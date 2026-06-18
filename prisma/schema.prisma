@@ -1,0 +1,174 @@
+// Family Finance OS — schema
+// Models the joint-family monthly roll-up (v1 core, no settlement yet).
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+}
+
+// A household = a family (or, later, a "personal" household of one).
+model Household {
+  id         Int        @id @default(autoincrement())
+  name       String
+  type       String     @default("family") // family | personal
+  treasurerMemberId Int? // hub member that everyone settles with (defaults to head)
+  members      Member[]
+  periods      Period[]
+  categories   Category[]
+  piggyEntries PiggyEntry[]
+  settlements  SettlementRecord[]
+  createdAt    DateTime     @default(now())
+}
+
+// A person in the household. `code` matches the sheet tags (H, B, L, KA, VL).
+model Member {
+  id          Int            @id @default(autoincrement())
+  household   Household      @relation(fields: [householdId], references: [id])
+  householdId Int
+  name        String
+  code        String
+  email       String?        @unique // whitelisted Google email -> this member
+  isEarner    Boolean        @default(true)
+  role        String         @default("member") // head | member
+  incomes     IncomeEntry[]
+  expenses    ExpenseEntry[]
+  spends      Spend[]
+
+  @@unique([householdId, code])
+}
+
+// A month (e.g. MAR 2026).
+model Period {
+  id           Int            @id @default(autoincrement())
+  household    Household      @relation(fields: [householdId], references: [id])
+  householdId  Int
+  year         Int
+  month        Int // 1-12
+  label        String // "MAR 2026"
+  status       String         @default("open") // open | closed
+  carryForward Float          @default(0) // opening balance carried in from previous month
+  movedToPiggy Float          @default(0) // amount sent to piggy at wind-down
+  closedAt     DateTime?
+  incomes      IncomeEntry[]
+  expenses     ExpenseEntry[]
+  budgets      Budget[]
+  piggyEntries PiggyEntry[]
+  spends       Spend[]
+  settlements  SettlementRecord[]
+
+  @@unique([householdId, year, month])
+}
+
+// Savings ledger. kind="piggy" = general Piggy (variable-category remainders);
+// kind="sinking" = a sinking fund's own hold (WiFi/Mobile). categoryId gives the breakdown.
+model PiggyEntry {
+  id          Int       @id @default(autoincrement())
+  household   Household  @relation(fields: [householdId], references: [id])
+  householdId Int
+  period      Period?    @relation(fields: [periodId], references: [id])
+  periodId    Int?
+  category    Category?  @relation(fields: [categoryId], references: [id])
+  categoryId  Int?
+  kind        String     @default("piggy") // piggy | sinking
+  amount      Float // positive = deposit, negative = withdrawal/payment
+  note        String?
+  createdAt   DateTime   @default(now())
+}
+
+// Expense category (Veg, Loan, Utilities...) with a necessary/other default.
+model Category {
+  id          Int            @id @default(autoincrement())
+  household   Household      @relation(fields: [householdId], references: [id])
+  householdId Int
+  name        String
+  kind        String         @default("expense") // expense | income
+  section     String         @default("Monthly") // Loans | Chits | Monthly | Misc
+  necessary    Boolean        @default(true) // default; overridable per expense
+  tracked      Boolean        @default(false) // variable category logged in the Expenses tab
+  monthlyBudget Float?        // recurring default budget, used to seed new months (template)
+  sinking      Boolean        @default(false) // true = accrues to its own hold until the bill is due
+  cycleMonths  Int?           // payment cycle for sinking funds (WiFi=3, Mobile=12...)
+  onHold       Boolean        @default(false) // paused: skipped when seeding new months & wind-down
+  expenses     ExpenseEntry[]
+  budgets      Budget[]
+  spends       Spend[]
+  piggyEntries PiggyEntry[]
+
+  @@unique([householdId, name])
+}
+
+model IncomeEntry {
+  id        Int      @id @default(autoincrement())
+  period    Period   @relation(fields: [periodId], references: [id])
+  periodId  Int
+  source    String // "VL Salary", "G704 Rent"
+  amount    Float
+  owner     Member?  @relation(fields: [ownerId], references: [id])
+  ownerId   Int?
+  note      String?
+  createdAt DateTime @default(now())
+}
+
+model ExpenseEntry {
+  id         Int      @id @default(autoincrement())
+  period     Period   @relation(fields: [periodId], references: [id])
+  periodId   Int
+  label      String
+  amount     Float
+  category   Category @relation(fields: [categoryId], references: [id])
+  categoryId Int
+  member     Member?  @relation(fields: [memberId], references: [id]) // attribution tag
+  memberId   Int?
+  necessary  Boolean  @default(true) // defaults from category, overridable
+  note       String?
+  createdAt  DateTime @default(now())
+}
+
+// Actual logged spend within a tracked category (the daily WhatsApp-group entries).
+// Separate from ExpenseEntry so the Sheet (allocations) never double-counts.
+model Spend {
+  id         Int      @id @default(autoincrement())
+  period     Period   @relation(fields: [periodId], references: [id])
+  periodId   Int
+  category   Category @relation(fields: [categoryId], references: [id])
+  categoryId Int
+  member     Member?  @relation(fields: [memberId], references: [id])
+  memberId   Int?
+  label      String
+  amount     Float
+  imagePath  String? // /uploads/<file> for petrol receipts etc.
+  createdAt  DateTime @default(now())
+}
+
+// A recorded settlement payment: one transfer (from → to) marked paid for a month.
+// Member ids are plain scalars (names resolved from the loaded member list).
+model SettlementRecord {
+  id           Int       @id @default(autoincrement())
+  household    Household  @relation(fields: [householdId], references: [id])
+  householdId  Int
+  period       Period     @relation(fields: [periodId], references: [id])
+  periodId     Int
+  fromMemberId Int // who pays
+  toMemberId   Int // who receives (the treasurer/hub)
+  amount       Float // amount recorded at settle time
+  note         String?
+  settledById  Int? // session member who marked it
+  settledAt    DateTime   @default(now())
+
+  @@unique([periodId, fromMemberId, toMemberId])
+}
+
+// Planned amount per category per month (planned-vs-actual).
+model Budget {
+  id         Int      @id @default(autoincrement())
+  period     Period   @relation(fields: [periodId], references: [id])
+  periodId   Int
+  category   Category @relation(fields: [categoryId], references: [id])
+  categoryId Int
+  planned    Float
+
+  @@unique([periodId, categoryId])
+}
