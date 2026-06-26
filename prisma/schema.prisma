@@ -20,7 +20,36 @@ model Household {
   categories   Category[]
   piggyEntries PiggyEntry[]
   settlements  SettlementRecord[]
+  loans        Loan[]
   createdAt    DateTime     @default(now())
+}
+
+// A loan or chit fund tracked with an outstanding balance / installment progress.
+model Loan {
+  id                Int      @id @default(autoincrement())
+  household         Household @relation(fields: [householdId], references: [id])
+  householdId       Int
+  name              String // "BOB loan", "JL1", "Harish Chit"
+  kind              String   @default("loan") // loan | chit
+  outstanding       Float    @default(0) // loans: remaining principal
+  monthlyAmount     Float    @default(0) // EMI / chit installment
+  memberId          Int? // responsible member (for settlement tagging)
+  totalInstallments Int? // chit: number of installments
+  paidInstallments  Int      @default(0) // chit: installments paid so far
+  status            String   @default("active") // active | closed
+  payments          LoanPayment[]
+  createdAt         DateTime @default(now())
+}
+
+model LoanPayment {
+  id            Int      @id @default(autoincrement())
+  loan          Loan     @relation(fields: [loanId], references: [id], onDelete: Cascade)
+  loanId        Int
+  periodId      Int? // the month it was paid in (optional link)
+  amount        Float // total paid
+  principalPart Float    @default(0) // amount that reduced outstanding (prepayments = full amount)
+  note          String?
+  createdAt     DateTime @default(now())
 }
 
 // A person in the household. `code` matches the sheet tags (H, B, L, KA, VL).
@@ -49,6 +78,7 @@ model Period {
   month        Int // 1-12
   label        String // "MAR 2026"
   status       String         @default("open") // open | closed
+  treasurerMemberId Int? // per-month hub override; falls back to Household.treasurerMemberId
   carryForward Float          @default(0) // opening balance carried in from previous month
   movedToPiggy Float          @default(0) // amount sent to piggy at wind-down
   closedAt     DateTime?
@@ -92,6 +122,7 @@ model Category {
   sinking      Boolean        @default(false) // true = accrues to its own hold until the bill is due
   cycleMonths  Int?           // payment cycle for sinking funds (WiFi=3, Mobile=12...)
   onHold       Boolean        @default(false) // paused: skipped when seeding new months & wind-down
+  responsibleMemberId Int?     // who is charged the over-budget excess at wind-down (e.g. Provision → Harish)
   expenses     ExpenseEntry[]
   budgets      Budget[]
   spends       Spend[]

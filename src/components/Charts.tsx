@@ -5,6 +5,8 @@ import {
   BarChart,
   Cell,
   Legend,
+  Line,
+  LineChart,
   Pie,
   PieChart,
   ResponsiveContainer,
@@ -14,6 +16,26 @@ import {
 } from "recharts";
 
 const inr = (n: number) => `₹${n.toLocaleString("en-IN")}`;
+
+export function TrendChart({
+  data,
+}: {
+  data: { label: string; income: number; expense: number; balance: number }[];
+}) {
+  return (
+    <ResponsiveContainer width="100%" height={260}>
+      <LineChart data={data} margin={{ top: 10, right: 16, left: 0, bottom: 0 }}>
+        <XAxis dataKey="label" tick={{ fontSize: 11 }} />
+        <YAxis tickFormatter={(v) => `₹${Math.round(Number(v) / 1000)}k`} tick={{ fontSize: 11 }} width={48} />
+        <Tooltip formatter={(value) => inr(Number(value))} />
+        <Legend />
+        <Line type="monotone" dataKey="income" stroke="#16a34a" name="Income" strokeWidth={2} dot={{ r: 3 }} />
+        <Line type="monotone" dataKey="expense" stroke="#dc2626" name="Expense" strokeWidth={2} dot={{ r: 3 }} />
+        <Line type="monotone" dataKey="balance" stroke="#4f46e5" name="Balance" strokeWidth={2} dot={{ r: 3 }} />
+      </LineChart>
+    </ResponsiveContainer>
+  );
+}
 
 export function CategoryBars({
   data,

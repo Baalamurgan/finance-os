@@ -7,6 +7,23 @@ html {
   scrollbar-gutter: stable;
 }
 
+/* Interactive elements get a pointer cursor app-wide (Tailwind v4 Preflight
+   no longer does this for buttons). Disabled controls show not-allowed. */
+@layer base {
+  button:not(:disabled),
+  a[href],
+  summary,
+  select:not(:disabled),
+  label[for],
+  [role="button"]:not([aria-disabled="true"]) {
+    cursor: pointer;
+  }
+  button:disabled,
+  [aria-disabled="true"] {
+    cursor: not-allowed;
+  }
+}
+
 body {
   background: #f8fafc; /* slate-50 */
   color: #0f172a; /* slate-900 */

@@ -16,14 +16,19 @@ type Row = {
   sinking: boolean;
   cycleMonths: number | null;
   onHold: boolean;
+  responsibleMemberId: number | null;
 };
+
+type MemberLite = { id: number; name: string };
 
 export function MonthlySetup({
   rows,
   householdId,
+  members,
 }: {
   rows: Row[];
   householdId: number;
+  members: MemberLite[];
 }) {
   return (
     <div className="space-y-5">
@@ -35,31 +40,38 @@ export function MonthlySetup({
               <th className="px-4 py-2">Monthly amount</th>
               <th className="px-4 py-2">Sinking?</th>
               <th className="px-4 py-2">Every (mo)</th>
+              <th className="px-4 py-2">Responsible</th>
               <th className="px-4 py-2"></th>
             </tr>
           </thead>
           <tbody>
             {rows.map((r) => (
-              <SetupRow key={r.id} r={r} />
+              <SetupRow key={r.id} r={r} members={members} />
             ))}
           </tbody>
         </table>
       </div>
+      <p className="text-xs text-slate-400">
+        <b>Responsible</b> = the person this category&apos;s expenses are tagged to by default (drives
+        settlement) and who is charged any over-budget excess at wind-down.
+      </p>
 
       <AddCategory householdId={householdId} />
     </div>
   );
 }
 
-function SetupRow({ r }: { r: Row }) {
+function SetupRow({ r, members }: { r: Row; members: MemberLite[] }) {
   const [amount, setAmount] = useState(r.monthlyBudget?.toString() ?? "");
   const [sinking, setSinking] = useState(r.sinking);
   const [cycle, setCycle] = useState(r.cycleMonths?.toString() ?? "");
+  const [resp, setResp] = useState(r.responsibleMemberId?.toString() ?? "");
 
   const dirty =
     amount !== (r.monthlyBudget?.toString() ?? "") ||
     sinking !== r.sinking ||
-    cycle !== (r.cycleMonths?.toString() ?? "");
+    cycle !== (r.cycleMonths?.toString() ?? "") ||
+    resp !== (r.responsibleMemberId?.toString() ?? "");
   const lump = sinking && amount && cycle ? Number(amount) * Number(cycle) : null;
 
   return (
@@ -119,6 +131,22 @@ function SetupRow({ r }: { r: Row }) {
         ) : (
           <span className="text-slate-300">—</span>
         )}
+      </td>
+      <td className="px-4 py-2">
+        <select
+          form={`sf-${r.id}`}
+          name="responsibleMemberId"
+          value={resp}
+          onChange={(e) => setResp(e.target.value)}
+          className="input w-28"
+        >
+          <option value="">Shared</option>
+          {members.map((mm) => (
+            <option key={mm.id} value={mm.id}>
+              {mm.name}
+            </option>
+          ))}
+        </select>
       </td>
       <td className="px-4 py-2">
         <div className="flex items-center justify-end gap-1">

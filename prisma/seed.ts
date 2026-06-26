@@ -20,13 +20,14 @@ const CATEGORIES: {
   monthlyBudget?: number;
   sinking?: boolean;
   cycleMonths?: number;
+  responsible?: string; // member code charged the over-budget excess at wind-down
 }[] = [
   { name: "Loan", necessary: true, section: "Loans" },
   { name: "Interest", necessary: true, section: "Loans" },
   { name: "Chit", necessary: true, section: "Chits" },
   { name: "Transport", necessary: true, section: "Monthly" },
   { name: "Household", necessary: true, section: "Monthly" },
-  { name: "Provision", necessary: true, section: "Monthly", tracked: true, monthlyBudget: 5000 },
+  { name: "Provision", necessary: true, section: "Monthly", tracked: true, monthlyBudget: 5000, responsible: "H" },
   { name: "Veg & Fruits", necessary: true, section: "Monthly", tracked: true, monthlyBudget: 5000 },
   { name: "Non-Veg", necessary: true, section: "Monthly", tracked: true, monthlyBudget: 3000 },
   { name: "Petrol", necessary: true, section: "Monthly", tracked: true, monthlyBudget: 12000 },
@@ -128,7 +129,10 @@ const SPENDS: { category: string; member: string | null; label: string; amount: 
 ];
 
 async function main() {
-  // idempotent reseed
+  // idempotent reseed — delete child tables before their parents (FK-safe)
+  await prisma.loanPayment.deleteMany();
+  await prisma.loan.deleteMany();
+  await prisma.settlementRecord.deleteMany();
   await prisma.spend.deleteMany();
   await prisma.piggyEntry.deleteMany();
   await prisma.expenseEntry.deleteMany();
@@ -153,8 +157,13 @@ async function main() {
 
   const categories = new Map<string, { id: number; necessary: boolean }>();
   for (const c of CATEGORIES) {
+    const { responsible, ...catData } = c as typeof c & { responsible?: string };
     const created = await prisma.category.create({
-      data: { ...c, householdId: household.id },
+      data: {
+        ...catData,
+        householdId: household.id,
+        responsibleMemberId: responsible ? members.get(responsible) ?? null : null,
+      },
     });
     categories.set(c.name, { id: created.id, necessary: c.necessary });
   }
@@ -209,6 +218,20 @@ async function main() {
       },
     });
   }
+
+  // Loans & chits known from the sheets (head can add the rest / fix balances)
+  await prisma.loan.create({
+    data: {
+      householdId: household.id, name: "KA 3L Loan", kind: "loan",
+      outstanding: 300000, monthlyAmount: 4500, memberId: members.get("KA"),
+    },
+  });
+  await prisma.loan.create({
+    data: {
+      householdId: household.id, name: "Harish Chit", kind: "chit",
+      monthlyAmount: 8500, totalInstallments: 20, paidInstallments: 5, memberId: members.get("VL"),
+    },
+  });
 
   const income = INCOMES.reduce((s, i) => s + i.amount, 0);
   const expense = EXPENSES.reduce((s, e) => s + e.amount, 0);

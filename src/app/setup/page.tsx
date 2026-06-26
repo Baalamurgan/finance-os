@@ -23,6 +23,7 @@ export default async function SetupPage({
       sinking: cat.sinking,
       cycleMonths: cat.cycleMonths,
       onHold: cat.onHold,
+      responsibleMemberId: cat.responsibleMemberId ?? null,
     }));
 
   return (
@@ -52,7 +53,7 @@ export default async function SetupPage({
           </p>
         </div>
 
-        <MonthlySetup rows={rows} householdId={c.household.id} />
+        <MonthlySetup rows={rows} householdId={c.household.id} members={c.members} />
       </main>
     </>
   );

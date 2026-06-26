@@ -18,11 +18,12 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       return !!member;
     },
     async jwt({ token, user }) {
-      // on sign-in (user present) attach member identity to the token
-      if (user?.email) {
-        const member = await prisma.member.findFirst({
-          where: { email: user.email.toLowerCase() },
-        });
+      // Re-resolve member identity by email on every call (not just sign-in) so a
+      // DB reseed — which changes autoincrement member ids — never leaves a stale
+      // memberId in the token (which would FK-violate on spend/expense writes).
+      const email = (user?.email ?? token.email)?.toLowerCase();
+      if (email) {
+        const member = await prisma.member.findFirst({ where: { email } });
         if (member) {
           token.memberId = member.id;
           token.role = member.role;

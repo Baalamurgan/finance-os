@@ -42,15 +42,17 @@ export async function saveExpense(formData: FormData) {
   const finalLabel = label || category?.name || "Expense";
   const necessary =
     necessaryRaw === "yes" ? true : necessaryRaw === "no" ? false : (category?.necessary ?? true);
+  // auto-attribute to the category's responsible member when none is picked
+  const finalMemberId = memberId ?? category?.responsibleMemberId ?? null;
 
   if (id) {
     await prisma.expenseEntry.update({
       where: { id },
-      data: { categoryId, amount, label: finalLabel, memberId, necessary },
+      data: { categoryId, amount, label: finalLabel, memberId: finalMemberId, necessary },
     });
   } else {
     await prisma.expenseEntry.create({
-      data: { periodId, categoryId, amount, label: finalLabel, memberId, necessary },
+      data: { periodId, categoryId, amount, label: finalLabel, memberId: finalMemberId, necessary },
     });
   }
   revalidatePath("/", "layout");
@@ -253,14 +255,24 @@ export async function toggleHold(formData: FormData) {
 export async function setTreasurer(formData: FormData) {
   if (!(await isHead())) return;
   const householdId = Number(formData.get("householdId"));
+  const periodId = formData.get("periodId") ? Number(formData.get("periodId")) : null;
   const memberId = formData.get("treasurerMemberId")
     ? Number(formData.get("treasurerMemberId"))
     : null;
-  if (!householdId) return;
-  await prisma.household.update({
-    where: { id: householdId },
-    data: { treasurerMemberId: memberId },
-  });
+  // When a periodId is given, set the per-month hub override; else the household default.
+  if (periodId) {
+    await prisma.period.update({
+      where: { id: periodId },
+      data: { treasurerMemberId: memberId },
+    });
+  } else if (householdId) {
+    await prisma.household.update({
+      where: { id: householdId },
+      data: { treasurerMemberId: memberId },
+    });
+  } else {
+    return;
+  }
   revalidatePath("/", "layout");
 }
 
@@ -301,6 +313,71 @@ export async function unsettle(formData: FormData) {
   revalidatePath("/", "layout");
 }
 
+// ---- Loans & chits (head-only) ----
+export async function createLoan(formData: FormData) {
+  if (!(await isHead())) return;
+  const householdId = Number(formData.get("householdId"));
+  const name = String(formData.get("name") ?? "").trim();
+  const kind = String(formData.get("kind") ?? "loan") === "chit" ? "chit" : "loan";
+  const outstanding = Number(formData.get("outstanding")) || 0;
+  const monthlyAmount = Number(formData.get("monthlyAmount")) || 0;
+  const memberRaw = String(formData.get("memberId") ?? "").trim();
+  const memberId = memberRaw === "" ? null : Number(memberRaw);
+  const totalRaw = String(formData.get("totalInstallments") ?? "").trim();
+  const totalInstallments = totalRaw === "" ? null : Number(totalRaw);
+  const paidInstallments = Number(formData.get("paidInstallments")) || 0;
+  if (!householdId || !name) return;
+  await prisma.loan.create({
+    data: { householdId, name, kind, outstanding, monthlyAmount, memberId, totalInstallments, paidInstallments },
+  });
+  revalidatePath("/", "layout");
+}
+
+// Record a monthly payment / prepayment. principalPart reduces the outstanding;
+// for chits it bumps the installment count. Auto-closes when done.
+export async function recordLoanPayment(formData: FormData) {
+  if (!(await isHead())) return;
+  const loanId = Number(formData.get("loanId"));
+  const periodId = formData.get("periodId") ? Number(formData.get("periodId")) : null;
+  const amount = Number(formData.get("amount")) || 0;
+  const principalPart = Number(formData.get("principalPart")) || 0;
+  const note = String(formData.get("note") ?? "").trim() || null;
+  if (!loanId || amount <= 0) return;
+  const loan = await prisma.loan.findUnique({ where: { id: loanId } });
+  if (!loan) return;
+
+  const newOutstanding = Math.max(0, loan.outstanding - principalPart);
+  const newPaid = loan.kind === "chit" ? loan.paidInstallments + 1 : loan.paidInstallments;
+  const done =
+    (loan.kind === "loan" && principalPart > 0 && newOutstanding <= 0) ||
+    (loan.kind === "chit" && loan.totalInstallments != null && newPaid >= loan.totalInstallments);
+
+  await prisma.$transaction([
+    prisma.loanPayment.create({ data: { loanId, periodId, amount, principalPart, note } }),
+    prisma.loan.update({
+      where: { id: loanId },
+      data: { outstanding: newOutstanding, paidInstallments: newPaid, status: done ? "closed" : loan.status },
+    }),
+  ]);
+  revalidatePath("/", "layout");
+}
+
+export async function closeLoan(formData: FormData) {
+  if (!(await isHead())) return;
+  const loanId = Number(formData.get("loanId"));
+  if (!loanId) return;
+  await prisma.loan.update({ where: { id: loanId }, data: { status: "closed" } });
+  revalidatePath("/", "layout");
+}
+
+export async function deleteLoan(formData: FormData) {
+  if (!(await isHead())) return;
+  const loanId = Number(formData.get("loanId"));
+  if (!loanId) return;
+  await prisma.loan.delete({ where: { id: loanId } });
+  revalidatePath("/", "layout");
+}
+
 // Head edits a category's recurring defaults on the Monthly Setup screen.
 export async function saveRecurring(formData: FormData) {
   if (!(await isHead())) return;
@@ -311,10 +388,13 @@ export async function saveRecurring(formData: FormData) {
   const sinking = formData.get("sinking") === "on";
   const cycleRaw = String(formData.get("cycleMonths") ?? "").trim();
   const cycleMonths = sinking && cycleRaw ? Number(cycleRaw) : null;
+  // responsible/default member: tags this category's lines + receives over-budget excess
+  const respRaw = String(formData.get("responsibleMemberId") ?? "").trim();
+  const responsibleMemberId = respRaw === "" ? null : Number(respRaw);
 
   await prisma.category.update({
     where: { id },
-    data: { monthlyBudget, sinking, cycleMonths },
+    data: { monthlyBudget, sinking, cycleMonths, responsibleMemberId },
   });
   revalidatePath("/", "layout");
 }
@@ -497,6 +577,8 @@ export async function windDownMonth(formData: FormData) {
 
   let movedToPiggy = 0;
   let miscTotal = 0;
+  // over-budget food etc. charged to a responsible member next month
+  const excessCharges: { categoryId: number; memberId: number; amount: number; label: string }[] = [];
 
   const nextMonth = period.month === 12 ? 1 : period.month + 1;
   const nextYear = period.month === 12 ? period.year + 1 : period.year;
@@ -509,6 +591,17 @@ export async function windDownMonth(formData: FormData) {
       const budget = budgetOf(cat.id);
       if (budget > 0) {
         const remainder = budget - spentOf(cat.id);
+        // Over budget + a responsible member set → charge the excess to that person
+        // next month (matches the sheet's "provision excess exp → Harish"); no piggy hit.
+        if (remainder < 0 && cat.responsibleMemberId) {
+          excessCharges.push({
+            categoryId: cat.id,
+            memberId: cat.responsibleMemberId,
+            amount: -remainder,
+            label: `${cat.name} excess (${period.label})`,
+          });
+          continue;
+        }
         await tx.piggyEntry.create({
           data: {
             householdId,
@@ -548,6 +641,20 @@ export async function windDownMonth(formData: FormData) {
           periodId: next.id,
           source: `Misc adjustment (from ${period.label})`,
           amount: -miscTotal,
+        },
+      });
+    }
+
+    // Over-budget food etc. → charged to the responsible member as next-month expenses
+    for (const ch of excessCharges) {
+      await tx.expenseEntry.create({
+        data: {
+          periodId: next.id,
+          label: ch.label,
+          amount: ch.amount,
+          categoryId: ch.categoryId,
+          memberId: ch.memberId,
+          necessary: true,
         },
       });
     }

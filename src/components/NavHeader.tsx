@@ -30,6 +30,7 @@ export function NavHeader({
     | "expenses"
     | "analysis"
     | "piggy"
+    | "loans"
     | "settlement"
     | "wind-down"
     | "setup"
@@ -55,6 +56,7 @@ export function NavHeader({
     { key: "expenses", label: "Expenses", href: "/expenses" },
     { key: "analysis", label: "Analysis", href: "/analysis" },
     { key: "piggy", label: "Piggy", href: "/piggy" },
+    { key: "loans", label: "Loans & Chits", href: "/loans" },
     { key: "settlement", label: "Settlement", href: "/settlement" },
     { key: "wind-down", label: "Wind Down", href: "/wind-down" },
     ...(isHead

@@ -91,6 +91,12 @@ export default async function SheetPage({
                 Carried in: {formatINR(c.selected.carryForward)}
               </span>
             )}
+            <a
+              href={`/api/export?y=${c.selYear}&m=${c.selMonth}`}
+              className="rounded-full border border-slate-300 px-3 py-1 text-xs font-medium text-slate-600 hover:bg-slate-100"
+            >
+              ↓ Export CSV
+            </a>
             <span
               className={`rounded-full px-3 py-1 text-xs font-medium ${
                 open ? "bg-green-100 text-green-700" : "bg-slate-200 text-slate-600"

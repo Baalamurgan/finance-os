@@ -1,8 +1,8 @@
 import { formatINR } from "@/lib/format";
 import { loadCommon } from "@/lib/load";
-import { getRollup } from "@/lib/queries";
+import { getRollup, getTrends } from "@/lib/queries";
 import { NavHeader } from "@/components/NavHeader";
-import { CategoryBars, SplitPie } from "@/components/Charts";
+import { CategoryBars, SplitPie, TrendChart } from "@/components/Charts";
 
 export default async function AnalysisPage({
   searchParams,
@@ -47,6 +47,8 @@ export default async function AnalysisPage({
   }
 
   const rollup = await getRollup(c.selected.id);
+  const trends = await getTrends(c.household.id);
+  const overBudget = rollup.byCategory.filter((r) => r.planned > 0 && r.actual > r.planned);
 
   return (
     <>
@@ -59,6 +61,24 @@ export default async function AnalysisPage({
           <Card label="Total Expense" value={formatINR(rollup.totalExpense)} tone="red" />
           <Card label="Balance" value={formatINR(rollup.balance)} tone="indigo" />
         </section>
+
+        {overBudget.length > 0 && (
+          <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+            <b>Over budget this month:</b>{" "}
+            {overBudget
+              .map((r) => `${r.name} (${formatINR(r.actual)} of ${formatINR(r.planned)})`)
+              .join(", ")}
+            .
+          </div>
+        )}
+
+        {trends.length > 1 && (
+          <section className="rounded-xl border border-slate-200 bg-white p-4">
+            <h2 className="text-sm font-semibold text-slate-700">Trends — income, expense &amp; balance</h2>
+            <p className="mb-2 text-xs text-slate-400">Month over month across all recorded periods.</p>
+            <TrendChart data={trends} />
+          </section>
+        )}
 
         {/* priority: budget vs spent table first */}
         <BudgetVsSpent rows={rollup.byCategory} />

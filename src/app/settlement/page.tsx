@@ -2,12 +2,13 @@ import { formatINR } from "@/lib/format";
 import { loadCommon } from "@/lib/load";
 import { getSettlement, getSettlementHistory } from "@/lib/queries";
 import { NavHeader } from "@/components/NavHeader";
-import { setTreasurer, markSettled, unsettle } from "../actions";
+import { markSettled, unsettle } from "../actions";
+import { HubSelect } from "@/components/HubSelect";
 
 export default async function SettlementPage({
   searchParams,
 }: {
-  searchParams: Promise<{ y?: string; m?: string }>;
+  searchParams: Promise<{ y?: string; m?: string; hub?: string }>;
 }) {
   const sp = await searchParams;
   const c = await loadCommon(sp);
@@ -41,9 +42,11 @@ export default async function SettlementPage({
   }
 
   const selectedId = c.selected.id;
-  // treasurer = household setting, else the head, else first member
+  // treasurer = ?hub query (shareable) → this month's saved override → household → head
   const headId = c.members.find((m) => m.role === "head")?.id ?? c.members[0]?.id ?? null;
-  const treasurerId = c.household.treasurerMemberId ?? headId;
+  const hubParam = sp.hub ? Number(sp.hub) : null;
+  const treasurerId =
+    hubParam ?? c.selected.treasurerMemberId ?? c.household.treasurerMemberId ?? headId;
   const { rows, treasurer, transfers, settledCount, total, allSettled } =
     await getSettlement(c.household.id, selectedId, treasurerId);
   const history = await getSettlementHistory(c.household.id);
@@ -66,22 +69,15 @@ export default async function SettlementPage({
             </p>
           </div>
           {c.isHead && (
-            <form action={setTreasurer} className="flex items-center gap-2">
-              <input type="hidden" name="householdId" value={c.household.id} />
-              <label className="text-xs text-slate-500">Treasurer</label>
-              <select
-                name="treasurerMemberId"
-                defaultValue={treasurerId ?? ""}
-                className="input"
-              >
-                {c.members.map((m) => (
-                  <option key={m.id} value={m.id}>
-                    {m.name}
-                  </option>
-                ))}
-              </select>
-              <button className="btn">Set</button>
-            </form>
+            <HubSelect
+              members={c.members}
+              value={treasurerId}
+              y={c.selYear}
+              m={c.selMonth}
+              householdId={c.household.id}
+              periodId={selectedId}
+              label={c.selected.label}
+            />
           )}
         </div>
 

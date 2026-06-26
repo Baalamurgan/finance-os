@@ -80,6 +80,17 @@ export default async function WindDownPage({
           <div className="mt-1 text-sm text-slate-500">
             Income {formatINR(rollup.totalIncome)} − Expense {formatINR(rollup.totalExpense)}
           </div>
+          {rollup.balance < 0 && (
+            <div className="mt-2 text-sm font-medium text-red-700">
+              Deficit month — covered by the carried-in balance
+              {c.selected.carryForward !== 0 && ` (${formatINR(c.selected.carryForward)})`} / Piggy.
+              {carryOut < 0 && (
+                <span className="block">
+                  ⚠ Next month starts in deficit: {formatINR(carryOut)} carried over.
+                </span>
+              )}
+            </div>
+          )}
         </section>
 
         {open ? (
@@ -105,8 +116,10 @@ export default async function WindDownPage({
                 </div>
               )}
               <div className="flex justify-between border-t border-slate-100 pt-3 text-sm font-semibold text-slate-800">
-                <span>Balance carried to next month</span>
-                <span className="tabular-nums">{formatINR(carryOut)}</span>
+                <span>{carryOut < 0 ? "Deficit carried to next month" : "Balance carried to next month"}</span>
+                <span className={`tabular-nums ${carryOut < 0 ? "text-red-700" : ""}`}>
+                  {formatINR(carryOut)}
+                </span>
               </div>
 
               <WindDownButton periodId={c.selected.id} label={c.selected.label} />

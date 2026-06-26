@@ -76,6 +76,79 @@ export async function getPiggyOverview(householdId: number) {
   return { generalTotal, generalByCategory, sinking };
 }
 
+// Month-over-month income/expense/balance across all periods (for trends).
+export async function getTrends(householdId: number) {
+  const periods = await prisma.period.findMany({
+    where: { householdId },
+    orderBy: [{ year: "asc" }, { month: "asc" }],
+  });
+  const ids = periods.map((p) => p.id);
+  const [inc, exp] = await Promise.all([
+    prisma.incomeEntry.groupBy({ by: ["periodId"], where: { periodId: { in: ids } }, _sum: { amount: true } }),
+    prisma.expenseEntry.groupBy({ by: ["periodId"], where: { periodId: { in: ids } }, _sum: { amount: true } }),
+  ]);
+  const incMap = new Map(inc.map((r) => [r.periodId, r._sum.amount ?? 0]));
+  const expMap = new Map(exp.map((r) => [r.periodId, r._sum.amount ?? 0]));
+  return periods.map((p) => {
+    const income = incMap.get(p.id) ?? 0;
+    const expense = expMap.get(p.id) ?? 0;
+    return { label: p.label, income, expense, balance: income - expense };
+  });
+}
+
+export type Loans = Awaited<ReturnType<typeof getLoans>>;
+
+// Loans & chits with progress + recent payments, members resolved for display.
+export async function getLoans(householdId: number) {
+  const [loans, members] = await Promise.all([
+    prisma.loan.findMany({
+      where: { householdId },
+      include: { payments: { orderBy: { createdAt: "desc" }, take: 5 } },
+      orderBy: [{ status: "asc" }, { name: "asc" }],
+    }),
+    prisma.member.findMany({ where: { householdId } }),
+  ]);
+  const nameOf = (id: number | null) =>
+    id == null ? null : members.find((m) => m.id === id)?.name ?? null;
+
+  const rows = loans.map((l) => ({
+    id: l.id,
+    name: l.name,
+    kind: l.kind,
+    outstanding: l.outstanding,
+    monthlyAmount: l.monthlyAmount,
+    memberId: l.memberId,
+    memberName: nameOf(l.memberId),
+    totalInstallments: l.totalInstallments,
+    paidInstallments: l.paidInstallments,
+    status: l.status,
+    progress:
+      l.kind === "chit" && l.totalInstallments
+        ? Math.min(1, l.paidInstallments / l.totalInstallments)
+        : null,
+    payments: l.payments.map((p) => ({
+      id: p.id,
+      amount: p.amount,
+      principalPart: p.principalPart,
+      note: p.note,
+      createdAt: p.createdAt,
+    })),
+  }));
+
+  const activeLoans = rows.filter((r) => r.kind === "loan" && r.status === "active");
+  const activeChits = rows.filter((r) => r.kind === "chit" && r.status === "active");
+  return {
+    rows,
+    totalOutstanding: activeLoans.reduce((s, r) => s + r.outstanding, 0),
+    monthlyCommitment: rows
+      .filter((r) => r.status === "active")
+      .reduce((s, r) => s + r.monthlyAmount, 0),
+    activeLoans,
+    activeChits,
+    closed: rows.filter((r) => r.status === "closed"),
+  };
+}
+
 export type Settlement = Awaited<ReturnType<typeof getSettlement>>;
 
 /**
