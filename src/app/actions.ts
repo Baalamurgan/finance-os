@@ -3,9 +3,6 @@
 import { prisma } from "@/lib/prisma";
 import { revalidatePath } from "next/cache";
 import { auth, signOut } from "@/auth";
-import { promises as fs } from "fs";
-import path from "path";
-import { randomUUID } from "crypto";
 
 export async function doSignOut() {
   await signOut({ redirectTo: "/signin" });
@@ -94,14 +91,11 @@ export async function deleteIncome(formData: FormData) {
 }
 
 // Save an uploaded image to public/uploads and return its public path, or null.
-async function saveUpload(file: FormDataEntryValue | null): Promise<string | null> {
-  if (!(file instanceof File) || file.size === 0) return null;
-  const ext = (file.name.split(".").pop() || "jpg").toLowerCase().replace(/[^a-z0-9]/g, "");
-  const name = `${randomUUID()}.${ext}`;
-  const dir = path.join(process.cwd(), "public", "uploads");
-  await fs.mkdir(dir, { recursive: true });
-  await fs.writeFile(path.join(dir, name), Buffer.from(await file.arrayBuffer()));
-  return `/uploads/${name}`;
+async function saveUpload(_file: FormDataEntryValue | null): Promise<string | null> {
+  // Receipt uploads deferred for v1: the serverless host has an ephemeral/read-only
+  // filesystem, so local fs writes don't work. Re-enable via Supabase Storage later.
+  // (No-op for now; the file input is hidden in AddSpendModal.)
+  return null;
 }
 
 // Log an actual spend in a tracked category (Expenses tab).
@@ -139,11 +133,7 @@ export async function deleteSpend(formData: FormData) {
   const isOwner = spend.memberId === session.user.memberId;
   if (session.user.role !== "head" && !isOwner) return;
 
-  if (spend.imagePath) {
-    await fs
-      .unlink(path.join(process.cwd(), "public", spend.imagePath))
-      .catch(() => {});
-  }
+  // (Receipt files are deferred/cloud-stored — nothing to unlink locally.)
   await prisma.spend.delete({ where: { id } });
   revalidatePath("/", "layout");
 }

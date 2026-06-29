@@ -1,12 +1,12 @@
 import "dotenv/config";
 import { PrismaClient } from "@prisma/client";
-import { PrismaBetterSqlite3 } from "@prisma/adapter-better-sqlite3";
+import { PrismaPg } from "@prisma/adapter-pg";
 
 // READ-ONLY dry-run of a month wind-down. Writes nothing — safe to run anytime.
 // Shows exactly what winding down the latest OPEN month would do: piggy/sinking
 // deposits, food over-budget excess, misc adjustment, and the carry-forward.
 const prisma = new PrismaClient({
-  adapter: new PrismaBetterSqlite3({ url: process.env.DATABASE_URL ?? "file:./dev.db" }),
+  adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL }),
 });
 const inr = (n: number) => `₹${Math.round(n).toLocaleString("en-IN")}`;
 const MONTHS = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"];

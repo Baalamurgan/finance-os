@@ -86,7 +86,8 @@ export function NavHeader({
           <div className="text-[11px] text-slate-400">Family Finance OS</div>
         </div>
 
-        <nav className="flex flex-wrap items-center gap-1">
+        {/* desktop tabs (mobile uses the bottom bar) */}
+        <nav className="hidden flex-wrap items-center gap-1 sm:flex">
           {primaryTabs.map((t) => (
             <Link
               key={t.key}
@@ -160,7 +161,73 @@ export function NavHeader({
           </div>
         </div>
       </div>
+
+      {/* mobile bottom tab bar */}
+      <BottomNav primaryTabs={primaryTabs} moreTabs={moreTabs} q={q} active={active} />
     </header>
+  );
+}
+
+function BottomNav({
+  primaryTabs,
+  moreTabs,
+  q,
+  active,
+}: {
+  primaryTabs: { key: string; label: string; href: string }[];
+  moreTabs: { key: string; label: string; href: string }[];
+  q: string;
+  active: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const moreActive = moreTabs.some((t) => t.key === active);
+  const cell = (activeHere: boolean) =>
+    `flex flex-1 flex-col items-center justify-center gap-0.5 py-2 text-[11px] font-medium ${
+      activeHere ? "text-indigo-600" : "text-slate-500"
+    }`;
+
+  return (
+    <>
+      {/* tap-away + slide-up sheet for "More" */}
+      {open && (
+        <div className="fixed inset-0 z-40 bg-slate-900/20 sm:hidden" onClick={() => setOpen(false)}>
+          <div
+            className="absolute inset-x-0 bottom-14 mx-2 overflow-hidden rounded-xl border border-slate-200 bg-white py-1 shadow-lg"
+            style={{ marginBottom: "env(safe-area-inset-bottom)" }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            {moreTabs.map((t) => (
+              <Link
+                key={t.key}
+                href={`${t.href}${q}`}
+                onClick={() => setOpen(false)}
+                className={`block px-4 py-3 text-sm ${
+                  active === t.key ? "bg-indigo-50 font-medium text-indigo-700" : "text-slate-700"
+                }`}
+              >
+                {t.label}
+              </Link>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <nav
+        className="fixed inset-x-0 bottom-0 z-50 flex border-t border-slate-200 bg-white/95 backdrop-blur sm:hidden"
+        style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
+      >
+        {primaryTabs.map((t) => (
+          <Link key={t.key} href={`${t.href}${q}`} className={cell(active === t.key)} onClick={() => setOpen(false)}>
+            {t.label}
+          </Link>
+        ))}
+        {moreTabs.length > 0 && (
+          <button type="button" onClick={() => setOpen((v) => !v)} className={cell(moreActive || open)}>
+            More
+          </button>
+        )}
+      </nav>
+    </>
   );
 }
 

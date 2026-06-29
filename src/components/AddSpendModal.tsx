@@ -133,20 +133,8 @@ export function AddSpendModal({
                   />
                 </div>
 
-                <div>
-                  <label className="text-xs font-medium text-slate-500">
-                    Receipt photo (optional)
-                  </label>
-                  <input
-                    name="image"
-                    type="file"
-                    accept="image/*"
-                    className="mt-1 block w-full text-sm text-slate-600 file:mr-3 file:rounded-md file:border-0 file:bg-indigo-50 file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-indigo-700 hover:file:bg-indigo-100"
-                  />
-                  <p className="mt-1 text-[11px] text-slate-400">
-                    Useful for petrol bills (GPay vs card tracking later).
-                  </p>
-                </div>
+                {/* Receipt photo upload deferred for v1 (needs Supabase Storage on
+                    serverless). Re-enable the file input once cloud storage is wired. */}
               </div>
 
               <div className="flex justify-end gap-2 border-t border-slate-100 px-5 py-3">

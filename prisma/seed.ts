@@ -1,13 +1,12 @@
 import "dotenv/config";
 import { PrismaClient } from "@prisma/client";
-import { PrismaBetterSqlite3 } from "@prisma/adapter-better-sqlite3";
+import { PrismaPg } from "@prisma/adapter-pg";
 
 // Seed the household, members, categories and the MAR 2026 roll-up,
 // reconstructed from KA_MAR_26.xlsx so totals match the sheet exactly:
 //   income 345102 · expense 174451 · balance 170651
-const adapter = new PrismaBetterSqlite3({
-  url: process.env.DATABASE_URL ?? "file:./dev.db",
-});
+// DEV-ONLY: this wipes all tables — never run against prod.
+const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL });
 const prisma = new PrismaClient({ adapter });
 
 // necessary/other default + sheet section per category. `tracked` = logged in the Expenses tab.

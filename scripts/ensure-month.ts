@@ -1,13 +1,13 @@
 import "dotenv/config";
 import { PrismaClient } from "@prisma/client";
-import { PrismaBetterSqlite3 } from "@prisma/adapter-better-sqlite3";
+import { PrismaPg } from "@prisma/adapter-pg";
 
 // Non-destructive: ensures the *current calendar month* exists as a period for every
 // household, cloned from the latest period (income + expense rows + budgets, tags kept).
 // Does NOT close or touch any previous month — that stays a manual wind-down.
 // Intended to run on the 1st via cron/launchd so the new month is ready to log into.
 const prisma = new PrismaClient({
-  adapter: new PrismaBetterSqlite3({ url: process.env.DATABASE_URL ?? "file:./dev.db" }),
+  adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL }),
 });
 
 const MONTHS = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"];
