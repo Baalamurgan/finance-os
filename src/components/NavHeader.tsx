@@ -164,12 +164,28 @@ export function NavHeader({
       </div>
     </header>
 
+    {/* big thumb-reachable "Add Spend" button on mobile (the easy daily action) */}
+    {periodOpen && periodId && (
+      <AddSpendModal
+        periodId={periodId}
+        trigger="fab"
+        categories={categories.filter((c) => c.tracked)}
+      />
+    )}
+
     {/* mobile bottom tab bar — rendered OUTSIDE the backdrop-blur header so that
         position:fixed resolves against the viewport, not the header box */}
     <BottomNav primaryTabs={primaryTabs} moreTabs={moreTabs} q={q} active={active} />
     </>
   );
 }
+
+// Simple, instantly-recognizable icons for the bottom bar (kind to older eyes).
+const TAB_ICON: Record<string, string> = {
+  sheet: "📋",
+  expenses: "🧾",
+  analysis: "📊",
+};
 
 function BottomNav({
   primaryTabs,
@@ -185,7 +201,7 @@ function BottomNav({
   const [open, setOpen] = useState(false);
   const moreActive = moreTabs.some((t) => t.key === active);
   const cell = (activeHere: boolean) =>
-    `flex flex-1 flex-col items-center justify-center gap-0.5 py-2 text-[11px] font-medium ${
+    `flex flex-1 flex-col items-center justify-center gap-0.5 py-2.5 text-xs font-medium ${
       activeHere ? "text-indigo-600" : "text-slate-500"
     }`;
 
@@ -193,10 +209,10 @@ function BottomNav({
     <>
       {/* tap-away + slide-up sheet for "More" */}
       {open && (
-        <div className="fixed inset-0 z-40 bg-slate-900/20 sm:hidden" onClick={() => setOpen(false)}>
+        <div className="fixed inset-0 z-40 bg-slate-900/30 sm:hidden" onClick={() => setOpen(false)}>
           <div
-            className="absolute inset-x-0 bottom-14 mx-2 overflow-hidden rounded-xl border border-slate-200 bg-white py-1 shadow-lg"
-            style={{ marginBottom: "env(safe-area-inset-bottom)" }}
+            className="absolute inset-x-0 mx-2 overflow-hidden rounded-2xl border border-slate-200 bg-white py-1 shadow-xl"
+            style={{ bottom: "calc(env(safe-area-inset-bottom) + 4.5rem)" }}
             onClick={(e) => e.stopPropagation()}
           >
             {moreTabs.map((t) => (
@@ -204,7 +220,7 @@ function BottomNav({
                 key={t.key}
                 href={`${t.href}${q}`}
                 onClick={() => setOpen(false)}
-                className={`block px-4 py-3 text-sm ${
+                className={`block px-5 py-4 text-base ${
                   active === t.key ? "bg-indigo-50 font-medium text-indigo-700" : "text-slate-700"
                 }`}
               >
@@ -221,11 +237,13 @@ function BottomNav({
       >
         {primaryTabs.map((t) => (
           <Link key={t.key} href={`${t.href}${q}`} className={cell(active === t.key)} onClick={() => setOpen(false)}>
+            <span className="text-xl leading-none">{TAB_ICON[t.key] ?? "•"}</span>
             {t.label}
           </Link>
         ))}
         {moreTabs.length > 0 && (
           <button type="button" onClick={() => setOpen((v) => !v)} className={cell(moreActive || open)}>
+            <span className="text-xl leading-none">⋯</span>
             More
           </button>
         )}

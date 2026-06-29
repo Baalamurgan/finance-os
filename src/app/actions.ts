@@ -100,24 +100,42 @@ async function saveUpload(_file: FormDataEntryValue | null): Promise<string | nu
 
 // Log an actual spend in a tracked category (Expenses tab).
 // ANY signed-in member can log — auto-attributed to themselves (like the WhatsApp groups).
-export async function addSpend(formData: FormData) {
+async function doAddSpend(formData: FormData): Promise<boolean> {
   const session = await auth();
   const memberId = session?.user?.memberId;
-  if (!memberId) return; // must be a mapped member
+  if (!memberId) return false; // must be a mapped member
 
   const periodId = Number(formData.get("periodId"));
   const categoryId = Number(formData.get("categoryId"));
   const amount = Number(formData.get("amount"));
   const label = String(formData.get("label") ?? "").trim();
 
-  if (!periodId || !categoryId || !amount || !label) return;
-  if (!(await periodOpen(periodId))) return;
+  if (!periodId || !categoryId || !amount || !label) return false;
+  if (!(await periodOpen(periodId))) return false;
 
   const imagePath = await saveUpload(formData.get("image"));
   await prisma.spend.create({
     data: { periodId, categoryId, memberId, label, amount, imagePath },
   });
   revalidatePath("/", "layout");
+  return true;
+}
+
+// Plain form-action caller (card mode on the Expenses page): fire-and-forget.
+export async function addSpend(formData: FormData) {
+  await doAddSpend(formData);
+}
+
+// useActionState caller (the quick-entry modal): returns a success signal so the
+// UI can show "Saved ✓" and reset for the next item without closing. `n`
+// increments on each successful save and drives the client-side reset effect.
+export type AddSpendState = { ok: boolean; n: number };
+export async function addSpendAction(
+  prev: AddSpendState,
+  formData: FormData,
+): Promise<AddSpendState> {
+  const ok = await doAddSpend(formData);
+  return { ok, n: ok ? prev.n + 1 : prev.n };
 }
 
 // The spend's owner can delete their own; the head can delete anyone's.
