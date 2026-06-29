@@ -2,6 +2,7 @@ import { prisma } from "@/lib/prisma";
 
 const MONTHS = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"];
 
+
 // Non-destructive: ensures the current calendar month exists for every household,
 // cloned from the latest period (income≥0 + expenses skipping onHold + budgets).
 // Does NOT close any prior month. Shared by the local script and the Vercel cron route.
