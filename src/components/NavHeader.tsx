@@ -79,8 +79,9 @@ export function NavHeader({
   const go = (y: number, m: number) => router.push(`${activeHref}?y=${y}&m=${m}`);
 
   return (
+    <>
     <header className="sticky top-0 z-40 border-b border-slate-200 bg-white/90 backdrop-blur">
-      <div className="mx-auto flex max-w-7xl flex-wrap items-center gap-3 px-6 py-3">
+      <div className="mx-auto flex max-w-7xl flex-wrap items-center gap-x-3 gap-y-2 px-4 py-3 sm:px-6">
         <div className="mr-2">
           <div className="text-base font-bold text-slate-900">{householdName}</div>
           <div className="text-[11px] text-slate-400">Family Finance OS</div>
@@ -161,10 +162,12 @@ export function NavHeader({
           </div>
         </div>
       </div>
-
-      {/* mobile bottom tab bar */}
-      <BottomNav primaryTabs={primaryTabs} moreTabs={moreTabs} q={q} active={active} />
     </header>
+
+    {/* mobile bottom tab bar — rendered OUTSIDE the backdrop-blur header so that
+        position:fixed resolves against the viewport, not the header box */}
+    <BottomNav primaryTabs={primaryTabs} moreTabs={moreTabs} q={q} active={active} />
+    </>
   );
 }
 
