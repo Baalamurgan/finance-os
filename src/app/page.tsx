@@ -73,6 +73,14 @@ export default async function SheetPage({
   const rollup = await getRollup(c.selected.id);
   const open = c.selected.status === "open";
 
+  // Safeguard: if the current calendar month has no period yet (e.g. the monthly
+  // auto-create didn't run), nudge the head to start it so the family always has
+  // an open month to log into.
+  const now = new Date();
+  const curY = now.getFullYear();
+  const curM = now.getMonth() + 1;
+  const currentMonthMissing = !c.periods.some((p) => p.year === curY && p.month === curM);
+
   // group expenses into the fixed section order
   const grouped = SECTION_ORDER.map((section) => {
     const rows = rollup.expenses.filter((e) => e.category.section === section);
@@ -83,6 +91,21 @@ export default async function SheetPage({
     <>
       {nav}
       <main className="mx-auto max-w-[68rem] space-y-4 p-6">
+        {c.isHead && currentMonthMissing && (
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3">
+            <p className="text-sm font-medium text-amber-800">
+              {monthLabel(curM, curY)} hasn&apos;t been started yet — the family can&apos;t log
+              spends until it&apos;s open.
+            </p>
+            <form action={createPeriod}>
+              <input type="hidden" name="householdId" value={c.household.id} />
+              <input type="hidden" name="year" value={curY} />
+              <input type="hidden" name="month" value={curM} />
+              <button className="btn whitespace-nowrap">Start {monthLabel(curM, curY)}</button>
+            </form>
+          </div>
+        )}
+
         <div className="flex flex-wrap items-center justify-between gap-2">
           <h1 className="text-xl font-bold text-slate-900">{c.selected.label} roll-up</h1>
           <div className="flex items-center gap-2 text-sm">

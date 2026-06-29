@@ -3,7 +3,7 @@ import { loadCommon } from "@/lib/load";
 import { getTrackedExpenses } from "@/lib/queries";
 import { NavHeader } from "@/components/NavHeader";
 import { AddSpendModal } from "@/components/AddSpendModal";
-import { deleteSpend } from "../actions";
+import { SpendDeleteButton } from "@/components/SpendDeleteButton";
 
 export default async function ExpensesPage({
   searchParams,
@@ -171,17 +171,7 @@ export default async function ExpensesPage({
                       </div>
                       <div className="flex items-center gap-2">
                         <span className="tabular-nums text-slate-700">{formatINR(s.amount)}</span>
-                        {open && (
-                          <form action={deleteSpend}>
-                            <input type="hidden" name="id" value={s.id} />
-                            <button
-                              className="text-xs text-slate-300 hover:text-red-600"
-                              aria-label="Delete"
-                            >
-                              ✕
-                            </button>
-                          </form>
-                        )}
+                        {open && <SpendDeleteButton id={s.id} />}
                       </div>
                     </div>
                   ))}
