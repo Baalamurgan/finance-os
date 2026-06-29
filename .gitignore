@@ -44,3 +44,6 @@ next-env.d.ts
 
 # local SQLite (retired — app is on Postgres)
 /dev.db
+
+# local DB snapshots (may contain financial data)
+backups/

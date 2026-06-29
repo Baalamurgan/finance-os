@@ -12,7 +12,9 @@
     "db:seed": "tsx prisma/seed.ts",
     "ensure-month": "tsx scripts/ensure-month.ts",
     "preview:rollover": "tsx scripts/preview-rollover.ts",
-    "import:history": "tsx scripts/import-history.ts"
+    "import:history": "tsx scripts/import-history.ts",
+    "db:backup": "tsx scripts/db-backup.ts",
+    "db:restore": "tsx scripts/db-restore.ts"
   },
   "dependencies": {
     "@prisma/adapter-better-sqlite3": "^7.8.0",
