@@ -1,6 +1,6 @@
 import { formatINR } from "@/lib/format";
 import { loadCommon } from "@/lib/load";
-import { getPiggyOverview, getSinkingBalances } from "@/lib/queries";
+import { getPiggyOverview, getSinkingBalances, getPiggyHistory } from "@/lib/queries";
 import { NavHeader } from "@/components/NavHeader";
 import { WithdrawPiggyModal } from "@/components/WithdrawPiggyModal";
 import { DepositPiggyModal } from "@/components/DepositPiggyModal";
@@ -17,6 +17,7 @@ export default async function PiggyPage({
   const { generalTotal, generalByCategory, sinking } = await getPiggyOverview(c.household.id);
   const sinkingTotal = sinking.reduce((s, x) => s + x.hold, 0);
   const sinkingBalances = await getSinkingBalances(c.household.id);
+  const history = await getPiggyHistory(c.household.id);
 
   return (
     <>
@@ -149,6 +150,37 @@ export default async function PiggyPage({
             Use the <b>Use Piggy</b> button to send money to Dad / a loan / a chit — it records the
             spend and reduces the chosen fund (you can&apos;t withdraw more than is available).
           </p>
+        </section>
+
+        {/* transaction history */}
+        <section className="rounded-xl border border-slate-200 bg-white p-4">
+          <h2 className="mb-3 text-sm font-semibold text-slate-700">History</h2>
+          {history.length === 0 ? (
+            <p className="text-sm text-slate-400">
+              No activity yet. Deposits, wind-down accruals and withdrawals will show here.
+            </p>
+          ) : (
+            <ul className="divide-y divide-slate-100 text-sm">
+              {history.map((h) => (
+                <li key={h.id} className="flex items-center justify-between gap-3 py-2">
+                  <div className="min-w-0">
+                    <div className="truncate text-slate-700">
+                      <span className="font-medium">{h.bucket}</span>
+                      {h.note ? <span className="text-slate-400"> · {h.note}</span> : null}
+                    </div>
+                    <div className="text-[11px] text-slate-400">
+                      {new Date(h.createdAt).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}
+                      {h.period ? ` · ${h.period}` : ""}
+                    </div>
+                  </div>
+                  <span className={`tabular-nums font-semibold ${h.amount < 0 ? "text-red-600" : "text-green-700"}`}>
+                    {h.amount < 0 ? "−" : "+"}
+                    {formatINR(Math.abs(h.amount))}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
         </section>
       </main>
     </>

@@ -50,6 +50,25 @@ export async function getSinkingBalances(householdId: number) {
   return map;
 }
 
+// Every Piggy/sinking transaction (deposits +, withdrawals/payments −) newest first.
+export async function getPiggyHistory(householdId: number) {
+  const rows = await prisma.piggyEntry.findMany({
+    where: { householdId },
+    include: { category: true, period: true },
+    orderBy: { createdAt: "desc" },
+    take: 200,
+  });
+  return rows.map((r) => ({
+    id: r.id,
+    kind: r.kind, // "piggy" | "sinking"
+    bucket: r.kind === "sinking" ? r.category?.name ?? "Sinking" : "General Piggy",
+    amount: r.amount,
+    note: r.note ?? "",
+    period: r.period?.label ?? null,
+    createdAt: r.createdAt,
+  }));
+}
+
 // General Piggy (per-category breakdown) + each sinking fund's accumulated hold.
 export async function getPiggyOverview(householdId: number) {
   const entries = await prisma.piggyEntry.findMany({

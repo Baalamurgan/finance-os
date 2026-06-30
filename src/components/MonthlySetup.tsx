@@ -73,6 +73,8 @@ function SetupRow({ r, members }: { r: Row; members: MemberLite[] }) {
     cycle !== (r.cycleMonths?.toString() ?? "") ||
     resp !== (r.responsibleMemberId?.toString() ?? "");
   const lump = sinking && amount && cycle ? Number(amount) * Number(cycle) : null;
+  // sinking funds must have a monthly amount AND a cycle (validation)
+  const invalid = sinking && (!amount || Number(amount) <= 0 || !cycle || Number(cycle) < 1);
 
   return (
     <tr className={`border-b border-slate-100 align-middle ${r.onHold ? "opacity-50" : ""}`}>
@@ -125,7 +127,10 @@ function SetupRow({ r, members }: { r: Row; members: MemberLite[] }) {
               className="input w-16"
             />
             {lump && (
-              <div className="mt-0.5 text-[11px] text-slate-400">≈ {formatINR(lump)}</div>
+              <div className="mt-0.5 text-[11px] text-slate-400">≈ {formatINR(lump)} per bill</div>
+            )}
+            {invalid && (
+              <div className="mt-0.5 text-[11px] font-medium text-red-600">amount + cycle required</div>
             )}
           </div>
         ) : (
@@ -152,7 +157,7 @@ function SetupRow({ r, members }: { r: Row; members: MemberLite[] }) {
         <div className="flex items-center justify-end gap-1">
           <button
             form={`sf-${r.id}`}
-            disabled={!dirty}
+            disabled={!dirty || invalid}
             className="btn px-2 py-1.5 text-xs disabled:opacity-40"
           >
             Save

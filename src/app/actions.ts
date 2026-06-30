@@ -440,6 +440,8 @@ export async function saveRecurring(formData: FormData) {
   const sinking = formData.get("sinking") === "on";
   const cycleRaw = String(formData.get("cycleMonths") ?? "").trim();
   const cycleMonths = sinking && cycleRaw ? Number(cycleRaw) : null;
+  // sinking funds require a monthly amount AND a valid cycle
+  if (sinking && (!monthlyBudget || monthlyBudget <= 0 || !cycleMonths || cycleMonths < 1)) return;
   // responsible/default member: tags this category's lines + receives over-budget excess
   const respRaw = String(formData.get("responsibleMemberId") ?? "").trim();
   const responsibleMemberId = respRaw === "" ? null : Number(respRaw);
