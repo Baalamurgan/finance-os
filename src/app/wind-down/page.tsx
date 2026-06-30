@@ -47,14 +47,23 @@ export default async function WindDownPage({
   const open = c.selected.status === "open";
   const sinkingIds = new Set(c.categories.filter((x) => x.sinking).map((x) => x.id));
 
-  // what each tracked category contributes at close
-  const toPiggy = tracked.cards.filter((t) => t.allocation > 0 && !sinkingIds.has(t.id));
-  const toSinking = tracked.cards.filter((t) => t.allocation > 0 && sinkingIds.has(t.id));
+  // what each tracked category contributes at close:
+  //  • under budget (remaining ≥ 0) → Piggy (non-sinking) or its sinking hold
+  //  • over budget (remaining < 0) → carried to next month as a one-off expense
+  //  • misc (no budget) → carried to next month as a one-off expense
+  const budgeted = tracked.cards.filter((t) => t.allocation > 0);
+  const piggyRows = budgeted.filter((t) => !sinkingIds.has(t.id) && t.remaining >= 0);
+  const sinkingRows = budgeted.filter((t) => sinkingIds.has(t.id) && t.remaining >= 0);
+  const overBudget = budgeted.filter((t) => t.remaining < 0);
   const miscCards = tracked.cards.filter((t) => t.allocation === 0 && t.spent > 0);
 
-  const piggyAdd = toPiggy.reduce((s, t) => s + t.remaining, 0);
-  const sinkingAdd = toSinking.reduce((s, t) => s + t.remaining, 0);
-  const miscTotal = miscCards.reduce((s, t) => s + t.spent, 0);
+  const piggyAdd = piggyRows.reduce((s, t) => s + t.remaining, 0);
+  const sinkingAdd = sinkingRows.reduce((s, t) => s + t.remaining, 0);
+  const carriedRows = [
+    ...overBudget.map((t) => ({ name: `${t.name} — over by`, amount: -t.remaining })),
+    ...miscCards.map((t) => ({ name: `${t.name} (misc)`, amount: t.spent })),
+  ];
+  const carriedTotal = carriedRows.reduce((s, r) => s + r.amount, 0);
   const carryOut = c.selected.carryForward + rollup.totalIncome - rollup.totalExpense;
 
   return (
@@ -94,45 +103,27 @@ export default async function WindDownPage({
         </section>
 
         {open ? (
-          c.isHead ? (
+          c.canEdit ? (
             <section className="space-y-4 rounded-xl border border-slate-200 bg-white p-5">
               <h2 className="text-sm font-semibold text-slate-700">
                 When you wind down, here&apos;s what happens
               </h2>
 
               <Breakdown
-                title="→ General Piggy (variable categories' leftover)"
-                rows={toPiggy.map((t) => ({
-                  name:
-                    t.remaining < 0
-                      ? `${t.name} — over by ${formatINR(-t.remaining)}, covered from Piggy`
-                      : t.name,
-                  amount: t.remaining,
-                }))}
+                title="→ General Piggy (under-budget leftovers)"
+                rows={piggyRows.map((t) => ({ name: t.name, amount: t.remaining }))}
                 total={piggyAdd}
               />
-              {c.piggyBalance + piggyAdd < 0 && (
-                <p className="rounded-lg bg-amber-50 px-3 py-2 text-xs font-medium text-amber-800">
-                  ⚠ Over-budget spending is more than the Piggy holds — the general Piggy will go
-                  negative ({formatINR(c.piggyBalance + piggyAdd)}). Add money to Piggy or reduce spends.
-                </p>
-              )}
               <Breakdown
                 title="→ Sinking-fund holds (saved for upcoming bills)"
-                rows={toSinking.map((t) => ({
-                  name:
-                    t.remaining < 0
-                      ? `${t.name} — over by ${formatINR(-t.remaining)}`
-                      : t.name,
-                  amount: t.remaining,
-                }))}
+                rows={sinkingRows.map((t) => ({ name: t.name, amount: t.remaining }))}
                 total={sinkingAdd}
               />
-              {miscTotal > 0 && (
-                <div className="rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-800">
-                  Misc {formatINR(miscTotal)} → deducted from next month&apos;s income
-                </div>
-              )}
+              <Breakdown
+                title="→ Carried to next month (added as expenses there)"
+                rows={carriedRows}
+                total={carriedTotal}
+              />
               <div className="flex justify-between border-t border-slate-100 pt-3 text-sm font-semibold text-slate-800">
                 <span>{carryOut < 0 ? "Deficit carried to next month" : "Balance carried to next month"}</span>
                 <span className={`tabular-nums ${carryOut < 0 ? "text-red-700" : ""}`}>
@@ -144,7 +135,7 @@ export default async function WindDownPage({
             </section>
           ) : (
             <p className="rounded-xl border border-slate-200 bg-white p-5 text-center text-sm text-slate-500">
-              Only the head of family can wind down the month.
+              Only the head or a manager can wind down the month.
             </p>
           )
         ) : (

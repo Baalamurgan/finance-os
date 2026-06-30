@@ -56,6 +56,17 @@ export default async function PiggyPage({
           )}
         </div>
 
+        <div className="rounded-xl border border-slate-300 bg-slate-900 p-5 text-white">
+          <div className="text-xs font-medium uppercase tracking-wide text-slate-300">
+            Total set aside in the account
+          </div>
+          <div className="mt-1 text-3xl font-extrabold">{formatINR(generalTotal + sinkingTotal)}</div>
+          <div className="mt-1 text-xs text-slate-400">
+            General Piggy {formatINR(generalTotal)} + sinking holds {formatINR(sinkingTotal)} — these
+            live in your one bank account; the split below is just how it&apos;s earmarked.
+          </div>
+        </div>
+
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <div className="rounded-xl border border-amber-200 bg-amber-50 p-5">
             <div className="text-xs font-medium uppercase tracking-wide text-amber-700">

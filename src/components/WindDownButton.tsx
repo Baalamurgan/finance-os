@@ -9,9 +9,9 @@ export function WindDownButton({ periodId, label }: { periodId: number; label: s
       onSubmit={(e) => {
         if (
           !confirm(
-            `Wind down ${label}?\n\nThis moves each category's leftover to Piggy / sinking holds, ` +
-              `carries the balance forward, pre-fills next month, and LOCKS ${label}. ` +
-              `This can't be undone.`
+            `Wind down ${label}?\n\nUnder-budget leftovers go to Piggy / sinking holds; ` +
+              `over-budget amounts and misc spends are added to next month's sheet as expenses; ` +
+              `the balance carries forward and ${label} is LOCKED. This can't be undone.`
           )
         ) {
           e.preventDefault();

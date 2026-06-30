@@ -476,7 +476,8 @@ async function clonePeriodStructure(
 ) {
   const [incomes, expenses, heldCats] = await Promise.all([
     tx.incomeEntry.findMany({ where: { periodId: sourceId } }),
-    tx.expenseEntry.findMany({ where: { periodId: sourceId } }),
+    // oneOff lines (carried misc / over-budget) must NOT propagate to future months
+    tx.expenseEntry.findMany({ where: { periodId: sourceId, oneOff: false } }),
     tx.category.findMany({ where: { householdId, onHold: true }, select: { id: true } }),
   ]);
   const held = new Set(heldCats.map((c) => c.id));
@@ -606,7 +607,7 @@ export async function deleteMember(formData: FormData) {
 //  • Misc (tracked, no budget) total → deducted from NEXT month's income
 //  • month balance (carryIn + income − expense) carries forward; next month is cloned & locked
 export async function windDownMonth(formData: FormData) {
-  if (!(await isHead())) return;
+  if (!(await canEdit())) return; // head or manager
   const periodId = Number(formData.get("periodId"));
   if (!periodId) return;
 
@@ -632,7 +633,8 @@ export async function windDownMonth(formData: FormData) {
     spends.filter((s) => s.categoryId === catId).reduce((sum, s) => sum + s.amount, 0);
 
   let movedToPiggy = 0;
-  let miscTotal = 0;
+  // over-budget excess + misc spends are carried into NEXT month as one-off expenses
+  const carryToNext: { categoryId: number; amount: number; label: string }[] = [];
 
   const nextMonth = period.month === 12 ? 1 : period.month + 1;
   const nextYear = period.month === 12 ? period.year + 1 : period.year;
@@ -643,24 +645,37 @@ export async function windDownMonth(formData: FormData) {
   await prisma.$transaction(async (tx) => {
     for (const cat of trackedCats) {
       const budget = budgetOf(cat.id);
+      const spent = spentOf(cat.id);
       if (budget > 0) {
-        // remainder = committed budget − actually spent. Positive → saved to the
-        // Piggy / sinking hold; negative (over budget) → covered from the Piggy.
-        const remainder = budget - spentOf(cat.id);
-        await tx.piggyEntry.create({
-          data: {
-            householdId,
-            periodId,
+        const remainder = budget - spent;
+        if (remainder >= 0) {
+          // under budget → save the leftover to Piggy (or the sinking hold)
+          await tx.piggyEntry.create({
+            data: {
+              householdId,
+              periodId,
+              categoryId: cat.id,
+              kind: cat.sinking ? "sinking" : "piggy",
+              amount: remainder,
+              note: `${period.label} · ${cat.name}`,
+            },
+          });
+          if (!cat.sinking) movedToPiggy += remainder;
+        } else {
+          // over budget → carry the excess into next month as a one-off expense
+          carryToNext.push({
             categoryId: cat.id,
-            kind: cat.sinking ? "sinking" : "piggy",
-            amount: remainder,
-            note: `${period.label} · ${cat.name}`,
-          },
+            amount: -remainder,
+            label: `${cat.name} over-budget (from ${period.label})`,
+          });
+        }
+      } else if (spent > 0) {
+        // tracked, no budget = Misc → carry the spend into next month as an expense
+        carryToNext.push({
+          categoryId: cat.id,
+          amount: spent,
+          label: `Misc (from ${period.label})`,
         });
-        if (!cat.sinking) movedToPiggy += remainder;
-      } else {
-        // tracked but no budget = Misc → deducted from next month's income
-        miscTotal += spentOf(cat.id);
       }
     }
 
@@ -679,13 +694,17 @@ export async function windDownMonth(formData: FormData) {
     const hasStructure = await tx.expenseEntry.count({ where: { periodId: next.id } });
     if (hasStructure === 0) await clonePeriodStructure(tx, periodId, next.id, householdId);
 
-    // Misc reduces next month's income (a negative income line)
-    if (miscTotal > 0) {
-      await tx.incomeEntry.create({
+    // add the carried over-budget + misc as one-off expenses on next month's sheet
+    // (oneOff so they are NOT copied forward again into later months)
+    for (const c of carryToNext) {
+      await tx.expenseEntry.create({
         data: {
           periodId: next.id,
-          source: `Misc adjustment (from ${period.label})`,
-          amount: -miscTotal,
+          categoryId: c.categoryId,
+          label: c.label,
+          amount: c.amount,
+          necessary: true,
+          oneOff: true,
         },
       });
     }

@@ -154,6 +154,7 @@ model ExpenseEntry {
   member     Member?  @relation(fields: [memberId], references: [id]) // attribution tag
   memberId   Int?
   necessary  Boolean  @default(true) // defaults from category, overridable
+  oneOff     Boolean  @default(false) // wind-down carry (misc/over-budget) — NOT copied to future months
   note       String?
   createdAt  DateTime @default(now())
 }

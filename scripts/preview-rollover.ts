@@ -43,25 +43,25 @@ async function main() {
   console.log(`Income ${inr(income)}  −  Expense ${inr(expense)}  =  ${income - expense >= 0 ? "surplus" : "DEFICIT"} ${inr(income - expense)}`);
   console.log(`Carried in ${inr(period.carryForward)}  →  carry to ${MONTHS[nm - 1]} ${ny}: ${inr(carryOut)}${carryOut < 0 ? "  ⚠ next month starts in deficit" : ""}`);
 
-  let piggy = 0, sinking = 0, misc = 0;
+  let piggy = 0, sinking = 0, carried = 0;
   console.log(`\n  Category moves at wind-down:`);
   for (const c of trackedCats) {
     const b = budgetOf(c.id);
     if (b > 0) {
       const rem = b - spentOf(c.id);
-      if (c.sinking) {
-        sinking += rem;
-        console.log(`   • ${c.name}: ${inr(rem)} → sinking hold${rem < 0 ? " (over budget)" : ""}`);
+      if (rem >= 0) {
+        if (c.sinking) { sinking += rem; console.log(`   • ${c.name}: ${inr(rem)} → sinking hold`); }
+        else { piggy += rem; console.log(`   • ${c.name}: ${inr(rem)} → general Piggy`); }
       } else {
-        piggy += rem;
-        console.log(`   • ${c.name}: ${inr(rem)} → general Piggy${rem < 0 ? " (over budget — covered from Piggy)" : ""}`);
+        carried += -rem;
+        console.log(`   • ${c.name}: over by ${inr(-rem)} → carried to next month as expense`);
       }
     } else {
       const sp = spentOf(c.id);
-      if (sp > 0) { misc += sp; console.log(`   • ${c.name} (misc): ${inr(sp)} → deducted from next month income`); }
+      if (sp > 0) { carried += sp; console.log(`   • ${c.name} (misc): ${inr(sp)} → carried to next month as expense`); }
     }
   }
-  console.log(`\n  Totals → general Piggy ${inr(piggy)} · sinking ${inr(sinking)} · misc adjustment −${inr(misc)}`);
+  console.log(`\n  Totals → general Piggy ${inr(piggy)} · sinking ${inr(sinking)} · carried to next month ${inr(carried)}`);
 
   const nextStruct = {
     income: incomes.filter((i) => i.amount >= 0).length,
