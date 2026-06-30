@@ -24,7 +24,7 @@ export function ExpenseModal({
     memberId: number | null;
     necessary: boolean;
   };
-  trigger: "primary" | "row";
+  trigger: "primary" | "row" | "menuitem";
 }) {
   const [open, setOpen] = useState(false);
   const [categoryId, setCategoryId] = useState<number | null>(
@@ -46,6 +46,13 @@ export function ExpenseModal({
       {trigger === "primary" ? (
         <button onClick={() => setOpen(true)} className="btn">
           + Add Expense
+        </button>
+      ) : trigger === "menuitem" ? (
+        <button
+          onClick={() => setOpen(true)}
+          className="block w-full px-4 py-3 text-left text-sm text-slate-700 hover:bg-slate-50"
+        >
+          Edit
         </button>
       ) : (
         <button

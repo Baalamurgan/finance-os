@@ -50,8 +50,13 @@ function MemberRow({ m, isSelf }: { m: M; isSelf: boolean }) {
   const [name, setName] = useState(m.name);
   const [code, setCode] = useState(m.code);
   const [role, setRole] = useState(m.role);
+  const [email, setEmail] = useState(m.email ?? "");
 
-  const dirty = name.trim() !== m.name || code.trim() !== m.code || role !== m.role;
+  const dirty =
+    name.trim() !== m.name ||
+    code.trim() !== m.code ||
+    role !== m.role ||
+    email.trim().toLowerCase() !== (m.email ?? "");
   const valid = name.trim().length > 0 && code.trim().length > 0;
 
   return (
@@ -77,7 +82,15 @@ function MemberRow({ m, isSelf }: { m: M; isSelf: boolean }) {
         />
       </td>
       <td className="px-4 py-2">
-        <span className="text-slate-500">{m.email ?? <em className="text-slate-300">none</em>}</span>
+        <input
+          form={`mf-${m.id}`}
+          name="email"
+          type="email"
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+          placeholder="Google email"
+          className="input w-48"
+        />
       </td>
       <td className="px-4 py-2">
         <select
@@ -88,6 +101,7 @@ function MemberRow({ m, isSelf }: { m: M; isSelf: boolean }) {
           className="input"
         >
           <option value="member">member</option>
+          <option value="manager">manager</option>
           <option value="head">head</option>
         </select>
       </td>
@@ -170,6 +184,7 @@ function AddMember({ householdId }: { householdId: number }) {
         />
         <select name="role" defaultValue="member" className="input">
           <option value="member">member</option>
+          <option value="manager">manager</option>
           <option value="head">head</option>
         </select>
         <button disabled={!valid} className="btn disabled:opacity-40">

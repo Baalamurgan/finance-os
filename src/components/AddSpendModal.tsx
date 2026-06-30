@@ -21,6 +21,7 @@ export function AddSpendModal({
   const [mounted, setMounted] = useState(false);
   const [categoryId, setCategoryId] = useState<number | null>(fixedCategory?.id ?? null);
   const [justSaved, setJustSaved] = useState(false);
+  const [keepAdding, setKeepAdding] = useState(false);
 
   const [state, formAction, pending] = useActionState<AddSpendState, FormData>(
     addSpendAction,
@@ -40,31 +41,30 @@ export function AddSpendModal({
     return () => window.removeEventListener("keydown", onKey);
   }, [open]);
 
-  // On a successful save (n increments): clear the amount/what fields, keep the
-  // category + modal open, refocus the amount, and flash "Saved ✓" — so logging
-  // several grocery items in a row is as quick as ticking a notebook.
+  // On a successful save: if "keep adding" is on, clear + stay open (rapid
+  // grocery logging); otherwise close the modal (the default expectation).
   useEffect(() => {
     if (state.n > prevN.current) {
       prevN.current = state.n;
-      formRef.current?.reset(); // clears uncontrolled amount/what; category stays (controlled)
-      setJustSaved(true);
-      amountRef.current?.focus();
-      const t = setTimeout(() => setJustSaved(false), 2500);
-      return () => clearTimeout(t);
+      if (keepAdding) {
+        formRef.current?.reset(); // clears uncontrolled amount/what; category stays (controlled)
+        setJustSaved(true);
+        amountRef.current?.focus();
+        const t = setTimeout(() => setJustSaved(false), 2500);
+        return () => clearTimeout(t);
+      }
+      setOpen(false);
     }
-  }, [state.n]);
+  }, [state.n, keepAdding]);
 
   const openModal = () => {
     setJustSaved(false);
     setOpen(true);
   };
 
-  // Render the overlay at <body> via a portal so an ancestor's backdrop-blur
-  // (the sticky header) doesn't trap `position: fixed` and clip the modal.
   return (
     <>
       {trigger === "primary" && (
-        // top-bar button — hidden on mobile (the FAB covers small screens)
         <button onClick={openModal} className="btn hidden sm:inline-block">
           + Add Spend
         </button>
@@ -77,16 +77,7 @@ export function AddSpendModal({
           + Add spend
         </button>
       )}
-      {trigger === "fab" && (
-        // big thumb-reachable floating button, mobile only, above the bottom nav
-        <button
-          onClick={openModal}
-          className="fixed right-4 z-40 flex items-center gap-2 rounded-full bg-indigo-600 px-5 py-4 text-base font-semibold text-white shadow-lg shadow-indigo-600/30 active:bg-indigo-800 sm:hidden"
-          style={{ bottom: "calc(env(safe-area-inset-bottom) + 4.75rem)" }}
-        >
-          <span className="text-xl leading-none">+</span> Add Spend
-        </button>
-      )}
+      {trigger === "fab" && <Fab onOpen={openModal} />}
 
       {open &&
         mounted &&
@@ -170,9 +161,20 @@ export function AddSpendModal({
                     />
                   </div>
 
+                  {/* keep-adding toggle: off = Save closes; on = stay open for next item */}
+                  <label className="flex items-center gap-3 rounded-xl bg-slate-50 px-4 py-3 text-base text-slate-700">
+                    <input
+                      type="checkbox"
+                      checked={keepAdding}
+                      onChange={(e) => setKeepAdding(e.target.checked)}
+                      className="h-5 w-5"
+                    />
+                    ➕ Keep adding more (don&apos;t close after saving)
+                  </label>
+
                   {justSaved && (
                     <p className="rounded-xl bg-green-50 px-4 py-3 text-center text-base font-semibold text-green-700">
-                      ✓ Saved! Add the next item, or tap Done.
+                      ✓ Saved! Add the next item.
                     </p>
                   )}
                 </div>
@@ -183,14 +185,14 @@ export function AddSpendModal({
                     onClick={() => setOpen(false)}
                     className="min-h-12 flex-1 rounded-xl border-2 border-slate-200 px-4 py-3 text-base font-medium text-slate-600 active:bg-slate-100"
                   >
-                    Done
+                    Cancel
                   </button>
                   <button
                     type="submit"
                     disabled={!categoryId || pending}
                     className="min-h-12 flex-1 rounded-xl bg-indigo-600 px-4 py-3 text-base font-semibold text-white shadow-sm active:bg-indigo-800 disabled:opacity-40"
                   >
-                    {pending ? "Saving…" : "Save spend"}
+                    {pending ? "Saving…" : "Save"}
                   </button>
                 </div>
               </form>
@@ -199,5 +201,65 @@ export function AddSpendModal({
           document.body,
         )}
     </>
+  );
+}
+
+// Floating Add-Spend button (mobile). Draggable left↔right so it never blocks a
+// row's delete control; the chosen side is remembered in localStorage. A plain
+// tap (no drag) opens the modal.
+function Fab({ onOpen }: { onOpen: () => void }) {
+  const [side, setSide] = useState<"left" | "right">("right");
+  const [dragX, setDragX] = useState<number | null>(null);
+  const startX = useRef<number | null>(null);
+  const moved = useRef(false);
+
+  useEffect(() => {
+    const s = localStorage.getItem("fab-side");
+    if (s === "left" || s === "right") setSide(s);
+  }, []);
+
+  const onPointerDown = (e: React.PointerEvent) => {
+    moved.current = false;
+    startX.current = e.clientX;
+    (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
+  };
+  const onPointerMove = (e: React.PointerEvent) => {
+    if (startX.current == null) return;
+    if (Math.abs(e.clientX - startX.current) > 6) {
+      moved.current = true;
+      setDragX(e.clientX);
+    }
+  };
+  const onPointerUp = (e: React.PointerEvent) => {
+    if (startX.current == null) return;
+    const x = e.clientX;
+    startX.current = null;
+    if (moved.current) {
+      const newSide = x < window.innerWidth / 2 ? "left" : "right";
+      setSide(newSide);
+      localStorage.setItem("fab-side", newSide);
+      setDragX(null);
+    } else {
+      onOpen();
+    }
+  };
+
+  const positional: React.CSSProperties =
+    dragX != null
+      ? { left: Math.max(8, Math.min(window.innerWidth - 140, dragX - 60)) }
+      : side === "left"
+        ? { left: 16 }
+        : { right: 16 };
+
+  return (
+    <button
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={onPointerUp}
+      className="fixed z-40 flex touch-none select-none items-center gap-2 rounded-full bg-indigo-600 px-5 py-4 text-base font-semibold text-white shadow-lg shadow-indigo-600/30 active:bg-indigo-800 sm:hidden"
+      style={{ bottom: "calc(env(safe-area-inset-bottom) + 4.75rem)", ...positional }}
+    >
+      <span className="text-xl leading-none">+</span> Add Spend
+    </button>
   );
 }

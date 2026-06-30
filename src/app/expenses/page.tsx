@@ -54,7 +54,7 @@ export default async function ExpensesPage({
   return (
     <>
       {nav}
-      <main className="mx-auto max-w-7xl space-y-5 p-6">
+      <main className="mx-auto max-w-7xl space-y-5 p-6 pb-28 sm:pb-6">
         <div className="flex flex-wrap items-end justify-between gap-2">
           <div>
             <h1 className="text-xl font-bold text-slate-900">

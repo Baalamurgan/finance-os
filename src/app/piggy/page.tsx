@@ -1,8 +1,9 @@
 import { formatINR } from "@/lib/format";
 import { loadCommon } from "@/lib/load";
-import { getPiggyOverview } from "@/lib/queries";
+import { getPiggyOverview, getSinkingBalances } from "@/lib/queries";
 import { NavHeader } from "@/components/NavHeader";
 import { WithdrawPiggyModal } from "@/components/WithdrawPiggyModal";
+import { DepositPiggyModal } from "@/components/DepositPiggyModal";
 
 export default async function PiggyPage({
   searchParams,
@@ -15,6 +16,7 @@ export default async function PiggyPage({
 
   const { generalTotal, generalByCategory, sinking } = await getPiggyOverview(c.household.id);
   const sinkingTotal = sinking.reduce((s, x) => s + x.hold, 0);
+  const sinkingBalances = await getSinkingBalances(c.household.id);
 
   return (
     <>
@@ -35,16 +37,22 @@ export default async function PiggyPage({
       <main className="mx-auto max-w-4xl space-y-6 p-6">
         <div className="flex items-center justify-between gap-2">
           <h1 className="text-xl font-bold text-slate-900">🐷 Piggy &amp; savings</h1>
-          {c.isHead && c.selected && c.selected.status === "open" && (
-            <WithdrawPiggyModal
-              periodId={c.selected.id}
-              periodLabel={c.selected.label}
-              categories={c.categories.map((cat) => ({
-                id: cat.id,
-                name: cat.name,
-                sinking: cat.sinking,
-              }))}
-            />
+          {c.isHead && (
+            <div className="flex items-center gap-2">
+              <DepositPiggyModal />
+              {c.selected && c.selected.status === "open" && (
+                <WithdrawPiggyModal
+                  periodId={c.selected.id}
+                  periodLabel={c.selected.label}
+                  categories={c.categories.map((cat) => ({
+                    id: cat.id,
+                    name: cat.name,
+                    sinking: cat.sinking,
+                  }))}
+                  available={{ general: generalTotal, sinking: sinkingBalances }}
+                />
+              )}
+            </div>
           )}
         </div>
 
@@ -127,7 +135,8 @@ export default async function PiggyPage({
             </ul>
           )}
           <p className="mt-3 text-xs text-slate-400">
-            Withdrawals (sending Piggy to Dad / a loan / a chit) come in a later update.
+            Use the <b>Use Piggy</b> button to send money to Dad / a loan / a chit — it records the
+            spend and reduces the chosen fund (you can&apos;t withdraw more than is available).
           </p>
         </section>
       </main>

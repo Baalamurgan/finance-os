@@ -38,6 +38,18 @@ export async function getPiggyBalance(householdId: number) {
 
 export type PiggyOverview = Awaited<ReturnType<typeof getPiggyOverview>>;
 
+// Per-category sinking-fund balances, keyed by categoryId (for overdraw checks).
+export async function getSinkingBalances(householdId: number) {
+  const rows = await prisma.piggyEntry.groupBy({
+    by: ["categoryId"],
+    where: { householdId, kind: "sinking" },
+    _sum: { amount: true },
+  });
+  const map: Record<number, number> = {};
+  for (const r of rows) if (r.categoryId != null) map[r.categoryId] = r._sum.amount ?? 0;
+  return map;
+}
+
 // General Piggy (per-category breakdown) + each sinking fund's accumulated hold.
 export async function getPiggyOverview(householdId: number) {
   const entries = await prisma.piggyEntry.findMany({
@@ -92,7 +104,7 @@ export async function getTrends(householdId: number) {
   return periods.map((p) => {
     const income = incMap.get(p.id) ?? 0;
     const expense = expMap.get(p.id) ?? 0;
-    return { label: p.label, income, expense, balance: income - expense };
+    return { label: p.label, year: p.year, month: p.month, income, expense, balance: income - expense };
   });
 }
 
@@ -395,5 +407,56 @@ export async function getRollup(periodId: number) {
     ],
     incomes,
     expenses,
+  };
+}
+
+// Aggregate getRollup across every period in an inclusive [from, to] month range
+// (for the Analysis "custom range" view). Sums totals + by-category/member/split.
+export async function getRollupRange(
+  householdId: number,
+  fromY: number,
+  fromM: number,
+  toY: number,
+  toM: number,
+) {
+  const lo = fromY * 12 + (fromM - 1);
+  const hi = toY * 12 + (toM - 1);
+  const [a, b] = lo <= hi ? [lo, hi] : [hi, lo];
+
+  const periods = await prisma.period.findMany({ where: { householdId } });
+  const inRange = periods.filter((p) => {
+    const k = p.year * 12 + (p.month - 1);
+    return k >= a && k <= b;
+  });
+  const rollups = await Promise.all(inRange.map((p) => getRollup(p.id)));
+
+  const totalIncome = rollups.reduce((s, r) => s + r.totalIncome, 0);
+  const totalExpense = rollups.reduce((s, r) => s + r.totalExpense, 0);
+
+  const catMap = new Map<string, { name: string; actual: number; planned: number }>();
+  for (const r of rollups)
+    for (const c of r.byCategory) {
+      const e = catMap.get(c.name) ?? { name: c.name, actual: 0, planned: 0 };
+      e.actual += c.actual;
+      e.planned += c.planned;
+      catMap.set(c.name, e);
+    }
+
+  const memMap = new Map<string, number>();
+  for (const r of rollups)
+    for (const m of r.byMember) memMap.set(m.name, (memMap.get(m.name) ?? 0) + m.total);
+
+  const nvo = new Map<string, number>();
+  for (const r of rollups)
+    for (const x of r.necessaryVsOther) nvo.set(x.name, (nvo.get(x.name) ?? 0) + x.value);
+
+  return {
+    totalIncome,
+    totalExpense,
+    balance: totalIncome - totalExpense,
+    byCategory: [...catMap.values()],
+    byMember: [...memMap.entries()].map(([name, total]) => ({ name, total })).filter((m) => m.total > 0),
+    necessaryVsOther: [...nvo.entries()].map(([name, value]) => ({ name, value })),
+    monthsCount: inRange.length,
   };
 }

@@ -3,6 +3,7 @@ import { loadCommon } from "@/lib/load";
 import { getRollup } from "@/lib/queries";
 import { NavHeader } from "@/components/NavHeader";
 import { ExpenseModal } from "@/components/ExpenseModal";
+import { RowActions } from "@/components/RowActions";
 import { addIncome, createPeriod, deleteExpense, deleteIncome } from "./actions";
 
 const SECTION_ORDER = ["Loans", "Chits", "Monthly", "Misc"] as const;
@@ -81,6 +82,10 @@ export default async function SheetPage({
   const curM = now.getMonth() + 1;
   const currentMonthMissing = !c.periods.some((p) => p.year === curY && p.month === curM);
 
+  // Head + Manager edit open months; the head can also edit a closed (locked) month.
+  const canEditHere = c.canEdit && (open || c.isHead);
+  const editingClosed = canEditHere && !open; // head editing a locked month
+
   // group expenses into the fixed section order
   const grouped = SECTION_ORDER.map((section) => {
     const rows = rollup.expenses.filter((e) => e.category.section === section);
@@ -103,6 +108,12 @@ export default async function SheetPage({
               <input type="hidden" name="month" value={curM} />
               <button className="btn whitespace-nowrap">Start {monthLabel(curM, curY)}</button>
             </form>
+          </div>
+        )}
+
+        {editingClosed && (
+          <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-2.5 text-sm font-medium text-amber-800">
+            🔒 {c.selected.label} is closed — you&apos;re editing a locked month as head. Changes save immediately.
           </div>
         )}
 
@@ -137,10 +148,10 @@ export default async function SheetPage({
             <div className="flex-1 divide-y divide-slate-100 px-4 py-1">
               {rollup.incomes.map((i) => (
                 <Row key={i.id} label={i.source} tag={i.owner?.name} amount={i.amount}>
-                  {c.isHead && open && <DeleteBtn id={i.id} action={deleteIncome} />}
+                  {canEditHere && <RowActions id={i.id} deleteAction={deleteIncome} />}
                 </Row>
               ))}
-              {c.isHead && open && (
+              {canEditHere && (
                 <details className="py-2 text-sm">
                   <summary className="cursor-pointer text-indigo-600">+ Add income</summary>
                   <form action={addIncome} className="mt-2 space-y-2">
@@ -195,13 +206,13 @@ export default async function SheetPage({
                         tag={e.member?.name}
                         amount={e.amount}
                       >
-                        {c.isHead && open && (
-                          <span className="flex items-center gap-1">
+                        {canEditHere && (
+                          <RowActions id={e.id} deleteAction={deleteExpense}>
                             <ExpenseModal
                               categories={c.categories}
                               members={c.members}
                               periodId={c.selected!.id}
-                              trigger="row"
+                              trigger="menuitem"
                               initial={{
                                 id: e.id,
                                 label: e.label,
@@ -211,8 +222,7 @@ export default async function SheetPage({
                                 necessary: e.necessary,
                               }}
                             />
-                            <DeleteBtn id={e.id} action={deleteExpense} />
-                          </span>
+                          </RowActions>
                         )}
                       </Row>
                     ))}
@@ -230,9 +240,9 @@ export default async function SheetPage({
           <Stat label="🐷 Piggy bank" value={formatINR(c.piggyBalance)} />
         </div>
 
-        {!c.isHead && (
+        {!c.canEdit && (
           <p className="text-center text-xs text-slate-400">
-            Read-only view. Only the head of family can edit.
+            Read-only view. Only the head or a manager can edit income & expenses.
           </p>
         )}
       </main>
@@ -306,23 +316,6 @@ function Row({
         {children}
       </div>
     </div>
-  );
-}
-
-function DeleteBtn({
-  id,
-  action,
-}: {
-  id: number;
-  action: (formData: FormData) => void;
-}) {
-  return (
-    <form action={action}>
-      <input type="hidden" name="id" value={id} />
-      <button className="text-xs text-slate-300 hover:text-red-600" aria-label="Delete">
-        ✕
-      </button>
-    </form>
   );
 }
 

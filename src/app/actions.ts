@@ -14,14 +14,28 @@ async function isHead() {
   return session?.user?.role === "head";
 }
 
+// Head + Manager may add/edit/delete income & expenses. Members are read-only
+// (they can still log their own spends via addSpend).
+async function canEdit() {
+  const session = await auth();
+  return session?.user?.role === "head" || session?.user?.role === "manager";
+}
+
 async function periodOpen(periodId: number) {
   const p = await prisma.period.findUnique({ where: { id: periodId } });
   return p?.status === "open";
 }
 
-// Create (no id) or update (id present). Head-only, open periods only.
+// May this caller edit entries in this period right now?
+// Head can edit any month (incl. closed); Manager only while the month is open.
+async function canEditNow(periodId: number) {
+  if (await isHead()) return true;
+  return await periodOpen(periodId);
+}
+
+// Create (no id) or update (id present). Head/Manager; head may edit closed months.
 export async function saveExpense(formData: FormData) {
-  if (!(await isHead())) return;
+  if (!(await canEdit())) return;
 
   const id = formData.get("id") ? Number(formData.get("id")) : null;
   const periodId = Number(formData.get("periodId"));
@@ -33,7 +47,7 @@ export async function saveExpense(formData: FormData) {
   const necessaryRaw = formData.get("necessary"); // "default" | "yes" | "no"
 
   if (!periodId || !categoryId || !amount) return;
-  if (!(await periodOpen(periodId))) return;
+  if (!(await canEditNow(periodId))) return;
 
   const category = await prisma.category.findUnique({ where: { id: categoryId } });
   const finalLabel = label || category?.name || "Expense";
@@ -56,7 +70,7 @@ export async function saveExpense(formData: FormData) {
 }
 
 export async function addIncome(formData: FormData) {
-  if (!(await isHead())) return;
+  if (!(await canEdit())) return;
   const periodId = Number(formData.get("periodId"));
   const source = String(formData.get("source") ?? "").trim();
   const amount = Number(formData.get("amount"));
@@ -64,28 +78,28 @@ export async function addIncome(formData: FormData) {
   const ownerId = ownerRaw ? Number(ownerRaw) : null;
 
   if (!periodId || !source || !amount) return;
-  if (!(await periodOpen(periodId))) return;
+  if (!(await canEditNow(periodId))) return;
 
   await prisma.incomeEntry.create({ data: { periodId, source, amount, ownerId } });
   revalidatePath("/", "layout");
 }
 
 export async function deleteExpense(formData: FormData) {
-  if (!(await isHead())) return;
+  if (!(await canEdit())) return;
   const id = Number(formData.get("id"));
   if (!id) return;
   const e = await prisma.expenseEntry.findUnique({ where: { id } });
-  if (e && !(await periodOpen(e.periodId))) return;
+  if (e && !(await canEditNow(e.periodId))) return;
   await prisma.expenseEntry.delete({ where: { id } });
   revalidatePath("/", "layout");
 }
 
 export async function deleteIncome(formData: FormData) {
-  if (!(await isHead())) return;
+  if (!(await canEdit())) return;
   const id = Number(formData.get("id"));
   if (!id) return;
   const i = await prisma.incomeEntry.findUnique({ where: { id } });
-  if (i && !(await periodOpen(i.periodId))) return;
+  if (i && !(await canEditNow(i.periodId))) return;
   await prisma.incomeEntry.delete({ where: { id } });
   revalidatePath("/", "layout");
 }
@@ -171,6 +185,15 @@ export async function withdrawPiggy(formData: FormData) {
   if (!household) return;
   const sinkingCatId = source !== "general" ? Number(source) : null;
 
+  // Overdraw guard: never let a withdrawal exceed the available balance.
+  const avail = await prisma.piggyEntry.aggregate({
+    where: sinkingCatId
+      ? { householdId: household.id, kind: "sinking", categoryId: sinkingCatId }
+      : { householdId: household.id, kind: "piggy" },
+    _sum: { amount: true },
+  });
+  if (Math.abs(amount) > (avail._sum.amount ?? 0)) return; // blocked (UI also guards)
+
   await prisma.$transaction(async (tx) => {
     // 1. reduce the piggy/sinking bucket
     await tx.piggyEntry.create({
@@ -198,6 +221,25 @@ export async function withdrawPiggy(formData: FormData) {
         necessary: cat?.necessary ?? true,
       },
     });
+  });
+  revalidatePath("/", "layout");
+}
+
+// Head adds money into the general Piggy (e.g. a manual top-up). Positive entry.
+export async function depositPiggy(formData: FormData) {
+  if (!(await isHead())) return;
+  const amount = Number(formData.get("amount"));
+  const note = String(formData.get("note") ?? "").trim() || "Manual top-up";
+  if (!amount || amount <= 0) return;
+  const household = await prisma.household.findFirst();
+  if (!household) return;
+  await prisma.piggyEntry.create({
+    data: {
+      householdId: household.id,
+      kind: "piggy",
+      amount: Math.abs(amount),
+      note: `Deposit: ${note}`,
+    },
   });
   revalidatePath("/", "layout");
 }
@@ -353,6 +395,8 @@ export async function recordLoanPayment(formData: FormData) {
   if (!loanId || amount <= 0) return;
   const loan = await prisma.loan.findUnique({ where: { id: loanId } });
   if (!loan) return;
+  // Overdraw guard: can't pay off more principal than is outstanding.
+  if (principalPart > loan.outstanding) return; // blocked (UI also guards)
 
   const newOutstanding = Math.max(0, loan.outstanding - principalPart);
   const newPaid = loan.kind === "chit" ? loan.paidInstallments + 1 : loan.paidInstallments;
@@ -512,8 +556,12 @@ export async function saveMember(formData: FormData) {
 
   try {
     if (id) {
-      // email intentionally NOT updated here
-      await prisma.member.update({ where: { id }, data: { name, code, role } });
+      // Head may set/clear a member's Google email here to grant/revoke sign-in.
+      const emailRaw = String(formData.get("email") ?? "").trim().toLowerCase();
+      await prisma.member.update({
+        where: { id },
+        data: { name, code, role, email: emailRaw || null },
+      });
     } else {
       const email = String(formData.get("email") ?? "").trim().toLowerCase();
       if (!householdId || !email) return; // email mandatory when adding

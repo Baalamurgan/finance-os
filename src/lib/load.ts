@@ -47,7 +47,12 @@ export async function loadCommon(params?: { y?: string; m?: string }) {
   if (y && m) {
     selected = periods.find((p) => p.year === y && p.month === m) ?? null;
   } else {
-    selected = periods[0] ?? null;
+    // Default to TODAY's calendar month if it exists, else the latest period.
+    const t = new Date();
+    selected =
+      periods.find((p) => p.year === t.getFullYear() && p.month === t.getMonth() + 1) ??
+      periods[0] ??
+      null;
   }
 
   const now = new Date();
@@ -67,6 +72,9 @@ export async function loadCommon(params?: { y?: string; m?: string }) {
     piggyBalance,
     currentMember,
     isHead: currentMember?.role === "head",
+    // Head + Manager may edit income/expenses; Members are read-only.
+    canEdit: currentMember?.role === "head" || currentMember?.role === "manager",
+    role: currentMember?.role ?? "member",
     account: {
       name: session.user.name ?? currentMember.name,
       email: session.user.email ?? currentMember.email ?? "",

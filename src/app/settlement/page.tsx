@@ -4,6 +4,7 @@ import { getSettlement, getSettlementHistory } from "@/lib/queries";
 import { NavHeader } from "@/components/NavHeader";
 import { markSettled, unsettle } from "../actions";
 import { HubSelect } from "@/components/HubSelect";
+import { ConfirmForm } from "@/components/ConfirmForm";
 
 export default async function SettlementPage({
   searchParams,
@@ -140,7 +141,10 @@ export default async function SettlementPage({
                       </span>
                     ) : (
                       c.isHead && (
-                        <form action={markSettled}>
+                        <ConfirmForm
+                          action={markSettled}
+                          message={`Mark ${t.from} → ${t.to} ${formatINR(t.amount)} as paid?`}
+                        >
                           <input type="hidden" name="householdId" value={c.household.id} />
                           <input type="hidden" name="periodId" value={selectedId} />
                           <input type="hidden" name="fromMemberId" value={t.fromId} />
@@ -149,7 +153,7 @@ export default async function SettlementPage({
                           <button className="rounded-md bg-indigo-600 px-3 py-1 text-xs font-medium text-white hover:bg-indigo-700">
                             Mark paid
                           </button>
-                        </form>
+                        </ConfirmForm>
                       )
                     )}
                   </div>

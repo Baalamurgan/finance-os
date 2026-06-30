@@ -1,13 +1,24 @@
 import { formatINR } from "@/lib/format";
 import { loadCommon } from "@/lib/load";
-import { getRollup, getTrends } from "@/lib/queries";
+import { getRollup, getRollupRange, getTrends } from "@/lib/queries";
 import { NavHeader } from "@/components/NavHeader";
 import { CategoryBars, SplitPie, TrendChart } from "@/components/Charts";
+import { AnalysisRangePicker } from "@/components/AnalysisRangePicker";
+
+const MON = ["", "JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"];
 
 export default async function AnalysisPage({
   searchParams,
 }: {
-  searchParams: Promise<{ y?: string; m?: string }>;
+  searchParams: Promise<{
+    y?: string;
+    m?: string;
+    mode?: string;
+    fy?: string;
+    fm?: string;
+    ty?: string;
+    tm?: string;
+  }>;
 }) {
   const sp = await searchParams;
   const c = await loadCommon(sp);
@@ -35,26 +46,61 @@ export default async function AnalysisPage({
     />
   );
 
-  if (c.noData || !c.selected) {
+  const isRange = sp.mode === "range" && !!(sp.fy && sp.fm && sp.ty && sp.tm);
+
+  // Default the range picker's inputs sensibly (range = current ± / single month).
+  const fromDefault = isRange
+    ? { y: Number(sp.fy), m: Number(sp.fm) }
+    : { y: c.selYear, m: c.selMonth };
+  const toDefault = isRange
+    ? { y: Number(sp.ty), m: Number(sp.tm) }
+    : { y: c.selYear, m: c.selMonth };
+
+  const picker = (
+    <AnalysisRangePicker
+      isRange={isRange}
+      curYear={c.selYear}
+      curMonth={c.selMonth}
+      from={fromDefault}
+      to={toDefault}
+    />
+  );
+
+  if (!isRange && (c.noData || !c.selected)) {
     return (
       <>
         {nav}
-        <main className="mx-auto max-w-2xl p-16 text-center text-slate-500">
-          No data to analyse for this month.
+        <main className="mx-auto max-w-7xl space-y-4 p-6">
+          {picker}
+          <p className="p-12 text-center text-slate-500">No data to analyse for this month.</p>
         </main>
       </>
     );
   }
 
-  const rollup = await getRollup(c.selected.id);
-  const trends = await getTrends(c.household.id);
+  const rollup = isRange
+    ? await getRollupRange(c.household.id, Number(sp.fy), Number(sp.fm), Number(sp.ty), Number(sp.tm))
+    : await getRollup(c.selected!.id);
+  const allTrends = await getTrends(c.household.id);
+  const trends = isRange
+    ? allTrends.filter((t) => {
+        const lo = Number(sp.fy) * 12 + (Number(sp.fm) - 1);
+        const hi = Number(sp.ty) * 12 + (Number(sp.tm) - 1);
+        const k = t.year * 12 + (t.month - 1);
+        return k >= Math.min(lo, hi) && k <= Math.max(lo, hi);
+      })
+    : allTrends;
   const overBudget = rollup.byCategory.filter((r) => r.planned > 0 && r.actual > r.planned);
+  const title = isRange
+    ? `${MON[Number(sp.fm)]} ${sp.fy} – ${MON[Number(sp.tm)]} ${sp.ty} — analysis`
+    : `${c.selected!.label} — analysis`;
 
   return (
     <>
       {nav}
       <main className="mx-auto max-w-7xl space-y-8 p-6">
-        <h1 className="text-xl font-bold text-slate-900">{c.selected.label} — analysis</h1>
+        {picker}
+        <h1 className="text-xl font-bold text-slate-900">{title}</h1>
 
         <section className="grid grid-cols-1 gap-4 sm:grid-cols-3">
           <Card label="Total Income" value={formatINR(rollup.totalIncome)} tone="green" />

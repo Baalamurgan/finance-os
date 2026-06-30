@@ -2,7 +2,9 @@ import { formatINR } from "@/lib/format";
 import { loadCommon } from "@/lib/load";
 import { getLoans } from "@/lib/queries";
 import { NavHeader } from "@/components/NavHeader";
-import { createLoan, recordLoanPayment, closeLoan, deleteLoan } from "../actions";
+import { ConfirmForm } from "@/components/ConfirmForm";
+import { LoanPaymentForm } from "@/components/LoanPaymentForm";
+import { createLoan, closeLoan, deleteLoan } from "../actions";
 
 export default async function LoansPage({
   searchParams,
@@ -132,42 +134,19 @@ function LoanCard({
 
       {isHead && (
         <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-slate-100 pt-3">
-          <details className="text-sm">
-            <summary className="cursor-pointer text-indigo-600">+ Record payment</summary>
-            <form action={recordLoanPayment} className="mt-2 flex flex-wrap items-end gap-2">
-              <input type="hidden" name="loanId" value={l.id} />
-              {periodId && <input type="hidden" name="periodId" value={periodId} />}
-              <label className="text-xs text-slate-500">
-                Amount
-                <input name="amount" type="number" step="0.01" required className="input mt-0.5 block w-28" />
-              </label>
-              <label className="text-xs text-slate-500">
-                Principal part
-                <input
-                  name="principalPart"
-                  type="number"
-                  step="0.01"
-                  defaultValue={l.kind === "loan" ? "" : "0"}
-                  placeholder={l.kind === "loan" ? "reduces balance" : "0"}
-                  className="input mt-0.5 block w-32"
-                />
-              </label>
-              <input name="note" placeholder="note" className="input w-32" />
-              <button className="btn">Save</button>
-            </form>
-          </details>
-          <form action={closeLoan}>
+          <LoanPaymentForm loanId={l.id} periodId={periodId} kind={l.kind} outstanding={l.outstanding} />
+          <ConfirmForm action={closeLoan} message={`Close ${l.name}? It moves to the Closed list.`}>
             <input type="hidden" name="loanId" value={l.id} />
             <button className="rounded-md px-2 py-1.5 text-xs text-slate-500 hover:bg-slate-100">
               Close
             </button>
-          </form>
-          <form action={deleteLoan}>
+          </ConfirmForm>
+          <ConfirmForm action={deleteLoan} message={`Delete ${l.name} permanently? This removes its payment history.`}>
             <input type="hidden" name="loanId" value={l.id} />
             <button className="rounded-md px-2 py-1.5 text-xs text-slate-300 hover:text-red-600">
               Delete
             </button>
-          </form>
+          </ConfirmForm>
         </div>
       )}
 
