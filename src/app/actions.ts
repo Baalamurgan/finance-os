@@ -633,8 +633,6 @@ export async function windDownMonth(formData: FormData) {
 
   let movedToPiggy = 0;
   let miscTotal = 0;
-  // over-budget food etc. charged to a responsible member next month
-  const excessCharges: { categoryId: number; memberId: number; amount: number; label: string }[] = [];
 
   const nextMonth = period.month === 12 ? 1 : period.month + 1;
   const nextYear = period.month === 12 ? period.year + 1 : period.year;
@@ -646,18 +644,9 @@ export async function windDownMonth(formData: FormData) {
     for (const cat of trackedCats) {
       const budget = budgetOf(cat.id);
       if (budget > 0) {
+        // remainder = committed budget − actually spent. Positive → saved to the
+        // Piggy / sinking hold; negative (over budget) → covered from the Piggy.
         const remainder = budget - spentOf(cat.id);
-        // Over budget + a responsible member set → charge the excess to that person
-        // next month (matches the sheet's "provision excess exp → Harish"); no piggy hit.
-        if (remainder < 0 && cat.responsibleMemberId) {
-          excessCharges.push({
-            categoryId: cat.id,
-            memberId: cat.responsibleMemberId,
-            amount: -remainder,
-            label: `${cat.name} excess (${period.label})`,
-          });
-          continue;
-        }
         await tx.piggyEntry.create({
           data: {
             householdId,
@@ -697,20 +686,6 @@ export async function windDownMonth(formData: FormData) {
           periodId: next.id,
           source: `Misc adjustment (from ${period.label})`,
           amount: -miscTotal,
-        },
-      });
-    }
-
-    // Over-budget food etc. → charged to the responsible member as next-month expenses
-    for (const ch of excessCharges) {
-      await tx.expenseEntry.create({
-        data: {
-          periodId: next.id,
-          label: ch.label,
-          amount: ch.amount,
-          categoryId: ch.categoryId,
-          memberId: ch.memberId,
-          necessary: true,
         },
       });
     }

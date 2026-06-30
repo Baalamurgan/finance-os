@@ -80,7 +80,7 @@ const EXPENSES: {
   { label: "VL-JL-Trustpuram Interest", amount: 6100, category: "Interest", member: "H" },
   { label: "Gillnagar-Harish-JL Interest", amount: 2665, category: "Interest", member: "H" },
   { label: "KA-3L-Interest", amount: 4500, category: "Interest", member: "KA" },
-  { label: "EB Amount", amount: 2000, category: "EB", member: "B" },
+  { label: "EB (monthly share)", amount: 1000, category: "EB", member: "B" },
   { label: "God", amount: 1001, category: "God", member: null },
   { label: "Car Cleaning", amount: 500, category: "Household", member: null },
   { label: "Maintenance-BFC", amount: 1000, category: "Household", member: null },

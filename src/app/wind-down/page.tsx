@@ -102,12 +102,30 @@ export default async function WindDownPage({
 
               <Breakdown
                 title="→ General Piggy (variable categories' leftover)"
-                rows={toPiggy.map((t) => ({ name: t.name, amount: t.remaining }))}
+                rows={toPiggy.map((t) => ({
+                  name:
+                    t.remaining < 0
+                      ? `${t.name} — over by ${formatINR(-t.remaining)}, covered from Piggy`
+                      : t.name,
+                  amount: t.remaining,
+                }))}
                 total={piggyAdd}
               />
+              {c.piggyBalance + piggyAdd < 0 && (
+                <p className="rounded-lg bg-amber-50 px-3 py-2 text-xs font-medium text-amber-800">
+                  ⚠ Over-budget spending is more than the Piggy holds — the general Piggy will go
+                  negative ({formatINR(c.piggyBalance + piggyAdd)}). Add money to Piggy or reduce spends.
+                </p>
+              )}
               <Breakdown
                 title="→ Sinking-fund holds (saved for upcoming bills)"
-                rows={toSinking.map((t) => ({ name: t.name, amount: t.remaining }))}
+                rows={toSinking.map((t) => ({
+                  name:
+                    t.remaining < 0
+                      ? `${t.name} — over by ${formatINR(-t.remaining)}`
+                      : t.name,
+                  amount: t.remaining,
+                }))}
                 total={sinkingAdd}
               />
               {miscTotal > 0 && (

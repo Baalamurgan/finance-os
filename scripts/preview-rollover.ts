@@ -49,14 +49,12 @@ async function main() {
     const b = budgetOf(c.id);
     if (b > 0) {
       const rem = b - spentOf(c.id);
-      if (rem < 0 && c.responsibleMemberId) {
-        console.log(`   • ${c.name}: OVER by ${inr(-rem)} → charged to ${mName(c.responsibleMemberId)} next month`);
-      } else if (c.sinking) {
+      if (c.sinking) {
         sinking += rem;
-        console.log(`   • ${c.name}: ${inr(rem)} → sinking hold`);
+        console.log(`   • ${c.name}: ${inr(rem)} → sinking hold${rem < 0 ? " (over budget)" : ""}`);
       } else {
         piggy += rem;
-        console.log(`   • ${c.name}: ${inr(rem)} → general Piggy`);
+        console.log(`   • ${c.name}: ${inr(rem)} → general Piggy${rem < 0 ? " (over budget — covered from Piggy)" : ""}`);
       }
     } else {
       const sp = spentOf(c.id);

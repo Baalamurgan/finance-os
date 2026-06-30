@@ -323,7 +323,7 @@ export async function getTrackedExpenses(householdId: number, periodId: number) 
  * per-member attribution, necessary-vs-other, and the raw entry lists.
  */
 export async function getRollup(periodId: number) {
-  const [incomes, expenses, budgets, members] = await Promise.all([
+  const [incomes, expenses, budgets, members, spends, cats] = await Promise.all([
     prisma.incomeEntry.findMany({
       where: { periodId },
       include: { owner: true },
@@ -339,40 +339,38 @@ export async function getRollup(periodId: number) {
       where: { household: { periods: { some: { id: periodId } } } },
       orderBy: { id: "asc" },
     }),
+    prisma.spend.findMany({ where: { periodId } }),
+    prisma.category.findMany({
+      where: { household: { periods: { some: { id: periodId } } } },
+    }),
   ]);
 
   const totalIncome = incomes.reduce((s, i) => s + i.amount, 0);
   const totalExpense = expenses.reduce((s, e) => s + e.amount, 0);
   const balance = totalIncome - totalExpense;
 
-  // by category: actual spend + planned budget
+  // by category: planned budget + "actual". For TRACKED categories, "actual" is
+  // the real daily Spend total (matches the Expenses tab); for non-tracked it's
+  // the sheet ExpenseEntry total. (totalExpense/balance above stay on ExpenseEntry.)
   const plannedByCat = new Map<number, number>();
   for (const b of budgets) plannedByCat.set(b.categoryId, b.planned);
 
-  const catMap = new Map<
-    number,
-    { name: string; actual: number; planned: number }
-  >();
-  for (const e of expenses) {
-    const cur = catMap.get(e.categoryId) ?? {
-      name: e.category.name,
-      actual: 0,
-      planned: plannedByCat.get(e.categoryId) ?? 0,
-    };
-    cur.actual += e.amount;
-    catMap.set(e.categoryId, cur);
-  }
-  // include budgeted categories with no expenses yet
-  for (const b of budgets) {
-    if (!catMap.has(b.categoryId)) {
-      catMap.set(b.categoryId, {
-        name: b.category.name,
-        actual: 0,
-        planned: b.planned,
-      });
-    }
-  }
-  const byCategory = [...catMap.values()].sort((a, b) => b.actual - a.actual);
+  const expenseByCat = new Map<number, number>();
+  for (const e of expenses) expenseByCat.set(e.categoryId, (expenseByCat.get(e.categoryId) ?? 0) + e.amount);
+
+  const spendByCat = new Map<number, number>();
+  for (const s of spends) spendByCat.set(s.categoryId, (spendByCat.get(s.categoryId) ?? 0) + s.amount);
+
+  const byCategory = cats
+    .map((cat) => ({
+      name: cat.name,
+      planned: plannedByCat.get(cat.id) ?? 0,
+      actual: cat.tracked
+        ? spendByCat.get(cat.id) ?? 0
+        : expenseByCat.get(cat.id) ?? 0,
+    }))
+    .filter((r) => r.actual > 0 || r.planned > 0)
+    .sort((a, b) => b.actual - a.actual);
 
   // per-member attribution (expenses with a member tag)
   const memberTotals = new Map<number, number>();
