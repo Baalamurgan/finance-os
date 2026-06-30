@@ -11,7 +11,10 @@ export function ExpenseModal({
   members,
   periodId,
   initial,
-  trigger,
+  trigger = "row",
+  controlledOpen,
+  onOpenChange,
+  hideTrigger,
 }: {
   categories: Cat[];
   members: Mem[];
@@ -24,9 +27,14 @@ export function ExpenseModal({
     memberId: number | null;
     necessary: boolean;
   };
-  trigger: "primary" | "row" | "menuitem";
+  trigger?: "primary" | "row" | "menuitem";
+  controlledOpen?: boolean; // when provided, parent controls open state
+  onOpenChange?: (v: boolean) => void;
+  hideTrigger?: boolean; // render no trigger (parent opens via controlledOpen)
 }) {
-  const [open, setOpen] = useState(false);
+  const [openState, setOpenState] = useState(false);
+  const open = controlledOpen ?? openState;
+  const setOpen = onOpenChange ?? setOpenState;
   const [categoryId, setCategoryId] = useState<number | null>(
     initial?.categoryId ?? null
   );
@@ -43,7 +51,7 @@ export function ExpenseModal({
 
   return (
     <>
-      {trigger === "primary" ? (
+      {hideTrigger ? null : trigger === "primary" ? (
         <button onClick={() => setOpen(true)} className="btn">
           + Add Expense
         </button>

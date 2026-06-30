@@ -47,10 +47,15 @@ export async function loadCommon(params?: { y?: string; m?: string }) {
   if (y && m) {
     selected = periods.find((p) => p.year === y && p.month === m) ?? null;
   } else {
-    // Default to TODAY's calendar month if it exists, else the latest period.
+    // Prefer TODAY's calendar month if it's OPEN, else the latest open month
+    // (so an old closed/imported current month doesn't hide the Add buttons),
+    // else just the latest period. periods are sorted newest-first.
     const t = new Date();
     selected =
-      periods.find((p) => p.year === t.getFullYear() && p.month === t.getMonth() + 1) ??
+      periods.find(
+        (p) => p.year === t.getFullYear() && p.month === t.getMonth() + 1 && p.status === "open",
+      ) ??
+      periods.find((p) => p.status === "open") ??
       periods[0] ??
       null;
   }

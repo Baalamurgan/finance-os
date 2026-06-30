@@ -2,9 +2,9 @@ import { formatINR } from "@/lib/format";
 import { loadCommon } from "@/lib/load";
 import { getRollup } from "@/lib/queries";
 import { NavHeader } from "@/components/NavHeader";
-import { ExpenseModal } from "@/components/ExpenseModal";
 import { RowActions } from "@/components/RowActions";
-import { addIncome, createPeriod, deleteExpense, deleteIncome } from "./actions";
+import { ExpenseRowActions } from "@/components/ExpenseRowActions";
+import { addIncome, createPeriod, deleteIncome } from "./actions";
 
 const SECTION_ORDER = ["Loans", "Chits", "Monthly", "Misc"] as const;
 const SECTION_LABEL: Record<string, string> = {
@@ -207,22 +207,19 @@ export default async function SheetPage({
                         amount={e.amount}
                       >
                         {canEditHere && (
-                          <RowActions id={e.id} deleteAction={deleteExpense}>
-                            <ExpenseModal
-                              categories={c.categories}
-                              members={c.members}
-                              periodId={c.selected!.id}
-                              trigger="menuitem"
-                              initial={{
-                                id: e.id,
-                                label: e.label,
-                                amount: e.amount,
-                                categoryId: e.categoryId,
-                                memberId: e.memberId,
-                                necessary: e.necessary,
-                              }}
-                            />
-                          </RowActions>
+                          <ExpenseRowActions
+                            categories={c.categories}
+                            members={c.members}
+                            periodId={c.selected!.id}
+                            initial={{
+                              id: e.id,
+                              label: e.label,
+                              amount: e.amount,
+                              categoryId: e.categoryId,
+                              memberId: e.memberId,
+                              necessary: e.necessary,
+                            }}
+                          />
                         )}
                       </Row>
                     ))}
