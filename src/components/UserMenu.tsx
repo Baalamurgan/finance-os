@@ -1,21 +1,56 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
+import { startRegistration } from "@simplewebauthn/browser";
 import { doSignOut } from "@/app/actions";
+import { lockNow, removeMyBiometric } from "@/app/lock/actions";
 
 export function UserMenu({
   name,
   email,
   image,
   role,
+  pinEnabled = false,
+  hasBiometric = false,
 }: {
   name: string;
   email: string;
   image: string | null;
   role: string;
+  pinEnabled?: boolean;
+  hasBiometric?: boolean;
 }) {
+  const router = useRouter();
   const [open, setOpen] = useState(false);
+  const [bioBusy, setBioBusy] = useState(false);
+  const [bioMsg, setBioMsg] = useState<string | null>(null);
   const ref = useRef<HTMLDivElement>(null);
+
+  const enrollBiometric = async () => {
+    setBioBusy(true);
+    setBioMsg(null);
+    try {
+      const optRes = await fetch("/api/webauthn/register/options", { method: "POST" });
+      if (!optRes.ok) throw new Error("Couldn’t start biometric setup.");
+      const options = await optRes.json();
+      const attestation = await startRegistration(options);
+      const verifyRes = await fetch("/api/webauthn/register/verify", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ ...attestation, deviceLabel: navigator.platform || "This device" }),
+      });
+      const data = await verifyRes.json();
+      if (data.verified) {
+        setBioMsg("Biometric unlock enabled.");
+        router.refresh();
+      } else throw new Error(data.error ?? "Setup failed.");
+    } catch (e) {
+      setBioMsg(e instanceof Error ? e.message : "Biometric unavailable on this device.");
+    } finally {
+      setBioBusy(false);
+    }
+  };
 
   useEffect(() => {
     if (!open) return;
@@ -66,6 +101,34 @@ export function UserMenu({
               </span>
             </div>
           </div>
+          {pinEnabled && (
+            <div className="border-b border-slate-100">
+              {hasBiometric ? (
+                <form action={removeMyBiometric}>
+                  <button className="flex w-full items-center gap-2 px-4 py-3 text-left text-sm text-slate-700 hover:bg-slate-50">
+                    <FaceGlyph />
+                    Turn off biometric unlock
+                  </button>
+                </form>
+              ) : (
+                <button
+                  onClick={enrollBiometric}
+                  disabled={bioBusy}
+                  className="flex w-full items-center gap-2 px-4 py-3 text-left text-sm text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                >
+                  <FaceGlyph />
+                  {bioBusy ? "Setting up…" : "Enable Face ID / fingerprint"}
+                </button>
+              )}
+              {bioMsg && <p className="px-4 pb-2 text-xs text-slate-500">{bioMsg}</p>}
+              <form action={lockNow}>
+                <button className="flex w-full items-center gap-2 px-4 py-3 text-left text-sm text-slate-700 hover:bg-slate-50">
+                  <LockGlyph />
+                  Lock now
+                </button>
+              </form>
+            </div>
+          )}
           <form action={doSignOut}>
             <button className="flex w-full items-center gap-2 px-4 py-3 text-left text-sm text-slate-700 hover:bg-slate-50">
               <svg width="16" height="16" viewBox="0 0 24 24" className="text-slate-400">
@@ -80,6 +143,24 @@ export function UserMenu({
         </div>
       )}
     </div>
+  );
+}
+
+function FaceGlyph() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" className="text-slate-400" aria-hidden>
+      <path d="M4 8V6a2 2 0 0 1 2-2h2M16 4h2a2 2 0 0 1 2 2v2M20 16v2a2 2 0 0 1-2 2h-2M8 20H6a2 2 0 0 1-2-2v-2" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
+      <path d="M9 10v1M15 10v1M10 15s.8.8 2 .8 2-.8 2-.8" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function LockGlyph() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" className="text-slate-400" aria-hidden>
+      <rect x="5" y="11" width="14" height="9" rx="2" fill="currentColor" />
+      <path d="M8 11V8a4 4 0 0 1 8 0v3" stroke="currentColor" strokeWidth="2" />
+    </svg>
   );
 }
 

@@ -16,6 +16,12 @@ model Household {
   type       String     @default("family") // family | personal
   treasurerMemberId Int? // hub member that everyone settles with (defaults to head)
   windDownDay Int? // day of month the head aims to close/wind down; drives the reminder
+  // App-lock: one shared PIN for the whole household (set/reset by the head).
+  // Everyone enters it after Google login. null = lock disabled.
+  pinHash           String? // PBKDF2 hash of the 4-digit PIN
+  pinSalt           String? // per-household salt (hex)
+  pinFailedAttempts Int      @default(0) // consecutive wrong PINs (brute-force ladder)
+  pinLockedUntil    DateTime? // temporary lockout after too many wrong PINs
   members      Member[]
   periods      Period[]
   categories   Category[]
@@ -66,8 +72,23 @@ model Member {
   incomes     IncomeEntry[]
   expenses    ExpenseEntry[]
   spends      Spend[]
+  webauthnCreds WebAuthnCredential[]
 
   @@unique([householdId, code])
+}
+
+// A registered platform biometric (Face ID / Touch ID / Android) for one member
+// on one device. Unlocking with biometric = a WebAuthn assertion against these.
+model WebAuthnCredential {
+  id           Int      @id @default(autoincrement())
+  member       Member   @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  memberId     Int
+  credentialId String   @unique // base64url credential id
+  publicKey    Bytes // COSE public key
+  counter      Int      @default(0)
+  transports   String? // csv of authenticator transports
+  deviceLabel  String? // best-effort label ("iPhone", "This device")
+  createdAt    DateTime @default(now())
 }
 
 // A month (e.g. MAR 2026).

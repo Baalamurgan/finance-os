@@ -29,6 +29,8 @@ export default async function WindDownPage({
       currentMemberId={c.currentMember?.id}
       windDownReminder={c.windDownReminder}
       canEdit={c.canEdit}
+      pinEnabled={c.pinEnabled}
+      hasBiometric={c.hasBiometric}
     />
   );
 

@@ -1,5 +1,7 @@
 import { redirect } from "next/navigation";
 import { auth } from "@/auth";
+import { prisma } from "@/lib/prisma";
+import { isUnlocked } from "@/lib/applock";
 import {
   getCategories,
   getHousehold,
@@ -39,6 +41,11 @@ export async function loadCommon(params?: { y?: string; m?: string }) {
   // signed in but not mapped to any family member → deny
   if (!currentMember) redirect("/signin?error=AccessDenied");
 
+  // App-lock: if the household has a shared PIN and this device isn't unlocked
+  // for the session, gate everything behind the lock screen. (The /lock page
+  // does its own minimal loading so it never trips this redirect.)
+  if (household.pinHash && !(await isUnlocked(household.id))) redirect("/lock");
+
   // resolve the selected period by (year, month), else latest
   const y = params?.y ? Number(params.y) : undefined;
   const m = params?.m ? Number(params.m) : undefined;
@@ -64,6 +71,11 @@ export async function loadCommon(params?: { y?: string; m?: string }) {
   const selYear = y ?? selected?.year ?? now.getFullYear();
   const selMonth = m ?? selected?.month ?? now.getMonth() + 1;
   const noData = !selected;
+
+  // App-lock state for the header menu (enable biometric / lock now).
+  const pinEnabled = !!household.pinHash;
+  const hasBiometric =
+    pinEnabled && (await prisma.webAuthnCredential.count({ where: { memberId: currentMember.id } })) > 0;
 
   // In-app wind-down reminder: if the head set a close day, surface a banner
   // in the 5 days leading up to it (counts to this month's day, else next month's).
@@ -91,6 +103,8 @@ export async function loadCommon(params?: { y?: string; m?: string }) {
     categories,
     piggyBalance,
     currentMember,
+    pinEnabled,
+    hasBiometric,
     isHead: currentMember?.role === "head",
     // Head + Manager may edit income/expenses; Members are read-only.
     canEdit: currentMember?.role === "head" || currentMember?.role === "manager",

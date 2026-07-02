@@ -28,6 +28,8 @@ export function NavHeader({
   currentMemberId,
   windDownReminder,
   canEdit,
+  pinEnabled,
+  hasBiometric,
 }: {
   active:
     | "sheet"
@@ -52,6 +54,8 @@ export function NavHeader({
   currentMemberId?: number | null;
   windDownReminder?: { daysUntil: number; day: number } | null;
   canEdit?: boolean;
+  pinEnabled?: boolean;
+  hasBiometric?: boolean;
 }) {
   const router = useRouter();
   const now = new Date();
@@ -174,6 +178,8 @@ export function NavHeader({
               email={account.email}
               image={account.image}
               role={isHead ? "head" : "member"}
+              pinEnabled={pinEnabled}
+              hasBiometric={hasBiometric}
             />
           </div>
         </div>

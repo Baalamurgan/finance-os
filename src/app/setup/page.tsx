@@ -3,6 +3,7 @@ import { loadCommon } from "@/lib/load";
 import { setWindDownDay } from "@/app/actions";
 import { NavHeader } from "@/components/NavHeader";
 import { MonthlySetup } from "@/components/MonthlySetup";
+import { PinSettings } from "@/components/PinSettings";
 
 export default async function SetupPage({
   searchParams,
@@ -47,6 +48,8 @@ export default async function SetupPage({
         currentMemberId={c.currentMember?.id}
         windDownReminder={c.windDownReminder}
         canEdit={c.canEdit}
+        pinEnabled={c.pinEnabled}
+        hasBiometric={c.hasBiometric}
       />
 
       <main className="mx-auto max-w-4xl space-y-5 p-6">
@@ -96,6 +99,8 @@ export default async function SetupPage({
             )}
           </form>
         </section>
+
+        <PinSettings isSet={c.pinEnabled} readOnly={readOnly} />
 
         <MonthlySetup
           rows={rows}

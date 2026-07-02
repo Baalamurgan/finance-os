@@ -39,6 +39,8 @@ export default async function PiggyPage({
         currentMemberId={c.currentMember?.id}
         windDownReminder={c.windDownReminder}
         canEdit={c.canEdit}
+        pinEnabled={c.pinEnabled}
+        hasBiometric={c.hasBiometric}
       />
 
       <main className="mx-auto max-w-4xl space-y-6 p-6">
