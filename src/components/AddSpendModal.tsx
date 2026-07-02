@@ -6,16 +6,24 @@ import { addSpendAction, type AddSpendState } from "@/app/actions";
 
 type Cat = { id: number; name: string };
 
+type Mem = { id: number; name: string };
+
 export function AddSpendModal({
   periodId,
   trigger,
   fixedCategory,
   categories,
+  isHead,
+  members,
+  currentMemberId,
 }: {
   periodId: number;
   trigger: "primary" | "card" | "fab";
   fixedCategory?: Cat; // card mode: category locked
   categories?: Cat[]; // picker mode: choose a category
+  isHead?: boolean; // head can log on behalf of another member
+  members?: Mem[];
+  currentMemberId?: number | null;
 }) {
   const [open, setOpen] = useState(false);
   const [mounted, setMounted] = useState(false);
@@ -160,6 +168,22 @@ export function AddSpendModal({
                       className="mt-1.5 w-full rounded-xl border-2 border-slate-300 px-4 py-3 text-lg outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
                     />
                   </div>
+
+                  {/* head-only: log a spend on behalf of another family member */}
+                  {isHead && members && members.length > 0 && (
+                    <div>
+                      <label className="text-sm font-medium text-slate-600">Who spent</label>
+                      <select
+                        name="memberId"
+                        defaultValue={currentMemberId ?? ""}
+                        className="mt-1.5 w-full rounded-xl border-2 border-slate-300 px-4 py-3 text-base outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
+                      >
+                        {members.map((m) => (
+                          <option key={m.id} value={m.id}>{m.name}</option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
 
                   {/* keep-adding toggle: off = Save closes; on = stay open for next item */}
                   <label className="flex items-center gap-3 rounded-xl bg-slate-50 px-4 py-3 text-base text-slate-700">

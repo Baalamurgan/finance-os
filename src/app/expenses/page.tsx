@@ -27,6 +27,7 @@ export default async function ExpensesPage({
       piggyBalance={c.piggyBalance}
       periodId={c.selected?.id ?? null}
       periodOpen={c.selected?.status === "open"}
+      currentMemberId={c.currentMember?.id}
     />
   );
 
@@ -99,6 +100,9 @@ export default async function ExpensesPage({
                       periodId={c.selected!.id}
                       trigger="card"
                       fixedCategory={{ id: card.id, name: card.name }}
+                      isHead={c.isHead}
+                      members={c.members}
+                      currentMemberId={c.currentMember?.id}
                     />
                   )}
                 </div>

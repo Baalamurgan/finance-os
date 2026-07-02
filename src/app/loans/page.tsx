@@ -33,6 +33,7 @@ export default async function LoansPage({
         piggyBalance={c.piggyBalance}
         periodId={periodId}
         periodOpen={c.selected?.status === "open"}
+        currentMemberId={c.currentMember?.id}
       />
 
       <main className="mx-auto max-w-4xl space-y-6 p-6">

@@ -43,6 +43,7 @@ export default async function AnalysisPage({
       piggyBalance={c.piggyBalance}
       periodId={c.selected?.id ?? null}
       periodOpen={c.selected?.status === "open"}
+      currentMemberId={c.currentMember?.id}
     />
   );
 

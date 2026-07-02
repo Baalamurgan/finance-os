@@ -2,9 +2,7 @@ import { formatINR } from "@/lib/format";
 import { loadCommon } from "@/lib/load";
 import { getSettlement, getSettlementHistory } from "@/lib/queries";
 import { NavHeader } from "@/components/NavHeader";
-import { markSettled, unsettle } from "../actions";
-import { HubSelect } from "@/components/HubSelect";
-import { ConfirmForm } from "@/components/ConfirmForm";
+import { SettlementBoard } from "@/components/SettlementBoard";
 
 export default async function SettlementPage({
   searchParams,
@@ -28,6 +26,7 @@ export default async function SettlementPage({
       piggyBalance={c.piggyBalance}
       periodId={c.selected?.id ?? null}
       periodOpen={c.selected?.status === "open"}
+      currentMemberId={c.currentMember?.id}
     />
   );
 
@@ -46,8 +45,9 @@ export default async function SettlementPage({
   // treasurer = ?hub query (shareable) → this month's saved override → household → head
   const headId = c.members.find((m) => m.role === "head")?.id ?? c.members[0]?.id ?? null;
   const hubParam = sp.hub ? Number(sp.hub) : null;
-  const treasurerId =
-    hubParam ?? c.selected.treasurerMemberId ?? c.household.treasurerMemberId ?? headId;
+  // persisted default (ignores the shareable ?hub= override) — for disabling "Set default"
+  const defaultId = c.selected.treasurerMemberId ?? c.household.treasurerMemberId ?? headId;
+  const treasurerId = hubParam ?? defaultId;
   const { rows, treasurer, transfers, settledCount, total, allSettled } =
     await getSettlement(c.household.id, selectedId, treasurerId);
   const history = await getSettlementHistory(c.household.id);
@@ -69,153 +69,24 @@ export default async function SettlementPage({
               difference with the treasurer.
             </p>
           </div>
-          {c.isHead && (
-            <HubSelect
-              members={c.members}
-              value={treasurerId}
-              y={c.selYear}
-              m={c.selMonth}
-              householdId={c.household.id}
-              periodId={selectedId}
-              label={c.selected.label}
-            />
-          )}
         </div>
 
-        {/* who owes whom */}
-        <section className="rounded-xl border border-slate-200 bg-white p-5">
-          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-            <h2 className="text-sm font-semibold text-slate-700">
-              Who owes whom{" "}
-              {treasurer && <span className="text-slate-400">(hub: {treasurer.name})</span>}
-            </h2>
-            {total > 0 &&
-              (allSettled ? (
-                <span className="rounded-full bg-green-100 px-3 py-1 text-xs font-medium text-green-700">
-                  ✓ Fully settled
-                </span>
-              ) : (
-                <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-600">
-                  {settledCount} of {total} settled
-                </span>
-              ))}
-          </div>
-          {transfers.length === 0 ? (
-            <p className="text-sm text-slate-400">All square — no transfers needed.</p>
-          ) : (
-            <ul className="space-y-2">
-              {transfers.map((t, i) => (
-                <li
-                  key={i}
-                  className={`flex flex-wrap items-center justify-between gap-3 rounded-lg px-4 py-3 ${
-                    t.settled ? "bg-green-50" : "bg-slate-50"
-                  }`}
-                >
-                  <span className="text-sm">
-                    <b className="text-slate-800">{t.from}</b>
-                    <span className="mx-2 text-indigo-500">→</span>
-                    <b className="text-slate-800">{t.to}</b>
-                  </span>
-                  <div className="flex items-center gap-3">
-                    <span className="text-lg font-bold tabular-nums text-indigo-700">
-                      {formatINR(t.amount)}
-                    </span>
-                    {t.settled ? (
-                      <span className="flex items-center gap-2">
-                        <span className="rounded-full bg-green-100 px-2 py-0.5 text-xs font-medium text-green-700">
-                          ✓ Settled{t.settledAt ? ` ${fmtDate(t.settledAt)}` : ""}
-                        </span>
-                        {t.amountChanged && (
-                          <span className="rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-700">
-                            amount changed since
-                          </span>
-                        )}
-                        {c.isHead && t.recordId && (
-                          <form action={unsettle}>
-                            <input type="hidden" name="id" value={t.recordId} />
-                            <button className="text-xs text-slate-400 hover:text-red-600">
-                              Undo
-                            </button>
-                          </form>
-                        )}
-                      </span>
-                    ) : (
-                      c.isHead && (
-                        <ConfirmForm
-                          action={markSettled}
-                          message={`Mark ${t.from} → ${t.to} ${formatINR(t.amount)} as paid?`}
-                        >
-                          <input type="hidden" name="householdId" value={c.household.id} />
-                          <input type="hidden" name="periodId" value={selectedId} />
-                          <input type="hidden" name="fromMemberId" value={t.fromId} />
-                          <input type="hidden" name="toMemberId" value={t.toId} />
-                          <input type="hidden" name="amount" value={t.amount} />
-                          <button className="rounded-md bg-indigo-600 px-3 py-1 text-xs font-medium text-white hover:bg-indigo-700">
-                            Mark paid
-                          </button>
-                        </ConfirmForm>
-                      )
-                    )}
-                  </div>
-                </li>
-              ))}
-            </ul>
-          )}
-        </section>
-
-        {/* per-member breakdown */}
-        <section className="overflow-x-auto rounded-xl border border-slate-200 bg-white">
-          <table className="w-full min-w-[480px] text-sm">
-            <thead>
-              <tr className="border-b border-slate-200 bg-slate-50 text-left text-slate-500">
-                <th className="px-4 py-2">Member</th>
-                <th className="px-4 py-2 text-right">Contributed</th>
-                <th className="px-4 py-2 text-right">Paid</th>
-                <th className="px-4 py-2 text-right">Net</th>
-                <th className="px-4 py-2 text-right">Position</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((r) => {
-                const isTreasurer = treasurer?.id === r.id;
-                return (
-                  <tr key={r.id} className="border-b border-slate-100">
-                    <td className="px-4 py-2 font-medium text-slate-800">
-                      {r.name}
-                      {isTreasurer && (
-                        <span className="ml-2 rounded-full bg-indigo-100 px-2 py-0.5 text-[10px] font-medium text-indigo-700">
-                          treasurer
-                        </span>
-                      )}
-                    </td>
-                    <td className="px-4 py-2 text-right tabular-nums text-slate-600">
-                      {formatINR(r.contributed)}
-                    </td>
-                    <td className="px-4 py-2 text-right tabular-nums text-slate-600">
-                      {formatINR(r.paid)}
-                    </td>
-                    <td
-                      className={`px-4 py-2 text-right tabular-nums font-medium ${
-                        r.net > 0 ? "text-green-600" : r.net < 0 ? "text-red-600" : "text-slate-400"
-                      }`}
-                    >
-                      {formatINR(r.net)}
-                    </td>
-                    <td className="px-4 py-2 text-right text-xs text-slate-500">
-                      {isTreasurer
-                        ? "—"
-                        : r.net > 0
-                          ? `pays ${treasurer?.name ?? "hub"}`
-                          : r.net < 0
-                            ? `gets from ${treasurer?.name ?? "hub"}`
-                            : "settled"}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </section>
+        <SettlementBoard
+          y={c.selYear}
+          m={c.selMonth}
+          householdId={c.household.id}
+          periodId={selectedId}
+          isHead={c.isHead}
+          members={c.members.map((mm) => ({ id: mm.id, name: mm.name }))}
+          treasurerId={treasurerId}
+          defaultId={defaultId}
+          treasurerName={treasurer?.name ?? null}
+          transfers={transfers}
+          rows={rows}
+          settledCount={settledCount}
+          total={total}
+          allSettled={allSettled}
+        />
 
         {/* settlement history (past months) */}
         {pastHistory.length > 0 && (

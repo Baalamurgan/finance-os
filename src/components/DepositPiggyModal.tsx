@@ -4,11 +4,16 @@ import { useEffect, useState } from "react";
 import { depositPiggy } from "@/app/actions";
 import { formatINR } from "@/lib/format";
 
-// Head-only: add money into the general Piggy (manual top-up), with confirm.
-export function DepositPiggyModal() {
+type Fund = { id: number; name: string };
+
+// Head-only: add money into the general Piggy or a specific sinking fund.
+export function DepositPiggyModal({ sinkingFunds }: { sinkingFunds: Fund[] }) {
   const [open, setOpen] = useState(false);
   const [amount, setAmount] = useState("");
+  const [target, setTarget] = useState("general");
   const amountNum = Number(amount) || 0;
+  const targetName =
+    target === "general" ? "General Piggy" : sinkingFunds.find((f) => String(f.id) === target)?.name ?? "fund";
 
   useEffect(() => {
     if (!open) return;
@@ -44,7 +49,7 @@ export function DepositPiggyModal() {
               action={depositPiggy}
               onSubmit={(e) => {
                 if (!e.currentTarget.checkValidity()) return;
-                if (!confirm(`Add ${formatINR(amountNum)} to the general Piggy?`)) {
+                if (!confirm(`Add ${formatINR(amountNum)} to ${targetName}?`)) {
                   e.preventDefault();
                   return;
                 }
@@ -68,6 +73,20 @@ export function DepositPiggyModal() {
                   placeholder="0"
                   className="mt-1.5 w-full rounded-xl border-2 border-slate-300 px-4 py-3 text-3xl font-bold tabular-nums outline-none focus:border-amber-400 focus:ring-2 focus:ring-amber-100"
                 />
+              </div>
+              <div>
+                <label className="text-sm font-medium text-slate-600">Add to</label>
+                <select
+                  name="target"
+                  value={target}
+                  onChange={(e) => setTarget(e.target.value)}
+                  className="input mt-1.5 w-full"
+                >
+                  <option value="general">General Piggy</option>
+                  {sinkingFunds.map((f) => (
+                    <option key={f.id} value={f.id}>{f.name} (sinking fund)</option>
+                  ))}
+                </select>
               </div>
               <div>
                 <label className="text-sm font-medium text-slate-600">Note</label>

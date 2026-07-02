@@ -4,6 +4,7 @@ import { getPiggyOverview, getSinkingBalances, getPiggyHistory } from "@/lib/que
 import { NavHeader } from "@/components/NavHeader";
 import { WithdrawPiggyModal } from "@/components/WithdrawPiggyModal";
 import { DepositPiggyModal } from "@/components/DepositPiggyModal";
+import { SetFundModal } from "@/components/SetFundModal";
 
 export default async function PiggyPage({
   searchParams,
@@ -18,6 +19,8 @@ export default async function PiggyPage({
   const sinkingTotal = sinking.reduce((s, x) => s + x.hold, 0);
   const sinkingBalances = await getSinkingBalances(c.household.id);
   const history = await getPiggyHistory(c.household.id);
+  const sinkingCats = c.categories.filter((cat) => cat.sinking);
+  const sinkingFunds = sinkingCats.map((cat) => ({ id: cat.id, name: cat.name }));
 
   return (
     <>
@@ -33,6 +36,7 @@ export default async function PiggyPage({
         piggyBalance={c.piggyBalance}
         periodId={c.selected?.id ?? null}
         periodOpen={c.selected?.status === "open"}
+        currentMemberId={c.currentMember?.id}
       />
 
       <main className="mx-auto max-w-4xl space-y-6 p-6">
@@ -40,7 +44,7 @@ export default async function PiggyPage({
           <h1 className="text-xl font-bold text-slate-900">🐷 Piggy &amp; savings</h1>
           {c.isHead && (
             <div className="flex items-center gap-2">
-              <DepositPiggyModal />
+              <DepositPiggyModal sinkingFunds={sinkingFunds} />
               {c.selected && c.selected.status === "open" && (
                 <WithdrawPiggyModal
                   periodId={c.selected.id}
@@ -70,8 +74,11 @@ export default async function PiggyPage({
 
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <div className="rounded-xl border border-amber-200 bg-amber-50 p-5">
-            <div className="text-xs font-medium uppercase tracking-wide text-amber-700">
-              General Piggy
+            <div className="flex items-center justify-between">
+              <div className="text-xs font-medium uppercase tracking-wide text-amber-700">
+                General Piggy
+              </div>
+              {c.isHead && <SetFundModal target="general" name="General Piggy" current={generalTotal} />}
             </div>
             <div className="mt-1 text-3xl font-extrabold text-amber-800">
               {formatINR(generalTotal)}
@@ -123,25 +130,31 @@ export default async function PiggyPage({
         {/* sinking funds */}
         <section className="rounded-xl border border-slate-200 bg-white p-4">
           <h2 className="mb-3 text-sm font-semibold text-slate-700">Sinking funds</h2>
-          {sinking.length === 0 ? (
+          {sinkingCats.length === 0 ? (
             <p className="text-sm text-slate-400">
               No sinking funds yet. Mark a category as a sinking fund in Setup.
             </p>
           ) : (
             <ul className="divide-y divide-slate-100 text-sm">
-              {sinking.map((s) => (
-                <li key={s.name} className="flex items-center justify-between py-2">
+              {sinkingCats.map((cat) => (
+                <li key={cat.id} className="flex items-center justify-between py-2">
                   <div>
-                    <span className="font-medium text-slate-700">{s.name}</span>
-                    {s.cycleMonths && (
+                    <span className="font-medium text-slate-700">{cat.name}</span>
+                    {cat.cycleMonths && (
                       <span className="ml-2 rounded-full bg-slate-100 px-2 py-0.5 text-[11px] text-slate-500">
-                        every {s.cycleMonths} mo
+                        every {cat.cycleMonths} mo
                       </span>
                     )}
                   </div>
-                  <span className="tabular-nums font-semibold text-slate-800">
-                    {formatINR(s.hold)} <span className="text-xs font-normal text-slate-400">held</span>
-                  </span>
+                  <div className="flex items-center gap-2">
+                    <span className="tabular-nums font-semibold text-slate-800">
+                      {formatINR(sinkingBalances[cat.id] ?? 0)}{" "}
+                      <span className="text-xs font-normal text-slate-400">held</span>
+                    </span>
+                    {c.isHead && (
+                      <SetFundModal target={String(cat.id)} name={cat.name} current={sinkingBalances[cat.id] ?? 0} />
+                    )}
+                  </div>
                 </li>
               ))}
             </ul>

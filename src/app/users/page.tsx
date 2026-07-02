@@ -27,6 +27,7 @@ export default async function UsersPage({
         piggyBalance={c.piggyBalance}
         periodId={c.selected?.id ?? null}
         periodOpen={c.selected?.status === "open"}
+        currentMemberId={c.currentMember?.id}
       />
 
       <main className="mx-auto max-w-4xl space-y-6 p-6">

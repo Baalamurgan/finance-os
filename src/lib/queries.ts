@@ -195,8 +195,8 @@ export async function getSettlement(
   const [members, incomes, expenses, spends, records] = await Promise.all([
     prisma.member.findMany({ where: { householdId }, orderBy: { id: "asc" } }),
     prisma.incomeEntry.findMany({ where: { periodId } }),
-    prisma.expenseEntry.findMany({ where: { periodId } }),
-    prisma.spend.findMany({ where: { periodId } }),
+    prisma.expenseEntry.findMany({ where: { periodId }, include: { category: true } }),
+    prisma.spend.findMany({ where: { periodId }, include: { category: true } }),
     prisma.settlementRecord.findMany({ where: { periodId } }),
   ]);
 
@@ -204,10 +204,17 @@ export async function getSettlement(
     const contributed = incomes
       .filter((i) => i.ownerId === m.id)
       .reduce((s, i) => s + i.amount, 0);
-    const paid =
-      expenses.filter((e) => e.memberId === m.id).reduce((s, e) => s + e.amount, 0) +
-      spends.filter((sp) => sp.memberId === m.id).reduce((s, sp) => s + sp.amount, 0);
-    return { id: m.id, name: m.name, contributed, paid, net: contributed - paid };
+    // itemised list of what this member paid — for the settlement hover breakdown
+    const paidItems = [
+      ...expenses
+        .filter((e) => e.memberId === m.id)
+        .map((e) => ({ label: e.label, amount: e.amount, category: e.category.name, kind: "sheet" as const })),
+      ...spends
+        .filter((sp) => sp.memberId === m.id)
+        .map((sp) => ({ label: sp.label, amount: sp.amount, category: sp.category.name, kind: "spend" as const })),
+    ].sort((a, b) => b.amount - a.amount);
+    const paid = paidItems.reduce((s, it) => s + it.amount, 0);
+    return { id: m.id, name: m.name, contributed, paid, net: contributed - paid, paidItems };
   });
 
   const treasurer = members.find((m) => m.id === treasurerId) ?? null;

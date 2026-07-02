@@ -166,8 +166,8 @@ async function saveUpload(_file: FormDataEntryValue | null): Promise<string | nu
 // ANY signed-in member can log — auto-attributed to themselves (like the WhatsApp groups).
 async function doAddSpend(formData: FormData): Promise<boolean> {
   const session = await auth();
-  const memberId = session?.user?.memberId;
-  if (!memberId) return false; // must be a mapped member
+  const selfId = session?.user?.memberId;
+  if (!selfId) return false; // must be a mapped member
 
   const periodId = Number(formData.get("periodId"));
   const categoryId = Number(formData.get("categoryId"));
@@ -176,6 +176,10 @@ async function doAddSpend(formData: FormData): Promise<boolean> {
 
   if (!periodId || !categoryId || !amount || !label) return false;
   if (!(await periodOpen(periodId))) return false;
+
+  // Only the head may log a spend on behalf of another member; everyone else = self.
+  const overrideId = Number(formData.get("memberId")) || 0;
+  const memberId = overrideId && session?.user?.role === "head" ? overrideId : selfId;
 
   const imagePath = await saveUpload(formData.get("image"));
   await prisma.spend.create({
@@ -280,15 +284,50 @@ export async function depositPiggy(formData: FormData) {
   if (!(await isHead())) return;
   const amount = Number(formData.get("amount"));
   const note = String(formData.get("note") ?? "").trim() || "Manual top-up";
+  // target = "general" (general Piggy) or a sinking-fund categoryId
+  const target = String(formData.get("target") ?? "general");
   if (!amount || amount <= 0) return;
   const household = await prisma.household.findFirst();
   if (!household) return;
+  const sinkingCatId = target !== "general" ? Number(target) : null;
   await prisma.piggyEntry.create({
     data: {
       householdId: household.id,
-      kind: "piggy",
+      categoryId: sinkingCatId,
+      kind: sinkingCatId ? "sinking" : "piggy",
       amount: Math.abs(amount),
       note: `Deposit: ${note}`,
+    },
+  });
+  revalidatePath("/", "layout");
+}
+
+// Head sets a fund's CURRENT balance to an exact amount — records the difference
+// as an "Adjustment" entry so the history stays intact. target = general | catId.
+export async function setFundBalance(formData: FormData) {
+  if (!(await isHead())) return;
+  const targetAmount = Number(formData.get("amount"));
+  const target = String(formData.get("target") ?? "general");
+  if (Number.isNaN(targetAmount)) return;
+  const household = await prisma.household.findFirst();
+  if (!household) return;
+  const sinkingCatId = target !== "general" ? Number(target) : null;
+  const agg = await prisma.piggyEntry.aggregate({
+    where: sinkingCatId
+      ? { householdId: household.id, kind: "sinking", categoryId: sinkingCatId }
+      : { householdId: household.id, kind: "piggy" },
+    _sum: { amount: true },
+  });
+  const current = agg._sum.amount ?? 0;
+  const delta = targetAmount - current;
+  if (Math.abs(delta) < 0.005) return; // already at target
+  await prisma.piggyEntry.create({
+    data: {
+      householdId: household.id,
+      categoryId: sinkingCatId,
+      kind: sinkingCatId ? "sinking" : "piggy",
+      amount: delta,
+      note: `Adjustment (set to ₹${Math.round(targetAmount).toLocaleString("en-IN")})`,
     },
   });
   revalidatePath("/", "layout");

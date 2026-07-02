@@ -24,6 +24,7 @@ export function NavHeader({
   piggyBalance,
   periodId,
   periodOpen,
+  currentMemberId,
 }: {
   active:
     | "sheet"
@@ -45,6 +46,7 @@ export function NavHeader({
   piggyBalance: number;
   periodId: number | null;
   periodOpen: boolean;
+  currentMemberId?: number | null;
 }) {
   const router = useRouter();
   const now = new Date();
@@ -148,6 +150,9 @@ export function NavHeader({
               periodId={periodId}
               trigger="primary"
               categories={categories.filter((c) => c.tracked)}
+              isHead={isHead}
+              members={members}
+              currentMemberId={currentMemberId}
             />
           )}
 
@@ -170,6 +175,9 @@ export function NavHeader({
         periodId={periodId}
         trigger="fab"
         categories={categories.filter((c) => c.tracked)}
+        isHead={isHead}
+        members={members}
+        currentMemberId={currentMemberId}
       />
     )}
 

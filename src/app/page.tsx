@@ -125,6 +125,7 @@ export default async function SheetPage({
       piggyBalance={c.piggyBalance}
       periodId={c.selected?.id ?? null}
       periodOpen={c.selected?.status === "open"}
+      currentMemberId={c.currentMember?.id}
     />
   );
 
@@ -236,8 +237,8 @@ export default async function SheetPage({
 
         <div className="grid grid-cols-1 items-start gap-5 lg:grid-cols-2">
           {/* INCOME — collapsible column; total shown in the green summary bar */}
-          <details className="group/inc min-w-0 overflow-hidden rounded-xl border border-green-200 bg-white">
-            <summary className="flex cursor-pointer list-none items-center justify-between border-l-4 border-green-500 bg-green-50 px-4 py-3 [&::-webkit-details-marker]:hidden">
+          <details className="group/inc min-w-0 rounded-xl border border-green-200 bg-white">
+            <summary className="sticky top-14 z-20 flex cursor-pointer list-none items-center justify-between border-l-4 border-green-500 bg-green-50 px-4 py-3 [&::-webkit-details-marker]:hidden sm:static">
               <span className="flex items-center gap-2">
                 <svg width="16" height="16" viewBox="0 0 20 20" className="text-green-600 transition-transform group-open/inc:rotate-90">
                   <path fill="currentColor" d="M7 5l6 5-6 5z" />
@@ -263,8 +264,8 @@ export default async function SheetPage({
           </details>
 
           {/* EXPENSE — collapsible column; total in the red summary bar; split into Fixed vs Misc */}
-          <details className="group/exp min-w-0 overflow-hidden rounded-xl border border-red-200 bg-white">
-            <summary className="flex cursor-pointer list-none items-center justify-between border-l-4 border-red-500 bg-red-50 px-4 py-3 [&::-webkit-details-marker]:hidden">
+          <details className="group/exp min-w-0 rounded-xl border border-red-200 bg-white">
+            <summary className="sticky top-14 z-20 flex cursor-pointer list-none items-center justify-between border-l-4 border-red-500 bg-red-50 px-4 py-3 [&::-webkit-details-marker]:hidden sm:static">
               <span className="flex items-center gap-2">
                 <svg width="16" height="16" viewBox="0 0 20 20" className="text-red-600 transition-transform group-open/exp:rotate-90">
                   <path fill="currentColor" d="M7 5l6 5-6 5z" />
@@ -278,7 +279,7 @@ export default async function SheetPage({
             <div className="px-2 py-1">
               {/* Fixed monthly (Loans + Chits + Monthly) — collapsible */}
               <details open className="group/fx border-b border-slate-100">
-                <summary className="flex cursor-pointer list-none items-center justify-between rounded-lg px-2 py-2 hover:bg-slate-50 [&::-webkit-details-marker]:hidden">
+                <summary className="sticky top-[6.5rem] z-10 flex cursor-pointer list-none items-center justify-between rounded-lg bg-white px-2 py-2 hover:bg-slate-50 [&::-webkit-details-marker]:hidden sm:static">
                   <span className="flex items-center gap-1.5">
                     <svg width="14" height="14" viewBox="0 0 20 20" className="text-slate-400 transition-transform group-open/fx:rotate-90">
                       <path fill="currentColor" d="M7 5l6 5-6 5z" />
@@ -320,7 +321,7 @@ export default async function SheetPage({
 
               {/* Miscellaneous (unplanned / extra) — collapsible */}
               <details open className="group/msc">
-                <summary className="flex cursor-pointer list-none items-center justify-between rounded-lg px-2 py-2 hover:bg-slate-50 [&::-webkit-details-marker]:hidden">
+                <summary className="sticky top-[6.5rem] z-10 flex cursor-pointer list-none items-center justify-between rounded-lg bg-white px-2 py-2 hover:bg-slate-50 [&::-webkit-details-marker]:hidden sm:static">
                   <span className="flex items-center gap-1.5">
                     <svg width="14" height="14" viewBox="0 0 20 20" className="text-slate-400 transition-transform group-open/msc:rotate-90">
                       <path fill="currentColor" d="M7 5l6 5-6 5z" />

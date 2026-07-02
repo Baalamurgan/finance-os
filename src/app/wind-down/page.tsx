@@ -26,6 +26,7 @@ export default async function WindDownPage({
       piggyBalance={c.piggyBalance}
       periodId={c.selected?.id ?? null}
       periodOpen={c.selected?.status === "open"}
+      currentMemberId={c.currentMember?.id}
     />
   );
 
@@ -135,7 +136,12 @@ export default async function WindDownPage({
             </section>
           ) : (
             <p className="rounded-xl border border-slate-200 bg-white p-5 text-center text-sm text-slate-500">
-              Only the head or a manager can wind down the month.
+              Only the head
+              {(() => {
+                const h = c.members.find((m) => m.role === "head")?.name;
+                return h ? ` (${h})` : "";
+              })()}{" "}
+              or a manager can wind down {c.selected.label}.
             </p>
           )
         ) : (
