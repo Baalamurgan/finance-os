@@ -40,3 +40,45 @@ body {
       shadow-sm transition hover:bg-indigo-700 active:bg-indigo-800;
   }
 }
+
+/* ─────────────────────────────────────────────────────────────────────────
+   Marketing / landing page (/welcome) — scoped styles.
+   An editorial serif for display headings (no network font; renders
+   beautifully on Apple devices, graceful elsewhere) + a lightweight
+   scroll-reveal that respects reduced-motion.
+   ───────────────────────────────────────────────────────────────────────── */
+.font-display {
+  font-family: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia,
+    "Times New Roman", serif;
+  letter-spacing: -0.01em;
+}
+
+.reveal {
+  opacity: 0;
+  transform: translateY(var(--reveal-y, 18px));
+  transition:
+    opacity 0.8s cubic-bezier(0.22, 0.61, 0.24, 1),
+    transform 0.8s cubic-bezier(0.22, 0.61, 0.24, 1);
+  will-change: opacity, transform;
+}
+.reveal-in {
+  opacity: 1;
+  transform: none;
+}
+
+@keyframes float-slow {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-10px); }
+}
+.animate-float-slow { animation: float-slow 7s ease-in-out infinite; }
+
+@keyframes float-slower {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-14px); }
+}
+.animate-float-slower { animation: float-slower 9s ease-in-out infinite; }
+
+@media (prefers-reduced-motion: reduce) {
+  .reveal { opacity: 1; transform: none; transition: none; }
+  .animate-float-slow, .animate-float-slower { animation: none; }
+}

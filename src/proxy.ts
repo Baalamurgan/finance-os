@@ -17,8 +17,9 @@ export function proxy(request: NextRequest) {
 }
 
 export const config = {
-  // run on everything except auth routes, the sign-in page, and static assets
+  // run on everything except auth routes, the public landing page, the sign-in
+  // page, and static assets
   matcher: [
-    "/((?!api/auth|api/cron|signin|_next/static|_next/image|favicon.ico|manifest.webmanifest|sw\\.js|.*\\.png).*)",
+    "/((?!api/auth|api/cron|welcome|signin|_next/static|_next/image|favicon.ico|manifest.webmanifest|sw\\.js|.*\\.png).*)",
   ],
 };
