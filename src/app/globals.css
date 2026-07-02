@@ -7,15 +7,6 @@ html {
   scrollbar-gutter: stable;
 }
 
-body {
-  /* Contain horizontal overflow at the BODY (not html — setting overflow on
-     <html> breaks vertical scrolling in Safari). `clip` doesn't create a scroll
-     container, so the page still scrolls vertically and position:sticky works;
-     tables with their own overflow-x-auto still scroll internally. */
-  overflow-x: clip;
-  overscroll-behavior-x: none; /* stop the horizontal rubber-band pan on touch */
-}
-
 /* Interactive elements get a pointer cursor app-wide (Tailwind v4 Preflight
    no longer does this for buttons). Disabled controls show not-allowed. */
 @layer base {
