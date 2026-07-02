@@ -192,13 +192,26 @@ export async function getSettlement(
   periodId: number,
   treasurerId: number | null
 ) {
+  // Settlement is a START-of-month activity (salaries → hub). Daily spends + misc
+  // logged during a month are credited to the spender in the NEXT month's
+  // settlement, so this month settles against the PREVIOUS month's spends.
+  const period = await prisma.period.findUnique({ where: { id: periodId } });
+  const prevMonth = period ? (period.month === 1 ? 12 : period.month - 1) : 0;
+  const prevYear = period ? (period.month === 1 ? period.year - 1 : period.year) : 0;
+  const prevPeriod = period
+    ? await prisma.period.findUnique({
+        where: { householdId_year_month: { householdId, year: prevYear, month: prevMonth } },
+      })
+    : null;
+
   const [members, incomes, expenses, spends, records] = await Promise.all([
     prisma.member.findMany({ where: { householdId }, orderBy: { id: "asc" } }),
     prisma.incomeEntry.findMany({ where: { periodId } }),
     prisma.expenseEntry.findMany({ where: { periodId }, include: { category: true } }),
-    prisma.spend.findMany({ where: { periodId }, include: { category: true } }),
+    prisma.spend.findMany({ where: { periodId: prevPeriod?.id ?? -1 }, include: { category: true } }),
     prisma.settlementRecord.findMany({ where: { periodId } }),
   ]);
+  const prevLabel = prevPeriod?.label ?? null;
 
   const rows = members.map((m) => {
     const contributed = incomes
@@ -211,7 +224,12 @@ export async function getSettlement(
         .map((e) => ({ label: e.label, amount: e.amount, category: e.category.name, kind: "sheet" as const })),
       ...spends
         .filter((sp) => sp.memberId === m.id)
-        .map((sp) => ({ label: sp.label, amount: sp.amount, category: sp.category.name, kind: "spend" as const })),
+        .map((sp) => ({
+          label: prevLabel ? `${sp.label} (${prevLabel})` : sp.label,
+          amount: sp.amount,
+          category: sp.category.name,
+          kind: "spend" as const,
+        })),
     ].sort((a, b) => b.amount - a.amount);
     const paid = paidItems.reduce((s, it) => s + it.amount, 0);
     return { id: m.id, name: m.name, contributed, paid, net: contributed - paid, paidItems };

@@ -137,8 +137,10 @@ export default async function SettlementPage({
         )}
 
         <p className="text-xs text-slate-400">
-          Contributed = salary/income owned by the member. Paid = expenses &amp; spends tagged to
-          them. Rent and untagged items stay with the treasurer&apos;s pool.
+          Contributed = salary/income owned by the member. Paid = this month&apos;s tagged sheet
+          expenses <b>plus last month&apos;s daily spends &amp; misc</b> tagged to them (spends are
+          settled the month after they happen). Rent and untagged items stay with the
+          treasurer&apos;s pool.
         </p>
       </main>
     </>
