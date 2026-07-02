@@ -77,6 +77,7 @@ export default async function SettlementPage({
           householdId={c.household.id}
           periodId={selectedId}
           isHead={c.isHead}
+          currentMemberId={c.currentMember?.id}
           members={c.members.map((mm) => ({ id: mm.id, name: mm.name }))}
           treasurerId={treasurerId}
           defaultId={defaultId}

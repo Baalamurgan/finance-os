@@ -14,15 +14,18 @@ type Transfer = {
 };
 
 export function SettlementBoard({
-  y, m, householdId, periodId, isHead, members,
+  y, m, householdId, periodId, isHead, currentMemberId, members,
   treasurerId, defaultId, treasurerName,
   transfers, rows, settledCount, total, allSettled,
 }: {
   y: number; m: number; householdId: number; periodId: number; isHead: boolean;
+  currentMemberId?: number | null;
   members: { id: number; name: string }[];
   treasurerId: number | null; defaultId: number | null; treasurerName: string | null;
   transfers: Transfer[]; rows: Row[]; settledCount: number; total: number; allSettled: boolean;
 }) {
+  // head, or the payer/receiver of a transfer, may mark it paid / undo it
+  const canSettle = (t: Transfer) => isHead || currentMemberId === t.fromId || currentMemberId === t.toId;
   const router = useRouter();
   const [pending, startTransition] = useTransition();
   const [sel, setSel] = useState<number>(treasurerId ?? members[0]?.id ?? 0);
@@ -108,7 +111,7 @@ export function SettlementBoard({
                       {t.amountChanged && (
                         <span className="rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-700">amount changed since</span>
                       )}
-                      {isHead && t.recordId && (
+                      {canSettle(t) && t.recordId && (
                         <form action={unsettle}>
                           <input type="hidden" name="id" value={t.recordId} />
                           <button className="text-xs text-slate-400 hover:text-red-600">Undo</button>
@@ -116,7 +119,7 @@ export function SettlementBoard({
                       )}
                     </span>
                   ) : (
-                    isHead && (
+                    canSettle(t) && (
                       <ConfirmForm action={markSettled} message={`Mark ${t.from} → ${t.to} ${formatINR(t.amount)} as paid?`}>
                         <input type="hidden" name="householdId" value={householdId} />
                         <input type="hidden" name="periodId" value={periodId} />

@@ -341,10 +341,14 @@ export async function getTrackedExpenses(householdId: number, periodId: number) 
     };
   });
 
-  const totalAllocation = cards.reduce((s, c) => s + c.allocation, 0);
-  const totalSpent = cards.reduce((s, c) => s + c.spent, 0);
+  // Headline totals cover BUDGETED categories only — miscellaneous (no-budget)
+  // spends are shown separately and must not count against the allocation.
+  const budgeted = cards.filter((c) => c.allocation > 0);
+  const totalAllocation = budgeted.reduce((s, c) => s + c.allocation, 0);
+  const totalSpent = budgeted.reduce((s, c) => s + c.spent, 0);
+  const miscSpent = cards.filter((c) => c.allocation === 0).reduce((s, c) => s + c.spent, 0);
 
-  return { cards, totalAllocation, totalSpent, totalRemaining: totalAllocation - totalSpent };
+  return { cards, totalAllocation, totalSpent, totalRemaining: totalAllocation - totalSpent, miscSpent };
 }
 
 /**

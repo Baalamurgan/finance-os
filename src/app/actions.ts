@@ -417,7 +417,6 @@ export async function setTreasurer(formData: FormData) {
 
 // Mark one settlement transfer (from → to) as paid for a month. Head-only.
 export async function markSettled(formData: FormData) {
-  if (!(await isHead())) return;
   const session = await auth();
   const householdId = Number(formData.get("householdId"));
   const periodId = Number(formData.get("periodId"));
@@ -426,6 +425,10 @@ export async function markSettled(formData: FormData) {
   const amount = Number(formData.get("amount"));
   const note = String(formData.get("note") ?? "").trim() || null;
   if (!householdId || !periodId || !fromMemberId || !toMemberId || !amount) return;
+  // head, OR the payer/receiver of THIS transfer, may mark it settled
+  const me = session?.user?.memberId;
+  const allowed = session?.user?.role === "head" || me === fromMemberId || me === toMemberId;
+  if (!allowed) return;
 
   await prisma.settlementRecord.upsert({
     where: { periodId_fromMemberId_toMemberId: { periodId, fromMemberId, toMemberId } },
@@ -445,9 +448,15 @@ export async function markSettled(formData: FormData) {
 
 // Undo a recorded settlement. Head-only.
 export async function unsettle(formData: FormData) {
-  if (!(await isHead())) return;
+  const session = await auth();
   const id = Number(formData.get("id"));
   if (!id) return;
+  const rec = await prisma.settlementRecord.findUnique({ where: { id } });
+  if (!rec) return;
+  const me = session?.user?.memberId;
+  // head, OR the payer/receiver of this transfer, may undo it
+  const allowed = session?.user?.role === "head" || me === rec.fromMemberId || me === rec.toMemberId;
+  if (!allowed) return;
   await prisma.settlementRecord.delete({ where: { id } });
   revalidatePath("/", "layout");
 }
