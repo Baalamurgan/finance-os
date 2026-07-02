@@ -535,10 +535,43 @@ export async function saveRecurring(formData: FormData) {
   const respRaw = String(formData.get("responsibleMemberId") ?? "").trim();
   const responsibleMemberId = respRaw === "" ? null : Number(respRaw);
 
+  const cat = await prisma.category.findUnique({ where: { id } });
+  if (!cat) return;
+
   await prisma.category.update({
     where: { id },
     data: { monthlyBudget, sinking, cycleMonths, responsibleMemberId },
   });
+
+  // Keep OPEN months consistent with the new recurring config:
+  //  • upsert the period Budget to the new monthly amount (drives wind-down + Expenses tab)
+  //  • for SINKING categories, the sheet shows the monthly SHARE — replace this category's
+  //    sheet line(s) in the open month with a single "{name} (monthly share)" = monthlyBudget
+  const openPeriods = await prisma.period.findMany({
+    where: { householdId: cat.householdId, status: "open" },
+    select: { id: true },
+  });
+  for (const p of openPeriods) {
+    if (monthlyBudget != null && monthlyBudget > 0) {
+      const existing = await prisma.budget.findFirst({ where: { periodId: p.id, categoryId: id } });
+      if (existing) await prisma.budget.update({ where: { id: existing.id }, data: { planned: monthlyBudget } });
+      else await prisma.budget.create({ data: { periodId: p.id, categoryId: id, planned: monthlyBudget } });
+    }
+    if (sinking && monthlyBudget != null && monthlyBudget > 0) {
+      await prisma.$transaction([
+        prisma.expenseEntry.deleteMany({ where: { periodId: p.id, categoryId: id } }),
+        prisma.expenseEntry.create({
+          data: {
+            periodId: p.id,
+            categoryId: id,
+            label: `${cat.name} (monthly share)`,
+            amount: monthlyBudget,
+            necessary: cat.necessary,
+          },
+        }),
+      ]);
+    }
+  }
   revalidatePath("/", "layout");
 }
 
@@ -737,21 +770,35 @@ export async function windDownMonth(formData: FormData) {
     for (const cat of trackedCats) {
       const budget = budgetOf(cat.id);
       const spent = spentOf(cat.id);
-      if (budget > 0) {
+      if (cat.sinking && budget > 0) {
+        // SINKING: always settle against its own fund. remainder = share − spent;
+        // positive accrues, negative DRAWS from the fund (this month's share is
+        // applied first, the fund covers the rest of the bill). Fund may go negative.
+        await tx.piggyEntry.create({
+          data: {
+            householdId,
+            periodId,
+            categoryId: cat.id,
+            kind: "sinking",
+            amount: budget - spent,
+            note: `${period.label} · ${cat.name}`,
+          },
+        });
+      } else if (budget > 0) {
         const remainder = budget - spent;
         if (remainder >= 0) {
-          // under budget → save the leftover to Piggy (or the sinking hold)
+          // under budget → save the leftover to the general Piggy
           await tx.piggyEntry.create({
             data: {
               householdId,
               periodId,
               categoryId: cat.id,
-              kind: cat.sinking ? "sinking" : "piggy",
+              kind: "piggy",
               amount: remainder,
               note: `${period.label} · ${cat.name}`,
             },
           });
-          if (!cat.sinking) movedToPiggy += remainder;
+          movedToPiggy += remainder;
         } else {
           // over budget → carry the excess into next month as a one-off expense
           carryToNext.push({

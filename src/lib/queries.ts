@@ -307,7 +307,7 @@ export type TrackedExpenses = Awaited<ReturnType<typeof getTrackedExpenses>>;
  * (sum of Spends), remaining, over-budget flag, and the list of spends.
  */
 export async function getTrackedExpenses(householdId: number, periodId: number) {
-  const [categories, budgets, spends] = await Promise.all([
+  const [categories, budgets, spends, sinkBal] = await Promise.all([
     prisma.category.findMany({
       where: { householdId, tracked: true, onHold: false },
       orderBy: { name: "asc" },
@@ -318,6 +318,7 @@ export async function getTrackedExpenses(householdId: number, periodId: number) 
       include: { member: true, category: true },
       orderBy: { createdAt: "desc" },
     }),
+    getSinkingBalances(householdId),
   ]);
 
   const plannedByCat = new Map<number, number>();
@@ -334,6 +335,8 @@ export async function getTrackedExpenses(householdId: number, periodId: number) 
       spent,
       remaining: allocation - spent,
       overBudget: allocation > 0 && spent > allocation,
+      sinking: cat.sinking,
+      fund: sinkBal[cat.id] ?? 0, // current accumulated sinking-fund balance
       spends: rows,
     };
   });

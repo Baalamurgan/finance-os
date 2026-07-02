@@ -49,9 +49,12 @@ async function main() {
     const b = budgetOf(c.id);
     if (b > 0) {
       const rem = b - spentOf(c.id);
-      if (rem >= 0) {
-        if (c.sinking) { sinking += rem; console.log(`   • ${c.name}: ${inr(rem)} → sinking hold`); }
-        else { piggy += rem; console.log(`   • ${c.name}: ${inr(rem)} → general Piggy`); }
+      if (c.sinking) {
+        sinking += rem;
+        console.log(`   • ${c.name}: ${inr(rem)} → sinking fund (${rem >= 0 ? "accrue" : "draw"})`);
+      } else if (rem >= 0) {
+        piggy += rem;
+        console.log(`   • ${c.name}: ${inr(rem)} → general Piggy`);
       } else {
         carried += -rem;
         console.log(`   • ${c.name}: over by ${inr(-rem)} → carried to next month as expense`);

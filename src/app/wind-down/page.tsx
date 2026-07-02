@@ -49,17 +49,19 @@ export default async function WindDownPage({
   const sinkingIds = new Set(c.categories.filter((x) => x.sinking).map((x) => x.id));
 
   // what each tracked category contributes at close:
-  //  • under budget (remaining ≥ 0) → Piggy (non-sinking) or its sinking hold
-  //  • over budget (remaining < 0) → carried to next month as a one-off expense
+  //  • non-sinking under budget → general Piggy; over budget → carried to next month
+  //  • SINKING → settles against its own fund: share − spent (accrue if +, draw if −)
   //  • misc (no budget) → carried to next month as a one-off expense
   const budgeted = tracked.cards.filter((t) => t.allocation > 0);
   const piggyRows = budgeted.filter((t) => !sinkingIds.has(t.id) && t.remaining >= 0);
-  const sinkingRows = budgeted.filter((t) => sinkingIds.has(t.id) && t.remaining >= 0);
-  const overBudget = budgeted.filter((t) => t.remaining < 0);
+  const sinkingRows = budgeted.filter((t) => sinkingIds.has(t.id)); // all sinking, any sign
+  const overBudget = budgeted.filter((t) => !sinkingIds.has(t.id) && t.remaining < 0);
   const miscCards = tracked.cards.filter((t) => t.allocation === 0 && t.spent > 0);
 
   const piggyAdd = piggyRows.reduce((s, t) => s + t.remaining, 0);
   const sinkingAdd = sinkingRows.reduce((s, t) => s + t.remaining, 0);
+  // a fund that would end negative (bill exceeded share + accrued fund)
+  const sinkingNegative = sinkingRows.filter((t) => t.fund + t.remaining < 0);
   const carriedRows = [
     ...overBudget.map((t) => ({ name: `${t.name} — over by`, amount: -t.remaining })),
     ...miscCards.map((t) => ({ name: `${t.name} (misc)`, amount: t.spent })),
@@ -116,10 +118,16 @@ export default async function WindDownPage({
                 total={piggyAdd}
               />
               <Breakdown
-                title="→ Sinking-fund holds (saved for upcoming bills)"
+                title="↔ Sinking funds (share − bill: + accrues, − draws from the fund)"
                 rows={sinkingRows.map((t) => ({ name: t.name, amount: t.remaining }))}
                 total={sinkingAdd}
               />
+              {sinkingNegative.length > 0 && (
+                <p className="rounded-lg bg-amber-50 px-3 py-2 text-xs font-medium text-amber-800">
+                  ⚠ {sinkingNegative.map((t) => t.name).join(", ")}: the bill is more than the share +
+                  saved fund, so the fund will go negative and catch up from next months&apos; shares.
+                </p>
+              )}
               <Breakdown
                 title="→ Carried to next month (added as expenses there)"
                 rows={carriedRows}

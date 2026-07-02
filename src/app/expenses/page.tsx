@@ -107,9 +107,27 @@ export default async function ExpensesPage({
                   )}
                 </div>
 
-                {/* allocation / spent / remaining — or 'no budget' for Misc */}
+                {/* allocation / spent / remaining — sinking-fund aware, or 'no budget' for Misc */}
                 <div className="px-4 pt-3">
-                  {card.allocation > 0 ? (
+                  {card.sinking && card.allocation > 0 ? (
+                    <>
+                      <div className="flex items-center justify-between text-sm">
+                        <span className="text-slate-500">
+                          Spent <b className="text-slate-800">{formatINR(card.spent)}</b>
+                        </span>
+                        <span className="text-xs font-medium text-indigo-600">
+                          {card.spent > card.allocation
+                            ? `₹${Math.round(card.spent - card.allocation).toLocaleString("en-IN")} from fund`
+                            : `${formatINR(card.remaining)} → fund`}
+                        </span>
+                      </div>
+                      <div className="mt-1 text-[11px] text-slate-400">
+                        Monthly share {formatINR(card.allocation)} · Fund{" "}
+                        <b className={card.fund < 0 ? "text-red-600" : "text-slate-600"}>{formatINR(card.fund)}</b>{" "}
+                        held — a bill over the share draws from the fund at month close.
+                      </div>
+                    </>
+                  ) : card.allocation > 0 ? (
                     <>
                       <div className="flex items-center justify-between text-sm">
                         <span className="text-slate-500">
