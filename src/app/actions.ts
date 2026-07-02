@@ -62,8 +62,10 @@ export async function saveExpense(formData: FormData) {
       data: { categoryId, amount, label: finalLabel, memberId: finalMemberId, necessary },
     });
   } else {
+    // "Repeat every month" (checkbox) → recurring (copies forward); unchecked → one-off (this month only)
+    const oneOff = formData.get("repeat") !== "on";
     await prisma.expenseEntry.create({
-      data: { periodId, categoryId, amount, label: finalLabel, memberId: finalMemberId, necessary },
+      data: { periodId, categoryId, amount, label: finalLabel, memberId: finalMemberId, necessary, oneOff },
     });
   }
   revalidatePath("/", "layout");

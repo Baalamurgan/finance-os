@@ -3,8 +3,13 @@
 import { useEffect, useState } from "react";
 import { saveExpense } from "@/app/actions";
 
-type Cat = { id: number; name: string };
+type Cat = { id: number; name: string; section?: string };
 type Mem = { id: number; name: string };
+
+const SECTION_ORDER = ["Loans", "Chits", "Monthly", "Misc"] as const;
+const SECTION_LABEL: Record<string, string> = {
+  Loans: "Loans", Chits: "Chits", Monthly: "Monthly", Misc: "Miscellaneous",
+};
 
 export function ExpenseModal({
   categories,
@@ -27,7 +32,7 @@ export function ExpenseModal({
     memberId: number | null;
     necessary: boolean;
   };
-  trigger?: "primary" | "row" | "menuitem";
+  trigger?: "primary" | "row" | "menuitem" | "sheet";
   controlledOpen?: boolean; // when provided, parent controls open state
   onOpenChange?: (v: boolean) => void;
   hideTrigger?: boolean; // render no trigger (parent opens via controlledOpen)
@@ -51,7 +56,17 @@ export function ExpenseModal({
 
   return (
     <>
-      {hideTrigger ? null : trigger === "primary" ? (
+      {hideTrigger ? null : trigger === "sheet" ? (
+        <button
+          onClick={() => setOpen(true)}
+          className="w-full rounded-lg border border-dashed border-red-300 px-3 py-2 text-left text-sm font-medium text-red-700 hover:bg-red-50"
+        >
+          + Add expense
+          <span className="block text-[11px] font-normal text-slate-400">
+            loan / bill / one-off — affects the balance
+          </span>
+        </button>
+      ) : trigger === "primary" ? (
         <button onClick={() => setOpen(true)} className="btn">
           + Add Expense
         </button>
@@ -126,25 +141,31 @@ export function ExpenseModal({
                   />
                 </div>
 
-                {/* category chips */}
+                {/* category chips (grouped by section when section info is present) */}
                 <div>
                   <label className="text-xs font-medium text-slate-500">Category</label>
-                  <div className="mt-1 flex flex-wrap gap-2">
-                    {categories.map((cat) => (
-                      <button
-                        key={cat.id}
-                        type="button"
-                        onClick={() => setCategoryId(cat.id)}
-                        className={`rounded-full border px-3 py-1.5 text-sm transition ${
-                          categoryId === cat.id
-                            ? "border-indigo-500 bg-indigo-50 font-medium text-indigo-700"
-                            : "border-slate-300 text-slate-600 hover:border-slate-400"
-                        }`}
-                      >
-                        {cat.name}
-                      </button>
-                    ))}
-                  </div>
+                  {categories.some((c) => c.section) ? (
+                    <div className="mt-1 space-y-2">
+                      {SECTION_ORDER.filter((sec) => categories.some((c) => c.section === sec)).map((sec) => (
+                        <div key={sec}>
+                          <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">
+                            {SECTION_LABEL[sec]}
+                          </div>
+                          <div className="mt-1 flex flex-wrap gap-2">
+                            {categories.filter((c) => c.section === sec).map((cat) => (
+                              <CatChip key={cat.id} cat={cat} active={categoryId === cat.id} onClick={() => setCategoryId(cat.id)} />
+                            ))}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="mt-1 flex flex-wrap gap-2">
+                      {categories.map((cat) => (
+                        <CatChip key={cat.id} cat={cat} active={categoryId === cat.id} onClick={() => setCategoryId(cat.id)} />
+                      ))}
+                    </div>
+                  )}
                 </div>
 
                 <div className="grid grid-cols-2 gap-3">
@@ -183,6 +204,15 @@ export function ExpenseModal({
                   placeholder="Note (optional)"
                   className="input w-full"
                 />
+
+                {/* recurring vs one-time — create mode only */}
+                {!initial && (
+                  <label className="flex items-center gap-2 rounded-lg bg-slate-50 px-3 py-2 text-sm text-slate-700">
+                    <input type="checkbox" name="repeat" defaultChecked className="h-4 w-4 accent-indigo-600" />
+                    Repeat every month
+                    <span className="text-xs text-slate-400">(uncheck = only this month)</span>
+                  </label>
+                )}
               </div>
 
               {/* footer (always visible) */}
@@ -203,5 +233,21 @@ export function ExpenseModal({
         </div>
       )}
     </>
+  );
+}
+
+function CatChip({ cat, active, onClick }: { cat: Cat; active: boolean; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`rounded-full border px-3 py-1.5 text-sm transition ${
+        active
+          ? "border-indigo-500 bg-indigo-50 font-medium text-indigo-700"
+          : "border-slate-300 text-slate-600 hover:border-slate-400"
+      }`}
+    >
+      {cat.name}
+    </button>
   );
 }

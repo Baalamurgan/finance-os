@@ -61,8 +61,9 @@ export default async function ExpensesPage({
               {c.selected.label} — daily spends
             </h1>
             <p className="text-sm text-slate-500">
-              What was actually spent per category, against its monthly allocation. The unspent
-              remainder moves to Piggy at wind-down.
+              Daily variable spending against each category&apos;s budget — the unspent remainder
+              moves to Piggy at wind-down. For loans / bills / one-offs that change the balance, use
+              <b> + Add expense</b> on the Sheet instead.
             </p>
           </div>
           <div className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-right">

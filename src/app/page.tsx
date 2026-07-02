@@ -4,6 +4,7 @@ import { getRollup } from "@/lib/queries";
 import { NavHeader } from "@/components/NavHeader";
 import { RowActions } from "@/components/RowActions";
 import { ExpenseRowActions } from "@/components/ExpenseRowActions";
+import { ExpenseModal } from "@/components/ExpenseModal";
 import { addIncome, createPeriod, deleteIncome } from "./actions";
 
 const SECTION_ORDER = ["Loans", "Chits", "Monthly", "Misc"] as const;
@@ -226,6 +227,16 @@ export default async function SheetPage({
                   </div>
                 </details>
               ))}
+              {canEditHere && (
+                <div className="px-2 py-2">
+                  <ExpenseModal
+                    categories={c.categories}
+                    members={c.members}
+                    periodId={c.selected!.id}
+                    trigger="sheet"
+                  />
+                </div>
+              )}
             </div>
             <ColTotal label="Total Expense" value={rollup.totalExpense} tone="red" />
           </section>
