@@ -22,6 +22,8 @@ export function ExpenseModal({
   onOpenChange,
   hideTrigger,
   balance,
+  sheetLabel = "+ Add expense",
+  newCategoryDefaultSection = "Monthly",
 }: {
   categories: Cat[];
   members: Mem[];
@@ -39,6 +41,8 @@ export function ExpenseModal({
   onOpenChange?: (v: boolean) => void;
   hideTrigger?: boolean; // render no trigger (parent opens via controlledOpen)
   balance?: number; // current sheet balance — new expense can't exceed it (create only)
+  sheetLabel?: string; // text for the "sheet" trigger button
+  newCategoryDefaultSection?: string; // preselected section when creating a new category
 }) {
   const [openState, setOpenState] = useState(false);
   const open = controlledOpen ?? openState;
@@ -94,9 +98,9 @@ export function ExpenseModal({
           onClick={() => setOpen(true)}
           className="w-full rounded-lg border border-dashed border-red-300 px-3 py-2 text-left text-sm font-medium text-red-700 hover:bg-red-50"
         >
-          + Add expense
+          {sheetLabel}
           <span className="block text-[11px] font-normal text-slate-400">
-            loan / bill / one-off — affects the balance
+            affects the month&apos;s balance
           </span>
         </button>
       ) : trigger === "primary" ? (
@@ -240,7 +244,7 @@ export function ExpenseModal({
                         placeholder="New category (e.g. YouTube)"
                         className="input"
                       />
-                      <select name="newCategorySection" defaultValue="Monthly" className="input">
+                      <select name="newCategorySection" defaultValue={newCategoryDefaultSection} className="input">
                         <option value="Loans">Loans</option>
                         <option value="Chits">Chits</option>
                         <option value="Monthly">Monthly</option>

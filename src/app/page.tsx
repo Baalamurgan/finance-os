@@ -22,6 +22,87 @@ function monthLabel(month: number, year: number) {
     .toUpperCase()} ${year}`;
 }
 
+type ExpRow = Awaited<ReturnType<typeof getRollup>>["expenses"][number];
+type CatLite = { id: number; name: string; section?: string };
+type MemLite = { id: number; name: string };
+
+function ExpenseRow({
+  e,
+  canEditHere,
+  categories,
+  members,
+  periodId,
+}: {
+  e: ExpRow;
+  canEditHere: boolean;
+  categories: CatLite[];
+  members: MemLite[];
+  periodId: number;
+}) {
+  return (
+    <Row label={e.label} sub={e.category.name} tag={e.member?.name} amount={e.amount}>
+      {canEditHere && (
+        <ExpenseRowActions
+          categories={categories}
+          members={members}
+          periodId={periodId}
+          initial={{
+            id: e.id,
+            label: e.label,
+            amount: e.amount,
+            categoryId: e.categoryId,
+            memberId: e.memberId,
+            necessary: e.necessary,
+          }}
+        />
+      )}
+    </Row>
+  );
+}
+
+function ExpenseSection({
+  g,
+  canEditHere,
+  categories,
+  members,
+  periodId,
+}: {
+  g: { section: string; rows: ExpRow[]; subtotal: number };
+  canEditHere: boolean;
+  categories: CatLite[];
+  members: MemLite[];
+  periodId: number;
+}) {
+  return (
+    <details className="group border-b border-slate-100 last:border-0">
+      <summary className="flex cursor-pointer list-none items-center justify-between rounded-lg px-2 py-2 hover:bg-slate-50 [&::-webkit-details-marker]:hidden">
+        <span className="flex items-center gap-1.5">
+          <svg width="14" height="14" viewBox="0 0 20 20" className="text-slate-400 transition-transform group-open:rotate-90">
+            <path fill="currentColor" d="M7 5l6 5-6 5z" />
+          </svg>
+          <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+            {SECTION_LABEL[g.section]}
+          </span>
+          <span className="text-[10px] text-slate-400">({g.rows.length})</span>
+        </span>
+        <span className="text-sm font-bold tabular-nums text-slate-700">{formatINR(g.subtotal)}</span>
+      </summary>
+      <div className="divide-y divide-slate-100 px-2 pb-1">
+        {g.rows.map((e) => (
+          <ExpenseRow
+            key={e.id}
+            e={e}
+            canEditHere={canEditHere}
+            categories={categories}
+            members={members}
+            periodId={periodId}
+          />
+        ))}
+      </div>
+    </details>
+  );
+}
+
 export default async function SheetPage({
   searchParams,
 }: {
@@ -94,6 +175,16 @@ export default async function SheetPage({
     return { section, rows, subtotal: rows.reduce((s, e) => s + e.amount, 0) };
   }).filter((g) => g.rows.length > 0);
 
+  // split the Expense column into two blocks: fixed monthly (Loans+Chits+Monthly)
+  // vs miscellaneous/extra (Misc). Each has its own subtotal + Add expense.
+  const FIXED_SECTIONS = ["Loans", "Chits", "Monthly"];
+  const fixedGroups = grouped.filter((g) => FIXED_SECTIONS.includes(g.section));
+  const miscRows = rollup.expenses.filter((e) => e.category.section === "Misc");
+  const fixedSubtotal = fixedGroups.reduce((s, g) => s + g.subtotal, 0);
+  const miscSubtotal = miscRows.reduce((s, e) => s + e.amount, 0);
+  const fixedCats = c.categories.filter((cat) => FIXED_SECTIONS.includes(cat.section));
+  const miscCats = c.categories.filter((cat) => cat.section === "Misc");
+
   return (
     <>
       {nav}
@@ -162,68 +253,78 @@ export default async function SheetPage({
             <ColTotal label="Total Income" value={rollup.totalIncome} tone="green" />
           </section>
 
-          {/* EXPENSE — collapsible sections, single column */}
+          {/* EXPENSE — split into Fixed monthly vs Miscellaneous (extra) */}
           <section className="flex min-w-0 flex-col overflow-hidden rounded-xl border border-slate-200 bg-white">
             <ColHeader title="EXPENSE" tone="red" />
             <div className="flex-1 px-2 py-1">
-              {grouped.map((g) => (
-                <details key={g.section} className="group border-b border-slate-100 last:border-0">
-                  <summary className="flex cursor-pointer list-none items-center justify-between rounded-lg px-2 py-2 hover:bg-slate-50 [&::-webkit-details-marker]:hidden">
-                    <span className="flex items-center gap-1.5">
-                      <svg
-                        width="14"
-                        height="14"
-                        viewBox="0 0 20 20"
-                        className="text-slate-400 transition-transform group-open:rotate-90"
-                      >
-                        <path fill="currentColor" d="M7 5l6 5-6 5z" />
-                      </svg>
-                      <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                        {SECTION_LABEL[g.section]}
-                      </span>
-                      <span className="text-[10px] text-slate-400">({g.rows.length})</span>
-                    </span>
-                    <span className="text-sm font-bold tabular-nums text-slate-700">
-                      {formatINR(g.subtotal)}
-                    </span>
-                  </summary>
-                  <div className="divide-y divide-slate-100 px-2 pb-1">
-                    {g.rows.map((e) => (
-                      <Row
-                        key={e.id}
-                        label={e.label}
-                        sub={e.category.name}
-                        tag={e.member?.name}
-                        amount={e.amount}
-                      >
-                        {canEditHere && (
-                          <ExpenseRowActions
-                            categories={c.categories}
-                            members={c.members}
-                            periodId={c.selected!.id}
-                            initial={{
-                              id: e.id,
-                              label: e.label,
-                              amount: e.amount,
-                              categoryId: e.categoryId,
-                              memberId: e.memberId,
-                              necessary: e.necessary,
-                            }}
-                          />
-                        )}
-                      </Row>
-                    ))}
-                  </div>
-                </details>
+              {/* Fixed monthly (Loans + Chits + Monthly) */}
+              <div className="flex items-center justify-between px-2 pb-1 pt-1">
+                <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500">
+                  Fixed monthly
+                </span>
+                <span className="text-sm font-bold tabular-nums text-slate-700">
+                  {formatINR(fixedSubtotal)}
+                </span>
+              </div>
+              {fixedGroups.map((g) => (
+                <ExpenseSection
+                  key={g.section}
+                  g={g}
+                  canEditHere={canEditHere}
+                  categories={c.categories}
+                  members={c.members}
+                  periodId={c.selected!.id}
+                />
               ))}
               {canEditHere && (
                 <div className="px-2 py-2">
                   <ExpenseModal
-                    categories={c.categories}
+                    categories={fixedCats}
                     members={c.members}
                     periodId={c.selected!.id}
                     trigger="sheet"
                     balance={rollup.balance}
+                    sheetLabel="+ Add fixed expense"
+                    newCategoryDefaultSection="Monthly"
+                  />
+                </div>
+              )}
+
+              {/* Miscellaneous (unplanned / extra) */}
+              <div className="mt-2 flex items-center justify-between border-t-2 border-dashed border-slate-200 px-2 pb-1 pt-3">
+                <span className="text-[11px] font-bold uppercase tracking-wider text-amber-600">
+                  Miscellaneous · extra
+                </span>
+                <span className="text-sm font-bold tabular-nums text-slate-700">
+                  {formatINR(miscSubtotal)}
+                </span>
+              </div>
+              <div className="divide-y divide-slate-100 px-2 pb-1">
+                {miscRows.length === 0 ? (
+                  <p className="py-2 text-xs text-slate-400">No extra expenses this month.</p>
+                ) : (
+                  miscRows.map((e) => (
+                    <ExpenseRow
+                      key={e.id}
+                      e={e}
+                      canEditHere={canEditHere}
+                      categories={c.categories}
+                      members={c.members}
+                      periodId={c.selected!.id}
+                    />
+                  ))
+                )}
+              </div>
+              {canEditHere && (
+                <div className="px-2 py-2">
+                  <ExpenseModal
+                    categories={miscCats}
+                    members={c.members}
+                    periodId={c.selected!.id}
+                    trigger="sheet"
+                    balance={rollup.balance}
+                    sheetLabel="+ Add misc expense"
+                    newCategoryDefaultSection="Misc"
                   />
                 </div>
               )}
