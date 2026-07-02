@@ -32,24 +32,10 @@ export function MonthlySetup({
 }) {
   return (
     <div className="space-y-5">
-      <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white">
-        <table className="w-full min-w-[640px] text-sm">
-          <thead>
-            <tr className="border-b border-slate-200 bg-slate-50 text-left text-slate-500">
-              <th className="px-4 py-2">Category</th>
-              <th className="px-4 py-2">Monthly amount</th>
-              <th className="px-4 py-2">Sinking?</th>
-              <th className="px-4 py-2">Every (mo)</th>
-              <th className="px-4 py-2">Responsible</th>
-              <th className="px-4 py-2"></th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((r) => (
-              <SetupRow key={r.id} r={r} members={members} />
-            ))}
-          </tbody>
-        </table>
+      <div className="divide-y divide-slate-100 rounded-xl border border-slate-200 bg-white">
+        {rows.map((r) => (
+          <SetupRow key={r.id} r={r} members={members} />
+        ))}
       </div>
       <p className="text-xs text-slate-400">
         <b>Responsible</b> = the person this category&apos;s expenses are tagged to by default (drives
@@ -77,20 +63,19 @@ function SetupRow({ r, members }: { r: Row; members: MemberLite[] }) {
   const invalid = sinking && (!amount || Number(amount) <= 0 || !cycle || Number(cycle) < 1);
 
   return (
-    <tr className={`border-b border-slate-100 align-middle ${r.onHold ? "opacity-50" : ""}`}>
-      <td className="px-4 py-2 font-medium text-slate-800">
-        {r.name}
-        {r.onHold && (
-          <span className="ml-2 rounded-full bg-slate-200 px-2 py-0.5 text-[10px] text-slate-600">
-            on hold
-          </span>
-        )}
-      </td>
-      <td className="px-4 py-2">
-        <form action={saveRecurring} id={`sf-${r.id}`} />
-        <input form={`sf-${r.id}`} type="hidden" name="categoryId" value={r.id} />
-        <div className="flex items-center gap-1">
-          <span className="text-slate-400">₹</span>
+    <div className={`p-3 ${r.onHold ? "opacity-60" : ""}`}>
+      <form action={saveRecurring} id={`sf-${r.id}`} />
+      <input form={`sf-${r.id}`} type="hidden" name="categoryId" value={r.id} />
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+        <div className="min-w-[7rem] font-medium text-slate-800">
+          {r.name}
+          {r.onHold && (
+            <span className="ml-2 rounded-full bg-slate-200 px-2 py-0.5 text-[10px] text-slate-600">on hold</span>
+          )}
+        </div>
+
+        <label className="flex items-center gap-1 text-xs text-slate-500">
+          Amount ₹
           <input
             form={`sf-${r.id}`}
             name="monthlyBudget"
@@ -101,21 +86,23 @@ function SetupRow({ r, members }: { r: Row; members: MemberLite[] }) {
             placeholder="none"
             className="input w-24"
           />
-        </div>
-      </td>
-      <td className="px-4 py-2">
-        <input
-          form={`sf-${r.id}`}
-          type="checkbox"
-          name="sinking"
-          checked={sinking}
-          onChange={(e) => setSinking(e.target.checked)}
-          className="h-4 w-4 accent-indigo-600"
-        />
-      </td>
-      <td className="px-4 py-2">
-        {sinking ? (
-          <div>
+        </label>
+
+        <label className="flex items-center gap-1.5 text-xs text-slate-500">
+          <input
+            form={`sf-${r.id}`}
+            type="checkbox"
+            name="sinking"
+            checked={sinking}
+            onChange={(e) => setSinking(e.target.checked)}
+            className="h-4 w-4 accent-indigo-600"
+          />
+          Sinking fund
+        </label>
+
+        {sinking && (
+          <label className="flex items-center gap-1 text-xs text-slate-500">
+            Every
             <input
               form={`sf-${r.id}`}
               name="cycleMonths"
@@ -123,43 +110,31 @@ function SetupRow({ r, members }: { r: Row; members: MemberLite[] }) {
               min="1"
               value={cycle}
               onChange={(e) => setCycle(e.target.value)}
-              placeholder="e.g. 3"
+              placeholder="mo"
               className="input w-16"
             />
-            {lump && (
-              <div className="mt-0.5 text-[11px] text-slate-400">≈ {formatINR(lump)} per bill</div>
-            )}
-            {invalid && (
-              <div className="mt-0.5 text-[11px] font-medium text-red-600">amount + cycle required</div>
-            )}
-          </div>
-        ) : (
-          <span className="text-slate-300">—</span>
+            mo
+          </label>
         )}
-      </td>
-      <td className="px-4 py-2">
-        <select
-          form={`sf-${r.id}`}
-          name="responsibleMemberId"
-          value={resp}
-          onChange={(e) => setResp(e.target.value)}
-          className="input w-28"
-        >
-          <option value="">Shared</option>
-          {members.map((mm) => (
-            <option key={mm.id} value={mm.id}>
-              {mm.name}
-            </option>
-          ))}
-        </select>
-      </td>
-      <td className="px-4 py-2">
-        <div className="flex items-center justify-end gap-1">
-          <button
+
+        <label className="flex items-center gap-1 text-xs text-slate-500">
+          For
+          <select
             form={`sf-${r.id}`}
-            disabled={!dirty || invalid}
-            className="btn px-2 py-1.5 text-xs disabled:opacity-40"
+            name="responsibleMemberId"
+            value={resp}
+            onChange={(e) => setResp(e.target.value)}
+            className="input w-28"
           >
+            <option value="">Shared</option>
+            {members.map((mm) => (
+              <option key={mm.id} value={mm.id}>{mm.name}</option>
+            ))}
+          </select>
+        </label>
+
+        <div className="ml-auto flex items-center gap-1">
+          <button form={`sf-${r.id}`} disabled={!dirty || invalid} className="btn px-2 py-1.5 text-xs disabled:opacity-40">
             Save
           </button>
           <form action={toggleHold}>
@@ -171,8 +146,7 @@ function SetupRow({ r, members }: { r: Row; members: MemberLite[] }) {
           <form
             action={deleteCategory}
             onSubmit={(e) => {
-              if (!confirm(`Delete ${r.name}? (only works if it has no sheet history)`))
-                e.preventDefault();
+              if (!confirm(`Delete ${r.name}? (only works if it has no sheet history)`)) e.preventDefault();
             }}
           >
             <input type="hidden" name="categoryId" value={r.id} />
@@ -181,8 +155,10 @@ function SetupRow({ r, members }: { r: Row; members: MemberLite[] }) {
             </button>
           </form>
         </div>
-      </td>
-    </tr>
+      </div>
+      {sinking && lump && <div className="mt-1 text-[11px] text-slate-400">≈ {formatINR(lump)} per bill</div>}
+      {invalid && <div className="mt-1 text-[11px] font-medium text-red-600">Sinking funds need an amount + cycle</div>}
+    </div>
   );
 }
 

@@ -22,23 +22,10 @@ export function ManageUsers({
 }) {
   return (
     <div className="space-y-6">
-      <section className="overflow-x-auto rounded-xl border border-slate-200 bg-white">
-        <table className="w-full min-w-[640px] text-sm">
-          <thead>
-            <tr className="border-b border-slate-200 bg-slate-50 text-left text-slate-500">
-              <th className="px-4 py-2">Name</th>
-              <th className="px-4 py-2">Code</th>
-              <th className="px-4 py-2">Google email (login)</th>
-              <th className="px-4 py-2">Role</th>
-              <th className="px-4 py-2"></th>
-            </tr>
-          </thead>
-          <tbody>
-            {members.map((m) => (
-              <MemberRow key={m.id} m={m} isSelf={m.id === currentMemberId} />
-            ))}
-          </tbody>
-        </table>
+      <section className="divide-y divide-slate-100 rounded-xl border border-slate-200 bg-white">
+        {members.map((m) => (
+          <MemberRow key={m.id} m={m} isSelf={m.id === currentMemberId} />
+        ))}
       </section>
 
       <AddMember householdId={householdId} />
@@ -60,60 +47,32 @@ function MemberRow({ m, isSelf }: { m: M; isSelf: boolean }) {
   const valid = name.trim().length > 0 && code.trim().length > 0;
 
   return (
-    <tr className="border-b border-slate-100 align-middle">
-      <td className="px-4 py-2">
-        <form action={saveMember} id={`mf-${m.id}`} />
-        <input
-          form={`mf-${m.id}`}
-          name="name"
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          className="input w-32"
-        />
-        <input form={`mf-${m.id}`} type="hidden" name="id" value={m.id} />
-      </td>
-      <td className="px-4 py-2">
-        <input
-          form={`mf-${m.id}`}
-          name="code"
-          value={code}
-          onChange={(e) => setCode(e.target.value.toUpperCase())}
-          className="input w-16"
-        />
-      </td>
-      <td className="px-4 py-2">
-        <input
-          form={`mf-${m.id}`}
-          name="email"
-          type="email"
-          value={email}
-          onChange={(e) => setEmail(e.target.value)}
-          placeholder="Google email"
-          className="input w-48"
-        />
-      </td>
-      <td className="px-4 py-2">
-        <select
-          form={`mf-${m.id}`}
-          name="role"
-          value={role}
-          onChange={(e) => setRole(e.target.value)}
-          className="input"
-        >
-          <option value="member">member</option>
-          <option value="manager">manager</option>
-          <option value="head">head</option>
-        </select>
-      </td>
-      <td className="px-4 py-2">
-        <div className="flex items-center justify-end gap-2">
-          <button
-            form={`mf-${m.id}`}
-            disabled={!dirty || !valid}
-            className="btn disabled:opacity-40"
-          >
-            Save
-          </button>
+    <div className="p-3">
+      <form action={saveMember} id={`mf-${m.id}`} />
+      <input form={`mf-${m.id}`} type="hidden" name="id" value={m.id} />
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+        <label className="flex items-center gap-1 text-xs text-slate-500">
+          Name
+          <input form={`mf-${m.id}`} name="name" value={name} onChange={(e) => setName(e.target.value)} className="input w-32" />
+        </label>
+        <label className="flex items-center gap-1 text-xs text-slate-500">
+          Code
+          <input form={`mf-${m.id}`} name="code" value={code} onChange={(e) => setCode(e.target.value.toUpperCase())} className="input w-16" />
+        </label>
+        <label className="flex items-center gap-1 text-xs text-slate-500">
+          Email
+          <input form={`mf-${m.id}`} name="email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="Google email" className="input w-48" />
+        </label>
+        <label className="flex items-center gap-1 text-xs text-slate-500">
+          Role
+          <select form={`mf-${m.id}`} name="role" value={role} onChange={(e) => setRole(e.target.value)} className="input">
+            <option value="member">member</option>
+            <option value="manager">manager</option>
+            <option value="head">head</option>
+          </select>
+        </label>
+        <div className="ml-auto flex items-center gap-2">
+          <button form={`mf-${m.id}`} disabled={!dirty || !valid} className="btn disabled:opacity-40">Save</button>
           {!isSelf && (
             <form
               action={deleteMember}
@@ -122,17 +81,12 @@ function MemberRow({ m, isSelf }: { m: M; isSelf: boolean }) {
               }}
             >
               <input type="hidden" name="id" value={m.id} />
-              <button
-                className="rounded-md px-2 py-2 text-sm text-slate-400 hover:bg-red-50 hover:text-red-600"
-                title="Remove"
-              >
-                Delete
-              </button>
+              <button className="rounded-md px-2 py-2 text-sm text-slate-400 hover:bg-red-50 hover:text-red-600" title="Remove">Delete</button>
             </form>
           )}
         </div>
-      </td>
-    </tr>
+      </div>
+    </div>
   );
 }
 
