@@ -5,6 +5,17 @@ html {
      shift sideways when expanding content makes a scrollbar appear. */
   overflow-y: scroll;
   scrollbar-gutter: stable;
+  /* Never let the whole page pan sideways (esp. in the standalone PWA). `clip`
+     contains horizontal overflow WITHOUT creating a scroll container, so
+     position:sticky (nav + section headers) still works, and tables with their
+     own overflow-x-auto still scroll internally. */
+  overflow-x: clip;
+}
+
+body {
+  max-width: 100%;
+  overflow-x: clip;
+  overscroll-behavior-x: none; /* stop the horizontal rubber-band pan on touch */
 }
 
 /* Interactive elements get a pointer cursor app-wide (Tailwind v4 Preflight
