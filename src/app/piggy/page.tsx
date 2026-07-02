@@ -39,8 +39,8 @@ export default async function PiggyPage({
         currentMemberId={c.currentMember?.id}
       />
 
-      <main className="mx-auto max-w-4xl space-y-6 p-4 sm:p-6">
-        <div className="flex flex-wrap items-center justify-between gap-2">
+      <main className="mx-auto max-w-4xl space-y-6 p-6">
+        <div className="flex items-center justify-between gap-2">
           <h1 className="text-xl font-bold text-slate-900">🐷 Piggy &amp; savings</h1>
           {c.isHead && (
             <div className="flex items-center gap-2">

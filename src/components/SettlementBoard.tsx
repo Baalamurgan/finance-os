@@ -134,39 +134,45 @@ export function SettlementBoard({
         )}
       </section>
 
-      {/* per-member breakdown — wrapping cards (no fixed width, mobile-safe) */}
-      <section className="divide-y divide-slate-100 rounded-xl border border-slate-200 bg-white">
+      {/* per-member breakdown */}
+      <section className="overflow-x-auto rounded-xl border border-slate-200 bg-white">
         {pending ? (
           <div className="p-4"><Skeleton rows={4} /></div>
         ) : (
-          rows.map((r) => {
-            const isTreasurer = treasurerId === r.id;
-            return (
-              <div key={r.id} className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 px-4 py-3">
-                <div className="font-medium text-slate-800">
-                  {r.name}
-                  {isTreasurer && <span className="ml-2 rounded-full bg-indigo-100 px-2 py-0.5 text-[10px] font-medium text-indigo-700">treasurer</span>}
-                </div>
-                <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
-                  <span className="text-slate-500">
-                    Contributed <b className="tabular-nums text-slate-700">{formatINR(r.contributed)}</b>
-                  </span>
-                  <span className="text-slate-500">
-                    Paid <PaidBreakdown name={r.name} paid={r.paid} items={r.paidItems} />
-                  </span>
-                  <span className="text-slate-500">
-                    Net{" "}
-                    <b className={`tabular-nums ${r.net > 0 ? "text-green-600" : r.net < 0 ? "text-red-600" : "text-slate-400"}`}>
+          <table className="w-full min-w-[480px] text-sm">
+            <thead>
+              <tr className="border-b border-slate-200 bg-slate-50 text-left text-slate-500">
+                <th className="px-4 py-2">Member</th>
+                <th className="px-4 py-2 text-right">Contributed</th>
+                <th className="px-4 py-2 text-right">Paid</th>
+                <th className="px-4 py-2 text-right">Net</th>
+                <th className="px-4 py-2 text-right">Position</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r) => {
+                const isTreasurer = treasurerId === r.id;
+                return (
+                  <tr key={r.id} className="border-b border-slate-100">
+                    <td className="px-4 py-2 font-medium text-slate-800">
+                      {r.name}
+                      {isTreasurer && <span className="ml-2 rounded-full bg-indigo-100 px-2 py-0.5 text-[10px] font-medium text-indigo-700">treasurer</span>}
+                    </td>
+                    <td className="px-4 py-2 text-right tabular-nums text-slate-600">{formatINR(r.contributed)}</td>
+                    <td className="px-4 py-2 text-right">
+                      <PaidBreakdown name={r.name} paid={r.paid} items={r.paidItems} />
+                    </td>
+                    <td className={`px-4 py-2 text-right tabular-nums font-medium ${r.net > 0 ? "text-green-600" : r.net < 0 ? "text-red-600" : "text-slate-400"}`}>
                       {formatINR(r.net)}
-                    </b>
-                  </span>
-                  <span className="text-slate-500">
-                    {isTreasurer ? "—" : r.net > 0 ? `pays ${treasurerName ?? "hub"}` : r.net < 0 ? `gets from ${treasurerName ?? "hub"}` : "settled"}
-                  </span>
-                </div>
-              </div>
-            );
-          })
+                    </td>
+                    <td className="px-4 py-2 text-right text-xs text-slate-500">
+                      {isTreasurer ? "—" : r.net > 0 ? `pays ${treasurerName ?? "hub"}` : r.net < 0 ? `gets from ${treasurerName ?? "hub"}` : "settled"}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
         )}
       </section>
     </div>
