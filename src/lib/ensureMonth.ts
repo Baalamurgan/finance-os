@@ -28,7 +28,7 @@ export async function ensureCurrentMonth(now = new Date()) {
       const p = await tx.period.create({ data: { householdId: h.id, year, month, label } });
       if (latest) {
         const [incomes, expenses, heldCats] = await Promise.all([
-          tx.incomeEntry.findMany({ where: { periodId: latest.id } }),
+          tx.incomeEntry.findMany({ where: { periodId: latest.id, oneOff: false } }),
           // oneOff carries (misc / over-budget) are not copied forward
           tx.expenseEntry.findMany({ where: { periodId: latest.id, oneOff: false } }),
           tx.category.findMany({ where: { householdId: h.id, onHold: true }, select: { id: true } }),

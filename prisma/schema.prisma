@@ -139,6 +139,7 @@ model IncomeEntry {
   amount    Float
   owner     Member?  @relation(fields: [ownerId], references: [id])
   ownerId   Int?
+  oneOff    Boolean  @default(false) // one-time income (e.g. a loan/piggy top-up) — NOT copied forward
   note      String?
   createdAt DateTime @default(now())
 }

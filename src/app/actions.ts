@@ -62,6 +62,13 @@ export async function saveExpense(formData: FormData) {
       data: { categoryId, amount, label: finalLabel, memberId: finalMemberId, necessary },
     });
   } else {
+    // Guard: a new expense can't exceed the month's current balance (income − expense).
+    const [inc, exp] = await Promise.all([
+      prisma.incomeEntry.aggregate({ where: { periodId }, _sum: { amount: true } }),
+      prisma.expenseEntry.aggregate({ where: { periodId }, _sum: { amount: true } }),
+    ]);
+    const bal = (inc._sum.amount ?? 0) - (exp._sum.amount ?? 0);
+    if (amount > bal) return; // blocked (UI also guards)
     // "Repeat every month" (checkbox) → recurring (copies forward); unchecked → one-off (this month only)
     const oneOff = formData.get("repeat") !== "on";
     await prisma.expenseEntry.create({
@@ -82,7 +89,9 @@ export async function addIncome(formData: FormData) {
   if (!periodId || !source || !amount) return;
   if (!(await canEditNow(periodId))) return;
 
-  await prisma.incomeEntry.create({ data: { periodId, source, amount, ownerId } });
+  // "Repeat every month" → recurring; unchecked → one-time (not copied forward)
+  const oneOff = formData.get("repeat") !== "on";
+  await prisma.incomeEntry.create({ data: { periodId, source, amount, ownerId, oneOff } });
   revalidatePath("/", "layout");
 }
 
@@ -479,7 +488,7 @@ async function clonePeriodStructure(
   householdId: number
 ) {
   const [incomes, expenses, heldCats] = await Promise.all([
-    tx.incomeEntry.findMany({ where: { periodId: sourceId } }),
+    tx.incomeEntry.findMany({ where: { periodId: sourceId, oneOff: false } }),
     // oneOff lines (carried misc / over-budget) must NOT propagate to future months
     tx.expenseEntry.findMany({ where: { periodId: sourceId, oneOff: false } }),
     tx.category.findMany({ where: { householdId, onHold: true }, select: { id: true } }),

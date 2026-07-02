@@ -5,7 +5,8 @@ import { NavHeader } from "@/components/NavHeader";
 import { RowActions } from "@/components/RowActions";
 import { ExpenseRowActions } from "@/components/ExpenseRowActions";
 import { ExpenseModal } from "@/components/ExpenseModal";
-import { addIncome, createPeriod, deleteIncome } from "./actions";
+import { IncomeModal } from "@/components/IncomeModal";
+import { createPeriod, deleteIncome } from "./actions";
 
 const SECTION_ORDER = ["Loans", "Chits", "Monthly", "Misc"] as const;
 const SECTION_LABEL: Record<string, string> = {
@@ -153,21 +154,9 @@ export default async function SheetPage({
                 </Row>
               ))}
               {canEditHere && (
-                <details className="py-2 text-sm">
-                  <summary className="cursor-pointer text-indigo-600">+ Add income</summary>
-                  <form action={addIncome} className="mt-2 space-y-2">
-                    <input type="hidden" name="periodId" value={c.selected.id} />
-                    <input name="source" placeholder="Source" required className="input w-full" />
-                    <input name="amount" type="number" step="0.01" placeholder="Amount" required className="input w-full" />
-                    <select name="ownerId" className="input w-full">
-                      <option value="">Shared</option>
-                      {c.members.map((m) => (
-                        <option key={m.id} value={m.id}>{m.name}</option>
-                      ))}
-                    </select>
-                    <button className="btn w-full">Add</button>
-                  </form>
-                </details>
+                <div className="py-2">
+                  <IncomeModal members={c.members} periodId={c.selected.id} />
+                </div>
               )}
             </div>
             <ColTotal label="Total Income" value={rollup.totalIncome} tone="green" />
@@ -234,6 +223,7 @@ export default async function SheetPage({
                     members={c.members}
                     periodId={c.selected!.id}
                     trigger="sheet"
+                    balance={rollup.balance}
                   />
                 </div>
               )}

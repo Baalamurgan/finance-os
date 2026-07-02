@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { saveExpense } from "@/app/actions";
+import { formatINR } from "@/lib/format";
 
 type Cat = { id: number; name: string; section?: string };
 type Mem = { id: number; name: string };
@@ -20,6 +21,7 @@ export function ExpenseModal({
   controlledOpen,
   onOpenChange,
   hideTrigger,
+  balance,
 }: {
   categories: Cat[];
   members: Mem[];
@@ -36,6 +38,7 @@ export function ExpenseModal({
   controlledOpen?: boolean; // when provided, parent controls open state
   onOpenChange?: (v: boolean) => void;
   hideTrigger?: boolean; // render no trigger (parent opens via controlledOpen)
+  balance?: number; // current sheet balance — new expense can't exceed it (create only)
 }) {
   const [openState, setOpenState] = useState(false);
   const open = controlledOpen ?? openState;
@@ -43,6 +46,15 @@ export function ExpenseModal({
   const [categoryId, setCategoryId] = useState<number | null>(
     initial?.categoryId ?? null
   );
+  const [amount, setAmount] = useState(initial?.amount != null ? String(initial.amount) : "");
+
+  // balance cap applies only when adding a new expense (create) and a balance is known
+  const capped = !initial && typeof balance === "number";
+  const amountNum = Number(amount) || 0;
+  const overBalance = capped && amountNum > balance!;
+
+  const sections = SECTION_ORDER.filter((sec) => categories.some((c) => c.section === sec));
+  const grouped = sections.length > 0;
 
   // close on Esc
   useEffect(() => {
@@ -114,8 +126,13 @@ export function ExpenseModal({
             <form
               action={saveExpense}
               onSubmit={(e) => {
-                // only close on a valid submit (category chosen + native validity)
+                // only close on a valid submit (category chosen + native validity + within balance)
                 if (!categoryId || !e.currentTarget.checkValidity()) return;
+                if (overBalance) {
+                  e.preventDefault();
+                  alert(`Only ${formatINR(balance!)} is available in this month's balance.`);
+                  return;
+                }
                 setOpen(false);
               }}
               className="flex min-h-0 flex-col"
@@ -135,67 +152,60 @@ export function ExpenseModal({
                     inputMode="decimal"
                     autoFocus
                     required
-                    defaultValue={initial?.amount}
+                    value={amount}
+                    onChange={(e) => setAmount(e.target.value)}
                     placeholder="0"
-                    className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-3 text-3xl font-bold tabular-nums outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
+                    className={`mt-1 w-full rounded-lg border px-3 py-3 text-3xl font-bold tabular-nums outline-none focus:ring-2 ${
+                      overBalance
+                        ? "border-red-400 focus:border-red-400 focus:ring-red-100"
+                        : "border-slate-300 focus:border-indigo-400 focus:ring-indigo-100"
+                    }`}
                   />
-                </div>
-
-                {/* category chips (grouped by section when section info is present) */}
-                <div>
-                  <label className="text-xs font-medium text-slate-500">Category</label>
-                  {categories.some((c) => c.section) ? (
-                    <div className="mt-1 space-y-2">
-                      {SECTION_ORDER.filter((sec) => categories.some((c) => c.section === sec)).map((sec) => (
-                        <div key={sec}>
-                          <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">
-                            {SECTION_LABEL[sec]}
-                          </div>
-                          <div className="mt-1 flex flex-wrap gap-2">
-                            {categories.filter((c) => c.section === sec).map((cat) => (
-                              <CatChip key={cat.id} cat={cat} active={categoryId === cat.id} onClick={() => setCategoryId(cat.id)} />
-                            ))}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  ) : (
-                    <div className="mt-1 flex flex-wrap gap-2">
-                      {categories.map((cat) => (
-                        <CatChip key={cat.id} cat={cat} active={categoryId === cat.id} onClick={() => setCategoryId(cat.id)} />
-                      ))}
-                    </div>
+                  {capped && (
+                    <p className={`mt-1 text-xs ${overBalance ? "font-medium text-red-600" : "text-slate-400"}`}>
+                      {overBalance ? "More than available — " : "Balance available: "}
+                      {formatINR(balance!)}
+                    </p>
                   )}
                 </div>
 
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="text-xs font-medium text-slate-500">Member</label>
-                    <select
-                      name="memberId"
-                      defaultValue={initial?.memberId ?? ""}
-                      className="input mt-1 w-full"
-                    >
-                      <option value="">Shared</option>
-                      {members.map((m) => (
-                        <option key={m.id} value={m.id}>
-                          {m.name}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                  <div>
-                    <label className="text-xs font-medium text-slate-500">Necessary?</label>
-                    <select
-                      name="necessary"
-                      defaultValue={initial ? (initial.necessary ? "yes" : "no") : "default"}
-                      className="input mt-1 w-full"
-                    >
-                      <option value="default">Category default</option>
-                      <option value="yes">Necessary</option>
-                      <option value="no">Other</option>
-                    </select>
-                  </div>
+                {/* category — grouped dropdown */}
+                <div>
+                  <label className="text-xs font-medium text-slate-500">Category</label>
+                  <select
+                    value={categoryId ?? ""}
+                    onChange={(e) => setCategoryId(e.target.value ? Number(e.target.value) : null)}
+                    className="input mt-1 w-full"
+                  >
+                    <option value="">Select category…</option>
+                    {grouped
+                      ? sections.map((sec) => (
+                          <optgroup key={sec} label={SECTION_LABEL[sec]}>
+                            {categories.filter((c) => c.section === sec).map((cat) => (
+                              <option key={cat.id} value={cat.id}>{cat.name}</option>
+                            ))}
+                          </optgroup>
+                        ))
+                      : categories.map((cat) => (
+                          <option key={cat.id} value={cat.id}>{cat.name}</option>
+                        ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="text-xs font-medium text-slate-500">Member</label>
+                  <select
+                    name="memberId"
+                    defaultValue={initial?.memberId ?? ""}
+                    className="input mt-1 w-full"
+                  >
+                    <option value="">Shared</option>
+                    {members.map((m) => (
+                      <option key={m.id} value={m.id}>
+                        {m.name}
+                      </option>
+                    ))}
+                  </select>
                 </div>
 
                 <input
@@ -224,7 +234,7 @@ export function ExpenseModal({
                 >
                   Cancel
                 </button>
-                <button type="submit" disabled={!categoryId} className="btn disabled:opacity-40">
+                <button type="submit" disabled={!categoryId || overBalance} className="btn disabled:opacity-40">
                   {initial ? "Save" : "Add expense"}
                 </button>
               </div>
@@ -233,21 +243,5 @@ export function ExpenseModal({
         </div>
       )}
     </>
-  );
-}
-
-function CatChip({ cat, active, onClick }: { cat: Cat; active: boolean; onClick: () => void }) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={`rounded-full border px-3 py-1.5 text-sm transition ${
-        active
-          ? "border-indigo-500 bg-indigo-50 font-medium text-indigo-700"
-          : "border-slate-300 text-slate-600 hover:border-slate-400"
-      }`}
-    >
-      {cat.name}
-    </button>
   );
 }
