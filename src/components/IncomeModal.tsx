@@ -1,13 +1,19 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { addIncome } from "@/app/actions";
+import { useActionState, useEffect, useRef, useState } from "react";
+import { addIncomeAction, type SaveState } from "@/app/actions";
 
 type Mem = { id: number; name: string };
 
 // Add-income modal — matches the Sheet "+ Add expense" UI (sheet trigger + Repeat toggle).
 export function IncomeModal({ members, periodId }: { members: Mem[]; periodId: number }) {
   const [open, setOpen] = useState(false);
+  const formRef = useRef<HTMLFormElement>(null);
+  const prevN = useRef(0);
+  const [state, formAction, pending] = useActionState<SaveState, FormData>(addIncomeAction, {
+    ok: false,
+    n: 0,
+  });
 
   useEffect(() => {
     if (!open) return;
@@ -15,6 +21,15 @@ export function IncomeModal({ members, periodId }: { members: Mem[]; periodId: n
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [open]);
+
+  // close + reset only on a real successful save
+  useEffect(() => {
+    if (state.n > prevN.current) {
+      prevN.current = state.n;
+      formRef.current?.reset();
+      setOpen(false);
+    }
+  }, [state.n]);
 
   return (
     <>
@@ -50,11 +65,8 @@ export function IncomeModal({ members, periodId }: { members: Mem[]; periodId: n
             </div>
 
             <form
-              action={addIncome}
-              onSubmit={(e) => {
-                if (!e.currentTarget.checkValidity()) return;
-                setOpen(false);
-              }}
+              ref={formRef}
+              action={formAction}
               className="flex min-h-0 flex-col"
             >
               <div className="space-y-4 overflow-y-auto px-5 py-4">
@@ -104,7 +116,9 @@ export function IncomeModal({ members, periodId }: { members: Mem[]; periodId: n
                 >
                   Cancel
                 </button>
-                <button type="submit" className="btn">Add income</button>
+                <button type="submit" disabled={pending} className="btn disabled:opacity-40">
+                  {pending ? "Saving…" : "Add income"}
+                </button>
               </div>
             </form>
           </div>

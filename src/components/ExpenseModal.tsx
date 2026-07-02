@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { saveExpense } from "@/app/actions";
+import { useActionState, useEffect, useRef, useState } from "react";
+import { saveExpenseAction, type SaveState } from "@/app/actions";
 import { formatINR } from "@/lib/format";
 
 type Cat = { id: number; name: string; section?: string };
@@ -47,6 +47,14 @@ export function ExpenseModal({
     initial?.categoryId ?? null
   );
   const [amount, setAmount] = useState(initial?.amount != null ? String(initial.amount) : "");
+  const [newCat, setNewCat] = useState(false); // creating a brand-new category inline
+  const noteRef = useRef<HTMLInputElement>(null);
+  const prevN = useRef(0);
+
+  const [state, formAction, pending] = useActionState<SaveState, FormData>(saveExpenseAction, {
+    ok: false,
+    n: 0,
+  });
 
   // balance cap applies only when adding a new expense (create) and a balance is known
   const capped = !initial && typeof balance === "number";
@@ -65,6 +73,19 @@ export function ExpenseModal({
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [open]);
+
+  // close + reset only on a real successful save
+  useEffect(() => {
+    if (state.n > prevN.current) {
+      prevN.current = state.n;
+      setOpen(false);
+      if (!initial) {
+        setAmount("");
+        setCategoryId(null);
+        setNewCat(false);
+      }
+    }
+  }, [state.n]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <>
@@ -124,16 +145,25 @@ export function ExpenseModal({
             </div>
 
             <form
-              action={saveExpense}
+              action={formAction}
               onSubmit={(e) => {
-                // only close on a valid submit (category chosen + native validity + within balance)
-                if (!categoryId || !e.currentTarget.checkValidity()) return;
+                // client validation — block (don't run the action) until valid
+                if (!categoryId && !newCat) {
+                  e.preventDefault();
+                  alert("Pick a category (or add a new one).");
+                  return;
+                }
+                if (!noteRef.current?.value.trim()) {
+                  e.preventDefault();
+                  noteRef.current?.focus();
+                  return;
+                }
                 if (overBalance) {
                   e.preventDefault();
                   alert(`Only ${formatINR(balance!)} is available in this month's balance.`);
                   return;
                 }
-                setOpen(false);
+                // valid → let the server action run; the modal closes on success (effect)
               }}
               className="flex min-h-0 flex-col"
             >
@@ -169,12 +199,21 @@ export function ExpenseModal({
                   )}
                 </div>
 
-                {/* category — grouped dropdown */}
+                {/* category — grouped dropdown, with an inline "new category" option */}
                 <div>
                   <label className="text-xs font-medium text-slate-500">Category</label>
                   <select
-                    value={categoryId ?? ""}
-                    onChange={(e) => setCategoryId(e.target.value ? Number(e.target.value) : null)}
+                    value={newCat ? "new" : categoryId ?? ""}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      if (v === "new") {
+                        setNewCat(true);
+                        setCategoryId(null);
+                      } else {
+                        setNewCat(false);
+                        setCategoryId(v ? Number(v) : null);
+                      }
+                    }}
                     className="input mt-1 w-full"
                   >
                     <option value="">Select category…</option>
@@ -189,7 +228,26 @@ export function ExpenseModal({
                       : categories.map((cat) => (
                           <option key={cat.id} value={cat.id}>{cat.name}</option>
                         ))}
+                    <option value="new">➕ New category…</option>
                   </select>
+
+                  {newCat && (
+                    <div className="mt-2 grid grid-cols-2 gap-2">
+                      <input
+                        name="newCategoryName"
+                        required
+                        autoFocus
+                        placeholder="New category (e.g. YouTube)"
+                        className="input"
+                      />
+                      <select name="newCategorySection" defaultValue="Monthly" className="input">
+                        <option value="Loans">Loans</option>
+                        <option value="Chits">Chits</option>
+                        <option value="Monthly">Monthly</option>
+                        <option value="Misc">Miscellaneous</option>
+                      </select>
+                    </div>
+                  )}
                 </div>
 
                 <div>
@@ -208,12 +266,17 @@ export function ExpenseModal({
                   </select>
                 </div>
 
-                <input
-                  name="label"
-                  defaultValue={initial?.label}
-                  placeholder="Note (optional)"
-                  className="input w-full"
-                />
+                <div>
+                  <label className="text-xs font-medium text-slate-500">Note (required)</label>
+                  <input
+                    ref={noteRef}
+                    name="label"
+                    required
+                    defaultValue={initial?.label}
+                    placeholder="e.g. Jewel loan extra principal, Health insurance"
+                    className="input mt-1 w-full"
+                  />
+                </div>
 
                 {/* recurring vs one-time — create mode only */}
                 {!initial && (
@@ -234,8 +297,8 @@ export function ExpenseModal({
                 >
                   Cancel
                 </button>
-                <button type="submit" disabled={!categoryId || overBalance} className="btn disabled:opacity-40">
-                  {initial ? "Save" : "Add expense"}
+                <button type="submit" disabled={(!categoryId && !newCat) || overBalance || pending} className="btn disabled:opacity-40">
+                  {pending ? "Saving…" : initial ? "Save" : "Add expense"}
                 </button>
               </div>
             </form>

@@ -33,24 +33,44 @@ async function canEditNow(periodId: number) {
   return await periodOpen(periodId);
 }
 
+// Success signal for useActionState-driven modals (close + reset only on real success).
+export type SaveState = { ok: boolean; n: number };
+
 // Create (no id) or update (id present). Head/Manager; head may edit closed months.
-export async function saveExpense(formData: FormData) {
-  if (!(await canEdit())) return;
+// Returns true on success. Note (label) is REQUIRED.
+async function doSaveExpense(formData: FormData): Promise<boolean> {
+  if (!(await canEdit())) return false;
 
   const id = formData.get("id") ? Number(formData.get("id")) : null;
   const periodId = Number(formData.get("periodId"));
-  const categoryId = Number(formData.get("categoryId"));
+  let categoryId = Number(formData.get("categoryId")) || 0;
   const amount = Number(formData.get("amount"));
   const label = String(formData.get("label") ?? "").trim();
   const memberRaw = formData.get("memberId");
   const memberId = memberRaw ? Number(memberRaw) : null;
   const necessaryRaw = formData.get("necessary"); // "default" | "yes" | "no"
 
-  if (!periodId || !categoryId || !amount) return;
-  if (!(await canEditNow(periodId))) return;
+  if (!periodId || !amount || !label) return false; // note required
+  if (!(await canEditNow(periodId))) return false;
+
+  // create-a-new-category-on-the-fly (e.g. "YouTube" under Monthly) when none is picked
+  const newCatName = String(formData.get("newCategoryName") ?? "").trim();
+  if (!categoryId && newCatName) {
+    const period = await prisma.period.findUnique({ where: { id: periodId } });
+    if (!period) return false;
+    const section = String(formData.get("newCategorySection") ?? "Monthly");
+    const existing = await prisma.category.findFirst({
+      where: { householdId: period.householdId, name: newCatName },
+    });
+    categoryId =
+      existing?.id ??
+      (await prisma.category.create({
+        data: { householdId: period.householdId, name: newCatName, section },
+      })).id;
+  }
+  if (!categoryId) return false;
 
   const category = await prisma.category.findUnique({ where: { id: categoryId } });
-  const finalLabel = label || category?.name || "Expense";
   const necessary =
     necessaryRaw === "yes" ? true : necessaryRaw === "no" ? false : (category?.necessary ?? true);
   // auto-attribute to the category's responsible member when none is picked
@@ -59,7 +79,7 @@ export async function saveExpense(formData: FormData) {
   if (id) {
     await prisma.expenseEntry.update({
       where: { id },
-      data: { categoryId, amount, label: finalLabel, memberId: finalMemberId, necessary },
+      data: { categoryId, amount, label, memberId: finalMemberId, necessary },
     });
   } else {
     // Guard: a new expense can't exceed the month's current balance (income − expense).
@@ -68,31 +88,50 @@ export async function saveExpense(formData: FormData) {
       prisma.expenseEntry.aggregate({ where: { periodId }, _sum: { amount: true } }),
     ]);
     const bal = (inc._sum.amount ?? 0) - (exp._sum.amount ?? 0);
-    if (amount > bal) return; // blocked (UI also guards)
+    if (amount > bal) return false; // blocked (UI also guards)
     // "Repeat every month" (checkbox) → recurring (copies forward); unchecked → one-off (this month only)
     const oneOff = formData.get("repeat") !== "on";
     await prisma.expenseEntry.create({
-      data: { periodId, categoryId, amount, label: finalLabel, memberId: finalMemberId, necessary, oneOff },
+      data: { periodId, categoryId, amount, label, memberId: finalMemberId, necessary, oneOff },
     });
   }
   revalidatePath("/", "layout");
+  return true;
 }
 
-export async function addIncome(formData: FormData) {
-  if (!(await canEdit())) return;
+export async function saveExpense(formData: FormData) {
+  await doSaveExpense(formData);
+}
+export async function saveExpenseAction(prev: SaveState, formData: FormData): Promise<SaveState> {
+  const ok = await doSaveExpense(formData);
+  return { ok, n: ok ? prev.n + 1 : prev.n };
+}
+
+// Returns true on success. Source (the note/description) is REQUIRED.
+async function doAddIncome(formData: FormData): Promise<boolean> {
+  if (!(await canEdit())) return false;
   const periodId = Number(formData.get("periodId"));
   const source = String(formData.get("source") ?? "").trim();
   const amount = Number(formData.get("amount"));
   const ownerRaw = formData.get("ownerId");
   const ownerId = ownerRaw ? Number(ownerRaw) : null;
 
-  if (!periodId || !source || !amount) return;
-  if (!(await canEditNow(periodId))) return;
+  if (!periodId || !source || !amount) return false;
+  if (!(await canEditNow(periodId))) return false;
 
   // "Repeat every month" → recurring; unchecked → one-time (not copied forward)
   const oneOff = formData.get("repeat") !== "on";
   await prisma.incomeEntry.create({ data: { periodId, source, amount, ownerId, oneOff } });
   revalidatePath("/", "layout");
+  return true;
+}
+
+export async function addIncome(formData: FormData) {
+  await doAddIncome(formData);
+}
+export async function addIncomeAction(prev: SaveState, formData: FormData): Promise<SaveState> {
+  const ok = await doAddIncome(formData);
+  return { ok, n: ok ? prev.n + 1 : prev.n };
 }
 
 export async function deleteExpense(formData: FormData) {
