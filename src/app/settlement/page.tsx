@@ -27,6 +27,8 @@ export default async function SettlementPage({
       periodId={c.selected?.id ?? null}
       periodOpen={c.selected?.status === "open"}
       currentMemberId={c.currentMember?.id}
+      windDownReminder={c.windDownReminder}
+      canEdit={c.canEdit}
     />
   );
 

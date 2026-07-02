@@ -584,6 +584,18 @@ export async function saveRecurring(formData: FormData) {
   revalidatePath("/", "layout");
 }
 
+// Head sets the monthly close day (1–28) that drives the wind-down reminder.
+export async function setWindDownDay(formData: FormData) {
+  if (!(await isHead())) return;
+  const raw = String(formData.get("windDownDay") ?? "").trim();
+  const day = raw === "" ? null : Number(raw);
+  if (day != null && (Number.isNaN(day) || day < 1 || day > 28)) return;
+  const household = await prisma.household.findFirst();
+  if (!household) return;
+  await prisma.household.update({ where: { id: household.id }, data: { windDownDay: day } });
+  revalidatePath("/", "layout");
+}
+
 type Tx = Parameters<Parameters<typeof prisma.$transaction>[0]>[0];
 
 // Seed a new period's budgets from the recurring template (Category.monthlyBudget).

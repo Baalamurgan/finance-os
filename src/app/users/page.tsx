@@ -28,6 +28,8 @@ export default async function UsersPage({
         periodId={c.selected?.id ?? null}
         periodOpen={c.selected?.status === "open"}
         currentMemberId={c.currentMember?.id}
+        windDownReminder={c.windDownReminder}
+        canEdit={c.canEdit}
       />
 
       <main className="mx-auto max-w-4xl space-y-6 p-6">

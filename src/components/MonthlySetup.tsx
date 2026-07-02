@@ -25,10 +25,12 @@ export function MonthlySetup({
   rows,
   householdId,
   members,
+  readOnly = false,
 }: {
   rows: Row[];
   householdId: number;
   members: MemberLite[];
+  readOnly?: boolean;
 }) {
   return (
     <div className="space-y-5">
@@ -46,7 +48,7 @@ export function MonthlySetup({
           </thead>
           <tbody>
             {rows.map((r) => (
-              <SetupRow key={r.id} r={r} members={members} />
+              <SetupRow key={r.id} r={r} members={members} readOnly={readOnly} />
             ))}
           </tbody>
         </table>
@@ -56,12 +58,12 @@ export function MonthlySetup({
         settlement) and who is charged any over-budget excess at wind-down.
       </p>
 
-      <AddCategory householdId={householdId} />
+      {!readOnly && <AddCategory householdId={householdId} />}
     </div>
   );
 }
 
-function SetupRow({ r, members }: { r: Row; members: MemberLite[] }) {
+function SetupRow({ r, members, readOnly }: { r: Row; members: MemberLite[]; readOnly: boolean }) {
   const [amount, setAmount] = useState(r.monthlyBudget?.toString() ?? "");
   const [sinking, setSinking] = useState(r.sinking);
   const [cycle, setCycle] = useState(r.cycleMonths?.toString() ?? "");
@@ -99,7 +101,8 @@ function SetupRow({ r, members }: { r: Row; members: MemberLite[] }) {
             value={amount}
             onChange={(e) => setAmount(e.target.value)}
             placeholder="none"
-            className="input w-24"
+            disabled={readOnly}
+            className="input w-24 disabled:bg-slate-100 disabled:text-slate-400"
           />
         </div>
       </td>
@@ -110,7 +113,8 @@ function SetupRow({ r, members }: { r: Row; members: MemberLite[] }) {
           name="sinking"
           checked={sinking}
           onChange={(e) => setSinking(e.target.checked)}
-          className="h-4 w-4 accent-indigo-600"
+          disabled={readOnly}
+          className="h-4 w-4 accent-indigo-600 disabled:opacity-50"
         />
       </td>
       <td className="px-4 py-2">
@@ -124,7 +128,8 @@ function SetupRow({ r, members }: { r: Row; members: MemberLite[] }) {
               value={cycle}
               onChange={(e) => setCycle(e.target.value)}
               placeholder="e.g. 3"
-              className="input w-16"
+              disabled={readOnly}
+              className="input w-16 disabled:bg-slate-100 disabled:text-slate-400"
             />
             {lump && (
               <div className="mt-0.5 text-[11px] text-slate-400">≈ {formatINR(lump)} per bill</div>
@@ -143,7 +148,8 @@ function SetupRow({ r, members }: { r: Row; members: MemberLite[] }) {
           name="responsibleMemberId"
           value={resp}
           onChange={(e) => setResp(e.target.value)}
-          className="input w-28"
+          disabled={readOnly}
+          className="input w-28 disabled:bg-slate-100 disabled:text-slate-400"
         >
           <option value="">Shared</option>
           {members.map((mm) => (
@@ -154,6 +160,9 @@ function SetupRow({ r, members }: { r: Row; members: MemberLite[] }) {
         </select>
       </td>
       <td className="px-4 py-2">
+        {readOnly ? (
+          <span className="block text-right text-xs text-slate-300">—</span>
+        ) : (
         <div className="flex items-center justify-end gap-1">
           <button
             form={`sf-${r.id}`}
@@ -181,6 +190,7 @@ function SetupRow({ r, members }: { r: Row; members: MemberLite[] }) {
             </button>
           </form>
         </div>
+        )}
       </td>
     </tr>
   );

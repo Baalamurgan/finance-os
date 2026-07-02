@@ -15,6 +15,7 @@ model Household {
   name       String
   type       String     @default("family") // family | personal
   treasurerMemberId Int? // hub member that everyone settles with (defaults to head)
+  windDownDay Int? // day of month the head aims to close/wind down; drives the reminder
   members      Member[]
   periods      Period[]
   categories   Category[]

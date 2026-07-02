@@ -65,8 +65,23 @@ export async function loadCommon(params?: { y?: string; m?: string }) {
   const selMonth = m ?? selected?.month ?? now.getMonth() + 1;
   const noData = !selected;
 
+  // In-app wind-down reminder: if the head set a close day, surface a banner
+  // in the 5 days leading up to it (counts to this month's day, else next month's).
+  let windDownReminder: { daysUntil: number; day: number } | null = null;
+  const wd = household.windDownDay;
+  if (wd && wd >= 1 && wd <= 31) {
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    let close = new Date(today.getFullYear(), today.getMonth(), wd);
+    if (close.getTime() < today.getTime()) {
+      close = new Date(today.getFullYear(), today.getMonth() + 1, wd);
+    }
+    const daysUntil = Math.round((close.getTime() - today.getTime()) / 86400000);
+    if (daysUntil <= 5) windDownReminder = { daysUntil, day: wd };
+  }
+
   return {
     household,
+    windDownReminder,
     periods,
     selected,
     selYear,

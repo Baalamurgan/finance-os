@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { AddSpendModal } from "@/components/AddSpendModal";
 import { UserMenu } from "@/components/UserMenu";
+import { WindDownBanner } from "@/components/WindDownBanner";
 import { formatINR } from "@/lib/format";
 
 const MONTHS = [
@@ -25,6 +26,8 @@ export function NavHeader({
   periodId,
   periodOpen,
   currentMemberId,
+  windDownReminder,
+  canEdit,
 }: {
   active:
     | "sheet"
@@ -47,6 +50,8 @@ export function NavHeader({
   periodId: number | null;
   periodOpen: boolean;
   currentMemberId?: number | null;
+  windDownReminder?: { daysUntil: number; day: number } | null;
+  canEdit?: boolean;
 }) {
   const router = useRouter();
   const now = new Date();
@@ -56,21 +61,24 @@ export function NavHeader({
   const tabs = [
     { key: "sheet", label: "Sheet", href: "/" },
     { key: "expenses", label: "Expenses", href: "/expenses" },
+    { key: "settlement", label: "Settlement", href: "/settlement" },
     { key: "analysis", label: "Analysis", href: "/analysis" },
     { key: "piggy", label: "Piggy", href: "/piggy" },
     { key: "loans", label: "Loans & Chits", href: "/loans" },
-    { key: "settlement", label: "Settlement", href: "/settlement" },
     { key: "wind-down", label: "Wind Down", href: "/wind-down" },
+    // Setup is head-editable / manager view-only; Manage Users stays head-only.
     ...(isHead
       ? [
           { key: "setup", label: "Setup", href: "/setup" },
           { key: "users", label: "Manage Users", href: "/users" },
         ]
-      : []),
+      : canEdit
+        ? [{ key: "setup", label: "Setup", href: "/setup" }]
+        : []),
   ];
 
-  const primaryTabs = tabs.slice(0, 3); // Sheet · Expenses · Analysis
-  const moreTabs = tabs.slice(3);
+  const primaryTabs = tabs.slice(0, 3); // Sheet · Expenses · Settlement
+  const moreTabs = tabs.slice(3); // Analysis · Piggy · Loans · Wind Down · …
 
   const q = `?y=${selYear}&m=${selMonth}`;
   const activeHref = tabs.find((t) => t.key === active)?.href ?? "/";
@@ -78,7 +86,9 @@ export function NavHeader({
   const years: number[] = [];
   for (let yr = curYear; yr >= 2000; yr--) years.push(yr);
 
-  const go = (y: number, m: number) => router.push(`${activeHref}?y=${y}&m=${m}`);
+  // replace (not push) so the phone back button exits the app instead of
+  // stepping back through months/tabs — feels native, less confusing for elders.
+  const go = (y: number, m: number) => router.replace(`${activeHref}?y=${y}&m=${m}`);
 
   return (
     <>
@@ -95,6 +105,7 @@ export function NavHeader({
             <Link
               key={t.key}
               href={`${t.href}${q}`}
+              replace
               className={`rounded-md px-3 py-1.5 text-sm font-medium transition ${
                 active === t.key
                   ? "bg-indigo-600 text-white"
@@ -169,6 +180,8 @@ export function NavHeader({
       </div>
     </header>
 
+    {windDownReminder && <WindDownBanner daysUntil={windDownReminder.daysUntil} />}
+
     {/* big thumb-reachable "Add Spend" button on mobile (the easy daily action) */}
     {periodOpen && periodId && (
       <AddSpendModal
@@ -227,6 +240,7 @@ function BottomNav({
               <Link
                 key={t.key}
                 href={`${t.href}${q}`}
+                replace
                 onClick={() => setOpen(false)}
                 className={`block px-5 py-4 text-base ${
                   active === t.key ? "bg-indigo-50 font-medium text-indigo-700" : "text-slate-700"
@@ -244,7 +258,7 @@ function BottomNav({
         style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
       >
         {primaryTabs.map((t) => (
-          <Link key={t.key} href={`${t.href}${q}`} className={cell(active === t.key)} onClick={() => setOpen(false)}>
+          <Link key={t.key} href={`${t.href}${q}`} replace className={cell(active === t.key)} onClick={() => setOpen(false)}>
             <span className="text-xl leading-none">{TAB_ICON[t.key] ?? "•"}</span>
             {t.label}
           </Link>
@@ -303,6 +317,7 @@ function MoreMenu({
             <Link
               key={t.key}
               href={`${t.href}${q}`}
+              replace
               onClick={() => setOpen(false)}
               className={`block px-3 py-2 text-sm ${
                 active === t.key
