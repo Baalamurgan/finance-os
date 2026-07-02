@@ -5,15 +5,13 @@ html {
      shift sideways when expanding content makes a scrollbar appear. */
   overflow-y: scroll;
   scrollbar-gutter: stable;
-  /* Never let the whole page pan sideways (esp. in the standalone PWA). `clip`
-     contains horizontal overflow WITHOUT creating a scroll container, so
-     position:sticky (nav + section headers) still works, and tables with their
-     own overflow-x-auto still scroll internally. */
-  overflow-x: clip;
 }
 
 body {
-  max-width: 100%;
+  /* Contain horizontal overflow at the BODY (not html — setting overflow on
+     <html> breaks vertical scrolling in Safari). `clip` doesn't create a scroll
+     container, so the page still scrolls vertically and position:sticky works;
+     tables with their own overflow-x-auto still scroll internally. */
   overflow-x: clip;
   overscroll-behavior-x: none; /* stop the horizontal rubber-band pan on touch */
 }
