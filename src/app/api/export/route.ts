@@ -1,7 +1,10 @@
-// Per-month CSV export (data safety / portability). Any signed-in member can export.
+// Per-month CSV export (data safety / portability). Any signed-in member can
+// export — but if the household has an app-lock PIN, the device must be unlocked
+// (this reads real financial data, so it respects the same lock as the pages).
 import { NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
+import { isUnlocked } from "@/lib/applock";
 
 function csvCell(v: unknown) {
   const s = v == null ? "" : String(v);
@@ -14,6 +17,11 @@ function row(cells: unknown[]) {
 export async function GET(req: Request) {
   const session = await auth();
   if (!session?.user?.memberId) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+
+  const household = await prisma.household.findFirst({ select: { id: true, pinHash: true } });
+  if (household?.pinHash && !(await isUnlocked(household.id))) {
+    return NextResponse.json({ error: "locked" }, { status: 401 });
+  }
 
   const url = new URL(req.url);
   const year = Number(url.searchParams.get("y"));

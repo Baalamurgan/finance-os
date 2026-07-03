@@ -24,6 +24,7 @@ export default async function SetupPage({
     .map((cat) => ({
       id: cat.id,
       name: cat.name,
+      section: cat.section,
       monthlyBudget: cat.monthlyBudget,
       sinking: cat.sinking,
       cycleMonths: cat.cycleMonths,

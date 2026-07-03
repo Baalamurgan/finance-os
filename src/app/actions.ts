@@ -3,22 +3,35 @@
 import { prisma } from "@/lib/prisma";
 import { revalidatePath } from "next/cache";
 import { auth, signOut } from "@/auth";
+import { isUnlocked } from "@/lib/applock";
 
 export async function doSignOut() {
   await signOut({ redirectTo: "/signin" });
 }
 
+// App-lock: when the household has a shared PIN, every mutation also requires the
+// device to be unlocked — this closes the direct-API bypass of the /lock gate
+// (the gate itself only protects page reads via loadCommon).
+async function unlocked() {
+  const household = await prisma.household.findFirst({ select: { id: true, pinHash: true } });
+  if (!household?.pinHash) return true; // no lock configured
+  return await isUnlocked(household.id);
+}
+
 // Authorization comes from the Auth.js session role now.
 async function isHead() {
   const session = await auth();
-  return session?.user?.role === "head";
+  if (session?.user?.role !== "head") return false;
+  return await unlocked();
 }
 
 // Head + Manager may add/edit/delete income & expenses. Members are read-only
 // (they can still log their own spends via addSpend).
 async function canEdit() {
   const session = await auth();
-  return session?.user?.role === "head" || session?.user?.role === "manager";
+  const role = session?.user?.role;
+  if (role !== "head" && role !== "manager") return false;
+  return await unlocked();
 }
 
 async function periodOpen(periodId: number) {
@@ -168,6 +181,7 @@ async function doAddSpend(formData: FormData): Promise<boolean> {
   const session = await auth();
   const selfId = session?.user?.memberId;
   if (!selfId) return false; // must be a mapped member
+  if (!(await unlocked())) return false; // app-lock
 
   const periodId = Number(formData.get("periodId"));
   const categoryId = Number(formData.get("categoryId"));
@@ -210,6 +224,7 @@ export async function addSpendAction(
 export async function deleteSpend(formData: FormData) {
   const session = await auth();
   if (!session?.user) return;
+  if (!(await unlocked())) return; // app-lock
   const id = Number(formData.get("id"));
   if (!id) return;
   const spend = await prisma.spend.findUnique({ where: { id } });
@@ -416,6 +431,7 @@ export async function markSettled(formData: FormData) {
   const amount = Number(formData.get("amount"));
   const note = String(formData.get("note") ?? "").trim() || null;
   if (!householdId || !periodId || !fromMemberId || !toMemberId || !amount) return;
+  if (!(await unlocked())) return; // app-lock
   // head, OR the payer/receiver of THIS transfer, may mark it settled
   const me = session?.user?.memberId;
   const allowed = session?.user?.role === "head" || me === fromMemberId || me === toMemberId;
@@ -444,6 +460,7 @@ export async function unsettle(formData: FormData) {
   if (!id) return;
   const rec = await prisma.settlementRecord.findUnique({ where: { id } });
   if (!rec) return;
+  if (!(await unlocked())) return; // app-lock
   const me = session?.user?.memberId;
   // head, OR the payer/receiver of this transfer, may undo it
   const allowed = session?.user?.role === "head" || me === rec.fromMemberId || me === rec.toMemberId;
@@ -538,10 +555,25 @@ export async function saveRecurring(formData: FormData) {
   const cat = await prisma.category.findUnique({ where: { id } });
   if (!cat) return;
 
-  await prisma.category.update({
-    where: { id },
-    data: { monthlyBudget, sinking, cycleMonths, responsibleMemberId },
-  });
+  // name + section are head-editable in Setup (rename / move between sections)
+  const name = String(formData.get("name") ?? "").trim() || cat.name;
+  const sectionRaw = String(formData.get("section") ?? "").trim();
+  const section = ["Loans", "Chits", "Monthly", "Misc"].includes(sectionRaw)
+    ? sectionRaw
+    : cat.section;
+
+  try {
+    await prisma.category.update({
+      where: { id },
+      data: { name, section, monthlyBudget, sinking, cycleMonths, responsibleMemberId },
+    });
+  } catch {
+    // unique-name clash → keep the old name, still apply the rest
+    await prisma.category.update({
+      where: { id },
+      data: { section, monthlyBudget, sinking, cycleMonths, responsibleMemberId },
+    });
+  }
 
   // NOTE: Setup edits change only the recurring TEMPLATE. Already-generated months
   // (including the current open one) are intentionally left untouched — the new

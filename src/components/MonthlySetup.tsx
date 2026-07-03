@@ -12,6 +12,7 @@ import { formatINR } from "@/lib/format";
 type Row = {
   id: number;
   name: string;
+  section: string;
   monthlyBudget: number | null;
   sinking: boolean;
   cycleMonths: number | null;
@@ -20,6 +21,8 @@ type Row = {
 };
 
 type MemberLite = { id: number; name: string };
+
+const SECTIONS = ["Loans", "Chits", "Monthly", "Misc"] as const;
 
 export function MonthlySetup({
   rows,
@@ -64,33 +67,61 @@ export function MonthlySetup({
 }
 
 function SetupRow({ r, members, readOnly }: { r: Row; members: MemberLite[]; readOnly: boolean }) {
+  const [name, setName] = useState(r.name);
+  const [section, setSection] = useState(r.section);
   const [amount, setAmount] = useState(r.monthlyBudget?.toString() ?? "");
   const [sinking, setSinking] = useState(r.sinking);
   const [cycle, setCycle] = useState(r.cycleMonths?.toString() ?? "");
   const [resp, setResp] = useState(r.responsibleMemberId?.toString() ?? "");
 
   const dirty =
+    name.trim() !== r.name ||
+    section !== r.section ||
     amount !== (r.monthlyBudget?.toString() ?? "") ||
     sinking !== r.sinking ||
     cycle !== (r.cycleMonths?.toString() ?? "") ||
     resp !== (r.responsibleMemberId?.toString() ?? "");
   const lump = sinking && amount && cycle ? Number(amount) * Number(cycle) : null;
-  // sinking funds must have a monthly amount AND a cycle (validation)
-  const invalid = sinking && (!amount || Number(amount) <= 0 || !cycle || Number(cycle) < 1);
+  // sinking funds must have a monthly amount AND a cycle; name can't be blank
+  const invalid =
+    !name.trim() || (sinking && (!amount || Number(amount) <= 0 || !cycle || Number(cycle) < 1));
 
   return (
     <tr className={`border-b border-slate-100 align-middle ${r.onHold ? "opacity-50" : ""}`}>
-      <td className="px-4 py-2 font-medium text-slate-800">
-        {r.name}
-        {r.onHold && (
-          <span className="ml-2 rounded-full bg-slate-200 px-2 py-0.5 text-[10px] text-slate-600">
-            on hold
-          </span>
-        )}
-      </td>
       <td className="px-4 py-2">
         <form action={saveRecurring} id={`sf-${r.id}`} />
         <input form={`sf-${r.id}`} type="hidden" name="categoryId" value={r.id} />
+        <input
+          form={`sf-${r.id}`}
+          name="name"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          disabled={readOnly}
+          className="input w-36 font-medium text-slate-800 disabled:bg-slate-100 disabled:text-slate-500"
+        />
+        <div className="mt-1 flex items-center gap-1">
+          <select
+            form={`sf-${r.id}`}
+            name="section"
+            value={section}
+            onChange={(e) => setSection(e.target.value)}
+            disabled={readOnly}
+            className="input w-28 py-1 text-xs disabled:bg-slate-100 disabled:text-slate-400"
+          >
+            {SECTIONS.map((s) => (
+              <option key={s} value={s}>
+                {s}
+              </option>
+            ))}
+          </select>
+          {r.onHold && (
+            <span className="rounded-full bg-slate-200 px-2 py-0.5 text-[10px] text-slate-600">
+              on hold
+            </span>
+          )}
+        </div>
+      </td>
+      <td className="px-4 py-2">
         <div className="flex items-center gap-1">
           <span className="text-slate-400">₹</span>
           <input
