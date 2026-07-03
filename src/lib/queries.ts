@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/prisma";
+import { computeSettlement } from "@/lib/settlement-core";
 
 export type Rollup = Awaited<ReturnType<typeof getRollup>>;
 
@@ -213,63 +214,8 @@ export async function getSettlement(
   ]);
   const prevLabel = prevPeriod?.label ?? null;
 
-  const rows = members.map((m) => {
-    const contributed = incomes
-      .filter((i) => i.ownerId === m.id)
-      .reduce((s, i) => s + i.amount, 0);
-    // itemised list of what this member paid — for the settlement hover breakdown
-    const paidItems = [
-      ...expenses
-        .filter((e) => e.memberId === m.id)
-        .map((e) => ({ label: e.label, amount: e.amount, category: e.category.name, kind: "sheet" as const })),
-      ...spends
-        .filter((sp) => sp.memberId === m.id)
-        .map((sp) => ({
-          label: prevLabel ? `${sp.label} (${prevLabel})` : sp.label,
-          amount: sp.amount,
-          category: sp.category.name,
-          kind: "spend" as const,
-        })),
-    ].sort((a, b) => b.amount - a.amount);
-    const paid = paidItems.reduce((s, it) => s + it.amount, 0);
-    return { id: m.id, name: m.name, contributed, paid, net: contributed - paid, paidItems };
-  });
-
-  const treasurer = members.find((m) => m.id === treasurerId) ?? null;
-  const transfers = treasurer
-    ? rows
-        .filter((r) => r.id !== treasurer.id && Math.abs(r.net) >= 0.005)
-        .map((r) => {
-          // member → treasurer when net > 0, else treasurer → member
-          const base =
-            r.net > 0
-              ? { fromId: r.id, from: r.name, toId: treasurer.id, to: treasurer.name, amount: r.net }
-              : { fromId: treasurer.id, from: treasurer.name, toId: r.id, to: r.name, amount: -r.net };
-          const rec = records.find(
-            (s) => s.fromMemberId === base.fromId && s.toMemberId === base.toId
-          );
-          return {
-            ...base,
-            settled: !!rec,
-            recordId: rec?.id ?? null,
-            settledAt: rec?.settledAt ?? null,
-            // amount drifted since it was marked paid (data edited afterwards)
-            amountChanged: rec ? Math.abs(rec.amount - base.amount) >= 0.005 : false,
-          };
-        })
-        .sort((a, b) => b.amount - a.amount)
-    : [];
-
-  const settledCount = transfers.filter((t) => t.settled).length;
-
-  return {
-    rows,
-    treasurer,
-    transfers,
-    settledCount,
-    total: transfers.length,
-    allSettled: transfers.length > 0 && settledCount === transfers.length,
-  };
+  // pure math (unit-tested in settlement-core.test.ts)
+  return computeSettlement({ members, incomes, expenses, spends, records, treasurerId, prevLabel });
 }
 
 export type SettlementHistory = Awaited<ReturnType<typeof getSettlementHistory>>;
