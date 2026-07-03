@@ -6,6 +6,7 @@ import { useEffect, useRef, useState } from "react";
 import { AddSpendModal } from "@/components/AddSpendModal";
 import { UserMenu } from "@/components/UserMenu";
 import { WindDownBanner } from "@/components/WindDownBanner";
+import { AppLockWatcher } from "@/components/AppLockWatcher";
 import { formatINR } from "@/lib/format";
 
 const MONTHS = [
@@ -186,6 +187,7 @@ export function NavHeader({
       </div>
     </header>
 
+    {pinEnabled && <AppLockWatcher />}
     {windDownReminder && <WindDownBanner daysUntil={windDownReminder.daysUntil} />}
 
     {/* big thumb-reachable "Add Spend" button on mobile (the easy daily action) */}
@@ -211,6 +213,7 @@ export function NavHeader({
 const TAB_ICON: Record<string, string> = {
   sheet: "📋",
   expenses: "🧾",
+  settlement: "🤝",
   analysis: "📊",
 };
 

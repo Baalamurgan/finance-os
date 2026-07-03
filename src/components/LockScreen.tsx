@@ -23,6 +23,7 @@ export function LockScreen({
   const [bioError, setBioError] = useState<string | null>(null);
   const [bioBusy, setBioBusy] = useState(false);
   const formRef = useRef<HTMLFormElement>(null);
+  const autoTried = useRef(false);
 
   // success → into the app
   useEffect(() => {
@@ -81,6 +82,15 @@ export function LockScreen({
     }
   };
 
+  // Prompt biometric automatically on open — the PIN pad is the fallback.
+  useEffect(() => {
+    if (hasBiometric && !autoTried.current) {
+      autoTried.current = true;
+      void doBiometric();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hasBiometric]);
+
   return (
     <div className="w-full max-w-xs text-center">
       <div className="mx-auto grid h-14 w-14 place-items-center rounded-2xl bg-[#3f6152] text-white shadow-sm">
@@ -119,20 +129,14 @@ export function LockScreen({
         <input type="hidden" name="pin" value={pin} readOnly />
       </form>
 
-      {/* keypad */}
+      {/* keypad — biometric is prompted automatically on open, not a key here */}
       <div className="mt-2 grid grid-cols-3 gap-3">
         {["1", "2", "3", "4", "5", "6", "7", "8", "9"].map((d) => (
           <Key key={d} onClick={() => press(d)} disabled={disabled}>
             {d}
           </Key>
         ))}
-        {hasBiometric ? (
-          <Key onClick={doBiometric} disabled={bioBusy || pending} subtle aria-label="Use biometric">
-            <FaceIcon />
-          </Key>
-        ) : (
-          <span />
-        )}
+        <span />
         <Key onClick={() => press("0")} disabled={disabled}>
           0
         </Key>
@@ -141,7 +145,20 @@ export function LockScreen({
         </Key>
       </div>
 
-      {bioError && <p className="mt-4 text-[13px] text-[#b4685a]">{bioError}</p>}
+      {/* retry biometric (shown only if this device has it enrolled) */}
+      {hasBiometric && (
+        <button
+          type="button"
+          onClick={doBiometric}
+          disabled={bioBusy || pending}
+          className="mt-6 inline-flex items-center gap-2 text-[14px] font-medium text-[#3f6152] disabled:opacity-50"
+        >
+          <FaceIcon />
+          {bioBusy ? "Waiting for biometric…" : "Use Face ID / fingerprint"}
+        </button>
+      )}
+
+      {bioError && <p className="mt-3 text-[13px] text-[#b4685a]">{bioError}</p>}
 
       <p className="mt-8 text-[12.5px] text-[#a9a69d]">
         Forgot the PIN? Ask the head of your household to reset it in Setup.
