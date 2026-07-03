@@ -122,19 +122,6 @@ export function WithdrawPiggyModal({
                 </div>
 
                 <div>
-                  <label className="text-xs font-medium text-slate-500">
-                    Record the use under
-                  </label>
-                  <select name="expenseCategoryId" required className="input mt-1 w-full">
-                    {categories.map((c) => (
-                      <option key={c.id} value={c.id}>
-                        {c.name}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                <div>
                   <label className="text-xs font-medium text-slate-500">Note</label>
                   <input
                     name="note"
@@ -144,8 +131,8 @@ export function WithdrawPiggyModal({
                 </div>
 
                 <p className="rounded-lg bg-slate-50 px-3 py-2 text-[11px] text-slate-500">
-                  This adds the amount as income to <b>{periodLabel}</b> and a matching expense, and
-                  reduces the chosen Piggy/fund.
+                  This adds the amount as <b>income</b> to <b>{periodLabel}</b> and reduces the
+                  chosen Piggy/fund. Spend it from any category on the Sheet or Expenses.
                 </p>
               </div>
 

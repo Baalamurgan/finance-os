@@ -224,16 +224,18 @@ export async function deleteSpend(formData: FormData) {
   revalidatePath("/", "layout");
 }
 
-// Use Piggy money: reduce a Piggy/sinking bucket, AND post a matching income + expense
-// in the chosen month (so the sheet reflects the money coming in and being used).
+// Use Piggy money: reduce a Piggy/sinking bucket and add the amount as a ONE-OFF
+// income to the chosen month. No forced expense — the household then spends it
+// from any category via the normal add-spend/add-expense flow (the added income
+// raises the month balance, which the expense guard uses to permit those spends).
+// oneOff:true so the piggy income never clones into future months.
 export async function withdrawPiggy(formData: FormData) {
   if (!(await isHead())) return;
   const periodId = Number(formData.get("periodId"));
   const amount = Number(formData.get("amount"));
   const source = String(formData.get("source") ?? "general"); // "general" | categoryId
-  const expenseCategoryId = Number(formData.get("expenseCategoryId"));
   const note = String(formData.get("note") ?? "").trim() || "Piggy use";
-  if (!periodId || !amount || amount <= 0 || !expenseCategoryId) return;
+  if (!periodId || !amount || amount <= 0) return;
 
   const household = await prisma.household.findFirst();
   if (!household) return;
@@ -260,20 +262,9 @@ export async function withdrawPiggy(formData: FormData) {
         note: `Withdrawal: ${note}`,
       },
     });
-    // 2. income line (money brought into the month)
+    // 2. one-off income line (money brought into the month; not copied forward)
     await tx.incomeEntry.create({
-      data: { periodId, source: `From Piggy: ${note}`, amount },
-    });
-    // 3. matching expense line (where it went)
-    const cat = await tx.category.findUnique({ where: { id: expenseCategoryId } });
-    await tx.expenseEntry.create({
-      data: {
-        periodId,
-        label: note,
-        amount,
-        categoryId: expenseCategoryId,
-        necessary: cat?.necessary ?? true,
-      },
+      data: { periodId, source: `From Piggy: ${note}`, amount, oneOff: true },
     });
   });
   revalidatePath("/", "layout");

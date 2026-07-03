@@ -164,8 +164,9 @@ export default async function PiggyPage({
             </ul>
           )}
           <p className="mt-3 text-xs text-slate-400">
-            Use the <b>Use Piggy</b> button to send money to Dad / a loan / a chit — it records the
-            spend and reduces the chosen fund (you can&apos;t withdraw more than is available).
+            Use the <b>Use Piggy</b> button to bring money into the month — it adds the amount as
+            income to the current sheet and reduces the chosen fund (you can&apos;t withdraw more
+            than is available). Then spend it from any category on the Sheet or Expenses.
           </p>
         </section>
 
