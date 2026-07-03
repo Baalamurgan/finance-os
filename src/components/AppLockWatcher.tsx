@@ -22,6 +22,14 @@ export function AppLockWatcher() {
       // clears the unlock cookie server-side and redirects to /lock
       void lockNow();
     };
+
+    // Fresh app launch (e.g. cleared from recents): sessionStorage is wiped on full
+    // termination, so a valid unlock cookie without this marker means a stale
+    // session inherited across a close → force a re-lock. Set on unlock (LockScreen).
+    if (sessionStorage.getItem("applock-live") !== "1") {
+      lock();
+      return;
+    }
     const bump = () => {
       lastActive.current = Date.now();
     };

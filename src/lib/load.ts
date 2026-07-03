@@ -1,4 +1,5 @@
 import { redirect } from "next/navigation";
+import { cookies } from "next/headers";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
 import { isUnlocked } from "@/lib/applock";
@@ -77,6 +78,13 @@ export async function loadCommon(params?: { y?: string; m?: string }) {
   const hasBiometric =
     pinEnabled && (await prisma.webAuthnCredential.count({ where: { memberId: currentMember.id } })) > 0;
 
+  // "View as member": a head can downgrade themselves to read-only (effective role).
+  const actualRole = currentMember?.role ?? "member";
+  const actualIsHead = actualRole === "head";
+  const viewingAsMember =
+    actualIsHead && (await cookies()).get("view-as")?.value === "member";
+  const role = viewingAsMember ? "member" : actualRole;
+
   // In-app wind-down reminder: if the head set a close day, surface a banner
   // in the 5 days leading up to it (counts to this month's day, else next month's).
   let windDownReminder: { daysUntil: number; day: number } | null = null;
@@ -105,10 +113,12 @@ export async function loadCommon(params?: { y?: string; m?: string }) {
     currentMember,
     pinEnabled,
     hasBiometric,
-    isHead: currentMember?.role === "head",
-    // Head + Manager may edit income/expenses; Members are read-only.
-    canEdit: currentMember?.role === "head" || currentMember?.role === "manager",
-    role: currentMember?.role ?? "member",
+    actualIsHead,
+    viewingAsMember,
+    // Effective role (honours "view as member"): Head + Manager may edit; Members read-only.
+    isHead: role === "head",
+    canEdit: role === "head" || role === "manager",
+    role,
     account: {
       name: session.user.name ?? currentMember.name,
       email: session.user.email ?? currentMember.email ?? "",

@@ -48,6 +48,8 @@ export default async function AnalysisPage({
       canEdit={c.canEdit}
       pinEnabled={c.pinEnabled}
       hasBiometric={c.hasBiometric}
+      actualIsHead={c.actualIsHead}
+      viewingAsMember={c.viewingAsMember}
     />
   );
 

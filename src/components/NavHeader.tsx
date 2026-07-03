@@ -7,6 +7,7 @@ import { AddSpendModal } from "@/components/AddSpendModal";
 import { UserMenu } from "@/components/UserMenu";
 import { WindDownBanner } from "@/components/WindDownBanner";
 import { AppLockWatcher } from "@/components/AppLockWatcher";
+import { setViewAs } from "@/app/actions";
 import { formatINR } from "@/lib/format";
 
 const MONTHS = [
@@ -31,6 +32,8 @@ export function NavHeader({
   canEdit,
   pinEnabled,
   hasBiometric,
+  actualIsHead,
+  viewingAsMember,
 }: {
   active:
     | "sheet"
@@ -57,6 +60,8 @@ export function NavHeader({
   canEdit?: boolean;
   pinEnabled?: boolean;
   hasBiometric?: boolean;
+  actualIsHead?: boolean;
+  viewingAsMember?: boolean;
 }) {
   const router = useRouter();
   const now = new Date();
@@ -181,6 +186,8 @@ export function NavHeader({
               role={isHead ? "head" : "member"}
               pinEnabled={pinEnabled}
               hasBiometric={hasBiometric}
+              actualIsHead={actualIsHead}
+              viewingAsMember={viewingAsMember}
             />
           </div>
         </div>
@@ -188,6 +195,20 @@ export function NavHeader({
     </header>
 
     {pinEnabled && <AppLockWatcher />}
+    {viewingAsMember && (
+      <div className="border-b border-amber-200 bg-amber-100 text-amber-900">
+        <div className="mx-auto flex max-w-7xl items-center gap-3 px-4 py-2 text-sm sm:px-6">
+          <span className="text-base leading-none">👀</span>
+          <span className="flex-1 font-medium">You&apos;re viewing as a member (read-only).</span>
+          <form action={setViewAs}>
+            <input type="hidden" name="mode" value="head" />
+            <button className="whitespace-nowrap rounded-md bg-amber-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-amber-700">
+              Exit to head
+            </button>
+          </form>
+        </div>
+      </div>
+    )}
     {windDownReminder && <WindDownBanner daysUntil={windDownReminder.daysUntil} />}
 
     {/* big thumb-reachable "Add Spend" button on mobile (the easy daily action) */}

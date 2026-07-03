@@ -51,6 +51,8 @@ export default async function SetupPage({
         canEdit={c.canEdit}
         pinEnabled={c.pinEnabled}
         hasBiometric={c.hasBiometric}
+        actualIsHead={c.actualIsHead}
+        viewingAsMember={c.viewingAsMember}
       />
 
       <main className="mx-auto max-w-4xl space-y-5 p-6">

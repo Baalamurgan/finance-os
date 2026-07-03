@@ -25,9 +25,12 @@ export function LockScreen({
   const formRef = useRef<HTMLFormElement>(null);
   const autoTried = useRef(false);
 
-  // success → into the app
+  // success → mark this app session live (so we don't re-lock mid-use) + into the app
   useEffect(() => {
-    if (state.ok) router.replace("/");
+    if (state.ok) {
+      sessionStorage.setItem("applock-live", "1");
+      router.replace("/");
+    }
   }, [state.ok, router]);
 
   // wrong / locked → clear the entered digits
@@ -73,8 +76,10 @@ export function LockScreen({
         body: JSON.stringify(assertion),
       });
       const data = await verifyRes.json();
-      if (data.verified) router.replace("/");
-      else throw new Error(data.error ?? "Biometric didn’t match.");
+      if (data.verified) {
+        sessionStorage.setItem("applock-live", "1");
+        router.replace("/");
+      } else throw new Error(data.error ?? "Biometric didn’t match.");
     } catch (e) {
       setBioError(e instanceof Error ? e.message : "Biometric unavailable.");
     } finally {

@@ -32,6 +32,8 @@ export default async function ExpensesPage({
       canEdit={c.canEdit}
       pinEnabled={c.pinEnabled}
       hasBiometric={c.hasBiometric}
+      actualIsHead={c.actualIsHead}
+      viewingAsMember={c.viewingAsMember}
     />
   );
 

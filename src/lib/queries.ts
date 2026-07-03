@@ -301,9 +301,14 @@ export async function getTrackedExpenses(householdId: number, periodId: number) 
       overBudget: allocation > 0 && spent > allocation,
       sinking: cat.sinking,
       fund: sinkBal[cat.id] ?? 0, // current accumulated sinking-fund balance
+      // spends are fetched newest-first, so rows[0] is the latest for this card
+      lastSpentAt: rows[0]?.createdAt ?? null,
       spends: rows,
     };
   });
+
+  // Most-recently-used category first (cards with no spends fall to the bottom).
+  cards.sort((a, b) => (b.lastSpentAt?.getTime() ?? 0) - (a.lastSpentAt?.getTime() ?? 0));
 
   // Headline totals cover BUDGETED categories only — miscellaneous (no-budget)
   // spends are shown separately and must not count against the allocation.

@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { startRegistration } from "@simplewebauthn/browser";
-import { doSignOut } from "@/app/actions";
+import { doSignOut, setViewAs } from "@/app/actions";
 import { lockNow, removeMyBiometric } from "@/app/lock/actions";
 
 export function UserMenu({
@@ -13,6 +13,8 @@ export function UserMenu({
   role,
   pinEnabled = false,
   hasBiometric = false,
+  actualIsHead = false,
+  viewingAsMember = false,
 }: {
   name: string;
   email: string;
@@ -20,6 +22,8 @@ export function UserMenu({
   role: string;
   pinEnabled?: boolean;
   hasBiometric?: boolean;
+  actualIsHead?: boolean;
+  viewingAsMember?: boolean;
 }) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
@@ -101,6 +105,15 @@ export function UserMenu({
               </span>
             </div>
           </div>
+          {actualIsHead && (
+            <form action={setViewAs} className="border-b border-slate-100">
+              <input type="hidden" name="mode" value={viewingAsMember ? "head" : "member"} />
+              <button className="flex w-full items-center gap-2 px-4 py-3 text-left text-sm text-slate-700 hover:bg-slate-50">
+                <span className="text-base leading-none">👀</span>
+                {viewingAsMember ? "Exit member view (back to head)" : "View as member (read-only)"}
+              </button>
+            </form>
+          )}
           {pinEnabled && (
             <div className="border-b border-slate-100">
               {hasBiometric ? (

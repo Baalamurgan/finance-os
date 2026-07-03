@@ -7,7 +7,16 @@ import { ExpenseRowActions } from "@/components/ExpenseRowActions";
 import { ExpenseModal } from "@/components/ExpenseModal";
 import { DetailsPersist } from "@/components/DetailsPersist";
 import { IncomeModal } from "@/components/IncomeModal";
+import { IncomeRowActions } from "@/components/IncomeRowActions";
+import { MoneyFlowDonut } from "@/components/Charts";
 import { createPeriod, deleteIncome } from "./actions";
+
+const SECTION_COLOR: Record<string, string> = {
+  Loans: "#ef4444",
+  Chits: "#f59e0b",
+  Monthly: "#6366f1",
+  Misc: "#a855f7",
+};
 
 const SECTION_ORDER = ["Loans", "Chits", "Monthly", "Misc"] as const;
 const SECTION_LABEL: Record<string, string> = {
@@ -131,6 +140,8 @@ export default async function SheetPage({
       canEdit={c.canEdit}
       pinEnabled={c.pinEnabled}
       hasBiometric={c.hasBiometric}
+      actualIsHead={c.actualIsHead}
+      viewingAsMember={c.viewingAsMember}
     />
   );
 
@@ -258,7 +269,15 @@ export default async function SheetPage({
             <div className="divide-y divide-slate-100 px-4 py-1">
               {rollup.incomes.map((i) => (
                 <Row key={i.id} label={i.source} tag={i.owner?.name} amount={i.amount}>
-                  {canEditHere && <RowActions id={i.id} deleteAction={deleteIncome} />}
+                  {c.isHead ? (
+                    <IncomeRowActions
+                      members={c.members}
+                      periodId={c.selected!.id}
+                      initial={{ id: i.id, source: i.source, amount: i.amount, ownerId: i.ownerId }}
+                    />
+                  ) : (
+                    canEditHere && <RowActions id={i.id} deleteAction={deleteIncome} />
+                  )}
                 </Row>
               ))}
               {canEditHere && (
@@ -382,6 +401,35 @@ export default async function SheetPage({
           <Stat label="Balance (Income − Expense)" value={formatINR(rollup.balance)} accent />
           <Stat label="🐷 Piggy bank" value={formatINR(c.piggyBalance)} />
         </div>
+
+        {/* where did the income go — quick visual breakdown */}
+        {rollup.totalIncome > 0 &&
+          (() => {
+            const segments = [
+              ...grouped.map((g) => ({
+                name: SECTION_LABEL[g.section],
+                value: g.subtotal,
+                color: SECTION_COLOR[g.section] ?? "#94a3b8",
+              })),
+              ...(rollup.balance > 0
+                ? [{ name: "Left over", value: rollup.balance, color: "#22c55e" }]
+                : []),
+            ].filter((s) => s.value > 0);
+            return (
+              <div className="rounded-xl border border-slate-200 bg-white p-5">
+                <h2 className="mb-1 text-sm font-semibold text-slate-800">Where the income went</h2>
+                <p className="mb-4 text-xs text-slate-500">
+                  {formatINR(rollup.totalIncome)} came in this month. Here&apos;s where it went —
+                  and what&apos;s left.
+                </p>
+                <MoneyFlowDonut
+                  segments={segments}
+                  centerLabel="Income"
+                  centerValue={formatINR(rollup.totalIncome)}
+                />
+              </div>
+            );
+          })()}
 
         {!c.canEdit && (
           <p className="text-center text-xs text-slate-400">

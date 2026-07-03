@@ -31,6 +31,8 @@ export default async function SettlementPage({
       canEdit={c.canEdit}
       pinEnabled={c.pinEnabled}
       hasBiometric={c.hasBiometric}
+      actualIsHead={c.actualIsHead}
+      viewingAsMember={c.viewingAsMember}
     />
   );
 

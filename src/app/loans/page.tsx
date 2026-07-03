@@ -38,6 +38,8 @@ export default async function LoansPage({
         canEdit={c.canEdit}
         pinEnabled={c.pinEnabled}
         hasBiometric={c.hasBiometric}
+        actualIsHead={c.actualIsHead}
+        viewingAsMember={c.viewingAsMember}
       />
 
       <main className="mx-auto max-w-4xl space-y-6 p-6">

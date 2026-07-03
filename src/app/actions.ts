@@ -2,8 +2,41 @@
 
 import { prisma } from "@/lib/prisma";
 import { revalidatePath } from "next/cache";
+import { cookies } from "next/headers";
 import { auth, signOut } from "@/auth";
 import { isUnlocked } from "@/lib/applock";
+
+const VIEW_AS_COOKIE = "view-as";
+
+// The head can temporarily "view as member" (read-only) so they — or someone
+// handed the phone — can't edit by mistake. This downgrades the EFFECTIVE role
+// used by every guard below; the real session role is unchanged.
+async function effectiveRole(): Promise<string> {
+  const session = await auth();
+  const role = session?.user?.role ?? "member";
+  if (role !== "head") return role;
+  const viewAs = (await cookies()).get(VIEW_AS_COOKIE)?.value;
+  return viewAs === "member" ? "member" : "head";
+}
+
+export async function setViewAs(formData: FormData) {
+  // only a REAL head may toggle (checked on the raw session, so a head in member
+  // view can still switch back)
+  const session = await auth();
+  if (session?.user?.role !== "head") return;
+  const jar = await cookies();
+  if (String(formData.get("mode")) === "member") {
+    jar.set(VIEW_AS_COOKIE, "member", {
+      httpOnly: true,
+      sameSite: "lax",
+      secure: process.env.NODE_ENV === "production",
+      path: "/",
+    });
+  } else {
+    jar.delete(VIEW_AS_COOKIE);
+  }
+  revalidatePath("/", "layout");
+}
 
 export async function doSignOut() {
   await signOut({ redirectTo: "/signin" });
@@ -18,18 +51,16 @@ async function unlocked() {
   return await isUnlocked(household.id);
 }
 
-// Authorization comes from the Auth.js session role now.
+// Authorization from the EFFECTIVE role (honours the head's "view as member").
 async function isHead() {
-  const session = await auth();
-  if (session?.user?.role !== "head") return false;
+  if ((await effectiveRole()) !== "head") return false;
   return await unlocked();
 }
 
 // Head + Manager may add/edit/delete income & expenses. Members are read-only
 // (they can still log their own spends via addSpend).
 async function canEdit() {
-  const session = await auth();
-  const role = session?.user?.role;
+  const role = await effectiveRole();
   if (role !== "head" && role !== "manager") return false;
   return await unlocked();
 }
@@ -145,6 +176,23 @@ export async function addIncome(formData: FormData) {
 export async function addIncomeAction(prev: SaveState, formData: FormData): Promise<SaveState> {
   const ok = await doAddIncome(formData);
   return { ok, n: ok ? prev.n + 1 : prev.n };
+}
+
+// Edit an income line (source / amount / owner). HEAD ONLY — income drives
+// settlement, so a single owner edits it (add stays head+manager).
+export async function updateIncome(prev: SaveState, formData: FormData): Promise<SaveState> {
+  if (!(await isHead())) return { ok: false, n: prev.n };
+  const id = Number(formData.get("id"));
+  const source = String(formData.get("source") ?? "").trim();
+  const amount = Number(formData.get("amount"));
+  const ownerRaw = formData.get("ownerId");
+  const ownerId = ownerRaw ? Number(ownerRaw) : null;
+  if (!id || !source || !amount) return { ok: false, n: prev.n };
+  const i = await prisma.incomeEntry.findUnique({ where: { id } });
+  if (!i || !(await canEditNow(i.periodId))) return { ok: false, n: prev.n };
+  await prisma.incomeEntry.update({ where: { id }, data: { source, amount, ownerId } });
+  revalidatePath("/", "layout");
+  return { ok: true, n: prev.n + 1 };
 }
 
 export async function deleteExpense(formData: FormData) {
