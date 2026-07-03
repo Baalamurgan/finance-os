@@ -6,12 +6,14 @@ import "dotenv/config";
 import { readFileSync } from "node:fs";
 import { PrismaClient } from "@prisma/client";
 import { PrismaPg } from "@prisma/adapter-pg";
+import { assertDbWipeAllowed } from "./guard";
 
 const prisma = new PrismaClient({
   adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL }),
 });
 
 async function main() {
+  assertDbWipeAllowed("db:restore");
   const file = process.argv[2];
   const confirm = process.argv[3];
   if (!file || confirm !== "CONFIRM") {

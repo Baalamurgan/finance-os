@@ -1,6 +1,7 @@
 import "dotenv/config";
 import { PrismaClient } from "@prisma/client";
 import { PrismaPg } from "@prisma/adapter-pg";
+import { assertDbWipeAllowed } from "../scripts/guard";
 
 // Seed the household, members, categories and the MAR 2026 roll-up,
 // reconstructed from KA_MAR_26.xlsx so totals match the sheet exactly:
@@ -128,6 +129,7 @@ const SPENDS: { category: string; member: string | null; label: string; amount: 
 ];
 
 async function main() {
+  assertDbWipeAllowed("db:seed");
   // idempotent reseed — delete child tables before their parents (FK-safe)
   await prisma.loanPayment.deleteMany();
   await prisma.loan.deleteMany();

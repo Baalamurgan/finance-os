@@ -7,6 +7,7 @@
 import "dotenv/config";
 import { PrismaClient } from "@prisma/client";
 import { PrismaPg } from "@prisma/adapter-pg";
+import { assertDbWipeAllowed } from "./guard";
 
 const prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL }) });
 
@@ -147,6 +148,7 @@ const monthLabel = (y: number, m: number) =>
   `${["JAN","FEB","MAR","APR","MAY","JUN","JUL","AUG","SEP","OCT","NOV","DEC"][m - 1]} ${y}`;
 
 async function main() {
+  assertDbWipeAllowed("import:real");
   const hh = await prisma.household.findFirst();
   if (!hh) throw new Error("no household");
   const householdId = hh.id;

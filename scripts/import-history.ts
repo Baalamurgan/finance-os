@@ -1,6 +1,7 @@
 import "dotenv/config";
 import { PrismaClient } from "@prisma/client";
 import { PrismaPg } from "@prisma/adapter-pg";
+import { assertDbWipeAllowed } from "./guard";
 
 // RUN-ONCE history import for FEB/APR/MAY/JUN 2026 (MAR comes from seed.ts).
 // Summary-level: real INCOME lines + the real monthly EXPENSE total (one line) so
@@ -63,6 +64,7 @@ const HISTORY: M[] = [
 const NAME2CODE: Record<string, string> = { Bala: "B", KA: "KA", Harish: "H", VL: "VL" };
 
 async function main() {
+  assertDbWipeAllowed("import:history");
   const hh = await prisma.household.findFirst();
   if (!hh) throw new Error("No household — run db:seed first.");
   const members = Object.fromEntries((await prisma.member.findMany({ where: { householdId: hh.id } })).map((x) => [x.code, x.id]));

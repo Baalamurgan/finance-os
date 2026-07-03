@@ -113,3 +113,26 @@ would need Apple's $99/yr; the PWA avoids that.)
 ### Cutover note
 Once on Postgres, retire the local launchd agent:
 `launchctl unload ~/Library/LaunchAgents/com.financeos.ensure-month.plist` (Vercel Cron replaces it).
+
+---
+
+## Dev vs production database (do not wipe the family data)
+
+Local development must point at a **separate dev Supabase project**, never production.
+
+1. Create a second Supabase project (e.g. `finance-os-dev`). Copy its pooled `:6543`
+   and direct `:5432` connection strings.
+2. Put them in `.env.local` (see `.env.example`). Vercel's env keeps the **prod** URLs.
+3. Apply schema to dev: `npx prisma migrate deploy`.
+4. Seed/import against dev **only**, with the safety flag:
+   `ALLOW_DB_WIPE=1 npm run db:seed` then `ALLOW_DB_WIPE=1 npm run import:real`.
+
+**Guardrail:** `db:seed`, `import:history`, `import:real`, and `db:restore` refuse to
+run unless `ALLOW_DB_WIPE=1` is set, and print which host they'd hit — so an accidental
+`npm run db:seed` can never wipe production. Read-only scripts (`db:backup`,
+`preview:rollover`, `ensure-month`) are unaffected. Production only ever receives
+`prisma migrate deploy` + the one-time history import.
+
+## Tests
+`npm test` runs the vitest suite (settlement math, app-lock PIN/lockout, formatting).
+No database needed — the money logic is unit-tested via the pure `*-core.ts` modules.
