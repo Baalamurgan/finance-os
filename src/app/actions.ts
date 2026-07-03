@@ -339,12 +339,18 @@ export async function setFundBalance(formData: FormData) {
   revalidatePath("/", "layout");
 }
 
-// Add a new recurring/tracked category (Setup screen).
-export async function createCategory(formData: FormData) {
-  if (!(await isHead())) return;
+// Add a new recurring/tracked category (Setup screen). useActionState-shaped.
+export type CreateCategoryState = { ok: boolean; error?: string; n: number };
+
+export async function createCategory(
+  prev: CreateCategoryState,
+  formData: FormData,
+): Promise<CreateCategoryState> {
+  const n = (prev?.n ?? 0) + 1;
+  if (!(await isHead())) return { ok: false, error: "Only the head can add categories.", n };
   const householdId = Number(formData.get("householdId"));
   const name = String(formData.get("name") ?? "").trim();
-  if (!householdId || !name) return;
+  if (!householdId || !name) return { ok: false, error: "Give the category a name.", n };
   const amountRaw = String(formData.get("monthlyBudget") ?? "").trim();
   const monthlyBudget = amountRaw === "" ? null : Number(amountRaw);
   const sinking = formData.get("sinking") === "on";
@@ -353,20 +359,13 @@ export async function createCategory(formData: FormData) {
 
   try {
     await prisma.category.create({
-      data: {
-        householdId,
-        name,
-        section: "Monthly",
-        tracked: true,
-        monthlyBudget,
-        sinking,
-        cycleMonths,
-      },
+      data: { householdId, name, section: "Monthly", tracked: true, monthlyBudget, sinking, cycleMonths },
     });
   } catch {
-    // duplicate name — ignore
+    return { ok: false, error: `"${name}" already exists.`, n };
   }
   revalidatePath("/", "layout");
+  return { ok: true, n };
 }
 
 // Delete a category — only if it has no expense rows (else suggest Hold). Cleans budgets/spends.
@@ -537,23 +536,32 @@ export async function deleteLoan(formData: FormData) {
 }
 
 // Head edits a category's recurring defaults on the Monthly Setup screen.
-export async function saveRecurring(formData: FormData) {
-  if (!(await isHead())) return;
+// useActionState-shaped so the UI can toast success/errors. `n` increments per
+// save so the client effect fires even when the ok/error value repeats.
+export type SaveRecurringState = { ok: boolean; error?: string; n: number };
+
+export async function saveRecurring(
+  prev: SaveRecurringState,
+  formData: FormData,
+): Promise<SaveRecurringState> {
+  const n = (prev?.n ?? 0) + 1;
+  if (!(await isHead())) return { ok: false, error: "Only the head can edit setup.", n };
   const id = Number(formData.get("categoryId"));
-  if (!id) return;
+  if (!id) return { ok: false, error: "Missing category.", n };
   const amountRaw = String(formData.get("monthlyBudget") ?? "").trim();
   const monthlyBudget = amountRaw === "" ? null : Number(amountRaw);
   const sinking = formData.get("sinking") === "on";
   const cycleRaw = String(formData.get("cycleMonths") ?? "").trim();
   const cycleMonths = sinking && cycleRaw ? Number(cycleRaw) : null;
   // sinking funds require a monthly amount AND a valid cycle
-  if (sinking && (!monthlyBudget || monthlyBudget <= 0 || !cycleMonths || cycleMonths < 1)) return;
+  if (sinking && (!monthlyBudget || monthlyBudget <= 0 || !cycleMonths || cycleMonths < 1))
+    return { ok: false, error: "Sinking funds need a monthly amount and a cycle.", n };
   // responsible/default member: tags this category's lines + receives over-budget excess
   const respRaw = String(formData.get("responsibleMemberId") ?? "").trim();
   const responsibleMemberId = respRaw === "" ? null : Number(respRaw);
 
   const cat = await prisma.category.findUnique({ where: { id } });
-  if (!cat) return;
+  if (!cat) return { ok: false, error: "Category not found.", n };
 
   // name + section are head-editable in Setup (rename / move between sections)
   const name = String(formData.get("name") ?? "").trim() || cat.name;
@@ -573,6 +581,8 @@ export async function saveRecurring(formData: FormData) {
       where: { id },
       data: { section, monthlyBudget, sinking, cycleMonths, responsibleMemberId },
     });
+    revalidatePath("/", "layout");
+    return { ok: false, error: `"${name}" is already taken — saved everything except the name.`, n };
   }
 
   // NOTE: Setup edits change only the recurring TEMPLATE. Already-generated months
@@ -580,6 +590,7 @@ export async function saveRecurring(formData: FormData) {
   // config takes effect when the NEXT month is generated (clonePeriodStructure /
   // ensureCurrentMonth read Category.monthlyBudget + apply the current sinking share).
   revalidatePath("/", "layout");
+  return { ok: true, n };
 }
 
 // Head sets the monthly close day (1–28) that drives the wind-down reminder.
@@ -707,10 +718,16 @@ function deriveCode(name: string): string {
   return name.trim().slice(0, 2).toUpperCase();
 }
 
-// Member management (head-only).
-// Email is set only at creation (it's the login whitelist); edits change name/code/role only.
-export async function saveMember(formData: FormData) {
-  if (!(await isHead())) return;
+// Member management (head-only). useActionState-shaped for toast feedback.
+// Email is set only at creation (it's the login whitelist); edits change name/code/role/email.
+export type SaveMemberState = { ok: boolean; error?: string; n: number };
+
+export async function saveMember(
+  prev: SaveMemberState,
+  formData: FormData,
+): Promise<SaveMemberState> {
+  const n = (prev?.n ?? 0) + 1;
+  if (!(await isHead())) return { ok: false, error: "Only the head can manage members.", n };
   const id = formData.get("id") ? Number(formData.get("id")) : null;
   const householdId = Number(formData.get("householdId"));
   const name = String(formData.get("name") ?? "").trim();
@@ -718,7 +735,7 @@ export async function saveMember(formData: FormData) {
   const role = String(formData.get("role") ?? "member");
   const code = (codeRaw || deriveCode(name)).toUpperCase();
 
-  if (!name) return;
+  if (!name) return { ok: false, error: "Name is required.", n };
 
   try {
     if (id) {
@@ -730,15 +747,16 @@ export async function saveMember(formData: FormData) {
       });
     } else {
       const email = String(formData.get("email") ?? "").trim().toLowerCase();
-      if (!householdId || !email) return; // email mandatory when adding
+      if (!householdId || !email) return { ok: false, error: "Email is required to add a member.", n };
       await prisma.member.create({
         data: { householdId, name, code, role, email, isEarner: true },
       });
     }
   } catch {
-    // ignore unique-constraint collisions (duplicate email/code); UI re-renders unchanged
+    return { ok: false, error: "That email or code is already taken.", n };
   }
   revalidatePath("/", "layout");
+  return { ok: true, n };
 }
 
 // Remove a member from the household (head-only). Detaches their entry attributions

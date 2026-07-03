@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useActionState, useEffect, useState } from "react";
 import {
   saveRecurring,
   toggleHold,
@@ -8,6 +8,7 @@ import {
   createCategory,
 } from "@/app/actions";
 import { formatINR } from "@/lib/format";
+import { useToast } from "@/components/Toast";
 
 type Row = {
   id: number;
@@ -67,33 +68,51 @@ export function MonthlySetup({
 }
 
 function SetupRow({ r, members, readOnly }: { r: Row; members: MemberLite[]; readOnly: boolean }) {
+  const toast = useToast();
   const [name, setName] = useState(r.name);
   const [section, setSection] = useState(r.section);
   const [amount, setAmount] = useState(r.monthlyBudget?.toString() ?? "");
   const [sinking, setSinking] = useState(r.sinking);
   const [cycle, setCycle] = useState(r.cycleMonths?.toString() ?? "");
-  const [resp, setResp] = useState(r.responsibleMemberId?.toString() ?? "");
+  const [resp, setResp] = useState(r.responsibleMemberId != null ? String(r.responsibleMemberId) : "");
 
+  const [state, formAction, pending] = useActionState(saveRecurring, { ok: false, n: 0 });
+  useEffect(() => {
+    if (state.n === 0) return;
+    toast(state.ok ? `Saved "${name}"` : state.error ?? "Couldn't save", state.ok ? "success" : "error");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.n]);
+
+  const baseResp = r.responsibleMemberId != null ? String(r.responsibleMemberId) : "";
   const dirty =
     name.trim() !== r.name ||
     section !== r.section ||
     amount !== (r.monthlyBudget?.toString() ?? "") ||
     sinking !== r.sinking ||
     cycle !== (r.cycleMonths?.toString() ?? "") ||
-    resp !== (r.responsibleMemberId?.toString() ?? "");
+    resp !== baseResp;
   const lump = sinking && amount && cycle ? Number(amount) * Number(cycle) : null;
   // sinking funds must have a monthly amount AND a cycle; name can't be blank
   const invalid =
     !name.trim() || (sinking && (!amount || Number(amount) <= 0 || !cycle || Number(cycle) < 1));
+  // if the saved responsible member isn't in the list (edge case), still show it
+  const respMissing = resp !== "" && !members.some((m) => String(m.id) === resp);
 
   return (
     <tr className={`border-b border-slate-100 align-middle ${r.onHold ? "opacity-50" : ""}`}>
       <td className="px-4 py-2">
-        <form action={saveRecurring} id={`sf-${r.id}`} />
-        <input form={`sf-${r.id}`} type="hidden" name="categoryId" value={r.id} />
+        {/* The real <form> carries every value as a hidden input, so submission is
+            reliable regardless of table layout (fixes the responsible→Shared reset). */}
+        <form action={formAction} id={`sf-${r.id}`}>
+          <input type="hidden" name="categoryId" value={r.id} />
+          <input type="hidden" name="name" value={name} />
+          <input type="hidden" name="section" value={section} />
+          <input type="hidden" name="monthlyBudget" value={amount} />
+          <input type="hidden" name="sinking" value={sinking ? "on" : ""} />
+          <input type="hidden" name="cycleMonths" value={cycle} />
+          <input type="hidden" name="responsibleMemberId" value={resp} />
+        </form>
         <input
-          form={`sf-${r.id}`}
-          name="name"
           value={name}
           onChange={(e) => setName(e.target.value)}
           disabled={readOnly}
@@ -101,8 +120,6 @@ function SetupRow({ r, members, readOnly }: { r: Row; members: MemberLite[]; rea
         />
         <div className="mt-1 flex items-center gap-1">
           <select
-            form={`sf-${r.id}`}
-            name="section"
             value={section}
             onChange={(e) => setSection(e.target.value)}
             disabled={readOnly}
@@ -125,8 +142,6 @@ function SetupRow({ r, members, readOnly }: { r: Row; members: MemberLite[]; rea
         <div className="flex items-center gap-1">
           <span className="text-slate-400">₹</span>
           <input
-            form={`sf-${r.id}`}
-            name="monthlyBudget"
             type="number"
             step="0.01"
             value={amount}
@@ -139,9 +154,7 @@ function SetupRow({ r, members, readOnly }: { r: Row; members: MemberLite[]; rea
       </td>
       <td className="px-4 py-2">
         <input
-          form={`sf-${r.id}`}
           type="checkbox"
-          name="sinking"
           checked={sinking}
           onChange={(e) => setSinking(e.target.checked)}
           disabled={readOnly}
@@ -152,8 +165,6 @@ function SetupRow({ r, members, readOnly }: { r: Row; members: MemberLite[]; rea
         {sinking ? (
           <div>
             <input
-              form={`sf-${r.id}`}
-              name="cycleMonths"
               type="number"
               min="1"
               value={cycle}
@@ -175,8 +186,6 @@ function SetupRow({ r, members, readOnly }: { r: Row; members: MemberLite[]; rea
       </td>
       <td className="px-4 py-2">
         <select
-          form={`sf-${r.id}`}
-          name="responsibleMemberId"
           value={resp}
           onChange={(e) => setResp(e.target.value)}
           disabled={readOnly}
@@ -184,43 +193,45 @@ function SetupRow({ r, members, readOnly }: { r: Row; members: MemberLite[]; rea
         >
           <option value="">Shared</option>
           {members.map((mm) => (
-            <option key={mm.id} value={mm.id}>
+            <option key={mm.id} value={String(mm.id)}>
               {mm.name}
             </option>
           ))}
+          {respMissing && <option value={resp}>Member #{resp}</option>}
         </select>
       </td>
       <td className="px-4 py-2">
         {readOnly ? (
           <span className="block text-right text-xs text-slate-300">—</span>
         ) : (
-        <div className="flex items-center justify-end gap-1">
-          <button
-            form={`sf-${r.id}`}
-            disabled={!dirty || invalid}
-            className="btn px-2 py-1.5 text-xs disabled:opacity-40"
-          >
-            Save
-          </button>
-          <form action={toggleHold}>
-            <input type="hidden" name="categoryId" value={r.id} />
-            <button className="rounded-md px-2 py-1.5 text-xs text-slate-500 hover:bg-slate-100">
-              {r.onHold ? "Resume" : "Hold"}
+          <div className="flex items-center justify-end gap-1">
+            <button
+              form={`sf-${r.id}`}
+              type="submit"
+              disabled={!dirty || invalid || pending}
+              className="btn px-2 py-1.5 text-xs disabled:opacity-40"
+            >
+              {pending ? "Saving…" : "Save"}
             </button>
-          </form>
-          <form
-            action={deleteCategory}
-            onSubmit={(e) => {
-              if (!confirm(`Delete ${r.name}? (only works if it has no sheet history)`))
-                e.preventDefault();
-            }}
-          >
-            <input type="hidden" name="categoryId" value={r.id} />
-            <button className="rounded-md px-2 py-1.5 text-xs text-slate-400 hover:bg-red-50 hover:text-red-600">
-              Delete
-            </button>
-          </form>
-        </div>
+            <form action={toggleHold}>
+              <input type="hidden" name="categoryId" value={r.id} />
+              <button className="rounded-md px-2 py-1.5 text-xs text-slate-500 hover:bg-slate-100">
+                {r.onHold ? "Resume" : "Hold"}
+              </button>
+            </form>
+            <form
+              action={deleteCategory}
+              onSubmit={(e) => {
+                if (!confirm(`Delete ${r.name}? (only works if it has no sheet history)`))
+                  e.preventDefault();
+              }}
+            >
+              <input type="hidden" name="categoryId" value={r.id} />
+              <button className="rounded-md px-2 py-1.5 text-xs text-slate-400 hover:bg-red-50 hover:text-red-600">
+                Delete
+              </button>
+            </form>
+          </div>
         )}
       </td>
     </tr>
@@ -228,20 +239,27 @@ function SetupRow({ r, members, readOnly }: { r: Row; members: MemberLite[]; rea
 }
 
 function AddCategory({ householdId }: { householdId: number }) {
+  const toast = useToast();
   const [name, setName] = useState("");
   const [sinking, setSinking] = useState(false);
+  const [state, formAction, pending] = useActionState(createCategory, { ok: false, n: 0 });
+
+  useEffect(() => {
+    if (state.n === 0) return;
+    if (state.ok) {
+      setName("");
+      setSinking(false);
+      toast("Category added", "success");
+    } else {
+      toast(state.error ?? "Couldn't add category", "error");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.n]);
 
   return (
     <div className="rounded-xl border border-slate-200 bg-white p-4">
       <h2 className="mb-3 text-sm font-semibold text-slate-700">Add a category</h2>
-      <form
-        action={createCategory}
-        onSubmit={() => {
-          setName("");
-          setSinking(false);
-        }}
-        className="grid grid-cols-2 gap-3 sm:grid-cols-5"
-      >
+      <form action={formAction} className="grid grid-cols-2 gap-3 sm:grid-cols-5">
         <input type="hidden" name="householdId" value={householdId} />
         <input
           name="name"
@@ -270,8 +288,8 @@ function AddCategory({ householdId }: { householdId: number }) {
           disabled={!sinking}
           className="input disabled:opacity-40"
         />
-        <button disabled={!name.trim()} className="btn disabled:opacity-40">
-          Add
+        <button disabled={!name.trim() || pending} className="btn disabled:opacity-40">
+          {pending ? "Adding…" : "Add"}
         </button>
       </form>
     </div>

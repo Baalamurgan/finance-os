@@ -1,7 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useActionState, useEffect, useState } from "react";
 import { saveMember, deleteMember } from "@/app/actions";
+import { useToast } from "@/components/Toast";
 
 type M = { id: number; name: string; code: string; email: string | null; role: string };
 
@@ -47,10 +48,18 @@ export function ManageUsers({
 }
 
 function MemberRow({ m, isSelf }: { m: M; isSelf: boolean }) {
+  const toast = useToast();
   const [name, setName] = useState(m.name);
   const [code, setCode] = useState(m.code);
   const [role, setRole] = useState(m.role);
   const [email, setEmail] = useState(m.email ?? "");
+
+  const [state, formAction, pending] = useActionState(saveMember, { ok: false, n: 0 });
+  useEffect(() => {
+    if (state.n === 0) return;
+    toast(state.ok ? `Saved ${name}` : state.error ?? "Couldn't save", state.ok ? "success" : "error");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.n]);
 
   const dirty =
     name.trim() !== m.name ||
@@ -62,20 +71,22 @@ function MemberRow({ m, isSelf }: { m: M; isSelf: boolean }) {
   return (
     <tr className="border-b border-slate-100 align-middle">
       <td className="px-4 py-2">
-        <form action={saveMember} id={`mf-${m.id}`} />
+        {/* real <form> carries all values as hidden inputs → reliable submit */}
+        <form action={formAction} id={`mf-${m.id}`}>
+          <input type="hidden" name="id" value={m.id} />
+          <input type="hidden" name="name" value={name} />
+          <input type="hidden" name="code" value={code} />
+          <input type="hidden" name="email" value={email} />
+          <input type="hidden" name="role" value={role} />
+        </form>
         <input
-          form={`mf-${m.id}`}
-          name="name"
           value={name}
           onChange={(e) => setName(e.target.value)}
           className="input w-32"
         />
-        <input form={`mf-${m.id}`} type="hidden" name="id" value={m.id} />
       </td>
       <td className="px-4 py-2">
         <input
-          form={`mf-${m.id}`}
-          name="code"
           value={code}
           onChange={(e) => setCode(e.target.value.toUpperCase())}
           className="input w-16"
@@ -83,8 +94,6 @@ function MemberRow({ m, isSelf }: { m: M; isSelf: boolean }) {
       </td>
       <td className="px-4 py-2">
         <input
-          form={`mf-${m.id}`}
-          name="email"
           type="email"
           value={email}
           onChange={(e) => setEmail(e.target.value)}
@@ -93,13 +102,7 @@ function MemberRow({ m, isSelf }: { m: M; isSelf: boolean }) {
         />
       </td>
       <td className="px-4 py-2">
-        <select
-          form={`mf-${m.id}`}
-          name="role"
-          value={role}
-          onChange={(e) => setRole(e.target.value)}
-          className="input"
-        >
+        <select value={role} onChange={(e) => setRole(e.target.value)} className="input">
           <option value="member">member</option>
           <option value="manager">manager</option>
           <option value="head">head</option>
@@ -109,10 +112,11 @@ function MemberRow({ m, isSelf }: { m: M; isSelf: boolean }) {
         <div className="flex items-center justify-end gap-2">
           <button
             form={`mf-${m.id}`}
-            disabled={!dirty || !valid}
+            type="submit"
+            disabled={!dirty || !valid || pending}
             className="btn disabled:opacity-40"
           >
-            Save
+            {pending ? "Saving…" : "Save"}
           </button>
           {!isSelf && (
             <form
@@ -137,9 +141,26 @@ function MemberRow({ m, isSelf }: { m: M; isSelf: boolean }) {
 }
 
 function AddMember({ householdId }: { householdId: number }) {
+  const toast = useToast();
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [code, setCode] = useState("");
+  const [role, setRole] = useState("member");
+
+  const [state, formAction, pending] = useActionState(saveMember, { ok: false, n: 0 });
+  useEffect(() => {
+    if (state.n === 0) return;
+    if (state.ok) {
+      setName("");
+      setEmail("");
+      setCode("");
+      setRole("member");
+      toast("Member added", "success");
+    } else {
+      toast(state.error ?? "Couldn't add member", "error");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.n]);
 
   const valid = name.trim().length > 0 && email.trim().length > 0;
   const codePlaceholder = name.trim() ? deriveCode(name) : "auto";
@@ -147,16 +168,7 @@ function AddMember({ householdId }: { householdId: number }) {
   return (
     <section className="rounded-xl border border-slate-200 bg-white p-4">
       <h2 className="mb-3 text-sm font-semibold text-slate-700">Add member</h2>
-      <form
-        action={saveMember}
-        onSubmit={() => {
-          // reset after submit
-          setName("");
-          setEmail("");
-          setCode("");
-        }}
-        className="grid grid-cols-2 gap-3 sm:grid-cols-5"
-      >
+      <form action={formAction} className="grid grid-cols-2 gap-3 sm:grid-cols-5">
         <input type="hidden" name="householdId" value={householdId} />
         <input
           name="name"
@@ -182,13 +194,13 @@ function AddMember({ householdId }: { householdId: number }) {
           onChange={(e) => setCode(e.target.value.toUpperCase())}
           className="input"
         />
-        <select name="role" defaultValue="member" className="input">
+        <select name="role" value={role} onChange={(e) => setRole(e.target.value)} className="input">
           <option value="member">member</option>
           <option value="manager">manager</option>
           <option value="head">head</option>
         </select>
-        <button disabled={!valid} className="btn disabled:opacity-40">
-          Add
+        <button disabled={!valid || pending} className="btn disabled:opacity-40">
+          {pending ? "Adding…" : "Add"}
         </button>
       </form>
       <p className="mt-2 text-xs text-slate-400">
