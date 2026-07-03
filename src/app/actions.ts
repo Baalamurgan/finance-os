@@ -543,35 +543,10 @@ export async function saveRecurring(formData: FormData) {
     data: { monthlyBudget, sinking, cycleMonths, responsibleMemberId },
   });
 
-  // Keep OPEN months consistent with the new recurring config:
-  //  • upsert the period Budget to the new monthly amount (drives wind-down + Expenses tab)
-  //  • for SINKING categories, the sheet shows the monthly SHARE — replace this category's
-  //    sheet line(s) in the open month with a single "{name} (monthly share)" = monthlyBudget
-  const openPeriods = await prisma.period.findMany({
-    where: { householdId: cat.householdId, status: "open" },
-    select: { id: true },
-  });
-  for (const p of openPeriods) {
-    if (monthlyBudget != null && monthlyBudget > 0) {
-      const existing = await prisma.budget.findFirst({ where: { periodId: p.id, categoryId: id } });
-      if (existing) await prisma.budget.update({ where: { id: existing.id }, data: { planned: monthlyBudget } });
-      else await prisma.budget.create({ data: { periodId: p.id, categoryId: id, planned: monthlyBudget } });
-    }
-    if (sinking && monthlyBudget != null && monthlyBudget > 0) {
-      await prisma.$transaction([
-        prisma.expenseEntry.deleteMany({ where: { periodId: p.id, categoryId: id } }),
-        prisma.expenseEntry.create({
-          data: {
-            periodId: p.id,
-            categoryId: id,
-            label: `${cat.name} (monthly share)`,
-            amount: monthlyBudget,
-            necessary: cat.necessary,
-          },
-        }),
-      ]);
-    }
-  }
+  // NOTE: Setup edits change only the recurring TEMPLATE. Already-generated months
+  // (including the current open one) are intentionally left untouched — the new
+  // config takes effect when the NEXT month is generated (clonePeriodStructure /
+  // ensureCurrentMonth read Category.monthlyBudget + apply the current sinking share).
   revalidatePath("/", "layout");
 }
 
@@ -610,13 +585,23 @@ async function clonePeriodStructure(
   targetId: number,
   householdId: number
 ) {
-  const [incomes, expenses, heldCats] = await Promise.all([
+  const [incomes, expenses, cats] = await Promise.all([
     tx.incomeEntry.findMany({ where: { periodId: sourceId, oneOff: false } }),
     // oneOff lines (carried misc / over-budget) must NOT propagate to future months
     tx.expenseEntry.findMany({ where: { periodId: sourceId, oneOff: false } }),
-    tx.category.findMany({ where: { householdId, onHold: true }, select: { id: true } }),
+    tx.category.findMany({
+      where: { householdId },
+      select: { id: true, name: true, sinking: true, monthlyBudget: true, necessary: true, onHold: true },
+    }),
   ]);
-  const held = new Set(heldCats.map((c) => c.id));
+  const held = new Set(cats.filter((c) => c.onHold).map((c) => c.id));
+  // Sinking categories: regenerate the sheet "monthly share" line from the CURRENT
+  // template (not the cloned/stale amount) so Setup changes take effect from this
+  // new month, and allocation stays equal to the budget.
+  const sinkingCats = cats.filter(
+    (c) => c.sinking && !c.onHold && c.monthlyBudget != null && c.monthlyBudget > 0,
+  );
+  const sinkingIds = new Set(sinkingCats.map((c) => c.id));
   for (const i of incomes) {
     // skip carried-over one-off adjustments (e.g. Misc/Piggy lines) so they don't repeat
     if (i.amount < 0) continue;
@@ -626,6 +611,7 @@ async function clonePeriodStructure(
   }
   for (const e of expenses) {
     if (held.has(e.categoryId)) continue;
+    if (sinkingIds.has(e.categoryId)) continue; // replaced by a canonical share line below
     await tx.expenseEntry.create({
       data: {
         periodId: targetId,
@@ -634,6 +620,17 @@ async function clonePeriodStructure(
         categoryId: e.categoryId,
         memberId: e.memberId,
         necessary: e.necessary,
+      },
+    });
+  }
+  for (const c of sinkingCats) {
+    await tx.expenseEntry.create({
+      data: {
+        periodId: targetId,
+        categoryId: c.id,
+        label: `${c.name} (monthly share)`,
+        amount: c.monthlyBudget!,
+        necessary: c.necessary,
       },
     });
   }
