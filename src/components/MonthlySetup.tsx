@@ -18,6 +18,7 @@ type Row = {
   sinking: boolean;
   cycleMonths: number | null;
   onHold: boolean;
+  fixed: boolean;
   responsibleMemberId: number | null;
 };
 
@@ -59,11 +60,13 @@ export function MonthlySetup({
         </table>
       </div>
       <p className="text-xs text-slate-400">
-        <b>Responsible</b> = the person this category&apos;s expenses are tagged to by default (drives
-        settlement) and who is charged any over-budget excess at wind-down.
+        <b>Budget</b> = variable spending you log; the leftover goes to Piggy and it shows in
+        &ldquo;budget left in hand&rdquo;. <b>Fixed bill</b> = a set monthly amount one person pays
+        (subscriptions, EMIs) — it auto-subtracts from their salary in settlement every month and
+        isn&apos;t spend-tracked. <b>Responsible / Paid by</b> tags the expense to that member.
       </p>
 
-      {!readOnly && <AddCategory householdId={householdId} />}
+      {!readOnly && <AddCategory householdId={householdId} members={members} />}
     </div>
   );
 }
@@ -75,6 +78,7 @@ function SetupRow({ r, members, readOnly }: { r: Row; members: MemberLite[]; rea
   const [amount, setAmount] = useState(r.monthlyBudget?.toString() ?? "");
   const [sinking, setSinking] = useState(r.sinking);
   const [cycle, setCycle] = useState(r.cycleMonths?.toString() ?? "");
+  const [fixed, setFixed] = useState(r.fixed);
   const [resp, setResp] = useState(r.responsibleMemberId != null ? String(r.responsibleMemberId) : "");
 
   const [state, formAction, pending] = useActionState(saveRecurring, { ok: false, n: 0 });
@@ -91,11 +95,14 @@ function SetupRow({ r, members, readOnly }: { r: Row; members: MemberLite[]; rea
     amount !== (r.monthlyBudget?.toString() ?? "") ||
     sinking !== r.sinking ||
     cycle !== (r.cycleMonths?.toString() ?? "") ||
+    fixed !== r.fixed ||
     resp !== baseResp;
   const lump = sinking && amount && cycle ? Number(amount) * Number(cycle) : null;
-  // sinking funds must have a monthly amount AND a cycle; name can't be blank
+  // sinking funds need amount + cycle; fixed bills need an amount; name required
   const invalid =
-    !name.trim() || (sinking && (!amount || Number(amount) <= 0 || !cycle || Number(cycle) < 1));
+    !name.trim() ||
+    (sinking && (!amount || Number(amount) <= 0 || !cycle || Number(cycle) < 1)) ||
+    (fixed && (!amount || Number(amount) <= 0));
   // if the saved responsible member isn't in the list (edge case), still show it
   const respMissing = resp !== "" && !members.some((m) => String(m.id) === resp);
 
@@ -111,6 +118,7 @@ function SetupRow({ r, members, readOnly }: { r: Row; members: MemberLite[]; rea
           <input type="hidden" name="monthlyBudget" value={amount} />
           <input type="hidden" name="sinking" value={sinking ? "on" : ""} />
           <input type="hidden" name="cycleMonths" value={cycle} />
+          <input type="hidden" name="fixed" value={fixed ? "on" : ""} />
           <input type="hidden" name="responsibleMemberId" value={resp} />
         </form>
         <input
@@ -138,6 +146,26 @@ function SetupRow({ r, members, readOnly }: { r: Row; members: MemberLite[]; rea
             </span>
           )}
         </div>
+        {!readOnly && (
+          <div className="mt-1 inline-flex overflow-hidden rounded-md border border-slate-200 text-[10px] font-medium">
+            <button
+              type="button"
+              onClick={() => setFixed(false)}
+              className={`px-2 py-0.5 ${!fixed ? "bg-indigo-600 text-white" : "text-slate-500"}`}
+              title="You spend against it; leftover → Piggy; shows in 'budget left in hand'"
+            >
+              Budget
+            </button>
+            <button
+              type="button"
+              onClick={() => { setFixed(true); setSinking(false); }}
+              className={`px-2 py-0.5 ${fixed ? "bg-slate-800 text-white" : "text-slate-500"}`}
+              title="A fixed bill paid by one person; auto-subtracts from their salary in settlement each month"
+            >
+              Fixed bill
+            </button>
+          </div>
+        )}
       </td>
       <td className="px-4 py-2">
         <div className="flex items-center gap-1">
@@ -154,16 +182,22 @@ function SetupRow({ r, members, readOnly }: { r: Row; members: MemberLite[]; rea
         </div>
       </td>
       <td className="px-4 py-2">
-        <input
-          type="checkbox"
-          checked={sinking}
-          onChange={(e) => setSinking(e.target.checked)}
-          disabled={readOnly}
-          className="h-4 w-4 accent-indigo-600 disabled:opacity-50"
-        />
+        {fixed ? (
+          <span className="text-[11px] text-slate-300">n/a</span>
+        ) : (
+          <input
+            type="checkbox"
+            checked={sinking}
+            onChange={(e) => setSinking(e.target.checked)}
+            disabled={readOnly}
+            className="h-4 w-4 accent-indigo-600 disabled:opacity-50"
+          />
+        )}
       </td>
       <td className="px-4 py-2">
-        {sinking ? (
+        {fixed ? (
+          <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-medium text-slate-500">bill</span>
+        ) : sinking ? (
           <div>
             <input
               type="number"
@@ -200,6 +234,11 @@ function SetupRow({ r, members, readOnly }: { r: Row; members: MemberLite[]; rea
           ))}
           {respMissing && <option value={resp}>Member #{resp}</option>}
         </select>
+        {fixed && (
+          <div className="mt-0.5 text-[10px] font-medium text-slate-500">
+            {resp ? "paid by (settlement credit)" : "pick who pays it"}
+          </div>
+        )}
       </td>
       {/* ON = counts toward next month's sheet + shows in the Expenses tab; OFF (held) = skipped */}
       <td className="px-4 py-2">
@@ -257,10 +296,12 @@ function SetupRow({ r, members, readOnly }: { r: Row; members: MemberLite[]; rea
   );
 }
 
-function AddCategory({ householdId }: { householdId: number }) {
+function AddCategory({ householdId, members }: { householdId: number; members: MemberLite[] }) {
   const toast = useToast();
   const [name, setName] = useState("");
+  const [fixed, setFixed] = useState(false);
   const [sinking, setSinking] = useState(false);
+  const [paidBy, setPaidBy] = useState("");
   const [state, formAction, pending] = useActionState(createCategory, { ok: false, n: 0 });
 
   useEffect(() => {
@@ -268,6 +309,8 @@ function AddCategory({ householdId }: { householdId: number }) {
     if (state.ok) {
       setName("");
       setSinking(false);
+      setFixed(false);
+      setPaidBy("");
       toast("Category added", "success");
     } else {
       toast(state.error ?? "Couldn't add category", "error");
@@ -278,39 +321,65 @@ function AddCategory({ householdId }: { householdId: number }) {
   return (
     <div className="rounded-xl border border-slate-200 bg-white p-4">
       <h2 className="mb-3 text-sm font-semibold text-slate-700">Add a category</h2>
-      <form action={formAction} className="grid grid-cols-2 gap-3 sm:grid-cols-5">
+      <form action={formAction} className="flex flex-wrap items-center gap-3">
         <input type="hidden" name="householdId" value={householdId} />
+        <input type="hidden" name="fixed" value={fixed ? "on" : ""} />
+        <div className="inline-flex overflow-hidden rounded-md border border-slate-200 text-xs font-medium">
+          <button type="button" onClick={() => setFixed(false)} className={`px-2.5 py-1.5 ${!fixed ? "bg-indigo-600 text-white" : "text-slate-500"}`}>
+            Budget
+          </button>
+          <button type="button" onClick={() => { setFixed(true); setSinking(false); }} className={`px-2.5 py-1.5 ${fixed ? "bg-slate-800 text-white" : "text-slate-500"}`}>
+            Fixed bill
+          </button>
+        </div>
         <input
           name="name"
           placeholder="Name *"
           value={name}
           onChange={(e) => setName(e.target.value)}
           required
-          className="input"
+          className="input w-40"
         />
-        <input name="monthlyBudget" type="number" step="0.01" placeholder="₹ / month" className="input" />
-        <label className="flex items-center gap-2 text-sm text-slate-600">
-          <input
-            type="checkbox"
-            name="sinking"
-            checked={sinking}
-            onChange={(e) => setSinking(e.target.checked)}
-            className="h-4 w-4 accent-indigo-600"
-          />
-          Sinking
-        </label>
-        <input
-          name="cycleMonths"
-          type="number"
-          min="1"
-          placeholder="every (mo)"
-          disabled={!sinking}
-          className="input disabled:opacity-40"
-        />
+        <input name="monthlyBudget" type="number" step="0.01" placeholder="₹ / month" className="input w-28" />
+        {fixed ? (
+          <select name="responsibleMemberId" value={paidBy} onChange={(e) => setPaidBy(e.target.value)} className="input w-32">
+            <option value="">Paid by…</option>
+            {members.map((m) => (
+              <option key={m.id} value={String(m.id)}>{m.name}</option>
+            ))}
+          </select>
+        ) : (
+          <>
+            <label className="flex items-center gap-2 text-sm text-slate-600">
+              <input
+                type="checkbox"
+                name="sinking"
+                checked={sinking}
+                onChange={(e) => setSinking(e.target.checked)}
+                className="h-4 w-4 accent-indigo-600"
+              />
+              Sinking
+            </label>
+            <input
+              name="cycleMonths"
+              type="number"
+              min="1"
+              placeholder="every (mo)"
+              disabled={!sinking}
+              className="input w-24 disabled:opacity-40"
+            />
+          </>
+        )}
         <button disabled={!name.trim() || pending} className="btn disabled:opacity-40">
           {pending ? "Adding…" : "Add"}
         </button>
       </form>
+      {fixed && (
+        <p className="mt-2 text-xs text-slate-400">
+          A fixed bill (e.g. a subscription) auto-subtracts from the payer&apos;s salary in settlement
+          every month and won&apos;t show in &ldquo;budget left in hand.&rdquo;
+        </p>
+      )}
     </div>
   );
 }

@@ -425,26 +425,51 @@ export async function setFundBalance(formData: FormData) {
 // Add a new recurring/tracked category (Setup screen). useActionState-shaped.
 export type CreateCategoryState = { ok: boolean; error?: string; n: number };
 
-// Reflect a Setup budget change in the CURRENT open month too, so a newly-added
-// subscription / budget counts immediately (not only from next month). Holding a
-// category only affects future months, so leave the current month untouched then.
-async function syncCurrentBudget(
-  householdId: number,
-  categoryId: number,
-  monthlyBudget: number | null,
-  onHold: boolean,
-) {
-  if (onHold) return;
+// Reflect a Setup change in the CURRENT open month so it counts immediately (not
+// only from next month). A "budget" maintains the period's Budget row; a "fixed"
+// bill maintains a recurring Sheet expense line tagged to the payer (which the
+// settlement credits and clonePeriodStructure repeats). Holding only affects
+// future months, so a held item leaves the current month untouched.
+async function applyCurrentMonth(opts: {
+  householdId: number;
+  categoryId: number;
+  name: string;
+  amount: number | null;
+  fixed: boolean;
+  wasFixed: boolean;
+  memberId: number | null;
+  onHold: boolean;
+}) {
+  const { householdId, categoryId, name, amount, fixed, wasFixed, memberId, onHold } = opts;
   const period = await prisma.period.findFirst({
     where: { householdId, status: "open" },
     orderBy: [{ year: "desc" }, { month: "desc" }],
   });
   if (!period) return;
-  if (monthlyBudget != null && monthlyBudget > 0) {
+  const has = amount != null && amount > 0 && !onHold;
+
+  if (fixed) {
+    // a fixed bill is a Sheet expense, never a budget
+    await prisma.budget.deleteMany({ where: { periodId: period.id, categoryId } });
+    await prisma.expenseEntry.deleteMany({ where: { periodId: period.id, categoryId, oneOff: false } });
+    if (has) {
+      await prisma.expenseEntry.create({
+        data: { periodId: period.id, categoryId, label: name, amount, memberId, necessary: true, oneOff: false },
+      });
+    }
+    return;
+  }
+
+  // budget path — only touch Budget rows; never delete a category's manual Sheet
+  // lines. Exception: if it was a fixed bill, clear the bill line we managed.
+  if (wasFixed) {
+    await prisma.expenseEntry.deleteMany({ where: { periodId: period.id, categoryId, oneOff: false } });
+  }
+  if (has) {
     await prisma.budget.upsert({
       where: { periodId_categoryId: { periodId: period.id, categoryId } },
-      create: { periodId: period.id, categoryId, planned: monthlyBudget },
-      update: { planned: monthlyBudget },
+      create: { periodId: period.id, categoryId, planned: amount },
+      update: { planned: amount },
     });
   } else {
     await prisma.budget.deleteMany({ where: { periodId: period.id, categoryId } });
@@ -462,19 +487,23 @@ export async function createCategory(
   if (!householdId || !name) return { ok: false, error: "Give the category a name.", n };
   const amountRaw = String(formData.get("monthlyBudget") ?? "").trim();
   const monthlyBudget = amountRaw === "" ? null : Number(amountRaw);
-  const sinking = formData.get("sinking") === "on";
+  const fixed = formData.get("fixed") === "on";
+  const sinking = !fixed && formData.get("sinking") === "on";
   const cycleRaw = String(formData.get("cycleMonths") ?? "").trim();
   const cycleMonths = sinking && cycleRaw ? Number(cycleRaw) : null;
+  const paidByRaw = String(formData.get("responsibleMemberId") ?? "").trim();
+  const responsibleMemberId = paidByRaw === "" ? null : Number(paidByRaw);
 
   let created;
   try {
     created = await prisma.category.create({
-      data: { householdId, name, section: "Monthly", tracked: true, monthlyBudget, sinking, cycleMonths },
+      // fixed bills live on the Sheet (tracked=false); budgets are spend-tracked
+      data: { householdId, name, section: "Monthly", tracked: !fixed, monthlyBudget, sinking, cycleMonths, fixed, responsibleMemberId },
     });
   } catch {
     return { ok: false, error: `"${name}" already exists.`, n };
   }
-  await syncCurrentBudget(householdId, created.id, monthlyBudget, false);
+  await applyCurrentMonth({ householdId, categoryId: created.id, name, amount: monthlyBudget, fixed, wasFixed: false, memberId: responsibleMemberId, onHold: false });
   revalidatePath("/", "layout");
   return { ok: true, n };
 }
@@ -712,18 +741,23 @@ export async function saveRecurring(
   if (!id) return { ok: false, error: "Missing category.", n };
   const amountRaw = String(formData.get("monthlyBudget") ?? "").trim();
   const monthlyBudget = amountRaw === "" ? null : Number(amountRaw);
-  const sinking = formData.get("sinking") === "on";
+  const fixed = formData.get("fixed") === "on";
+  const sinking = !fixed && formData.get("sinking") === "on";
   const cycleRaw = String(formData.get("cycleMonths") ?? "").trim();
   const cycleMonths = sinking && cycleRaw ? Number(cycleRaw) : null;
   // sinking funds require a monthly amount AND a valid cycle
   if (sinking && (!monthlyBudget || monthlyBudget <= 0 || !cycleMonths || cycleMonths < 1))
     return { ok: false, error: "Sinking funds need a monthly amount and a cycle.", n };
-  // responsible/default member: tags this category's lines + receives over-budget excess
+  if (fixed && (!monthlyBudget || monthlyBudget <= 0))
+    return { ok: false, error: "A fixed bill needs a monthly amount.", n };
+  // responsible/default member: budget → over-budget owner; fixed → who pays it
   const respRaw = String(formData.get("responsibleMemberId") ?? "").trim();
   const responsibleMemberId = respRaw === "" ? null : Number(respRaw);
 
   const cat = await prisma.category.findUnique({ where: { id } });
   if (!cat) return { ok: false, error: "Category not found.", n };
+  // a fixed bill is a Sheet line, not spend-tracked; reverting to budget re-tracks it
+  const tracked = fixed ? false : cat.fixed ? true : cat.tracked;
 
   // name + section are head-editable in Setup (rename / move between sections)
   const name = String(formData.get("name") ?? "").trim() || cat.name;
@@ -735,23 +769,25 @@ export async function saveRecurring(
   try {
     await prisma.category.update({
       where: { id },
-      data: { name, section, monthlyBudget, sinking, cycleMonths, responsibleMemberId },
+      data: { name, section, monthlyBudget, sinking, cycleMonths, responsibleMemberId, fixed, tracked },
     });
   } catch {
     // unique-name clash → keep the old name, still apply the rest
     await prisma.category.update({
       where: { id },
-      data: { section, monthlyBudget, sinking, cycleMonths, responsibleMemberId },
+      data: { section, monthlyBudget, sinking, cycleMonths, responsibleMemberId, fixed, tracked },
     });
     revalidatePath("/", "layout");
     return { ok: false, error: `"${name}" is already taken — saved everything except the name.`, n };
   }
 
   // Setup edits define the recurring TEMPLATE for future months. We also mirror
-  // the monthly amount into the CURRENT open month's budget so a change (e.g. a
-  // new subscription) shows up immediately in Expenses + "budget left in hand".
-  // (Sheet expense lines and sinking share lines still regenerate next month.)
-  await syncCurrentBudget(cat.householdId, id, monthlyBudget, cat.onHold);
+  // the change into the CURRENT open month (budget row or fixed-bill Sheet line)
+  // so it shows up immediately in Expenses / settlement / "budget left in hand".
+  await applyCurrentMonth({
+    householdId: cat.householdId, categoryId: id, name, amount: monthlyBudget,
+    fixed, wasFixed: cat.fixed, memberId: responsibleMemberId, onHold: cat.onHold,
+  });
   revalidatePath("/", "layout");
   return { ok: true, n };
 }
@@ -774,7 +810,8 @@ type Tx = Parameters<Parameters<typeof prisma.$transaction>[0]>[0];
 // On-hold categories are skipped.
 async function seedBudgets(tx: Tx, householdId: number, periodId: number) {
   const cats = await tx.category.findMany({
-    where: { householdId, monthlyBudget: { not: null }, onHold: false },
+    // fixed bills recur as Sheet expense lines (cloned), not as budgets
+    where: { householdId, monthlyBudget: { not: null }, onHold: false, fixed: false },
   });
   for (const c of cats) {
     await tx.budget.create({

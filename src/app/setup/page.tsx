@@ -18,9 +18,9 @@ export default async function SetupPage({
   const readOnly = !c.isHead;
   const windDownDay = c.household.windDownDay ?? null;
 
-  // tracked categories carry the recurring config
+  // tracked categories + fixed bills carry the recurring config
   const rows = c.categories
-    .filter((cat) => cat.tracked)
+    .filter((cat) => cat.tracked || cat.fixed)
     .map((cat) => ({
       id: cat.id,
       name: cat.name,
@@ -29,6 +29,7 @@ export default async function SetupPage({
       sinking: cat.sinking,
       cycleMonths: cat.cycleMonths,
       onHold: cat.onHold,
+      fixed: cat.fixed,
       responsibleMemberId: cat.responsibleMemberId ?? null,
     }));
 

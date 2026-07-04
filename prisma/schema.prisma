@@ -313,7 +313,8 @@ model Category {
   sinking      Boolean        @default(false) // true = accrues to its own hold until the bill is due
   cycleMonths  Int?           // payment cycle for sinking funds (WiFi=3, Mobile=12...)
   onHold       Boolean        @default(false) // paused: skipped when seeding new months & wind-down
-  responsibleMemberId Int?     // who is charged the over-budget excess at wind-down (e.g. Provision → Harish)
+  fixed        Boolean        @default(false) // fixed monthly bill (e.g. subscription): a recurring Sheet expense tagged to the payer, not a budget
+  responsibleMemberId Int?     // budget: over-budget excess owner; fixed bill: who pays it (settlement credit)
   expenses     ExpenseEntry[]
   budgets      Budget[]
   spends       Spend[]
