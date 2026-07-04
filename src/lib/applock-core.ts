@@ -65,6 +65,31 @@ export function verifyUnlock(token: string | undefined, householdId: number): bo
   }
 }
 
+// Generic signed token for any scope (used by the personal lock, bound to memberId).
+export function signScope(scope: string, id: number): string {
+  const payload = Buffer.from(JSON.stringify({ s: scope, id, iat: Date.now() })).toString(
+    "base64url",
+  );
+  const sig = crypto.createHmac("sha256", SECRET).update(payload).digest("base64url");
+  return `${payload}.${sig}`;
+}
+
+export function verifyScope(token: string | undefined, scope: string, id: number): boolean {
+  if (!token) return false;
+  const [payload, sig] = token.split(".");
+  if (!payload || !sig) return false;
+  const expected = crypto.createHmac("sha256", SECRET).update(payload).digest("base64url");
+  const sigBuf = Buffer.from(sig);
+  const expBuf = Buffer.from(expected);
+  if (sigBuf.length !== expBuf.length || !crypto.timingSafeEqual(sigBuf, expBuf)) return false;
+  try {
+    const data = JSON.parse(Buffer.from(payload, "base64url").toString());
+    return data.s === scope && data.id === id;
+  } catch {
+    return false;
+  }
+}
+
 /** Milliseconds to lock out after N consecutive wrong PINs. No penalty for the
  *  first 4; then 30s doubling, capped at 15 min; at MAX we force Google re-login. */
 export function lockoutMs(attempts: number): number {

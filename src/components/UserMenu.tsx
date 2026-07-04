@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { startRegistration } from "@simplewebauthn/browser";
@@ -105,6 +106,14 @@ export function UserMenu({
               </span>
             </div>
           </div>
+          <Link
+            href="/personal"
+            onClick={() => setOpen(false)}
+            className="flex w-full items-center gap-2 border-b border-slate-100 px-4 py-3 text-left text-sm font-medium text-emerald-700 hover:bg-emerald-50"
+          >
+            <span className="text-base leading-none">🔒</span>
+            Switch to Personal →
+          </Link>
           {actualIsHead && (
             <form action={setViewAs} className="border-b border-slate-100">
               <input type="hidden" name="mode" value={viewingAsMember ? "head" : "member"} />

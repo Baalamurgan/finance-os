@@ -69,10 +69,22 @@ model Member {
   email       String?        @unique // whitelisted Google email -> this member
   isEarner    Boolean        @default(true)
   role        String         @default("member") // head | member
+  // Personal-finance mode: a private per-member space with its OWN lock, fully
+  // isolated from the family roll-up. Null PIN = personal not set up yet.
+  personalPinHash          String?
+  personalPinSalt          String?
+  personalPinFailedAttempts Int      @default(0)
+  personalPinLockedUntil   DateTime?
+  personalWindDownDay      Int?
+  personalOnboarded        Boolean   @default(false)
   incomes     IncomeEntry[]
   expenses    ExpenseEntry[]
   spends      Spend[]
   webauthnCreds WebAuthnCredential[]
+  personalCategories PersonalCategory[]
+  personalPeriods    PersonalPeriod[]
+  personalExpenses   PersonalExpense[]
+  personalLoans      PersonalLoan[]
 
   @@unique([householdId, code])
 }
@@ -88,6 +100,67 @@ model WebAuthnCredential {
   counter      Int      @default(0)
   transports   String? // csv of authenticator transports
   deviceLabel  String? // best-effort label ("iPhone", "This device")
+  purpose      String   @default("family") // family | personal — which lock this unlocks
+  createdAt    DateTime @default(now())
+}
+
+// ── Personal finance (private per member; never referenced by family tables) ──
+
+model PersonalCategory {
+  id        Int      @id @default(autoincrement())
+  member    Member   @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  memberId  Int
+  name      String
+  icon      String?  // emoji
+  sortOrder Int      @default(0)
+  archived  Boolean  @default(false)
+  expenses  PersonalExpense[]
+  createdAt DateTime @default(now())
+
+  @@unique([memberId, name])
+}
+
+model PersonalPeriod {
+  id        Int      @id @default(autoincrement())
+  member    Member   @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  memberId  Int
+  year      Int
+  month     Int
+  label     String
+  status    String   @default("open") // open | closed
+  income    Float    @default(0) // the month's income (single editable number)
+  closedAt  DateTime?
+  expenses  PersonalExpense[]
+  createdAt DateTime @default(now())
+
+  @@unique([memberId, year, month])
+}
+
+model PersonalExpense {
+  id         Int      @id @default(autoincrement())
+  member     Member   @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  memberId   Int
+  period     PersonalPeriod  @relation(fields: [periodId], references: [id], onDelete: Cascade)
+  periodId   Int
+  category   PersonalCategory @relation(fields: [categoryId], references: [id])
+  categoryId Int
+  amount     Float
+  note       String?
+  date       DateTime @default(now())
+  recurring  Boolean  @default(false) // recurring lines copy into the next month
+  createdAt  DateTime @default(now())
+}
+
+model PersonalLoan {
+  id           Int      @id @default(autoincrement())
+  member       Member   @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  memberId     Int
+  direction    String // lent | borrowed
+  counterparty String
+  amount       Float
+  outstanding  Float
+  note         String?
+  status       String   @default("open") // open | settled
   createdAt    DateTime @default(now())
 }
 
