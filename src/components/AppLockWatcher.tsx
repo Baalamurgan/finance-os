@@ -25,10 +25,26 @@ export function AppLockWatcher() {
 
     // Fresh app launch (e.g. cleared from recents): sessionStorage is wiped on full
     // termination, so a valid unlock cookie without this marker means a stale
-    // session inherited across a close → force a re-lock. Set on unlock (LockScreen).
-    if (sessionStorage.getItem("applock-live") !== "1") {
-      lock();
-      return;
+    // session inherited across a close → force a re-lock.
+    //
+    // The "just unlocked" signal is carried in the URL (?unlocked=1) because iOS
+    // standalone PWAs don't reliably persist sessionStorage across the /lock → /
+    // hop — relying on sessionStorage alone caused a lock↔unlock loop on Safari.
+    // We fail OPEN (never lock) if storage throws, so we can't ever trap the user.
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const justUnlocked = params.get("unlocked") === "1";
+      if (justUnlocked) {
+        sessionStorage.setItem("applock-live", "1");
+        params.delete("unlocked");
+        const qs = params.toString();
+        window.history.replaceState(null, "", window.location.pathname + (qs ? `?${qs}` : ""));
+      } else if (sessionStorage.getItem("applock-live") !== "1") {
+        lock();
+        return;
+      }
+    } catch {
+      /* storage unavailable → don't force a lock (server cookie still gates reads) */
     }
     const bump = () => {
       lastActive.current = Date.now();

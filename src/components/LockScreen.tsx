@@ -25,11 +25,16 @@ export function LockScreen({
   const formRef = useRef<HTMLFormElement>(null);
   const autoTried = useRef(false);
 
-  // success → mark this app session live (so we don't re-lock mid-use) + into the app
+  // success → mark this app session live (so we don't re-lock mid-use) + into the
+  // app. The ?unlocked=1 signal survives the hop even if iOS drops sessionStorage.
   useEffect(() => {
     if (state.ok) {
-      sessionStorage.setItem("applock-live", "1");
-      router.replace("/");
+      try {
+        sessionStorage.setItem("applock-live", "1");
+      } catch {
+        /* ignore */
+      }
+      router.replace("/?unlocked=1");
     }
   }, [state.ok, router]);
 
@@ -77,8 +82,12 @@ export function LockScreen({
       });
       const data = await verifyRes.json();
       if (data.verified) {
-        sessionStorage.setItem("applock-live", "1");
-        router.replace("/");
+        try {
+          sessionStorage.setItem("applock-live", "1");
+        } catch {
+          /* ignore */
+        }
+        router.replace("/?unlocked=1");
       } else throw new Error(data.error ?? "Biometric didn’t match.");
     } catch (e) {
       setBioError(e instanceof Error ? e.message : "Biometric unavailable.");
