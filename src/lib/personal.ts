@@ -65,7 +65,7 @@ export async function ensurePersonalMonth(memberId: number, now = new Date()) {
       });
       for (const e of recurring) {
         await tx.personalExpense.create({
-          data: { memberId, periodId: p.id, categoryId: e.categoryId, amount: e.amount, note: e.note, recurring: true },
+          data: { memberId, periodId: p.id, label: e.label, amount: e.amount, note: e.note, recurring: true },
         });
       }
       await tx.personalPeriod.update({

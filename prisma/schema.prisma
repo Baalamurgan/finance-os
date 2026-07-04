@@ -84,6 +84,7 @@ model Member {
   personalCategories PersonalCategory[]
   personalPeriods    PersonalPeriod[]
   personalExpenses   PersonalExpense[]
+  personalSpends     PersonalSpend[]
   personalLoans      PersonalLoan[]
 
   @@unique([householdId, code])
@@ -115,6 +116,7 @@ model PersonalCategory {
   sortOrder Int      @default(0)
   archived  Boolean  @default(false)
   expenses  PersonalExpense[]
+  spends    PersonalSpend[]
   createdAt DateTime @default(now())
 
   @@unique([memberId, name])
@@ -131,12 +133,33 @@ model PersonalPeriod {
   income    Float    @default(0) // the month's income (single editable number)
   closedAt  DateTime?
   expenses  PersonalExpense[]
+  spends    PersonalSpend[]
   createdAt DateTime @default(now())
 
   @@unique([memberId, year, month])
 }
 
+// Fixed monthly line-items on the Sheet (rent, subscriptions…). Label + amount,
+// no category. `recurring` lines copy into the next month.
 model PersonalExpense {
+  id         Int      @id @default(autoincrement())
+  member     Member   @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  memberId   Int
+  period     PersonalPeriod  @relation(fields: [periodId], references: [id], onDelete: Cascade)
+  periodId   Int
+  category   PersonalCategory? @relation(fields: [categoryId], references: [id])
+  categoryId Int?
+  label      String   @default("")
+  amount     Float
+  note       String?
+  date       DateTime @default(now())
+  recurring  Boolean  @default(false)
+  createdAt  DateTime @default(now())
+}
+
+// Daily spends tracked in the Expenses tab — categorised, drawn against the
+// remaining balance (income − fixed expenses − spends).
+model PersonalSpend {
   id         Int      @id @default(autoincrement())
   member     Member   @relation(fields: [memberId], references: [id], onDelete: Cascade)
   memberId   Int
@@ -147,7 +170,6 @@ model PersonalExpense {
   amount     Float
   note       String?
   date       DateTime @default(now())
-  recurring  Boolean  @default(false) // recurring lines copy into the next month
   createdAt  DateTime @default(now())
 }
 

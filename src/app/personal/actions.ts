@@ -17,7 +17,6 @@ async function me() {
       : null;
 }
 
-// Confirm a period belongs to the caller (scoping guard).
 async function ownsPeriod(memberId: number, periodId: number) {
   const p = await prisma.personalPeriod.findUnique({ where: { id: periodId } });
   return p && p.memberId === memberId ? p : null;
@@ -26,6 +25,8 @@ async function ownsPeriod(memberId: number, periodId: number) {
 function rev() {
   revalidatePath("/personal", "layout");
 }
+
+export type PersonalSaveState = { ok: boolean; error?: string; n: number };
 
 // ── Onboarding ───────────────────────────────────────────────────────────────
 export async function finishPersonalOnboarding(formData: FormData) {
@@ -37,13 +38,13 @@ export async function finishPersonalOnboarding(formData: FormData) {
   const income = Number(formData.get("income")) || 0;
   await prisma.personalPeriod.update({ where: { id: period.id }, data: { income } });
 
-  // recurring rows come as parallel arrays recurCat[]/recurAmt[]
-  const cats = formData.getAll("recurCat").map((v) => Number(v));
+  // fixed monthly expenses come as parallel arrays recurLabel[]/recurAmt[]
+  const labels = formData.getAll("recurLabel").map((v) => String(v).trim());
   const amts = formData.getAll("recurAmt").map((v) => Number(v));
-  for (let i = 0; i < cats.length; i++) {
-    if (cats[i] && amts[i] > 0) {
+  for (let i = 0; i < labels.length; i++) {
+    if (labels[i] && amts[i] > 0) {
       await prisma.personalExpense.create({
-        data: { memberId: member.id, periodId: period.id, categoryId: cats[i], amount: amts[i], recurring: true },
+        data: { memberId: member.id, periodId: period.id, label: labels[i], amount: amts[i], recurring: true },
       });
     }
   }
@@ -63,9 +64,7 @@ export async function setPersonalIncome(formData: FormData) {
   rev();
 }
 
-// ── Expenses ─────────────────────────────────────────────────────────────────
-export type PersonalSaveState = { ok: boolean; error?: string; n: number };
-
+// ── Sheet fixed expenses (label + amount, no category) ───────────────────────
 export async function addPersonalExpense(
   prev: PersonalSaveState,
   formData: FormData,
@@ -74,18 +73,14 @@ export async function addPersonalExpense(
   const member = await me();
   if (!member) return { ok: false, error: "Signed out.", n };
   const periodId = Number(formData.get("periodId"));
-  const categoryId = Number(formData.get("categoryId"));
+  const label = String(formData.get("label") ?? "").trim();
   const amount = Number(formData.get("amount"));
-  const note = String(formData.get("note") ?? "").trim() || null;
   const recurring = formData.get("recurring") === "on";
-  if (!periodId || !categoryId || !amount || amount <= 0)
-    return { ok: false, error: "Pick a category and amount.", n };
+  if (!periodId || !label || !amount || amount <= 0)
+    return { ok: false, error: "Enter a name and amount.", n };
   if (!(await ownsPeriod(member.id, periodId))) return { ok: false, error: "Not your month.", n };
-  const cat = await prisma.personalCategory.findUnique({ where: { id: categoryId } });
-  if (!cat || cat.memberId !== member.id) return { ok: false, error: "Unknown category.", n };
-
   await prisma.personalExpense.create({
-    data: { memberId: member.id, periodId, categoryId, amount, note, recurring },
+    data: { memberId: member.id, periodId, label, amount, recurring },
   });
   rev();
   return { ok: true, n };
@@ -99,14 +94,13 @@ export async function updatePersonalExpense(
   const member = await me();
   if (!member) return { ok: false, error: "Signed out.", n };
   const id = Number(formData.get("id"));
-  const categoryId = Number(formData.get("categoryId"));
+  const label = String(formData.get("label") ?? "").trim();
   const amount = Number(formData.get("amount"));
-  const note = String(formData.get("note") ?? "").trim() || null;
   const recurring = formData.get("recurring") === "on";
   const e = await prisma.personalExpense.findUnique({ where: { id } });
   if (!e || e.memberId !== member.id) return { ok: false, error: "Not found.", n };
-  if (!amount || amount <= 0) return { ok: false, error: "Enter an amount.", n };
-  await prisma.personalExpense.update({ where: { id }, data: { categoryId, amount, note, recurring } });
+  if (!label || !amount || amount <= 0) return { ok: false, error: "Enter a name and amount.", n };
+  await prisma.personalExpense.update({ where: { id }, data: { label, amount, recurring } });
   rev();
   return { ok: true, n };
 }
@@ -121,7 +115,58 @@ export async function deletePersonalExpense(formData: FormData) {
   rev();
 }
 
-// ── Categories ───────────────────────────────────────────────────────────────
+// ── Spends (categorised, Expenses tab) ───────────────────────────────────────
+export async function addPersonalSpend(
+  prev: PersonalSaveState,
+  formData: FormData,
+): Promise<PersonalSaveState> {
+  const n = (prev?.n ?? 0) + 1;
+  const member = await me();
+  if (!member) return { ok: false, error: "Signed out.", n };
+  const periodId = Number(formData.get("periodId"));
+  const categoryId = Number(formData.get("categoryId"));
+  const amount = Number(formData.get("amount"));
+  const note = String(formData.get("note") ?? "").trim() || null;
+  if (!periodId || !categoryId || !amount || amount <= 0)
+    return { ok: false, error: "Pick a category and amount.", n };
+  if (!(await ownsPeriod(member.id, periodId))) return { ok: false, error: "Not your month.", n };
+  const cat = await prisma.personalCategory.findUnique({ where: { id: categoryId } });
+  if (!cat || cat.memberId !== member.id) return { ok: false, error: "Unknown category.", n };
+  await prisma.personalSpend.create({ data: { memberId: member.id, periodId, categoryId, amount, note } });
+  rev();
+  return { ok: true, n };
+}
+
+export async function updatePersonalSpend(
+  prev: PersonalSaveState,
+  formData: FormData,
+): Promise<PersonalSaveState> {
+  const n = (prev?.n ?? 0) + 1;
+  const member = await me();
+  if (!member) return { ok: false, error: "Signed out.", n };
+  const id = Number(formData.get("id"));
+  const categoryId = Number(formData.get("categoryId"));
+  const amount = Number(formData.get("amount"));
+  const note = String(formData.get("note") ?? "").trim() || null;
+  const s = await prisma.personalSpend.findUnique({ where: { id } });
+  if (!s || s.memberId !== member.id) return { ok: false, error: "Not found.", n };
+  if (!amount || amount <= 0) return { ok: false, error: "Enter an amount.", n };
+  await prisma.personalSpend.update({ where: { id }, data: { categoryId, amount, note } });
+  rev();
+  return { ok: true, n };
+}
+
+export async function deletePersonalSpend(formData: FormData) {
+  const member = await me();
+  if (!member) return;
+  const id = Number(formData.get("id"));
+  const s = await prisma.personalSpend.findUnique({ where: { id } });
+  if (!s || s.memberId !== member.id) return;
+  await prisma.personalSpend.delete({ where: { id } });
+  rev();
+}
+
+// ── Categories (spend categories — managed in the Expenses tab) ──────────────
 export async function addPersonalCategory(formData: FormData) {
   const member = await me();
   if (!member) return;
@@ -130,22 +175,6 @@ export async function addPersonalCategory(formData: FormData) {
   if (!name) return;
   try {
     await prisma.personalCategory.create({ data: { memberId: member.id, name, icon, sortOrder: 999 } });
-  } catch {
-    /* duplicate name — ignore */
-  }
-  rev();
-}
-
-export async function renamePersonalCategory(formData: FormData) {
-  const member = await me();
-  if (!member) return;
-  const id = Number(formData.get("id"));
-  const name = String(formData.get("name") ?? "").trim();
-  const icon = String(formData.get("icon") ?? "").trim();
-  const c = await prisma.personalCategory.findUnique({ where: { id } });
-  if (!c || c.memberId !== member.id || !name) return;
-  try {
-    await prisma.personalCategory.update({ where: { id }, data: { name, icon: icon || c.icon } });
   } catch {
     /* duplicate — ignore */
   }

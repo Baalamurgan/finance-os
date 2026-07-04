@@ -18,17 +18,12 @@ export default async function PersonalOnboardingPage() {
   if (!member) redirect("/signin");
   if (member.personalOnboarded) redirect("/personal");
 
-  // seed the starter categories so the recurring picker has options
+  // seed the starter spend categories (used later in the Expenses tab)
   await seedPersonalCategories(member.id);
-  const categories = await prisma.personalCategory.findMany({
-    where: { memberId: member.id, archived: false },
-    orderBy: { sortOrder: "asc" },
-    select: { id: true, name: true, icon: true },
-  });
 
   return (
     <main className="min-h-screen bg-[#faf9f6]">
-      <PersonalOnboarding categories={categories} hasPin={!!member.personalPinHash} />
+      <PersonalOnboarding hasPin={!!member.personalPinHash} />
     </main>
   );
 }
