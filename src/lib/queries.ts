@@ -323,10 +323,13 @@ export async function getTrackedExpenses(householdId: number, periodId: number) 
 export type InHand = Awaited<ReturnType<typeof getInHand>>;
 
 /**
- * "How much is still in whose hand" for a month: each responsible member's
- * budgeted categories with spent/remaining, plus the head's account total
- * (accumulated Piggy + their own + shared budgets still unspent). This is the
- * cash each person should still be holding before wind-down.
+ * "How much is still in whose hand" for a month. Per person:
+ *   net = (their budgeted categories still unspent) − (their misc/unbudgeted spend).
+ * A positive net = pool cash they're still holding (→ Piggy at wind-down).
+ * A negative net = they fronted more than their budget → reclaim from the
+ * treasurer, or it's deducted from next month. Budgeted remaining is by the
+ * category's responsible member; misc spend is by whoever logged it. The head's
+ * account total = accumulated Piggy + their own net + the shared/pool net.
  */
 export async function getInHand(householdId: number, periodId: number) {
   const [categories, budgets, spends, members, piggy] = await Promise.all([
@@ -340,29 +343,39 @@ export async function getInHand(householdId: number, periodId: number) {
   const spentByCat = new Map<number, number>();
   for (const s of spends) spentByCat.set(s.categoryId, (spentByCat.get(s.categoryId) ?? 0) + s.amount);
 
+  const budgetedIds = new Set(categories.filter((c) => (plannedByCat.get(c.id) ?? 0) > 0).map((c) => c.id));
+
+  // budgeted category rows (by responsible member)
   const rows = categories
+    .filter((c) => budgetedIds.has(c.id))
     .map((cat) => ({
       id: cat.id,
       name: cat.name,
       responsibleMemberId: cat.responsibleMemberId,
       allocation: plannedByCat.get(cat.id) ?? 0,
       spent: spentByCat.get(cat.id) ?? 0,
-    }))
-    .filter((r) => r.allocation > 0)
-    .map((r) => ({ ...r, remaining: r.allocation - r.spent }));
+      remaining: (plannedByCat.get(cat.id) ?? 0) - (spentByCat.get(cat.id) ?? 0),
+    }));
 
-  const groupOf = (memberId: number | null) => rows.filter((r) => (r.responsibleMemberId ?? null) === memberId);
-  const sum = (rs: typeof rows) => rs.reduce((s, r) => s + r.remaining, 0);
+  // misc / unbudgeted spend (by whoever logged it)
+  const miscByMember = new Map<number | null, number>();
+  for (const s of spends) {
+    if (budgetedIds.has(s.categoryId)) continue;
+    const k = s.memberId ?? null;
+    miscByMember.set(k, (miscByMember.get(k) ?? 0) + s.amount);
+  }
+
+  const build = (key: number | null, name: string) => {
+    const cats = rows.filter((r) => (r.responsibleMemberId ?? null) === key);
+    const budgetRemaining = cats.reduce((s, r) => s + r.remaining, 0);
+    const miscSpent = miscByMember.get(key) ?? 0;
+    return { memberId: key, name, cats, budgetRemaining, miscSpent, net: budgetRemaining - miscSpent };
+  };
 
   const byPerson = members
-    .map((m) => {
-      const cats = groupOf(m.id);
-      return { memberId: m.id, name: m.name, cats, remaining: sum(cats), spent: cats.reduce((s, r) => s + r.spent, 0) };
-    })
-    .filter((g) => g.cats.length > 0);
-
-  const sharedCats = groupOf(null);
-  const shared = { cats: sharedCats, remaining: sum(sharedCats), spent: sharedCats.reduce((s, r) => s + r.spent, 0) };
+    .map((m) => build(m.id, m.name))
+    .filter((g) => g.cats.length > 0 || g.miscSpent > 0);
+  const shared = build(null, "Shared / pool");
   const piggyTotal = piggy.generalTotal + piggy.sinking.reduce((s, x) => s + x.hold, 0);
 
   return { byPerson, shared, piggyTotal };

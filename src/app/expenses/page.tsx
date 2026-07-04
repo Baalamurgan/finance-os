@@ -54,14 +54,16 @@ export default async function ExpensesPage({
   const miscCards = cards.filter((card) => card.allocation === 0);
   const open = c.selected.status === "open";
 
-  // "Budget left in hand" — per-person remaining + (head) the account total.
+  // "Budget left in hand" — per-person net (budget left − misc spent) + (head) account total.
   const inHand = await getInHand(c.household.id, c.selected.id);
   const currentMemberId = c.currentMember?.id ?? null;
   const headMember = c.members.find((m) => m.role === "head") ?? null;
   const headGroup = inHand.byPerson.find((g) => g.memberId === headMember?.id) ?? null;
-  const accountTotal = inHand.piggyTotal + (headGroup?.remaining ?? 0) + inHand.shared.remaining;
+  const accountTotal = inHand.piggyTotal + (headGroup?.net ?? 0) + inHand.shared.net;
   const myGroup = inHand.byPerson.find((g) => g.memberId === currentMemberId) ?? null;
   const visibleGroups = c.isHead ? inHand.byPerson : myGroup ? [myGroup] : [];
+  const showShared = c.isHead && (inHand.shared.cats.length > 0 || inHand.shared.miscSpent > 0);
+  const showInHand = visibleGroups.length > 0 || (c.isHead && (showShared || inHand.piggyTotal !== 0));
 
   return (
     <>
@@ -94,43 +96,6 @@ export default async function ExpensesPage({
             </div>
           </div>
         </div>
-
-        {/* Budget left in hand — who still holds what */}
-        {(visibleGroups.length > 0 || (c.isHead && (inHand.shared.cats.length > 0 || inHand.piggyTotal !== 0))) && (
-          <details open className="rounded-xl border border-slate-200 bg-white">
-            <summary className="flex cursor-pointer list-none items-center justify-between px-4 py-3 [&::-webkit-details-marker]:hidden">
-              <span className="text-sm font-semibold text-slate-800">💰 Budget left in hand</span>
-              <span className="text-xs text-slate-400">
-                {c.isHead ? "who still holds what this month" : "your unspent budget this month"}
-              </span>
-            </summary>
-            <div className="space-y-3 border-t border-slate-100 p-4">
-              {c.isHead && (
-                <div className="rounded-xl bg-slate-900 p-4 text-white">
-                  <div className="text-[11px] font-medium uppercase tracking-wide text-slate-300">
-                    Should be in {headMember?.name ?? "the"} account
-                  </div>
-                  <div className="mt-0.5 text-2xl font-extrabold tabular-nums">{formatINR(accountTotal)}</div>
-                  <div className="mt-1 text-xs text-slate-400">
-                    Piggy {formatINR(inHand.piggyTotal)} + your budgets left {formatINR(headGroup?.remaining ?? 0)}
-                    {inHand.shared.remaining !== 0 ? ` + shared ${formatINR(inHand.shared.remaining)}` : ""}
-                  </div>
-                </div>
-              )}
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                {visibleGroups.map((g) => (
-                  <PersonGroup key={g.memberId} name={g.name} remaining={g.remaining} cats={g.cats} />
-                ))}
-                {c.isHead && inHand.shared.cats.length > 0 && (
-                  <PersonGroup name="Shared / pool" remaining={inHand.shared.remaining} cats={inHand.shared.cats} />
-                )}
-              </div>
-              {!c.isHead && !myGroup && (
-                <p className="text-sm text-slate-400">You&apos;re not assigned any budgeted categories this month.</p>
-              )}
-            </div>
-          </details>
-        )}
 
         {/* budgeted categories (count toward Spent / Allocated above) */}
         <div className="grid grid-cols-1 gap-5 md:grid-cols-2">
@@ -175,6 +140,41 @@ export default async function ExpensesPage({
           </section>
         )}
 
+        {/* Budget left in hand — who still holds what (after misc, since it nets misc out) */}
+        {showInHand && (
+          <details open className="rounded-xl border border-slate-200 bg-white">
+            <summary className="flex cursor-pointer list-none items-center justify-between border-t-2 border-dashed border-slate-200 px-4 py-3 [&::-webkit-details-marker]:hidden">
+              <span className="text-sm font-semibold text-slate-800">💰 Budget left in hand</span>
+              <span className="text-xs text-slate-400">
+                {c.isHead ? "who still holds what (budget left − misc spent)" : "your budget left − your misc spend"}
+              </span>
+            </summary>
+            <div className="space-y-3 border-t border-slate-100 p-4">
+              {c.isHead && (
+                <div className="rounded-xl bg-slate-900 p-4 text-white">
+                  <div className="text-[11px] font-medium uppercase tracking-wide text-slate-300">
+                    Should be in {headMember?.name ?? "the"} account
+                  </div>
+                  <div className="mt-0.5 text-2xl font-extrabold tabular-nums">{formatINR(accountTotal)}</div>
+                  <div className="mt-1 text-xs text-slate-400">
+                    Piggy {formatINR(inHand.piggyTotal)} + your net {formatINR(headGroup?.net ?? 0)}
+                    {inHand.shared.net !== 0 ? ` + shared ${formatINR(inHand.shared.net)}` : ""}
+                  </div>
+                </div>
+              )}
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                {visibleGroups.map((g) => (
+                  <PersonGroup key={g.memberId} group={g} />
+                ))}
+                {showShared && <PersonGroup group={inHand.shared} />}
+              </div>
+              {!c.isHead && !myGroup && (
+                <p className="text-sm text-slate-400">You have no budgeted categories or misc spends this month.</p>
+              )}
+            </div>
+          </details>
+        )}
+
         {!open && (
           <p className="text-center text-xs text-slate-400">
             This month is closed — spends are locked.
@@ -185,21 +185,15 @@ export default async function ExpensesPage({
   );
 }
 
-function PersonGroup({
-  name,
-  remaining,
-  cats,
-}: {
-  name: string;
-  remaining: number;
-  cats: InHand["byPerson"][number]["cats"];
-}) {
+function PersonGroup({ group }: { group: InHand["byPerson"][number] | InHand["shared"] }) {
+  const { name, cats, miscSpent, net } = group;
   return (
     <div className="rounded-xl border border-slate-200 p-3">
-      <div className="flex items-baseline justify-between">
+      <div className="flex items-baseline justify-between gap-2">
         <span className="text-sm font-semibold text-slate-800">{name}</span>
-        <span className={`text-sm font-bold tabular-nums ${remaining < 0 ? "text-red-600" : "text-emerald-700"}`}>
-          {formatINR(remaining)} <span className="text-[10px] font-normal text-slate-400">left</span>
+        <span className={`text-right text-sm font-bold tabular-nums ${net < 0 ? "text-red-600" : "text-emerald-700"}`}>
+          {formatINR(net)}
+          <span className="ml-1 text-[10px] font-normal text-slate-400">{net < 0 ? "to reclaim" : "in hand"}</span>
         </span>
       </div>
       <ul className="mt-2 space-y-1">
@@ -212,7 +206,18 @@ function PersonGroup({
             </span>
           </li>
         ))}
+        {miscSpent > 0 && (
+          <li className="flex items-center justify-between gap-2 text-xs">
+            <span className="truncate text-amber-600">Miscellaneous (unbudgeted)</span>
+            <span className="shrink-0 tabular-nums text-red-600">− {formatINR(miscSpent)}</span>
+          </li>
+        )}
       </ul>
+      {net < 0 && (
+        <p className="mt-2 text-[11px] leading-tight text-amber-600">
+          Fronted more than budget — reclaim from the treasurer at wind-down, or deduct from next month.
+        </p>
+      )}
     </div>
   );
 }
