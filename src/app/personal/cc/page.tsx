@@ -15,15 +15,29 @@ export default async function PersonalCC({
   const sp = await searchParams;
   const c = await loadPersonal(sp);
   const d = await getCardDashboard(c.member.id);
+  const aiReady = !!process.env.ANTHROPIC_API_KEY;
 
   return (
     <>
       <PersonalNav active="cc" name={c.account.name} selYear={c.selYear} selMonth={c.selMonth} />
       <main className="mx-auto max-w-3xl space-y-4 p-4 sm:p-6">
-        <div>
+        <div className="flex flex-wrap items-center gap-2">
           <h1 className="text-xl font-bold text-slate-900">Cards</h1>
-          <p className="text-sm text-slate-500">Your credit-card spending — imported from statements.</p>
+          {!aiReady && (
+            <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-amber-700">
+              🚧 Work in progress
+            </span>
+          )}
         </div>
+        <p className="text-sm text-slate-500">Your credit-card spending — imported from statements.</p>
+
+        {!aiReady && (
+          <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
+            <b>Statement import is coming soon.</b> It reads a PDF statement automatically using AI —
+            it&apos;ll switch on once the <code className="rounded bg-amber-100 px-1">ANTHROPIC_API_KEY</code>{" "}
+            is added on the server (Vercel). You can still set up your cards below so it&apos;s ready to go.
+          </div>
+        )}
 
         {/* headline stats */}
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
@@ -83,8 +97,8 @@ export default async function PersonalCC({
           </details>
         </section>
 
-        {/* import */}
-        <CardImporter cards={d.cards.map((c) => ({ id: c.id, name: c.name }))} />
+        {/* import (only once the AI key is configured) */}
+        {aiReady && <CardImporter cards={d.cards.map((c) => ({ id: c.id, name: c.name }))} />}
 
         {/* top merchants */}
         {d.topMerchants.length > 0 && (
