@@ -62,7 +62,7 @@ export default async function ExpensesPage({
   const accountTotal = inHand.piggyTotal + (headGroup?.net ?? 0) + inHand.shared.net;
   const myGroup = inHand.byPerson.find((g) => g.memberId === currentMemberId) ?? null;
   const visibleGroups = c.isHead ? inHand.byPerson : myGroup ? [myGroup] : [];
-  const showShared = c.isHead && (inHand.shared.cats.length > 0 || inHand.shared.miscSpent > 0);
+  const showShared = c.isHead && (inHand.shared.cats.length > 0 || inHand.shared.miscSpent > 0 || inHand.shared.bills.length > 0);
   const showInHand = visibleGroups.length > 0 || (c.isHead && (showShared || inHand.piggyTotal !== 0));
 
   return (
@@ -186,7 +186,7 @@ export default async function ExpensesPage({
 }
 
 function PersonGroup({ group }: { group: InHand["byPerson"][number] | InHand["shared"] }) {
-  const { name, cats, miscSpent, net } = group;
+  const { name, cats, bills, miscSpent, net } = group;
   return (
     <div className="rounded-xl border border-slate-200 p-3">
       <div className="flex items-baseline justify-between gap-2">
@@ -204,6 +204,14 @@ function PersonGroup({ group }: { group: InHand["byPerson"][number] | InHand["sh
               spent {formatINR(cat.spent)}/{formatINR(cat.allocation)} ·{" "}
               <b className={cat.remaining < 0 ? "text-red-600" : "text-slate-600"}>{formatINR(cat.remaining)}</b>
             </span>
+          </li>
+        ))}
+        {bills.map((b, i) => (
+          <li key={`b${i}`} className="flex items-center justify-between gap-2 text-xs">
+            <span className="truncate text-slate-500">
+              {b.name} <span className="text-[10px] text-indigo-400">fixed bill</span>
+            </span>
+            <span className="shrink-0 tabular-nums text-slate-600">{formatINR(b.amount)}</span>
           </li>
         ))}
         {miscSpent > 0 && (

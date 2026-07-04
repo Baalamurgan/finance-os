@@ -324,18 +324,21 @@ export type InHand = Awaited<ReturnType<typeof getInHand>>;
 
 /**
  * "How much is still in whose hand" for a month. Per person:
- *   net = (their budgeted categories still unspent) − (their misc/unbudgeted spend).
- * A positive net = pool cash they're still holding (→ Piggy at wind-down).
- * A negative net = they fronted more than their budget → reclaim from the
- * treasurer, or it's deducted from next month. Budgeted remaining is by the
- * category's responsible member; misc spend is by whoever logged it. The head's
- * account total = accumulated Piggy + their own net + the shared/pool net.
+ *   net = (budgeted categories still unspent) + (fixed bills they cover)
+ *         − (their misc/unbudgeted spend).
+ * A positive net = cash they're still holding (budgets → Piggy at wind-down;
+ * fixed bills earmarked to pay). A negative net = they fronted more than they
+ * hold → reclaim from the treasurer, or deduct next month. Budgeted remaining +
+ * fixed bills are by the responsible/paying member; misc spend is by whoever
+ * logged it. The head's account total = Piggy + their own net + the shared net.
  */
 export async function getInHand(householdId: number, periodId: number) {
-  const [categories, budgets, spends, members, piggy] = await Promise.all([
+  const [categories, budgets, spends, fixedLines, members, piggy] = await Promise.all([
     prisma.category.findMany({ where: { householdId, tracked: true, onHold: false } }),
     prisma.budget.findMany({ where: { periodId } }),
     prisma.spend.findMany({ where: { periodId } }),
+    // fixed bills are Sheet expense lines tagged to whoever pays them
+    prisma.expenseEntry.findMany({ where: { periodId, category: { fixed: true } } }),
     prisma.member.findMany({ where: { householdId }, orderBy: { id: "asc" } }),
     getPiggyOverview(householdId),
   ]);
@@ -367,14 +370,18 @@ export async function getInHand(householdId: number, periodId: number) {
 
   const build = (key: number | null, name: string) => {
     const cats = rows.filter((r) => (r.responsibleMemberId ?? null) === key);
+    const bills = fixedLines
+      .filter((e) => (e.memberId ?? null) === key)
+      .map((e) => ({ name: e.label, amount: e.amount }));
     const budgetRemaining = cats.reduce((s, r) => s + r.remaining, 0);
+    const fixedTotal = bills.reduce((s, b) => s + b.amount, 0);
     const miscSpent = miscByMember.get(key) ?? 0;
-    return { memberId: key, name, cats, budgetRemaining, miscSpent, net: budgetRemaining - miscSpent };
+    return { memberId: key, name, cats, bills, budgetRemaining, fixedTotal, miscSpent, net: budgetRemaining + fixedTotal - miscSpent };
   };
 
   const byPerson = members
     .map((m) => build(m.id, m.name))
-    .filter((g) => g.cats.length > 0 || g.miscSpent > 0);
+    .filter((g) => g.cats.length > 0 || g.miscSpent > 0 || g.bills.length > 0);
   const shared = build(null, "Shared / pool");
   const piggyTotal = piggy.generalTotal + piggy.sinking.reduce((s, x) => s + x.hold, 0);
 
