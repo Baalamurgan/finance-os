@@ -133,8 +133,8 @@ function SetupRow({ r, members, readOnly }: { r: Row; members: MemberLite[]; rea
             ))}
           </select>
           {r.onHold && (
-            <span className="rounded-full bg-slate-200 px-2 py-0.5 text-[10px] text-slate-600">
-              on hold
+            <span className="rounded-full bg-slate-200 px-2 py-0.5 text-[10px] font-medium text-slate-600">
+              Hold
             </span>
           )}
         </div>

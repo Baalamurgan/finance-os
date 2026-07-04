@@ -1,6 +1,6 @@
 import { formatINR } from "@/lib/format";
 import { loadCommon } from "@/lib/load";
-import { getTrackedExpenses } from "@/lib/queries";
+import { getTrackedExpenses, getInHand, type InHand } from "@/lib/queries";
 import { NavHeader } from "@/components/NavHeader";
 import { AddSpendModal } from "@/components/AddSpendModal";
 import { SpendDeleteButton } from "@/components/SpendDeleteButton";
@@ -54,6 +54,15 @@ export default async function ExpensesPage({
   const miscCards = cards.filter((card) => card.allocation === 0);
   const open = c.selected.status === "open";
 
+  // "Budget left in hand" — per-person remaining + (head) the account total.
+  const inHand = await getInHand(c.household.id, c.selected.id);
+  const currentMemberId = c.currentMember?.id ?? null;
+  const headMember = c.members.find((m) => m.role === "head") ?? null;
+  const headGroup = inHand.byPerson.find((g) => g.memberId === headMember?.id) ?? null;
+  const accountTotal = inHand.piggyTotal + (headGroup?.remaining ?? 0) + inHand.shared.remaining;
+  const myGroup = inHand.byPerson.find((g) => g.memberId === currentMemberId) ?? null;
+  const visibleGroups = c.isHead ? inHand.byPerson : myGroup ? [myGroup] : [];
+
   return (
     <>
       {nav}
@@ -85,6 +94,43 @@ export default async function ExpensesPage({
             </div>
           </div>
         </div>
+
+        {/* Budget left in hand — who still holds what */}
+        {(visibleGroups.length > 0 || (c.isHead && (inHand.shared.cats.length > 0 || inHand.piggyTotal !== 0))) && (
+          <details open className="rounded-xl border border-slate-200 bg-white">
+            <summary className="flex cursor-pointer list-none items-center justify-between px-4 py-3 [&::-webkit-details-marker]:hidden">
+              <span className="text-sm font-semibold text-slate-800">💰 Budget left in hand</span>
+              <span className="text-xs text-slate-400">
+                {c.isHead ? "who still holds what this month" : "your unspent budget this month"}
+              </span>
+            </summary>
+            <div className="space-y-3 border-t border-slate-100 p-4">
+              {c.isHead && (
+                <div className="rounded-xl bg-slate-900 p-4 text-white">
+                  <div className="text-[11px] font-medium uppercase tracking-wide text-slate-300">
+                    Should be in {headMember?.name ?? "the"} account
+                  </div>
+                  <div className="mt-0.5 text-2xl font-extrabold tabular-nums">{formatINR(accountTotal)}</div>
+                  <div className="mt-1 text-xs text-slate-400">
+                    Piggy {formatINR(inHand.piggyTotal)} + your budgets left {formatINR(headGroup?.remaining ?? 0)}
+                    {inHand.shared.remaining !== 0 ? ` + shared ${formatINR(inHand.shared.remaining)}` : ""}
+                  </div>
+                </div>
+              )}
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                {visibleGroups.map((g) => (
+                  <PersonGroup key={g.memberId} name={g.name} remaining={g.remaining} cats={g.cats} />
+                ))}
+                {c.isHead && inHand.shared.cats.length > 0 && (
+                  <PersonGroup name="Shared / pool" remaining={inHand.shared.remaining} cats={inHand.shared.cats} />
+                )}
+              </div>
+              {!c.isHead && !myGroup && (
+                <p className="text-sm text-slate-400">You&apos;re not assigned any budgeted categories this month.</p>
+              )}
+            </div>
+          </details>
+        )}
 
         {/* budgeted categories (count toward Spent / Allocated above) */}
         <div className="grid grid-cols-1 gap-5 md:grid-cols-2">
@@ -136,6 +182,38 @@ export default async function ExpensesPage({
         )}
       </main>
     </>
+  );
+}
+
+function PersonGroup({
+  name,
+  remaining,
+  cats,
+}: {
+  name: string;
+  remaining: number;
+  cats: InHand["byPerson"][number]["cats"];
+}) {
+  return (
+    <div className="rounded-xl border border-slate-200 p-3">
+      <div className="flex items-baseline justify-between">
+        <span className="text-sm font-semibold text-slate-800">{name}</span>
+        <span className={`text-sm font-bold tabular-nums ${remaining < 0 ? "text-red-600" : "text-emerald-700"}`}>
+          {formatINR(remaining)} <span className="text-[10px] font-normal text-slate-400">left</span>
+        </span>
+      </div>
+      <ul className="mt-2 space-y-1">
+        {cats.map((cat) => (
+          <li key={cat.id} className="flex items-center justify-between gap-2 text-xs">
+            <span className="truncate text-slate-500">{cat.name}</span>
+            <span className="shrink-0 tabular-nums text-slate-400">
+              spent {formatINR(cat.spent)}/{formatINR(cat.allocation)} ·{" "}
+              <b className={cat.remaining < 0 ? "text-red-600" : "text-slate-600"}>{formatINR(cat.remaining)}</b>
+            </span>
+          </li>
+        ))}
+      </ul>
+    </div>
   );
 }
 

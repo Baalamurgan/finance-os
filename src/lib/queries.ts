@@ -320,6 +320,54 @@ export async function getTrackedExpenses(householdId: number, periodId: number) 
   return { cards, totalAllocation, totalSpent, totalRemaining: totalAllocation - totalSpent, miscSpent };
 }
 
+export type InHand = Awaited<ReturnType<typeof getInHand>>;
+
+/**
+ * "How much is still in whose hand" for a month: each responsible member's
+ * budgeted categories with spent/remaining, plus the head's account total
+ * (accumulated Piggy + their own + shared budgets still unspent). This is the
+ * cash each person should still be holding before wind-down.
+ */
+export async function getInHand(householdId: number, periodId: number) {
+  const [categories, budgets, spends, members, piggy] = await Promise.all([
+    prisma.category.findMany({ where: { householdId, tracked: true, onHold: false } }),
+    prisma.budget.findMany({ where: { periodId } }),
+    prisma.spend.findMany({ where: { periodId } }),
+    prisma.member.findMany({ where: { householdId }, orderBy: { id: "asc" } }),
+    getPiggyOverview(householdId),
+  ]);
+  const plannedByCat = new Map(budgets.map((b) => [b.categoryId, b.planned]));
+  const spentByCat = new Map<number, number>();
+  for (const s of spends) spentByCat.set(s.categoryId, (spentByCat.get(s.categoryId) ?? 0) + s.amount);
+
+  const rows = categories
+    .map((cat) => ({
+      id: cat.id,
+      name: cat.name,
+      responsibleMemberId: cat.responsibleMemberId,
+      allocation: plannedByCat.get(cat.id) ?? 0,
+      spent: spentByCat.get(cat.id) ?? 0,
+    }))
+    .filter((r) => r.allocation > 0)
+    .map((r) => ({ ...r, remaining: r.allocation - r.spent }));
+
+  const groupOf = (memberId: number | null) => rows.filter((r) => (r.responsibleMemberId ?? null) === memberId);
+  const sum = (rs: typeof rows) => rs.reduce((s, r) => s + r.remaining, 0);
+
+  const byPerson = members
+    .map((m) => {
+      const cats = groupOf(m.id);
+      return { memberId: m.id, name: m.name, cats, remaining: sum(cats), spent: cats.reduce((s, r) => s + r.spent, 0) };
+    })
+    .filter((g) => g.cats.length > 0);
+
+  const sharedCats = groupOf(null);
+  const shared = { cats: sharedCats, remaining: sum(sharedCats), spent: sharedCats.reduce((s, r) => s + r.spent, 0) };
+  const piggyTotal = piggy.generalTotal + piggy.sinking.reduce((s, x) => s + x.hold, 0);
+
+  return { byPerson, shared, piggyTotal };
+}
+
 /**
  * The monthly roll-up for one period: totals, by-category (with planned-vs-actual),
  * per-member attribution, necessary-vs-other, and the raw entry lists.
@@ -507,20 +555,28 @@ export async function getMonthChanges(householdId: number, periodId: number) {
 
   const [curInc, curExp, prevInc, prevExp] = await Promise.all([
     prisma.incomeEntry.findMany({ where: { periodId } }),
-    prisma.expenseEntry.findMany({ where: { periodId } }),
+    prisma.expenseEntry.findMany({ where: { periodId }, include: { category: true } }),
     prisma.incomeEntry.findMany({ where: { periodId: prev.id } }),
-    prisma.expenseEntry.findMany({ where: { periodId: prev.id } }),
+    prisma.expenseEntry.findMany({ where: { periodId: prev.id }, include: { category: true } }),
   ]);
+
+  const isMisc = (e: { category: { section: string } | null }) => e.category?.section === "Misc";
 
   const income = diffByKey(
     curInc.map((i) => ({ key: i.source, amount: i.amount })),
     prevInc.map((i) => ({ key: i.source, amount: i.amount })),
   );
+  // Misc is one-off and churns every month, so it gets its own block rather than
+  // flooding the main expense diff.
   const expense = diffByKey(
-    curExp.map((e) => ({ key: e.label, amount: e.amount })),
-    prevExp.map((e) => ({ key: e.label, amount: e.amount })),
+    curExp.filter((e) => !isMisc(e)).map((e) => ({ key: e.label, amount: e.amount })),
+    prevExp.filter((e) => !isMisc(e)).map((e) => ({ key: e.label, amount: e.amount })),
   );
-  return { prevLabel: prev.label, income, expense };
+  const misc = diffByKey(
+    curExp.filter(isMisc).map((e) => ({ key: e.label, amount: e.amount })),
+    prevExp.filter(isMisc).map((e) => ({ key: e.label, amount: e.amount })),
+  );
+  return { prevLabel: prev.label, income, expense, misc };
 }
 
 // ── Loan / chit detail (per-item page) ──────────────────────────────────────

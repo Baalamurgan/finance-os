@@ -6,6 +6,31 @@ export function personalMonthLabel(month: number, year: number) {
   return `${MONTHS[month - 1]} ${year}`;
 }
 
+/**
+ * Which month's cycle `now` falls in, given a personal wind-down day.
+ * day 1 (or unset) = plain calendar month. day D>1 = a cycle runs D→D-1, so
+ * before day D you're still in the previous month's cycle.
+ */
+export function personalAnchor(now: Date, windDownDay?: number | null): { year: number; month: number } {
+  const d = windDownDay && windDownDay >= 2 && windDownDay <= 28 ? windDownDay : 1;
+  let year = now.getFullYear();
+  let month = now.getMonth() + 1;
+  if (d > 1 && now.getDate() < d) {
+    month -= 1;
+    if (month < 1) { month = 12; year -= 1; }
+  }
+  return { year, month };
+}
+
+/** Human date span of a cycle, e.g. "25 Sep – 24 Oct" (null for calendar months). */
+export function personalCycleRange(year: number, month: number, windDownDay?: number | null): string | null {
+  const d = windDownDay && windDownDay >= 2 && windDownDay <= 28 ? windDownDay : 1;
+  if (d === 1) return null;
+  const end = new Date(year, month, d - 1); // month is 1-based → next month, day d-1
+  const short = (dt: Date) => `${dt.getDate()} ${MONTHS[dt.getMonth()][0]}${MONTHS[dt.getMonth()].slice(1, 3).toLowerCase()}`;
+  return `${short(new Date(year, month - 1, d))} – ${short(end)}`;
+}
+
 // Jupiter-style starter categories (seeded once per member; editable). Bucket =
 // the 50/30/20 default (need | want | invest) — reclassifiable in Setup.
 export const PERSONAL_CATEGORY_SEED: { name: string; icon: string; bucket: string }[] = [
@@ -44,8 +69,8 @@ export async function seedPersonalCategories(memberId: number) {
  * and close the previous month. No manual step — it's just one person.
  */
 export async function ensurePersonalMonth(memberId: number, now = new Date()) {
-  const year = now.getFullYear();
-  const month = now.getMonth() + 1;
+  const member = await prisma.member.findUnique({ where: { id: memberId }, select: { personalWindDownDay: true } });
+  const { year, month } = personalAnchor(now, member?.personalWindDownDay);
   const existing = await prisma.personalPeriod.findUnique({
     where: { memberId_year_month: { memberId, year, month } },
   });

@@ -50,15 +50,9 @@ export default async function ActivityPage({
   const changes = c.selected ? await getMonthChanges(c.household.id, c.selected.id) : null;
   const log = c.isHead ? await getActivityLog(c.household.id) : [];
 
-  const hasChanges =
-    changes?.income &&
-    changes?.expense &&
-    (changes.income.added.length ||
-      changes.income.removed.length ||
-      changes.income.changed.length ||
-      changes.expense.added.length ||
-      changes.expense.removed.length ||
-      changes.expense.changed.length);
+  const nonEmpty = (d?: { added: unknown[]; removed: unknown[]; changed: unknown[] } | null) =>
+    !!d && (d.added.length > 0 || d.removed.length > 0 || d.changed.length > 0);
+  const hasChanges = nonEmpty(changes?.income) || nonEmpty(changes?.expense) || nonEmpty(changes?.misc);
 
   return (
     <>
@@ -84,6 +78,11 @@ export default async function ActivityPage({
             <div className="mt-3 space-y-4">
               <ChangeBlock title="Income" diff={changes.income!} />
               <ChangeBlock title="Expenses" diff={changes.expense!} />
+              {nonEmpty(changes.misc) && (
+                <div className="rounded-lg bg-slate-50 p-3">
+                  <ChangeBlock title="Miscellaneous (one-off)" diff={changes.misc!} />
+                </div>
+              )}
             </div>
           )}
         </section>

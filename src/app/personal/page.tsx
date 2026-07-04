@@ -1,7 +1,7 @@
 import { formatINR } from "@/lib/format";
 import { prisma } from "@/lib/prisma";
 import { loadPersonal } from "@/lib/loadPersonal";
-import { personalMonthLabel } from "@/lib/personal";
+import { personalMonthLabel, personalCycleRange } from "@/lib/personal";
 import { PersonalNav } from "@/components/personal/PersonalNav";
 import { PersonalFixedModal } from "@/components/personal/PersonalFixedModal";
 import { PersonalFixedRowActions } from "@/components/personal/PersonalFixedRowActions";
@@ -68,7 +68,12 @@ export default async function PersonalSheet({
     <>
       {nav}
       <main className="mx-auto max-w-3xl space-y-4 p-4 pb-28 sm:p-6">
-        <h1 className="text-xl font-bold text-slate-900">{period.label}</h1>
+        <div>
+          <h1 className="text-xl font-bold text-slate-900">{period.label}</h1>
+          {personalCycleRange(period.year, period.month, c.member.personalWindDownDay) && (
+            <p className="text-xs text-slate-400">{personalCycleRange(period.year, period.month, c.member.personalWindDownDay)} · your cycle</p>
+          )}
+        </div>
 
         {/* salary + carry + extra income */}
         <div className="rounded-xl border border-emerald-200 bg-white p-4">

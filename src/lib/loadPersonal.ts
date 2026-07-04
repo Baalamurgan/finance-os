@@ -2,7 +2,7 @@ import { redirect } from "next/navigation";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
 import { isPersonalUnlocked } from "@/lib/personal-lock";
-import { ensurePersonalMonth } from "@/lib/personal";
+import { ensurePersonalMonth, personalAnchor } from "@/lib/personal";
 
 export type PersonalCommon = NonNullable<Awaited<ReturnType<typeof loadPersonal>>>;
 
@@ -43,11 +43,13 @@ export async function loadPersonal(params?: { y?: string; m?: string }) {
   const y = params?.y ? Number(params.y) : undefined;
   const m = params?.m ? Number(params.m) : undefined;
   const now = new Date();
+  const anchor = personalAnchor(now, member.personalWindDownDay);
+  // Explicit month → that month only (null = show the empty state, no silent
+  // fall-back to the latest month). No month → the current cycle.
   const selected =
-    (y && m ? periods.find((p) => p.year === y && p.month === m) : null) ??
-    periods.find((p) => p.year === now.getFullYear() && p.month === now.getMonth() + 1) ??
-    periods[0] ??
-    null;
+    y && m
+      ? (periods.find((p) => p.year === y && p.month === m) ?? null)
+      : (periods.find((p) => p.year === anchor.year && p.month === anchor.month) ?? periods[0] ?? null);
 
   const categories = await prisma.personalCategory.findMany({
     where: { memberId: member.id, archived: false },
@@ -62,8 +64,8 @@ export async function loadPersonal(params?: { y?: string; m?: string }) {
     account,
     periods,
     selected,
-    selYear: y ?? selected?.year ?? now.getFullYear(),
-    selMonth: m ?? selected?.month ?? now.getMonth() + 1,
+    selYear: y ?? selected?.year ?? anchor.year,
+    selMonth: m ?? selected?.month ?? anchor.month,
     categories,
     hasBiometric,
   };

@@ -151,6 +151,11 @@ export default async function PiggyPage({
                         every {cat.cycleMonths} mo
                       </span>
                     )}
+                    {cat.onHold && (
+                      <span className="ml-2 rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-700" title="Paused — not carried into next month">
+                        ⏸ Hold
+                      </span>
+                    )}
                   </div>
                   <div className="flex items-center gap-2">
                     <span className="tabular-nums font-semibold text-slate-800">
