@@ -4,6 +4,7 @@ import { useActionState, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { startAuthentication } from "@simplewebauthn/browser";
 import { verifyPin, type UnlockState } from "@/app/lock/actions";
+import { markAlive } from "@/components/AppLockWatcher";
 
 const INITIAL: UnlockState = { ok: false };
 
@@ -25,16 +26,12 @@ export function LockScreen({
   const formRef = useRef<HTMLFormElement>(null);
   const autoTried = useRef(false);
 
-  // success → mark this app session live (so we don't re-lock mid-use) + into the
-  // app. The ?unlocked=1 signal survives the hop even if iOS drops sessionStorage.
+  // success → stamp a fresh "alive" heartbeat (so AppLockWatcher's cold-start
+  // check sees a recent timestamp and doesn't re-lock) + into the app.
   useEffect(() => {
     if (state.ok) {
-      try {
-        sessionStorage.setItem("applock-live", "1");
-      } catch {
-        /* ignore */
-      }
-      router.replace("/?unlocked=1");
+      markAlive();
+      router.replace("/");
     }
   }, [state.ok, router]);
 
@@ -82,12 +79,8 @@ export function LockScreen({
       });
       const data = await verifyRes.json();
       if (data.verified) {
-        try {
-          sessionStorage.setItem("applock-live", "1");
-        } catch {
-          /* ignore */
-        }
-        router.replace("/?unlocked=1");
+        markAlive();
+        router.replace("/");
       } else throw new Error(data.error ?? "Biometric didn’t match.");
     } catch (e) {
       setBioError(e instanceof Error ? e.message : "Biometric unavailable.");
