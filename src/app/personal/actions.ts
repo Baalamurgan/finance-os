@@ -51,7 +51,7 @@ export async function finishPersonalOnboarding(formData: FormData) {
   }
 
   await prisma.member.update({ where: { id: member.id }, data: { personalOnboarded: true } });
-  redirect("/personal");
+  redirect("/personal/expenses");
 }
 
 // ── Income ───────────────────────────────────────────────────────────────────
@@ -62,6 +62,43 @@ export async function setPersonalIncome(formData: FormData) {
   const income = Number(formData.get("income")) || 0;
   if (!(await ownsPeriod(member.id, periodId))) return;
   await prisma.personalPeriod.update({ where: { id: periodId }, data: { income } });
+  rev();
+}
+
+// Extra one-off income this month (a gift, a parent topping you up) — raises the
+// spendable "personal expense".
+export async function addPersonalIncome(formData: FormData) {
+  const member = await me();
+  if (!member) return;
+  const periodId = Number(formData.get("periodId"));
+  const source = String(formData.get("source") ?? "").trim();
+  const amount = Number(formData.get("amount"));
+  if (!source || !amount || amount <= 0) return;
+  if (!(await ownsPeriod(member.id, periodId))) return;
+  await prisma.personalIncome.create({ data: { memberId: member.id, periodId, source, amount } });
+  rev();
+}
+
+export async function deletePersonalIncome(formData: FormData) {
+  const member = await me();
+  if (!member) return;
+  const id = Number(formData.get("id"));
+  const i = await prisma.personalIncome.findUnique({ where: { id } });
+  if (!i || i.memberId !== member.id) return;
+  await prisma.personalIncome.delete({ where: { id } });
+  rev();
+}
+
+// Classify a category into a 50/30/20 bucket (need | want | invest).
+export async function setPersonalCategoryBucket(formData: FormData) {
+  const member = await me();
+  if (!member) return;
+  const id = Number(formData.get("id"));
+  const bucket = String(formData.get("bucket"));
+  if (!["need", "want", "invest"].includes(bucket)) return;
+  const c = await prisma.personalCategory.findUnique({ where: { id } });
+  if (!c || c.memberId !== member.id) return;
+  await prisma.personalCategory.update({ where: { id }, data: { bucket } });
   rev();
 }
 

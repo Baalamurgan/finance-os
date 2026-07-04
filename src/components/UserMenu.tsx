@@ -107,7 +107,7 @@ export function UserMenu({
             </div>
           </div>
           <Link
-            href="/personal"
+            href="/personal/expenses"
             onClick={() => setOpen(false)}
             className="flex w-full items-center gap-2 border-b border-slate-100 px-4 py-3 text-left text-sm font-medium text-emerald-700 hover:bg-emerald-50"
           >

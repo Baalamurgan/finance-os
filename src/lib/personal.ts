@@ -6,24 +6,25 @@ export function personalMonthLabel(month: number, year: number) {
   return `${MONTHS[month - 1]} ${year}`;
 }
 
-// Jupiter-style starter categories (seeded once per member at onboarding; editable).
-export const PERSONAL_CATEGORY_SEED: { name: string; icon: string }[] = [
-  { name: "Food & Dining", icon: "🍽️" },
-  { name: "Groceries", icon: "🛒" },
-  { name: "Shopping", icon: "🛍️" },
-  { name: "Bills & Utilities", icon: "🧾" },
-  { name: "Rent", icon: "🏠" },
-  { name: "Transport & Fuel", icon: "🚕" },
-  { name: "Entertainment", icon: "🎬" },
-  { name: "Travel", icon: "✈️" },
-  { name: "Health", icon: "💊" },
-  { name: "Education", icon: "📚" },
-  { name: "Personal Care", icon: "💇" },
-  { name: "Gifts & Donations", icon: "🎁" },
-  { name: "Transfers / Sent", icon: "💸" },
-  { name: "EMI & Loans", icon: "🏦" },
-  { name: "Investments", icon: "📈" },
-  { name: "Miscellaneous", icon: "🔧" },
+// Jupiter-style starter categories (seeded once per member; editable). Bucket =
+// the 50/30/20 default (need | want | invest) — reclassifiable in Setup.
+export const PERSONAL_CATEGORY_SEED: { name: string; icon: string; bucket: string }[] = [
+  { name: "Food & Dining", icon: "🍽️", bucket: "want" },
+  { name: "Groceries", icon: "🛒", bucket: "need" },
+  { name: "Shopping", icon: "🛍️", bucket: "want" },
+  { name: "Bills & Utilities", icon: "🧾", bucket: "need" },
+  { name: "Rent", icon: "🏠", bucket: "need" },
+  { name: "Transport & Fuel", icon: "🚕", bucket: "need" },
+  { name: "Entertainment", icon: "🎬", bucket: "want" },
+  { name: "Travel", icon: "✈️", bucket: "want" },
+  { name: "Health", icon: "💊", bucket: "need" },
+  { name: "Education", icon: "📚", bucket: "need" },
+  { name: "Personal Care", icon: "💇", bucket: "want" },
+  { name: "Gifts & Donations", icon: "🎁", bucket: "want" },
+  { name: "Transfers / Sent", icon: "💸", bucket: "want" },
+  { name: "EMI & Loans", icon: "🏦", bucket: "need" },
+  { name: "Investments", icon: "📈", bucket: "invest" },
+  { name: "Miscellaneous", icon: "🔧", bucket: "want" },
 ];
 
 /** Seed the starter categories for a member (idempotent — skips existing names). */
@@ -33,7 +34,7 @@ export async function seedPersonalCategories(memberId: number) {
   const toCreate = PERSONAL_CATEGORY_SEED.filter((c) => !have.has(c.name));
   if (toCreate.length === 0) return;
   await prisma.personalCategory.createMany({
-    data: toCreate.map((c, i) => ({ memberId, name: c.name, icon: c.icon, sortOrder: i })),
+    data: toCreate.map((c, i) => ({ memberId, name: c.name, icon: c.icon, bucket: c.bucket, sortOrder: i })),
   });
 }
 
@@ -59,11 +60,14 @@ export async function ensurePersonalMonth(memberId: number, now = new Date()) {
   // carries into the new month as "Previous month remaining".
   let carryForward = 0;
   if (latest) {
-    const [exp, spd] = await Promise.all([
+    const [exp, spd, extra] = await Promise.all([
       prisma.personalExpense.aggregate({ where: { periodId: latest.id }, _sum: { amount: true } }),
       prisma.personalSpend.aggregate({ where: { periodId: latest.id }, _sum: { amount: true } }),
+      prisma.personalIncome.aggregate({ where: { periodId: latest.id }, _sum: { amount: true } }),
     ]);
-    carryForward = latest.income + latest.carryForward - (exp._sum.amount ?? 0) - (spd._sum.amount ?? 0);
+    carryForward =
+      latest.income + latest.carryForward + (extra._sum.amount ?? 0) -
+      (exp._sum.amount ?? 0) - (spd._sum.amount ?? 0);
   }
 
   return prisma.$transaction(async (tx) => {

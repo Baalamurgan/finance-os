@@ -5,7 +5,13 @@ import { PersonalNav } from "@/components/personal/PersonalNav";
 import { PersonalFixedModal } from "@/components/personal/PersonalFixedModal";
 import { PersonalFixedRowActions } from "@/components/personal/PersonalFixedRowActions";
 import { PersonalSecurity } from "@/components/personal/PersonalSecurity";
-import { setPersonalWindDownDay } from "@/app/personal/actions";
+import { setPersonalWindDownDay, setPersonalCategoryBucket } from "@/app/personal/actions";
+
+const BUCKETS = [
+  { key: "need", label: "Need", cls: "bg-emerald-600" },
+  { key: "want", label: "Want", cls: "bg-violet-600" },
+  { key: "invest", label: "Invest", cls: "bg-amber-500" },
+] as const;
 
 export default async function PersonalSetup({
   searchParams,
@@ -84,6 +90,39 @@ export default async function PersonalSetup({
             />
             <button className="rounded-md bg-emerald-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-emerald-700">Save</button>
           </form>
+        </section>
+
+        {/* 50/30/20 buckets */}
+        <section className="rounded-xl border border-slate-200 bg-white p-4">
+          <h2 className="text-sm font-semibold text-slate-900">Category buckets (50/30/20)</h2>
+          <p className="mt-0.5 text-xs text-slate-500">
+            Classify each category as a <b>Need</b>, <b>Want</b> or <b>Investment</b> — this drives the
+            Analysis tab&apos;s 50/30/20 split.
+          </p>
+          <div className="mt-3 space-y-2">
+            {c.categories.map((cat) => (
+              <div key={cat.id} className="flex items-center justify-between gap-2">
+                <span className="truncate text-sm text-slate-700">
+                  {cat.icon} {cat.name}
+                </span>
+                <form action={setPersonalCategoryBucket} className="flex gap-1">
+                  <input type="hidden" name="id" value={cat.id} />
+                  {BUCKETS.map((b) => (
+                    <button
+                      key={b.key}
+                      name="bucket"
+                      value={b.key}
+                      className={`rounded-md px-2 py-1 text-xs font-medium ${
+                        cat.bucket === b.key ? `${b.cls} text-white` : "bg-slate-100 text-slate-500 hover:bg-slate-200"
+                      }`}
+                    >
+                      {b.label}
+                    </button>
+                  ))}
+                </form>
+              </div>
+            ))}
+          </div>
         </section>
 
         <PersonalSecurity hasBiometric={c.hasBiometric} />

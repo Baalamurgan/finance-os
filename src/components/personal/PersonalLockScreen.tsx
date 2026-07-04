@@ -26,7 +26,7 @@ export function PersonalLockScreen({
   const autoTried = useRef(false);
 
   useEffect(() => {
-    if (state.ok) router.replace("/personal");
+    if (state.ok) router.replace("/personal/expenses");
   }, [state.ok, router]);
 
   useEffect(() => {
@@ -69,7 +69,7 @@ export function PersonalLockScreen({
         body: JSON.stringify(assertion),
       });
       const data = await verifyRes.json();
-      if (data.verified) router.replace("/personal");
+      if (data.verified) router.replace("/personal/expenses");
       else throw new Error(data.error ?? "Biometric didn’t match.");
     } catch (e) {
       setBioError(e instanceof Error ? e.message : "Biometric unavailable.");

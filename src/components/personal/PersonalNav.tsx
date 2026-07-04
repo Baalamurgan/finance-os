@@ -7,8 +7,9 @@ import { exitToFamily } from "@/app/personal/lock/actions";
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
 const TABS = [
-  { key: "sheet", label: "Sheet", href: "/personal" },
   { key: "expenses", label: "Expenses", href: "/personal/expenses" },
+  { key: "sheet", label: "Sheet", href: "/personal" },
+  { key: "analysis", label: "Analysis", href: "/personal/analysis" },
   { key: "setup", label: "Setup", href: "/personal/setup" },
   { key: "loans", label: "Lending", href: "/personal/loans" },
 ] as const;
@@ -19,7 +20,7 @@ export function PersonalNav({
   selYear,
   selMonth,
 }: {
-  active: "sheet" | "expenses" | "setup" | "loans";
+  active: "sheet" | "expenses" | "analysis" | "setup" | "loans";
   name: string;
   selYear: number;
   selMonth: number;
@@ -100,13 +101,13 @@ export function PersonalNav({
       </div>
 
       {/* mobile tabs */}
-      <nav className="flex gap-1 border-t border-emerald-100 px-3 py-2 sm:hidden">
+      <nav className="flex gap-1 overflow-x-auto border-t border-emerald-100 px-3 py-2 sm:hidden">
         {TABS.map((t) => (
           <Link
             key={t.key}
             href={`${t.href}${q}`}
             replace
-            className={`flex-1 rounded-md px-3 py-1.5 text-center text-sm font-medium ${
+            className={`whitespace-nowrap rounded-md px-3 py-1.5 text-center text-sm font-medium ${
               active === t.key ? "bg-emerald-600 text-white" : "text-emerald-800"
             }`}
           >

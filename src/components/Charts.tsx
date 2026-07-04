@@ -37,6 +37,27 @@ export function TrendChart({
   );
 }
 
+// Stacked monthly spend by 50/30/20 bucket (need / want / invest).
+export function BucketTrend({
+  data,
+}: {
+  data: { label: string; need: number; want: number; invest: number }[];
+}) {
+  return (
+    <ResponsiveContainer width="100%" height={260}>
+      <BarChart data={data} margin={{ top: 8, right: 12, left: 0, bottom: 0 }}>
+        <XAxis dataKey="label" tick={{ fontSize: 10 }} interval="preserveStartEnd" />
+        <YAxis tickFormatter={(v) => `₹${Math.round(Number(v) / 1000)}k`} tick={{ fontSize: 10 }} width={44} />
+        <Tooltip formatter={(value) => inr(Number(value))} />
+        <Legend iconSize={9} />
+        <Bar dataKey="need" stackId="a" fill="#10b981" name="Need" radius={[0, 0, 0, 0]} />
+        <Bar dataKey="want" stackId="a" fill="#8b5cf6" name="Want" />
+        <Bar dataKey="invest" stackId="a" fill="#f59e0b" name="Invest" radius={[3, 3, 0, 0]} />
+      </BarChart>
+    </ResponsiveContainer>
+  );
+}
+
 export function CategoryBars({
   data,
 }: {

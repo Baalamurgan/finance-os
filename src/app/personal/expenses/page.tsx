@@ -4,7 +4,8 @@ import { loadPersonal } from "@/lib/loadPersonal";
 import { personalMonthLabel } from "@/lib/personal";
 import { PersonalNav } from "@/components/personal/PersonalNav";
 import { PersonalSpendFab } from "@/components/personal/PersonalSpendFab";
-import { PersonalSpendRowActions } from "@/components/personal/PersonalSpendRowActions";
+import { PersonalSpendsView } from "@/components/personal/PersonalSpendsView";
+import { PersonalEmpty } from "@/components/personal/PersonalEmpty";
 import { MoneyFlowDonut } from "@/components/Charts";
 import { addPersonalCategory, archivePersonalCategory } from "@/app/personal/actions";
 
@@ -23,41 +24,40 @@ export default async function PersonalExpenses({
     return (
       <>
         {nav}
-        <main className="mx-auto max-w-2xl p-16 text-center text-slate-500">
-          No data for {personalMonthLabel(c.selMonth, c.selYear)}.
-        </main>
+        <PersonalEmpty label={personalMonthLabel(c.selMonth, c.selYear)} />
       </>
     );
   }
 
   const period = c.selected;
   const cats = new Map(c.categories.map((cat) => [cat.id, cat]));
-  const [fixedAgg, spends] = await Promise.all([
+  const catList = c.categories.map((cat) => ({ id: cat.id, name: cat.name, icon: cat.icon }));
+
+  const [fixedAgg, extraAgg, spends] = await Promise.all([
     prisma.personalExpense.aggregate({ where: { periodId: period.id }, _sum: { amount: true } }),
+    prisma.personalIncome.aggregate({ where: { periodId: period.id }, _sum: { amount: true } }),
     prisma.personalSpend.findMany({ where: { periodId: period.id }, orderBy: [{ date: "desc" }, { id: "desc" }] }),
   ]);
-  const available = period.income + period.carryForward - (fixedAgg._sum.amount ?? 0);
+  const totalIn = period.income + period.carryForward + (extraAgg._sum.amount ?? 0);
+  const personalExpense = totalIn - (fixedAgg._sum.amount ?? 0);
   const spentTotal = spends.reduce((s, e) => s + e.amount, 0);
-  const remaining = available - spentTotal;
+  const remaining = personalExpense - spentTotal;
 
-  const byCat = new Map<number, { total: number; items: typeof spends }>();
-  for (const s of spends) {
-    const g = byCat.get(s.categoryId) ?? { total: 0, items: [] };
-    g.total += s.amount;
-    g.items.push(s);
-    byCat.set(s.categoryId, g);
-  }
-  const groups = [...byCat.entries()]
-    .map(([id, g]) => ({ cat: cats.get(id), ...g }))
-    .filter((g) => g.cat)
-    .sort((a, b) => b.total - a.total);
-
+  const byCat = new Map<number, number>();
+  for (const s of spends) byCat.set(s.categoryId, (byCat.get(s.categoryId) ?? 0) + s.amount);
+  const groups = [...byCat.entries()].map(([id, total]) => ({ cat: cats.get(id), total })).filter((g) => g.cat).sort((a, b) => b.total - a.total);
   const segments = [
     ...groups.map((g, i) => ({ name: `${g.cat!.icon ?? ""} ${g.cat!.name}`.trim(), value: g.total, color: COLORS[i % COLORS.length] })),
     ...(remaining > 0 ? [{ name: "Remaining", value: remaining, color: "#22c55e" }] : []),
   ].filter((s) => s.value > 0);
 
-  const catList = c.categories.map((cat) => ({ id: cat.id, name: cat.name, icon: cat.icon }));
+  const spendsForClient = spends.map((s) => ({
+    id: s.id,
+    categoryId: s.categoryId,
+    amount: s.amount,
+    note: s.note,
+    date: s.date.toISOString(),
+  }));
 
   return (
     <>
@@ -67,9 +67,9 @@ export default async function PersonalExpenses({
 
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
           <div className="rounded-xl border border-slate-200 bg-white p-4">
-            <div className="text-[11px] font-medium uppercase tracking-wide text-slate-400">Available</div>
-            <div className="mt-1 text-xl font-bold text-slate-800">{formatINR(available)}</div>
-            <div className="text-[10px] text-slate-400">salary + carry − expenses</div>
+            <div className="text-[11px] font-medium uppercase tracking-wide text-slate-400">Can spend</div>
+            <div className="mt-1 text-xl font-bold text-slate-800">{formatINR(personalExpense)}</div>
+            <div className="text-[10px] text-slate-400">personal expense this month</div>
           </div>
           <div className="rounded-xl border border-slate-200 bg-white p-4">
             <div className="text-[11px] font-medium uppercase tracking-wide text-slate-400">Spent</div>
@@ -88,43 +88,9 @@ export default async function PersonalExpenses({
           </div>
         )}
 
-        <div className="space-y-3">
-          {groups.length === 0 ? (
-            <p className="rounded-xl border border-dashed border-slate-200 bg-white p-8 text-center text-sm text-slate-400">
-              No spends yet this month. Tap <b>+ Add spend</b> above.
-            </p>
-          ) : (
-            groups.map((g) => (
-              <details key={g.cat!.id} open className="rounded-xl border border-slate-200 bg-white">
-                <summary className="flex cursor-pointer list-none items-center justify-between px-4 py-3 [&::-webkit-details-marker]:hidden">
-                  <span className="font-medium text-slate-800">
-                    {g.cat!.icon} {g.cat!.name}
-                    <span className="ml-2 text-xs text-slate-400">({g.items.length})</span>
-                  </span>
-                  <span className="font-bold tabular-nums text-slate-700">{formatINR(g.total)}</span>
-                </summary>
-                <div className="divide-y divide-slate-100 border-t border-slate-100 px-4">
-                  {g.items.map((s) => (
-                    <div key={s.id} className="flex items-center justify-between py-2.5 text-sm">
-                      <div className="min-w-0">
-                        <div className="truncate text-slate-700">{s.note || g.cat!.name}</div>
-                        <div className="text-xs text-slate-400">
-                          {new Date(s.date).toLocaleDateString("en-GB", { day: "2-digit", month: "short" })}
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-2 pl-2">
-                        <span className="tabular-nums text-slate-700">{formatINR(s.amount)}</span>
-                        <PersonalSpendRowActions periodId={period.id} categories={catList} initial={{ id: s.id, categoryId: s.categoryId, amount: s.amount, note: s.note }} />
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </details>
-            ))
-          )}
-        </div>
+        <PersonalSpendsView spends={spendsForClient} categories={catList} periodId={period.id} />
 
-        {/* manage spend categories (lives here, not in Setup) */}
+        {/* manage spend categories */}
         <section className="rounded-xl border border-slate-200 bg-white p-4">
           <h2 className="text-sm font-semibold text-slate-900">Spend categories</h2>
           <div className="mt-3 flex flex-wrap gap-2">
