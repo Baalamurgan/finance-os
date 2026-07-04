@@ -3,7 +3,6 @@
 import { useActionState, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { setHouseholdPin, disableHouseholdPin, type PinAdminState } from "@/app/lock/actions";
-import { markAlive } from "@/components/AppLockWatcher";
 
 const INITIAL: PinAdminState = { ok: false };
 
@@ -17,9 +16,6 @@ export function PinSettings({ isSet, readOnly }: { isSet: boolean; readOnly: boo
     if (state.ok) {
       setPin("");
       setConfirm("");
-      // the head just set/changed the PIN in a live session → stamp the heartbeat
-      // so AppLockWatcher's cold-start check doesn't immediately bounce them to /lock
-      markAlive();
       router.refresh();
     }
   }, [state.ok, router]);

@@ -6,7 +6,6 @@ import { useEffect, useRef, useState } from "react";
 import { AddSpendModal } from "@/components/AddSpendModal";
 import { UserMenu } from "@/components/UserMenu";
 import { WindDownBanner } from "@/components/WindDownBanner";
-import { AppLockWatcher } from "@/components/AppLockWatcher";
 import { setViewAs } from "@/app/actions";
 import { formatINR } from "@/lib/format";
 
@@ -194,7 +193,6 @@ export function NavHeader({
       </div>
     </header>
 
-    {pinEnabled && <AppLockWatcher />}
     {viewingAsMember && (
       <div className="border-b border-amber-200 bg-amber-100 text-amber-900">
         <div className="mx-auto flex max-w-7xl items-center gap-3 px-4 py-2 text-sm sm:px-6">

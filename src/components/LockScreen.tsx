@@ -4,7 +4,6 @@ import { useActionState, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { startAuthentication } from "@simplewebauthn/browser";
 import { verifyPin, type UnlockState } from "@/app/lock/actions";
-import { markAlive } from "@/components/AppLockWatcher";
 
 const INITIAL: UnlockState = { ok: false };
 
@@ -26,13 +25,9 @@ export function LockScreen({
   const formRef = useRef<HTMLFormElement>(null);
   const autoTried = useRef(false);
 
-  // success → stamp a fresh "alive" heartbeat (so AppLockWatcher's cold-start
-  // check sees a recent timestamp and doesn't re-lock) + into the app.
+  // success → into the app
   useEffect(() => {
-    if (state.ok) {
-      markAlive();
-      router.replace("/");
-    }
+    if (state.ok) router.replace("/");
   }, [state.ok, router]);
 
   // wrong / locked → clear the entered digits
@@ -78,10 +73,8 @@ export function LockScreen({
         body: JSON.stringify(assertion),
       });
       const data = await verifyRes.json();
-      if (data.verified) {
-        markAlive();
-        router.replace("/");
-      } else throw new Error(data.error ?? "Biometric didn’t match.");
+      if (data.verified) router.replace("/");
+      else throw new Error(data.error ?? "Biometric didn’t match.");
     } catch (e) {
       setBioError(e instanceof Error ? e.message : "Biometric unavailable.");
     } finally {
