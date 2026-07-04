@@ -10,6 +10,7 @@ const TABS = [
   { key: "expenses", label: "Expenses", href: "/personal/expenses" },
   { key: "sheet", label: "Sheet", href: "/personal" },
   { key: "analysis", label: "Analysis", href: "/personal/analysis" },
+  { key: "cc", label: "Cards", href: "/personal/cc" },
   { key: "setup", label: "Setup", href: "/personal/setup" },
   { key: "loans", label: "Lending", href: "/personal/loans" },
 ] as const;
@@ -20,7 +21,7 @@ export function PersonalNav({
   selYear,
   selMonth,
 }: {
-  active: "sheet" | "expenses" | "analysis" | "setup" | "loans";
+  active: "sheet" | "expenses" | "analysis" | "cc" | "setup" | "loans";
   name: string;
   selYear: number;
   selMonth: number;

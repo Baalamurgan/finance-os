@@ -108,6 +108,8 @@ model Member {
   personalSpends     PersonalSpend[]
   personalIncomes    PersonalIncome[]
   personalLoans      PersonalLoan[]
+  personalCards      PersonalCard[]
+  personalCardTxns   PersonalCardTxn[]
 
   @@unique([householdId, code])
 }
@@ -222,6 +224,40 @@ model PersonalLoan {
   note         String?
   status       String   @default("open") // open | settled
   createdAt    DateTime @default(now())
+}
+
+// A credit card. Transactions are imported from statements (PDF → AI extract).
+model PersonalCard {
+  id        Int      @id @default(autoincrement())
+  member    Member   @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  memberId  Int
+  name      String   // "SBI SimplyClick"
+  bank      String?  // "SBI"
+  last4     String?  // "1234"
+  limitAmt  Float?   // credit limit
+  color     String   @default("#6366f1")
+  archived  Boolean  @default(false)
+  txns      PersonalCardTxn[]
+  createdAt DateTime @default(now())
+}
+
+// One line off a card statement. `bucket` mirrors the 50/30/20 tag so card spends
+// can later fold into the same Analysis view.
+model PersonalCardTxn {
+  id         Int      @id @default(autoincrement())
+  member     Member   @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  memberId   Int
+  card       PersonalCard @relation(fields: [cardId], references: [id], onDelete: Cascade)
+  cardId     Int
+  date       DateTime
+  merchant   String
+  amount     Float    // rupees, positive
+  type       String   @default("spend") // spend | payment | refund
+  category   String?  // free-text category from the statement / user
+  bucket     String?  // need | want | invest (optional)
+  createdAt  DateTime @default(now())
+
+  @@index([memberId, date])
 }
 
 // A month (e.g. MAR 2026).

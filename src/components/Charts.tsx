@@ -58,6 +58,26 @@ export function BucketTrend({
   );
 }
 
+// Single-series monthly spend bars (credit-card dashboard).
+export function SpendBars({
+  data,
+  color = "#6366f1",
+}: {
+  data: { label: string; total: number }[];
+  color?: string;
+}) {
+  return (
+    <ResponsiveContainer width="100%" height={240}>
+      <BarChart data={data} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
+        <XAxis dataKey="label" tick={{ fontSize: 9 }} interval="preserveStartEnd" />
+        <YAxis tickFormatter={(v) => `₹${Math.round(Number(v) / 1000)}k`} tick={{ fontSize: 10 }} width={44} />
+        <Tooltip formatter={(value) => inr(Number(value))} />
+        <Bar dataKey="total" fill={color} radius={[3, 3, 0, 0]} name="Spent" />
+      </BarChart>
+    </ResponsiveContainer>
+  );
+}
+
 export function CategoryBars({
   data,
 }: {
