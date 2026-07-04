@@ -43,6 +43,10 @@ model Loan {
   memberId          Int? // responsible member (for settlement tagging)
   totalInstallments Int? // chit: number of installments
   paidInstallments  Int      @default(0) // chit: installments paid so far
+  chitWonInstallment Int?    // chit: the installment number in which the pot was won (null = not yet)
+  chitPotAmount     Float?   // chit: the pot amount received when won
+  interestRate      Float?   // annual % (loans, display only)
+  note              String?
   status            String   @default("active") // active | closed
   payments          LoanPayment[]
   createdAt         DateTime @default(now())
@@ -55,8 +59,25 @@ model LoanPayment {
   periodId      Int? // the month it was paid in (optional link)
   amount        Float // total paid
   principalPart Float    @default(0) // amount that reduced outstanding (prepayments = full amount)
+  dividend      Float    @default(0) // chit: dividend received that month (reduces net cost)
   note          String?
   createdAt     DateTime @default(now())
+}
+
+// Activity log — every money-affecting change, with who did it. Head-only view.
+// Scalars (no relations) so it never couples to the other models' back-relations.
+model ActivityLog {
+  id          Int      @id @default(autoincrement())
+  householdId Int
+  memberId    Int?
+  memberName  String?
+  action      String // created | updated | deleted
+  entity      String // income | expense | spend | settlement | piggy | loan
+  summary     String
+  periodId    Int?
+  createdAt   DateTime @default(now())
+
+  @@index([householdId, createdAt])
 }
 
 // A person in the household. `code` matches the sheet tags (H, B, L, KA, VL).

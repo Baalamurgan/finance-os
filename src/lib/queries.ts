@@ -460,3 +460,90 @@ export async function getRollupRange(
     monthsCount: inRange.length,
   };
 }
+
+// ── Activity log (head-only) ─────────────────────────────────────────────────
+export async function getActivityLog(householdId: number, limit = 150) {
+  return prisma.activityLog.findMany({
+    where: { householdId },
+    orderBy: { id: "desc" },
+    take: limit,
+  });
+}
+
+// ── "What changed since last month" (everyone) ──────────────────────────────
+// Diffs the selected month's income + expense lines against the previous month,
+// aggregating by name so it reads as simple Added / Removed / Amount-changed lists.
+function diffByKey(
+  cur: { key: string; amount: number }[],
+  prev: { key: string; amount: number }[],
+) {
+  const sum = (rows: { key: string; amount: number }[]) => {
+    const m = new Map<string, number>();
+    for (const r of rows) m.set(r.key, (m.get(r.key) ?? 0) + r.amount);
+    return m;
+  };
+  const c = sum(cur);
+  const p = sum(prev);
+  const added: { label: string; amount: number }[] = [];
+  const removed: { label: string; amount: number }[] = [];
+  const changed: { label: string; from: number; to: number }[] = [];
+  for (const [key, amt] of c) {
+    if (!p.has(key)) added.push({ label: key, amount: amt });
+    else if (Math.abs((p.get(key) ?? 0) - amt) >= 0.5) changed.push({ label: key, from: p.get(key) ?? 0, to: amt });
+  }
+  for (const [key, amt] of p) if (!c.has(key)) removed.push({ label: key, amount: amt });
+  return { added, removed, changed };
+}
+
+export async function getMonthChanges(householdId: number, periodId: number) {
+  const period = await prisma.period.findUnique({ where: { id: periodId } });
+  if (!period) return null;
+  const prevMonth = period.month === 1 ? 12 : period.month - 1;
+  const prevYear = period.month === 1 ? period.year - 1 : period.year;
+  const prev = await prisma.period.findUnique({
+    where: { householdId_year_month: { householdId, year: prevYear, month: prevMonth } },
+  });
+  if (!prev) return { prevLabel: null, income: null, expense: null };
+
+  const [curInc, curExp, prevInc, prevExp] = await Promise.all([
+    prisma.incomeEntry.findMany({ where: { periodId } }),
+    prisma.expenseEntry.findMany({ where: { periodId } }),
+    prisma.incomeEntry.findMany({ where: { periodId: prev.id } }),
+    prisma.expenseEntry.findMany({ where: { periodId: prev.id } }),
+  ]);
+
+  const income = diffByKey(
+    curInc.map((i) => ({ key: i.source, amount: i.amount })),
+    prevInc.map((i) => ({ key: i.source, amount: i.amount })),
+  );
+  const expense = diffByKey(
+    curExp.map((e) => ({ key: e.label, amount: e.amount })),
+    prevExp.map((e) => ({ key: e.label, amount: e.amount })),
+  );
+  return { prevLabel: prev.label, income, expense };
+}
+
+// ── Loan / chit detail (per-item page) ──────────────────────────────────────
+export async function getLoanDetail(householdId: number, id: number) {
+  const loan = await prisma.loan.findFirst({
+    where: { id, householdId },
+    include: { payments: { orderBy: [{ createdAt: "desc" }, { id: "desc" }] } },
+  });
+  if (!loan) return null;
+  const members = await prisma.member.findMany({ where: { householdId } });
+  const memberName = loan.memberId ? members.find((m) => m.id === loan.memberId)?.name ?? null : null;
+  const totalPaid = loan.payments.reduce((s, p) => s + p.amount, 0);
+  const totalDividend = loan.payments.reduce((s, p) => s + p.dividend, 0);
+  const potReceived = loan.chitWonInstallment ? loan.chitPotAmount ?? 0 : 0;
+  // chit net cost so far = paid − dividends received − pot won (if any)
+  const chitNet = totalPaid - totalDividend - potReceived;
+  return {
+    loan,
+    memberName,
+    members: members.map((m) => ({ id: m.id, name: m.name })),
+    totalPaid,
+    totalDividend,
+    potReceived,
+    chitNet,
+  };
+}

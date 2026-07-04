@@ -5,6 +5,30 @@ import { revalidatePath } from "next/cache";
 import { cookies } from "next/headers";
 import { auth, signOut } from "@/auth";
 import { isUnlocked } from "@/lib/applock";
+import { formatINR } from "@/lib/format";
+
+// Record a money-affecting change for the head-only activity log (who + what + when).
+async function logActivity(
+  entity: string,
+  action: "created" | "updated" | "deleted",
+  summary: string,
+  periodId?: number | null,
+) {
+  const session = await auth();
+  const household = await prisma.household.findFirst({ select: { id: true } });
+  if (!household) return;
+  await prisma.activityLog.create({
+    data: {
+      householdId: household.id,
+      memberId: session?.user?.memberId ?? null,
+      memberName: session?.user?.memberName ?? session?.user?.name ?? null,
+      action,
+      entity,
+      summary,
+      periodId: periodId ?? null,
+    },
+  });
+}
 
 const VIEW_AS_COOKIE = "view-as";
 
@@ -125,6 +149,7 @@ async function doSaveExpense(formData: FormData): Promise<boolean> {
       where: { id },
       data: { categoryId, amount, label, memberId: finalMemberId, necessary },
     });
+    await logActivity("expense", "updated", `Edited expense “${label}” to ${formatINR(amount)}`, periodId);
   } else {
     // Guard: a new expense can't exceed the month's current balance (income − expense).
     const [inc, exp] = await Promise.all([
@@ -138,6 +163,7 @@ async function doSaveExpense(formData: FormData): Promise<boolean> {
     await prisma.expenseEntry.create({
       data: { periodId, categoryId, amount, label, memberId: finalMemberId, necessary, oneOff },
     });
+    await logActivity("expense", "created", `Added expense “${label}” ${formatINR(amount)}`, periodId);
   }
   revalidatePath("/", "layout");
   return true;
@@ -166,6 +192,7 @@ async function doAddIncome(formData: FormData): Promise<boolean> {
   // "Repeat every month" → recurring; unchecked → one-time (not copied forward)
   const oneOff = formData.get("repeat") !== "on";
   await prisma.incomeEntry.create({ data: { periodId, source, amount, ownerId, oneOff } });
+  await logActivity("income", "created", `Added income “${source}” ${formatINR(amount)}`, periodId);
   revalidatePath("/", "layout");
   return true;
 }
@@ -191,6 +218,7 @@ export async function updateIncome(prev: SaveState, formData: FormData): Promise
   const i = await prisma.incomeEntry.findUnique({ where: { id } });
   if (!i || !(await canEditNow(i.periodId))) return { ok: false, n: prev.n };
   await prisma.incomeEntry.update({ where: { id }, data: { source, amount, ownerId } });
+  await logActivity("income", "updated", `Edited income “${source}” to ${formatINR(amount)}`, i.periodId);
   revalidatePath("/", "layout");
   return { ok: true, n: prev.n + 1 };
 }
@@ -202,6 +230,7 @@ export async function deleteExpense(formData: FormData) {
   const e = await prisma.expenseEntry.findUnique({ where: { id } });
   if (e && !(await canEditNow(e.periodId))) return;
   await prisma.expenseEntry.delete({ where: { id } });
+  if (e) await logActivity("expense", "deleted", `Removed expense “${e.label}” ${formatINR(e.amount)}`, e.periodId);
   revalidatePath("/", "layout");
 }
 
@@ -212,6 +241,7 @@ export async function deleteIncome(formData: FormData) {
   const i = await prisma.incomeEntry.findUnique({ where: { id } });
   if (i && !(await canEditNow(i.periodId))) return;
   await prisma.incomeEntry.delete({ where: { id } });
+  if (i) await logActivity("income", "deleted", `Removed income “${i.source}” ${formatINR(i.amount)}`, i.periodId);
   revalidatePath("/", "layout");
 }
 
@@ -247,6 +277,7 @@ async function doAddSpend(formData: FormData): Promise<boolean> {
   await prisma.spend.create({
     data: { periodId, categoryId, memberId, label, amount, imagePath },
   });
+  await logActivity("spend", "created", `Logged spend “${label}” ${formatINR(amount)}`, periodId);
   revalidatePath("/", "layout");
   return true;
 }
@@ -284,6 +315,7 @@ export async function deleteSpend(formData: FormData) {
 
   // (Receipt files are deferred/cloud-stored — nothing to unlink locally.)
   await prisma.spend.delete({ where: { id } });
+  await logActivity("spend", "deleted", `Removed spend “${spend.label}” ${formatINR(spend.amount)}`, spend.periodId);
   revalidatePath("/", "layout");
 }
 
@@ -330,6 +362,7 @@ export async function withdrawPiggy(formData: FormData) {
       data: { periodId, source: `From Piggy: ${note}`, amount, oneOff: true },
     });
   });
+  await logActivity("piggy", "updated", `Used Piggy ${formatINR(amount)} — ${note}`, periodId);
   revalidatePath("/", "layout");
 }
 
@@ -353,6 +386,7 @@ export async function depositPiggy(formData: FormData) {
       note: `Deposit: ${note}`,
     },
   });
+  await logActivity("piggy", "created", `Added ${formatINR(amount)} to Piggy — ${note}`);
   revalidatePath("/", "layout");
 }
 
@@ -384,6 +418,7 @@ export async function setFundBalance(formData: FormData) {
       note: `Adjustment (set to ₹${Math.round(targetAmount).toLocaleString("en-IN")})`,
     },
   });
+  await logActivity("piggy", "updated", `Set a fund balance to ${formatINR(targetAmount)}`);
   revalidatePath("/", "layout");
 }
 
@@ -497,6 +532,7 @@ export async function markSettled(formData: FormData) {
       settledById: session?.user?.memberId ?? null,
     },
   });
+  await logActivity("settlement", "created", `Marked a settlement paid (${formatINR(amount)})`, periodId);
   revalidatePath("/", "layout");
 }
 
@@ -513,6 +549,7 @@ export async function unsettle(formData: FormData) {
   const allowed = session?.user?.role === "head" || me === rec.fromMemberId || me === rec.toMemberId;
   if (!allowed) return;
   await prisma.settlementRecord.delete({ where: { id } });
+  await logActivity("settlement", "deleted", `Undid a settlement (${formatINR(rec.amount)})`, rec.periodId);
   revalidatePath("/", "layout");
 }
 
@@ -529,10 +566,14 @@ export async function createLoan(formData: FormData) {
   const totalRaw = String(formData.get("totalInstallments") ?? "").trim();
   const totalInstallments = totalRaw === "" ? null : Number(totalRaw);
   const paidInstallments = Number(formData.get("paidInstallments")) || 0;
+  const rateRaw = String(formData.get("interestRate") ?? "").trim();
+  const interestRate = rateRaw === "" ? null : Number(rateRaw);
+  const note = String(formData.get("note") ?? "").trim() || null;
   if (!householdId || !name) return;
   await prisma.loan.create({
-    data: { householdId, name, kind, outstanding, monthlyAmount, memberId, totalInstallments, paidInstallments },
+    data: { householdId, name, kind, outstanding, monthlyAmount, memberId, totalInstallments, paidInstallments, interestRate, note },
   });
+  await logActivity("loan", "created", `Added ${kind} “${name}”`);
   revalidatePath("/", "layout");
 }
 
@@ -544,6 +585,7 @@ export async function recordLoanPayment(formData: FormData) {
   const periodId = formData.get("periodId") ? Number(formData.get("periodId")) : null;
   const amount = Number(formData.get("amount")) || 0;
   const principalPart = Number(formData.get("principalPart")) || 0;
+  const dividend = Number(formData.get("dividend")) || 0; // chit: dividend received this month
   const note = String(formData.get("note") ?? "").trim() || null;
   if (!loanId || amount <= 0) return;
   const loan = await prisma.loan.findUnique({ where: { id: loanId } });
@@ -558,12 +600,34 @@ export async function recordLoanPayment(formData: FormData) {
     (loan.kind === "chit" && loan.totalInstallments != null && newPaid >= loan.totalInstallments);
 
   await prisma.$transaction([
-    prisma.loanPayment.create({ data: { loanId, periodId, amount, principalPart, note } }),
+    prisma.loanPayment.create({ data: { loanId, periodId, amount, principalPart, dividend, note } }),
     prisma.loan.update({
       where: { id: loanId },
       data: { outstanding: newOutstanding, paidInstallments: newPaid, status: done ? "closed" : loan.status },
     }),
   ]);
+  await logActivity("loan", "updated", `Paid ${formatINR(amount)} on “${loan.name}”`);
+  revalidatePath("/", "layout");
+}
+
+// Chit: record that the pot was won on a given installment, for a given amount.
+export async function setChitWon(formData: FormData) {
+  if (!(await isHead())) return;
+  const loanId = Number(formData.get("loanId"));
+  const installment = Number(formData.get("installment")) || null;
+  const potAmount = Number(formData.get("potAmount")) || null;
+  if (!loanId) return;
+  const loan = await prisma.loan.findUnique({ where: { id: loanId } });
+  if (!loan) return;
+  await prisma.loan.update({
+    where: { id: loanId },
+    data: { chitWonInstallment: installment, chitPotAmount: potAmount },
+  });
+  await logActivity(
+    "loan",
+    "updated",
+    installment ? `Won the “${loan.name}” pot (${formatINR(potAmount ?? 0)})` : `Cleared pot-won on “${loan.name}”`,
+  );
   revalidatePath("/", "layout");
 }
 
@@ -571,7 +635,8 @@ export async function closeLoan(formData: FormData) {
   if (!(await isHead())) return;
   const loanId = Number(formData.get("loanId"));
   if (!loanId) return;
-  await prisma.loan.update({ where: { id: loanId }, data: { status: "closed" } });
+  const loan = await prisma.loan.update({ where: { id: loanId }, data: { status: "closed" } });
+  await logActivity("loan", "updated", `Closed “${loan.name}”`);
   revalidatePath("/", "layout");
 }
 
@@ -579,7 +644,28 @@ export async function deleteLoan(formData: FormData) {
   if (!(await isHead())) return;
   const loanId = Number(formData.get("loanId"));
   if (!loanId) return;
+  const loan = await prisma.loan.findUnique({ where: { id: loanId } });
   await prisma.loan.delete({ where: { id: loanId } });
+  if (loan) await logActivity("loan", "deleted", `Deleted “${loan.name}”`);
+  revalidatePath("/", "layout");
+}
+
+// Delete a single loan/chit payment (correction). Reverses its effect on the loan.
+export async function deleteLoanPayment(formData: FormData) {
+  if (!(await isHead())) return;
+  const id = Number(formData.get("id"));
+  if (!id) return;
+  const p = await prisma.loanPayment.findUnique({ where: { id }, include: { loan: true } });
+  if (!p) return;
+  const newPaid = p.loan.kind === "chit" ? Math.max(0, p.loan.paidInstallments - 1) : p.loan.paidInstallments;
+  await prisma.$transaction([
+    prisma.loanPayment.delete({ where: { id } }),
+    prisma.loan.update({
+      where: { id: p.loanId },
+      data: { outstanding: p.loan.outstanding + p.principalPart, paidInstallments: newPaid },
+    }),
+  ]);
+  await logActivity("loan", "updated", `Removed a payment on “${p.loan.name}”`);
   revalidatePath("/", "layout");
 }
 

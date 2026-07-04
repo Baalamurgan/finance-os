@@ -37,6 +37,7 @@ export function NavHeader({
   active:
     | "sheet"
     | "expenses"
+    | "activity"
     | "analysis"
     | "piggy"
     | "loans"
@@ -71,6 +72,7 @@ export function NavHeader({
     { key: "sheet", label: "Sheet", href: "/" },
     { key: "expenses", label: "Expenses", href: "/expenses" },
     { key: "settlement", label: "Settlement", href: "/settlement" },
+    { key: "activity", label: "Activity", href: "/activity" },
     { key: "analysis", label: "Analysis", href: "/analysis" },
     { key: "piggy", label: "Piggy", href: "/piggy" },
     { key: "loans", label: "Loans & Chits", href: "/loans" },

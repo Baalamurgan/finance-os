@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { formatINR } from "@/lib/format";
 import { loadCommon } from "@/lib/load";
 import { getLoans } from "@/lib/queries";
@@ -112,7 +113,9 @@ function LoanCard({
     <div className="rounded-xl border border-slate-200 bg-white p-4">
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div>
-          <div className="font-semibold text-slate-800">{l.name}</div>
+          <Link href={`/loans/${l.id}`} className="font-semibold text-indigo-700 hover:underline">
+            {l.name} <span className="text-xs font-normal text-slate-400">· details →</span>
+          </Link>
           <div className="text-xs text-slate-400">
             {l.memberName ? `${l.memberName} · ` : ""}
             {formatINR(l.monthlyAmount)}/mo
