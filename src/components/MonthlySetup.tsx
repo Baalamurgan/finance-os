@@ -60,10 +60,10 @@ export function MonthlySetup({
         </table>
       </div>
       <p className="text-xs text-slate-400">
-        <b>Budget</b> = variable spending you log; the leftover goes to Piggy and it shows in
-        &ldquo;budget left in hand&rdquo;. <b>Fixed bill</b> = a set monthly amount one person pays
-        (subscriptions, EMIs) — it auto-subtracts from their salary in settlement every month and
-        isn&apos;t spend-tracked. <b>Responsible / Paid by</b> tags the expense to that member.
+        Every item is a monthly expense tagged to whoever pays it (so settlement subtracts it from
+        their salary). Tick <b>Track &amp; save leftover → Piggy</b> for variable ones (Petrol,
+        Provision) where you want the leftover saved; leave it off for flat fixed bills (subscriptions,
+        EMIs). <b>Changes apply from next month</b> — the current sheet isn&apos;t touched.
       </p>
 
       {!readOnly && <AddCategory householdId={householdId} members={members} />}
@@ -147,24 +147,22 @@ function SetupRow({ r, members, readOnly }: { r: Row; members: MemberLite[]; rea
           )}
         </div>
         {!readOnly && (
-          <div className="mt-1 inline-flex overflow-hidden rounded-md border border-slate-200 text-[10px] font-medium">
-            <button
-              type="button"
-              onClick={() => setFixed(false)}
-              className={`px-2 py-0.5 ${!fixed ? "bg-indigo-600 text-white" : "text-slate-500"}`}
-              title="You spend against it; leftover → Piggy; shows in 'budget left in hand'"
-            >
-              Budget
-            </button>
-            <button
-              type="button"
-              onClick={() => { setFixed(true); setSinking(false); }}
-              className={`px-2 py-0.5 ${fixed ? "bg-slate-800 text-white" : "text-slate-500"}`}
-              title="A fixed bill paid by one person; auto-subtracts from their salary in settlement each month"
-            >
-              Fixed bill
-            </button>
-          </div>
+          <label
+            className="mt-1 flex items-center gap-1.5 text-[11px] text-slate-600"
+            title="On = track spending vs this amount and roll the leftover into Piggy (Petrol-style). Off = a flat fixed bill that's just paid every month (YouTube-style)."
+          >
+            <input
+              type="checkbox"
+              checked={!fixed}
+              onChange={(e) => {
+                const track = e.target.checked;
+                setFixed(!track);
+                if (!track) setSinking(false);
+              }}
+              className="h-3.5 w-3.5 accent-indigo-600"
+            />
+            Track &amp; save leftover → Piggy
+          </label>
         )}
       </td>
       <td className="px-4 py-2">
@@ -324,14 +322,6 @@ function AddCategory({ householdId, members }: { householdId: number; members: M
       <form action={formAction} className="flex flex-wrap items-center gap-3">
         <input type="hidden" name="householdId" value={householdId} />
         <input type="hidden" name="fixed" value={fixed ? "on" : ""} />
-        <div className="inline-flex overflow-hidden rounded-md border border-slate-200 text-xs font-medium">
-          <button type="button" onClick={() => setFixed(false)} className={`px-2.5 py-1.5 ${!fixed ? "bg-indigo-600 text-white" : "text-slate-500"}`}>
-            Budget
-          </button>
-          <button type="button" onClick={() => { setFixed(true); setSinking(false); }} className={`px-2.5 py-1.5 ${fixed ? "bg-slate-800 text-white" : "text-slate-500"}`}>
-            Fixed bill
-          </button>
-        </div>
         <input
           name="name"
           placeholder="Name *"
@@ -341,45 +331,49 @@ function AddCategory({ householdId, members }: { householdId: number; members: M
           className="input w-40"
         />
         <input name="monthlyBudget" type="number" step="0.01" placeholder="₹ / month" className="input w-28" />
-        {fixed ? (
-          <select name="responsibleMemberId" value={paidBy} onChange={(e) => setPaidBy(e.target.value)} className="input w-32">
-            <option value="">Paid by…</option>
-            {members.map((m) => (
-              <option key={m.id} value={String(m.id)}>{m.name}</option>
-            ))}
-          </select>
-        ) : (
-          <>
-            <label className="flex items-center gap-2 text-sm text-slate-600">
-              <input
-                type="checkbox"
-                name="sinking"
-                checked={sinking}
-                onChange={(e) => setSinking(e.target.checked)}
-                className="h-4 w-4 accent-indigo-600"
-              />
-              Sinking
-            </label>
+        <select name="responsibleMemberId" value={paidBy} onChange={(e) => setPaidBy(e.target.value)} className="input w-32">
+          <option value="">Paid by…</option>
+          {members.map((m) => (
+            <option key={m.id} value={String(m.id)}>{m.name}</option>
+          ))}
+        </select>
+        <label className="flex items-center gap-1.5 text-xs text-slate-600" title="On = track spending & save leftover to Piggy (Petrol-style). Off = flat fixed bill (YouTube-style).">
+          <input
+            type="checkbox"
+            checked={!fixed}
+            onChange={(e) => { const track = e.target.checked; setFixed(!track); if (!track) setSinking(false); }}
+            className="h-4 w-4 accent-indigo-600"
+          />
+          Track &amp; save → Piggy
+        </label>
+        {!fixed && (
+          <label className="flex items-center gap-1.5 text-xs text-slate-600">
+            <input
+              type="checkbox"
+              name="sinking"
+              checked={sinking}
+              onChange={(e) => setSinking(e.target.checked)}
+              className="h-4 w-4 accent-indigo-600"
+            />
+            Sinking
             <input
               name="cycleMonths"
               type="number"
               min="1"
-              placeholder="every (mo)"
+              placeholder="mo"
               disabled={!sinking}
-              className="input w-24 disabled:opacity-40"
+              className="input ml-1 w-16 disabled:opacity-40"
             />
-          </>
+          </label>
         )}
         <button disabled={!name.trim() || pending} className="btn disabled:opacity-40">
           {pending ? "Adding…" : "Add"}
         </button>
       </form>
-      {fixed && (
-        <p className="mt-2 text-xs text-slate-400">
-          A fixed bill (e.g. a subscription) auto-subtracts from the payer&apos;s salary in settlement
-          every month and won&apos;t show in &ldquo;budget left in hand.&rdquo;
-        </p>
-      )}
+      <p className="mt-2 text-xs text-slate-400">
+        Applies from <b>next month</b>. Off = a flat fixed bill (subscription/EMI); it won&apos;t show in
+        &ldquo;budget left in hand&rdquo; until it&apos;s a real Sheet line next month.
+      </p>
     </div>
   );
 }

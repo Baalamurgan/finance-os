@@ -6,6 +6,7 @@ import { cookies } from "next/headers";
 import { auth, signOut } from "@/auth";
 import { isUnlocked } from "@/lib/applock";
 import { formatINR } from "@/lib/format";
+import { clonePeriodInto } from "@/lib/periodClone";
 
 // Record a money-affecting change for the head-only activity log (who + what + when).
 async function logActivity(
@@ -425,57 +426,6 @@ export async function setFundBalance(formData: FormData) {
 // Add a new recurring/tracked category (Setup screen). useActionState-shaped.
 export type CreateCategoryState = { ok: boolean; error?: string; n: number };
 
-// Reflect a Setup change in the CURRENT open month so it counts immediately (not
-// only from next month). A "budget" maintains the period's Budget row; a "fixed"
-// bill maintains a recurring Sheet expense line tagged to the payer (which the
-// settlement credits and clonePeriodStructure repeats). Holding only affects
-// future months, so a held item leaves the current month untouched.
-async function applyCurrentMonth(opts: {
-  householdId: number;
-  categoryId: number;
-  name: string;
-  amount: number | null;
-  fixed: boolean;
-  wasFixed: boolean;
-  memberId: number | null;
-  onHold: boolean;
-}) {
-  const { householdId, categoryId, name, amount, fixed, wasFixed, memberId, onHold } = opts;
-  const period = await prisma.period.findFirst({
-    where: { householdId, status: "open" },
-    orderBy: [{ year: "desc" }, { month: "desc" }],
-  });
-  if (!period) return;
-  const has = amount != null && amount > 0 && !onHold;
-
-  if (fixed) {
-    // a fixed bill is a Sheet expense, never a budget
-    await prisma.budget.deleteMany({ where: { periodId: period.id, categoryId } });
-    await prisma.expenseEntry.deleteMany({ where: { periodId: period.id, categoryId, oneOff: false } });
-    if (has) {
-      await prisma.expenseEntry.create({
-        data: { periodId: period.id, categoryId, label: name, amount, memberId, necessary: true, oneOff: false },
-      });
-    }
-    return;
-  }
-
-  // budget path — only touch Budget rows; never delete a category's manual Sheet
-  // lines. Exception: if it was a fixed bill, clear the bill line we managed.
-  if (wasFixed) {
-    await prisma.expenseEntry.deleteMany({ where: { periodId: period.id, categoryId, oneOff: false } });
-  }
-  if (has) {
-    await prisma.budget.upsert({
-      where: { periodId_categoryId: { periodId: period.id, categoryId } },
-      create: { periodId: period.id, categoryId, planned: amount },
-      update: { planned: amount },
-    });
-  } else {
-    await prisma.budget.deleteMany({ where: { periodId: period.id, categoryId } });
-  }
-}
-
 export async function createCategory(
   prev: CreateCategoryState,
   formData: FormData,
@@ -494,16 +444,16 @@ export async function createCategory(
   const paidByRaw = String(formData.get("responsibleMemberId") ?? "").trim();
   const responsibleMemberId = paidByRaw === "" ? null : Number(paidByRaw);
 
-  let created;
   try {
-    created = await prisma.category.create({
+    await prisma.category.create({
       // fixed bills live on the Sheet (tracked=false); budgets are spend-tracked
       data: { householdId, name, section: "Monthly", tracked: !fixed, monthlyBudget, sinking, cycleMonths, fixed, responsibleMemberId },
     });
   } catch {
     return { ok: false, error: `"${name}" already exists.`, n };
   }
-  await applyCurrentMonth({ householdId, categoryId: created.id, name, amount: monthlyBudget, fixed, wasFixed: false, memberId: responsibleMemberId, onHold: false });
+  // Setup is the template for FUTURE months — it does not touch the current sheet.
+  // From next month, clonePeriodInto turns this category into a tagged Sheet line.
   revalidatePath("/", "layout");
   return { ok: true, n };
 }
@@ -781,13 +731,9 @@ export async function saveRecurring(
     return { ok: false, error: `"${name}" is already taken — saved everything except the name.`, n };
   }
 
-  // Setup edits define the recurring TEMPLATE for future months. We also mirror
-  // the change into the CURRENT open month (budget row or fixed-bill Sheet line)
-  // so it shows up immediately in Expenses / settlement / "budget left in hand".
-  await applyCurrentMonth({
-    householdId: cat.householdId, categoryId: id, name, amount: monthlyBudget,
-    fixed, wasFixed: cat.fixed, memberId: responsibleMemberId, onHold: cat.onHold,
-  });
+  // Setup edits define the recurring TEMPLATE only — the current open month is left
+  // untouched. The change takes effect from next month (clonePeriodInto regenerates
+  // each Setup category's tagged Sheet line + budget from the template).
   revalidatePath("/", "layout");
   return { ok: true, n };
 }
@@ -820,64 +766,16 @@ async function seedBudgets(tx: Tx, householdId: number, periodId: number) {
   }
 }
 
-// Clone last month's recurring structure (income + expense allocations) into a new period,
-// and seed budgets from the template. Actual spends start empty.
+// Clone last month's recurring structure (income + expense lines + budgets) into a
+// new period. Regenerates each Setup category's tagged line from the template.
+// Single source of truth in src/lib/periodClone.ts (shared with ensureCurrentMonth).
 async function clonePeriodStructure(
   tx: Tx,
   sourceId: number,
   targetId: number,
   householdId: number
 ) {
-  const [incomes, expenses, cats] = await Promise.all([
-    tx.incomeEntry.findMany({ where: { periodId: sourceId, oneOff: false } }),
-    // oneOff lines (carried misc / over-budget) must NOT propagate to future months
-    tx.expenseEntry.findMany({ where: { periodId: sourceId, oneOff: false } }),
-    tx.category.findMany({
-      where: { householdId },
-      select: { id: true, name: true, sinking: true, monthlyBudget: true, necessary: true, onHold: true },
-    }),
-  ]);
-  const held = new Set(cats.filter((c) => c.onHold).map((c) => c.id));
-  // Sinking categories: regenerate the sheet "monthly share" line from the CURRENT
-  // template (not the cloned/stale amount) so Setup changes take effect from this
-  // new month, and allocation stays equal to the budget.
-  const sinkingCats = cats.filter(
-    (c) => c.sinking && !c.onHold && c.monthlyBudget != null && c.monthlyBudget > 0,
-  );
-  const sinkingIds = new Set(sinkingCats.map((c) => c.id));
-  for (const i of incomes) {
-    // skip carried-over one-off adjustments (e.g. Misc/Piggy lines) so they don't repeat
-    if (i.amount < 0) continue;
-    await tx.incomeEntry.create({
-      data: { periodId: targetId, source: i.source, amount: i.amount, ownerId: i.ownerId },
-    });
-  }
-  for (const e of expenses) {
-    if (held.has(e.categoryId)) continue;
-    if (sinkingIds.has(e.categoryId)) continue; // replaced by a canonical share line below
-    await tx.expenseEntry.create({
-      data: {
-        periodId: targetId,
-        label: e.label,
-        amount: e.amount,
-        categoryId: e.categoryId,
-        memberId: e.memberId,
-        necessary: e.necessary,
-      },
-    });
-  }
-  for (const c of sinkingCats) {
-    await tx.expenseEntry.create({
-      data: {
-        periodId: targetId,
-        categoryId: c.id,
-        label: `${c.name} (monthly share)`,
-        amount: c.monthlyBudget!,
-        necessary: c.necessary,
-      },
-    });
-  }
-  await seedBudgets(tx, householdId, targetId);
+  await clonePeriodInto(tx, sourceId, targetId, householdId);
 }
 
 export async function createPeriod(formData: FormData) {
