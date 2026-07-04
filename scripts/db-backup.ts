@@ -11,7 +11,9 @@ const prisma = new PrismaClient({
 });
 
 async function main() {
-  // Order is FK-safe for restore (parents first).
+  // Order is FK-safe for restore (parents first). Covers EVERY table so a restore
+  // is complete — personal tables cascade off Member, so omitting them would lose
+  // that data on restore. Keep this in sync when new models are added.
   const data = {
     _meta: { takenAt: new Date().toISOString() },
     household: await prisma.household.findMany(),
@@ -26,6 +28,16 @@ async function main() {
     settlementRecord: await prisma.settlementRecord.findMany(),
     loan: await prisma.loan.findMany(),
     loanPayment: await prisma.loanPayment.findMany(),
+    activityLog: await prisma.activityLog.findMany(),
+    webAuthnCredential: await prisma.webAuthnCredential.findMany(),
+    personalCategory: await prisma.personalCategory.findMany(),
+    personalPeriod: await prisma.personalPeriod.findMany(),
+    personalIncome: await prisma.personalIncome.findMany(),
+    personalExpense: await prisma.personalExpense.findMany(),
+    personalSpend: await prisma.personalSpend.findMany(),
+    personalLoan: await prisma.personalLoan.findMany(),
+    personalCard: await prisma.personalCard.findMany(),
+    personalCardTxn: await prisma.personalCardTxn.findMany(),
   };
 
   mkdirSync("backups", { recursive: true });
