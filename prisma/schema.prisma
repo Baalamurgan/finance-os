@@ -130,7 +130,8 @@ model PersonalPeriod {
   month     Int
   label     String
   status    String   @default("open") // open | closed
-  income    Float    @default(0) // the month's income (single editable number)
+  income    Float    @default(0) // the month's salary (single editable number)
+  carryForward Float @default(0) // previous month's remaining, carried in
   closedAt  DateTime?
   expenses  PersonalExpense[]
   spends    PersonalSpend[]

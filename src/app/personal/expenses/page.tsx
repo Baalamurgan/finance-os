@@ -3,7 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { loadPersonal } from "@/lib/loadPersonal";
 import { personalMonthLabel } from "@/lib/personal";
 import { PersonalNav } from "@/components/personal/PersonalNav";
-import { PersonalSpendModal } from "@/components/personal/PersonalSpendModal";
+import { PersonalSpendFab } from "@/components/personal/PersonalSpendFab";
 import { PersonalSpendRowActions } from "@/components/personal/PersonalSpendRowActions";
 import { MoneyFlowDonut } from "@/components/Charts";
 import { addPersonalCategory, archivePersonalCategory } from "@/app/personal/actions";
@@ -36,7 +36,7 @@ export default async function PersonalExpenses({
     prisma.personalExpense.aggregate({ where: { periodId: period.id }, _sum: { amount: true } }),
     prisma.personalSpend.findMany({ where: { periodId: period.id }, orderBy: [{ date: "desc" }, { id: "desc" }] }),
   ]);
-  const available = period.income - (fixedAgg._sum.amount ?? 0);
+  const available = period.income + period.carryForward - (fixedAgg._sum.amount ?? 0);
   const spentTotal = spends.reduce((s, e) => s + e.amount, 0);
   const remaining = available - spentTotal;
 
@@ -62,14 +62,14 @@ export default async function PersonalExpenses({
   return (
     <>
       {nav}
-      <main className="mx-auto max-w-3xl space-y-4 p-4 sm:p-6">
+      <main className="mx-auto max-w-3xl space-y-4 p-4 pb-28 sm:p-6">
         <h1 className="text-xl font-bold text-slate-900">{period.label} — spends</h1>
 
-        <div className="grid grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
           <div className="rounded-xl border border-slate-200 bg-white p-4">
             <div className="text-[11px] font-medium uppercase tracking-wide text-slate-400">Available</div>
             <div className="mt-1 text-xl font-bold text-slate-800">{formatINR(available)}</div>
-            <div className="text-[10px] text-slate-400">income − fixed</div>
+            <div className="text-[10px] text-slate-400">salary + carry − expenses</div>
           </div>
           <div className="rounded-xl border border-slate-200 bg-white p-4">
             <div className="text-[11px] font-medium uppercase tracking-wide text-slate-400">Spent</div>
@@ -80,8 +80,6 @@ export default async function PersonalExpenses({
             <div className={`mt-1 text-xl font-bold ${remaining >= 0 ? "text-emerald-800" : "text-red-600"}`}>{formatINR(remaining)}</div>
           </div>
         </div>
-
-        <PersonalSpendModal periodId={period.id} categories={catList} remaining={remaining} />
 
         {spends.length > 0 && (
           <div className="rounded-xl border border-slate-200 bg-white p-5">
@@ -146,6 +144,8 @@ export default async function PersonalExpenses({
           </form>
         </section>
       </main>
+
+      <PersonalSpendFab periodId={period.id} categories={catList} remaining={remaining} />
     </>
   );
 }

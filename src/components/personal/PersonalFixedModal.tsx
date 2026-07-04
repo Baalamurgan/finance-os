@@ -4,20 +4,23 @@ import { useActionState, useEffect, useRef, useState } from "react";
 import { addPersonalExpense, updatePersonalExpense, type PersonalSaveState } from "@/app/personal/actions";
 import { useToast } from "@/components/Toast";
 
-type Initial = { id: number; label: string; amount: number; recurring: boolean };
+type Cat = { id: number; name: string; icon: string | null };
+type Initial = { id: number; label: string; categoryId: number | null; amount: number; recurring: boolean };
 const INIT: PersonalSaveState = { ok: false, n: 0 };
 
-// Fixed monthly line-item on the Sheet (label + amount, no category).
+// A monthly expense on the Sheet: name + category + amount + repeats-toggle.
 export function PersonalFixedModal({
   periodId,
+  categories,
   initial,
   hideTrigger = false,
   controlledOpen,
   onOpenChange,
   defaultRecurring = true,
-  triggerLabel = "+ Add fixed expense",
+  triggerLabel = "+ Add expense",
 }: {
   periodId: number;
+  categories: Cat[];
   initial?: Initial;
   hideTrigger?: boolean;
   controlledOpen?: boolean;
@@ -76,6 +79,15 @@ export function PersonalFixedModal({
                 <div>
                   <label className="text-xs font-medium text-slate-500">Name</label>
                   <input name="label" required defaultValue={isEdit ? initial!.label : ""} placeholder="e.g. Rent, Netflix" className="input mt-1 w-full" />
+                </div>
+                <div>
+                  <label className="text-xs font-medium text-slate-500">Category</label>
+                  <select name="categoryId" required defaultValue={isEdit && initial!.categoryId ? String(initial!.categoryId) : ""} className="input mt-1 w-full">
+                    <option value="" disabled>Pick a category</option>
+                    {categories.map((cat) => (
+                      <option key={cat.id} value={cat.id}>{cat.icon ? `${cat.icon} ` : ""}{cat.name}</option>
+                    ))}
+                  </select>
                 </div>
                 <div>
                   <label className="text-xs font-medium text-slate-500">Amount (₹)</label>

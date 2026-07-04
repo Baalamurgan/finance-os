@@ -4,9 +4,10 @@ import { useActionState, useEffect, useState } from "react";
 import { setPersonalPin, type PersonalPinAdminState } from "@/app/personal/lock/actions";
 import { finishPersonalOnboarding } from "@/app/personal/actions";
 
+type Cat = { id: number; name: string; icon: string | null };
 const PIN_INIT: PersonalPinAdminState = { ok: false };
 
-export function PersonalOnboarding({ hasPin }: { hasPin: boolean }) {
+export function PersonalOnboarding({ hasPin, categories }: { hasPin: boolean; categories: Cat[] }) {
   const [step, setStep] = useState(hasPin ? 2 : 1);
   return (
     <div className="mx-auto max-w-md px-5 py-10">
@@ -15,7 +16,7 @@ export function PersonalOnboarding({ hasPin }: { hasPin: boolean }) {
         <h1 className="mt-4 font-display text-2xl text-[#1c1c1a]">Set up Personal</h1>
         <p className="mt-1 text-sm text-slate-500">Private to you — separate from the family app.</p>
       </div>
-      {step === 1 ? <PinStep onDone={() => setStep(2)} /> : <DetailsStep />}
+      {step === 1 ? <PinStep onDone={() => setStep(2)} /> : <DetailsStep categories={categories} />}
       <div className="mt-6 flex justify-center gap-1.5">
         {[1, 2].map((s) => (
           <span key={s} className={`h-1.5 w-6 rounded-full ${s <= step ? "bg-emerald-600" : "bg-slate-200"}`} />
@@ -57,9 +58,9 @@ function PinStep({ onDone }: { onDone: () => void }) {
   );
 }
 
-function DetailsStep() {
-  const [rows, setRows] = useState<{ label: string; amt: string }[]>([{ label: "", amt: "" }]);
-  const update = (i: number, k: "label" | "amt", v: string) =>
+function DetailsStep({ categories }: { categories: Cat[] }) {
+  const [rows, setRows] = useState<{ label: string; cat: string; amt: string }[]>([{ label: "", cat: "", amt: "" }]);
+  const update = (i: number, k: "label" | "cat" | "amt", v: string) =>
     setRows((r) => r.map((row, j) => (j === i ? { ...row, [k]: v } : row)));
 
   return (
@@ -74,7 +75,7 @@ function DetailsStep() {
       <p className="mt-0.5 text-xs text-slate-500">Rent, subscriptions… these repeat automatically every month. (Optional — add more later.)</p>
       <div className="mt-3 space-y-2">
         {rows.map((row, i) => (
-          <div key={i} className="flex gap-2">
+          <div key={i} className="flex flex-wrap gap-2">
             <input
               name="recurLabel"
               value={row.label}
@@ -82,6 +83,12 @@ function DetailsStep() {
               placeholder="e.g. Rent"
               className="input flex-1"
             />
+            <select name="recurCat" value={row.cat} onChange={(e) => update(i, "cat", e.target.value)} className="input flex-1">
+              <option value="">Category…</option>
+              {categories.map((cc) => (
+                <option key={cc.id} value={cc.id}>{cc.icon} {cc.name}</option>
+              ))}
+            </select>
             <input
               name="recurAmt"
               type="number"
@@ -94,7 +101,7 @@ function DetailsStep() {
           </div>
         ))}
       </div>
-      <button type="button" onClick={() => setRows((r) => [...r, { label: "", amt: "" }])} className="mt-2 text-xs font-medium text-emerald-700">
+      <button type="button" onClick={() => setRows((r) => [...r, { label: "", cat: "", amt: "" }])} className="mt-2 text-xs font-medium text-emerald-700">
         + add another
       </button>
 

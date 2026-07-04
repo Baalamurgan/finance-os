@@ -16,6 +16,8 @@ export default async function PersonalSetup({
   const c = await loadPersonal(sp);
   const nav = <PersonalNav active="setup" name={c.account.name} selYear={c.selYear} selMonth={c.selMonth} />;
 
+  const catList = c.categories.map((cat) => ({ id: cat.id, name: cat.name, icon: cat.icon }));
+  const catName = (id: number | null) => (id == null ? null : c.categories.find((x) => x.id === id));
   const recurring = c.selected
     ? await prisma.personalExpense.findMany({
         where: { periodId: c.selected.id, recurring: true },
@@ -42,13 +44,16 @@ export default async function PersonalSetup({
             ) : (
               recurring.map((e) => (
                 <div key={e.id} className="flex items-center justify-between py-2 text-sm">
-                  <span className="text-slate-700">{e.label}</span>
+                  <span className="text-slate-700">
+                    {catName(e.categoryId)?.icon} {e.label}
+                  </span>
                   <span className="flex items-center gap-2">
                     <span className="tabular-nums font-medium text-slate-800">{formatINR(e.amount)}</span>
                     {c.selected && (
                       <PersonalFixedRowActions
                         periodId={c.selected.id}
-                        initial={{ id: e.id, label: e.label, amount: e.amount, recurring: e.recurring }}
+                        categories={catList}
+                        initial={{ id: e.id, label: e.label, categoryId: e.categoryId, amount: e.amount, recurring: e.recurring }}
                       />
                     )}
                   </span>
@@ -58,7 +63,7 @@ export default async function PersonalSetup({
           </div>
           {c.selected && (
             <div className="mt-3">
-              <PersonalFixedModal periodId={c.selected.id} defaultRecurring triggerLabel="+ Add standard expense" />
+              <PersonalFixedModal periodId={c.selected.id} categories={catList} defaultRecurring triggerLabel="+ Add standard expense" />
             </div>
           )}
         </section>

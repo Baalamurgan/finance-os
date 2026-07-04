@@ -92,8 +92,8 @@ export function PersonalSpendModal({
                   </select>
                 </div>
                 <div>
-                  <label className="text-xs font-medium text-slate-500">Note (optional)</label>
-                  <input name="note" defaultValue={isEdit ? (initial!.note ?? "") : ""} placeholder="e.g. Swiggy dinner" className="input mt-1 w-full" />
+                  <label className="text-xs font-medium text-slate-500">Name</label>
+                  <input name="note" required defaultValue={isEdit ? (initial!.note ?? "") : ""} placeholder="e.g. Swiggy dinner" className="input mt-1 w-full" />
                 </div>
               </div>
               <div className="flex justify-end gap-2 border-t border-slate-100 px-5 py-3">

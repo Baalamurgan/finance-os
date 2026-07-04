@@ -55,9 +55,27 @@ export async function ensurePersonalMonth(memberId: number, now = new Date()) {
     orderBy: [{ year: "desc" }, { month: "desc" }],
   });
 
+  // wind-down: the previous month's remaining (salary + carry − expenses − spends)
+  // carries into the new month as "Previous month remaining".
+  let carryForward = 0;
+  if (latest) {
+    const [exp, spd] = await Promise.all([
+      prisma.personalExpense.aggregate({ where: { periodId: latest.id }, _sum: { amount: true } }),
+      prisma.personalSpend.aggregate({ where: { periodId: latest.id }, _sum: { amount: true } }),
+    ]);
+    carryForward = latest.income + latest.carryForward - (exp._sum.amount ?? 0) - (spd._sum.amount ?? 0);
+  }
+
   return prisma.$transaction(async (tx) => {
     const p = await tx.personalPeriod.create({
-      data: { memberId, year, month, label: personalMonthLabel(month, year), income: latest?.income ?? 0 },
+      data: {
+        memberId,
+        year,
+        month,
+        label: personalMonthLabel(month, year),
+        income: latest?.income ?? 0,
+        carryForward,
+      },
     });
     if (latest) {
       const recurring = await tx.personalExpense.findMany({
@@ -65,7 +83,15 @@ export async function ensurePersonalMonth(memberId: number, now = new Date()) {
       });
       for (const e of recurring) {
         await tx.personalExpense.create({
-          data: { memberId, periodId: p.id, label: e.label, amount: e.amount, note: e.note, recurring: true },
+          data: {
+            memberId,
+            periodId: p.id,
+            label: e.label,
+            categoryId: e.categoryId,
+            amount: e.amount,
+            note: e.note,
+            recurring: true,
+          },
         });
       }
       await tx.personalPeriod.update({

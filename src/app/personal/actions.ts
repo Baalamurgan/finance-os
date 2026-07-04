@@ -38,13 +38,14 @@ export async function finishPersonalOnboarding(formData: FormData) {
   const income = Number(formData.get("income")) || 0;
   await prisma.personalPeriod.update({ where: { id: period.id }, data: { income } });
 
-  // fixed monthly expenses come as parallel arrays recurLabel[]/recurAmt[]
+  // fixed monthly expenses: recurLabel[] / recurCat[] / recurAmt[]
   const labels = formData.getAll("recurLabel").map((v) => String(v).trim());
+  const catIds = formData.getAll("recurCat").map((v) => Number(v));
   const amts = formData.getAll("recurAmt").map((v) => Number(v));
   for (let i = 0; i < labels.length; i++) {
-    if (labels[i] && amts[i] > 0) {
+    if (labels[i] && catIds[i] && amts[i] > 0) {
       await prisma.personalExpense.create({
-        data: { memberId: member.id, periodId: period.id, label: labels[i], amount: amts[i], recurring: true },
+        data: { memberId: member.id, periodId: period.id, label: labels[i], categoryId: catIds[i], amount: amts[i], recurring: true },
       });
     }
   }
@@ -74,13 +75,14 @@ export async function addPersonalExpense(
   if (!member) return { ok: false, error: "Signed out.", n };
   const periodId = Number(formData.get("periodId"));
   const label = String(formData.get("label") ?? "").trim();
+  const categoryId = Number(formData.get("categoryId"));
   const amount = Number(formData.get("amount"));
   const recurring = formData.get("recurring") === "on";
-  if (!periodId || !label || !amount || amount <= 0)
-    return { ok: false, error: "Enter a name and amount.", n };
+  if (!periodId || !label || !categoryId || !amount || amount <= 0)
+    return { ok: false, error: "Enter a name, category and amount.", n };
   if (!(await ownsPeriod(member.id, periodId))) return { ok: false, error: "Not your month.", n };
   await prisma.personalExpense.create({
-    data: { memberId: member.id, periodId, label, amount, recurring },
+    data: { memberId: member.id, periodId, label, categoryId, amount, recurring },
   });
   rev();
   return { ok: true, n };
@@ -95,12 +97,14 @@ export async function updatePersonalExpense(
   if (!member) return { ok: false, error: "Signed out.", n };
   const id = Number(formData.get("id"));
   const label = String(formData.get("label") ?? "").trim();
+  const categoryId = Number(formData.get("categoryId"));
   const amount = Number(formData.get("amount"));
   const recurring = formData.get("recurring") === "on";
   const e = await prisma.personalExpense.findUnique({ where: { id } });
   if (!e || e.memberId !== member.id) return { ok: false, error: "Not found.", n };
-  if (!label || !amount || amount <= 0) return { ok: false, error: "Enter a name and amount.", n };
-  await prisma.personalExpense.update({ where: { id }, data: { label, amount, recurring } });
+  if (!label || !categoryId || !amount || amount <= 0)
+    return { ok: false, error: "Enter a name, category and amount.", n };
+  await prisma.personalExpense.update({ where: { id }, data: { label, categoryId, amount, recurring } });
   rev();
   return { ok: true, n };
 }
@@ -126,9 +130,9 @@ export async function addPersonalSpend(
   const periodId = Number(formData.get("periodId"));
   const categoryId = Number(formData.get("categoryId"));
   const amount = Number(formData.get("amount"));
-  const note = String(formData.get("note") ?? "").trim() || null;
-  if (!periodId || !categoryId || !amount || amount <= 0)
-    return { ok: false, error: "Pick a category and amount.", n };
+  const note = String(formData.get("note") ?? "").trim();
+  if (!periodId || !categoryId || !amount || amount <= 0 || !note)
+    return { ok: false, error: "Enter a name, category and amount.", n };
   if (!(await ownsPeriod(member.id, periodId))) return { ok: false, error: "Not your month.", n };
   const cat = await prisma.personalCategory.findUnique({ where: { id: categoryId } });
   if (!cat || cat.memberId !== member.id) return { ok: false, error: "Unknown category.", n };
@@ -147,10 +151,11 @@ export async function updatePersonalSpend(
   const id = Number(formData.get("id"));
   const categoryId = Number(formData.get("categoryId"));
   const amount = Number(formData.get("amount"));
-  const note = String(formData.get("note") ?? "").trim() || null;
+  const note = String(formData.get("note") ?? "").trim();
   const s = await prisma.personalSpend.findUnique({ where: { id } });
   if (!s || s.memberId !== member.id) return { ok: false, error: "Not found.", n };
-  if (!amount || amount <= 0) return { ok: false, error: "Enter an amount.", n };
+  if (!amount || amount <= 0 || !categoryId || !note)
+    return { ok: false, error: "Enter a name, category and amount.", n };
   await prisma.personalSpend.update({ where: { id }, data: { categoryId, amount, note } });
   rev();
   return { ok: true, n };
