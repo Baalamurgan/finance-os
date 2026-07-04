@@ -425,6 +425,32 @@ export async function setFundBalance(formData: FormData) {
 // Add a new recurring/tracked category (Setup screen). useActionState-shaped.
 export type CreateCategoryState = { ok: boolean; error?: string; n: number };
 
+// Reflect a Setup budget change in the CURRENT open month too, so a newly-added
+// subscription / budget counts immediately (not only from next month). Holding a
+// category only affects future months, so leave the current month untouched then.
+async function syncCurrentBudget(
+  householdId: number,
+  categoryId: number,
+  monthlyBudget: number | null,
+  onHold: boolean,
+) {
+  if (onHold) return;
+  const period = await prisma.period.findFirst({
+    where: { householdId, status: "open" },
+    orderBy: [{ year: "desc" }, { month: "desc" }],
+  });
+  if (!period) return;
+  if (monthlyBudget != null && monthlyBudget > 0) {
+    await prisma.budget.upsert({
+      where: { periodId_categoryId: { periodId: period.id, categoryId } },
+      create: { periodId: period.id, categoryId, planned: monthlyBudget },
+      update: { planned: monthlyBudget },
+    });
+  } else {
+    await prisma.budget.deleteMany({ where: { periodId: period.id, categoryId } });
+  }
+}
+
 export async function createCategory(
   prev: CreateCategoryState,
   formData: FormData,
@@ -440,13 +466,15 @@ export async function createCategory(
   const cycleRaw = String(formData.get("cycleMonths") ?? "").trim();
   const cycleMonths = sinking && cycleRaw ? Number(cycleRaw) : null;
 
+  let created;
   try {
-    await prisma.category.create({
+    created = await prisma.category.create({
       data: { householdId, name, section: "Monthly", tracked: true, monthlyBudget, sinking, cycleMonths },
     });
   } catch {
     return { ok: false, error: `"${name}" already exists.`, n };
   }
+  await syncCurrentBudget(householdId, created.id, monthlyBudget, false);
   revalidatePath("/", "layout");
   return { ok: true, n };
 }
@@ -719,10 +747,11 @@ export async function saveRecurring(
     return { ok: false, error: `"${name}" is already taken — saved everything except the name.`, n };
   }
 
-  // NOTE: Setup edits change only the recurring TEMPLATE. Already-generated months
-  // (including the current open one) are intentionally left untouched — the new
-  // config takes effect when the NEXT month is generated (clonePeriodStructure /
-  // ensureCurrentMonth read Category.monthlyBudget + apply the current sinking share).
+  // Setup edits define the recurring TEMPLATE for future months. We also mirror
+  // the monthly amount into the CURRENT open month's budget so a change (e.g. a
+  // new subscription) shows up immediately in Expenses + "budget left in hand".
+  // (Sheet expense lines and sinking share lines still regenerate next month.)
+  await syncCurrentBudget(cat.householdId, id, monthlyBudget, cat.onHold);
   revalidatePath("/", "layout");
   return { ok: true, n };
 }
