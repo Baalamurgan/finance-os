@@ -256,9 +256,11 @@ export default async function SheetPage({
               <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3">
                 <div className="rounded-lg bg-white/70 p-2.5">
                   <div className="text-[10px] font-medium uppercase tracking-wide text-violet-500">
-                    Opening balance (from {preview.label})
+                    {preview.carryOut >= 0 ? `Last month surplus → income` : `Carried-in shortfall`}
                   </div>
-                  <div className="text-base font-bold tabular-nums text-violet-900">{formatINR(preview.carryOut)}</div>
+                  <div className={`text-base font-bold tabular-nums ${preview.carryOut < 0 ? "text-red-600" : "text-violet-900"}`}>
+                    {formatINR(preview.carryOut)}
+                  </div>
                 </div>
                 <div className="rounded-lg bg-white/70 p-2.5">
                   <div className="text-[10px] font-medium uppercase tracking-wide text-violet-500">

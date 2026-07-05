@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 import { loadCommon } from "@/lib/load";
 import { NavHeader } from "@/components/NavHeader";
 import { ManageUsers } from "@/components/ManageUsers";
+import { PinSettings } from "@/components/PinSettings";
 
 export default async function UsersPage({
   searchParams,
@@ -38,23 +39,30 @@ export default async function UsersPage({
 
       <main className="mx-auto max-w-4xl space-y-6 p-6">
         <div>
-          <h1 className="text-xl font-bold text-slate-900">Manage users</h1>
-          <p className="text-sm text-slate-500">
-            Add a member&apos;s Google email to let them sign in. Only the head can edit.
-          </p>
+          <h1 className="text-xl font-bold text-slate-900">Settings</h1>
+          <p className="text-sm text-slate-500">Manage who can sign in, and the app lock.</p>
         </div>
 
-        <ManageUsers
-          members={c.members.map((m) => ({
-            id: m.id,
-            name: m.name,
-            code: m.code,
-            email: m.email,
-            role: m.role,
-          }))}
-          householdId={c.household.id}
-          currentMemberId={c.currentMember.id}
-        />
+        <section className="space-y-2">
+          <h2 className="text-sm font-semibold text-slate-900">Members</h2>
+          <p className="text-xs text-slate-500">Add a member&apos;s Google email to let them sign in.</p>
+          <ManageUsers
+            members={c.members.map((m) => ({
+              id: m.id,
+              name: m.name,
+              code: m.code,
+              email: m.email,
+              role: m.role,
+            }))}
+            householdId={c.household.id}
+            currentMemberId={c.currentMember.id}
+          />
+        </section>
+
+        <section className="space-y-2">
+          <h2 className="text-sm font-semibold text-slate-900">App lock</h2>
+          <PinSettings isSet={c.pinEnabled} readOnly={false} />
+        </section>
       </main>
     </>
   );

@@ -810,6 +810,37 @@ export async function createPeriod(formData: FormData) {
   revalidatePath("/", "layout");
 }
 
+// Marks the auto-generated "Last month surplus" income line so it can be
+// found/replaced (estimate on a draft → final at wind-down). oneOff so it never
+// re-copies into the month after.
+const SURPLUS_NOTE = "__surplus__";
+
+// Add an ESTIMATED "last month surplus" income line to a draft, from the source
+// (current open) month's live carry-out. Replaces any prior estimate.
+async function addEstimatedSurplus(
+  tx: Tx,
+  source: { id: number; label: string; carryForward: number },
+  targetId: number,
+) {
+  const [inc, exp] = await Promise.all([
+    tx.incomeEntry.aggregate({ where: { periodId: source.id }, _sum: { amount: true } }),
+    tx.expenseEntry.aggregate({ where: { periodId: source.id }, _sum: { amount: true } }),
+  ]);
+  const carryOut = source.carryForward + (inc._sum.amount ?? 0) - (exp._sum.amount ?? 0);
+  await tx.incomeEntry.deleteMany({ where: { periodId: targetId, note: SURPLUS_NOTE } });
+  if (carryOut > 0) {
+    await tx.incomeEntry.create({
+      data: {
+        periodId: targetId,
+        source: `Last month surplus (est., from ${source.label})`,
+        amount: Math.round(carryOut * 100) / 100,
+        oneOff: true,
+        note: SURPLUS_NOTE,
+      },
+    });
+  }
+}
+
 // ── Next-month preview (head-only draft) ─────────────────────────────────────
 // A draft is a Period with status "draft": it never resolves as the "current"
 // month (loadCommon prefers "open"), can't be wound down (windDownMonth requires
@@ -852,6 +883,7 @@ export async function createNextMonthDraft(formData: FormData) {
     await prisma.$transaction(async (tx) => {
       const p = await tx.period.create({ data: { householdId, year, month, label, status: "draft", carryForward: 0 } });
       await clonePeriodInto(tx, current.id, p.id, householdId);
+      await addEstimatedSurplus(tx, current, p.id);
     });
   }
   revalidatePath("/", "layout");
@@ -869,9 +901,29 @@ export async function rebuildDraft(formData: FormData) {
   await prisma.$transaction(async (tx) => {
     await clearPeriodRows(tx, periodId);
     await clonePeriodInto(tx, current.id, periodId, draft.householdId);
+    await addEstimatedSurplus(tx, current, periodId);
   });
   revalidatePath("/", "layout");
   redirect(`/?y=${draft.year}&m=${draft.month}`);
+}
+
+// Toggle whether an income / expense line repeats into next month (the oneOff flag).
+export async function toggleIncomeRepeat(formData: FormData) {
+  if (!(await isHead())) return;
+  const id = Number(formData.get("id"));
+  const row = await prisma.incomeEntry.findUnique({ where: { id } });
+  if (!row) return;
+  await prisma.incomeEntry.update({ where: { id }, data: { oneOff: !row.oneOff } });
+  revalidatePath("/", "layout");
+}
+
+export async function toggleExpenseRepeat(formData: FormData) {
+  if (!(await isHead())) return;
+  const id = Number(formData.get("id"));
+  const row = await prisma.expenseEntry.findUnique({ where: { id } });
+  if (!row) return;
+  await prisma.expenseEntry.update({ where: { id }, data: { oneOff: !row.oneOff } });
+  revalidatePath("/", "layout");
 }
 
 // Throw the draft away entirely.
@@ -1083,6 +1135,23 @@ export async function windDownMonth(formData: FormData) {
           oneOff: true,
         },
       });
+    }
+
+    // Surplus → next month's INCOME (replaces the "carried in" opening balance).
+    // Replace any estimate a draft may already carry. A deficit stays a negative
+    // carryForward (a carried-in shortfall), not a negative income line.
+    await tx.incomeEntry.deleteMany({ where: { periodId: next.id, note: SURPLUS_NOTE } });
+    if (carryOut > 0) {
+      await tx.incomeEntry.create({
+        data: {
+          periodId: next.id,
+          source: `Last month surplus (from ${period.label})`,
+          amount: Math.round(carryOut * 100) / 100,
+          oneOff: true,
+          note: SURPLUS_NOTE,
+        },
+      });
+      await tx.period.update({ where: { id: next.id }, data: { carryForward: 0 } });
     }
   });
 

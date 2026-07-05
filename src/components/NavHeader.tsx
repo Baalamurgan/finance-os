@@ -77,11 +77,11 @@ export function NavHeader({
     { key: "piggy", label: "Piggy", href: "/piggy" },
     { key: "loans", label: "Loans & Chits", href: "/loans" },
     { key: "wind-down", label: "Wind Down", href: "/wind-down" },
-    // Setup is head-editable / manager view-only; Manage Users stays head-only.
+    // Setup is head-editable / manager view-only; Settings (users + app lock) is head-only.
     ...(isHead
       ? [
           { key: "setup", label: "Setup", href: "/setup" },
-          { key: "users", label: "Manage Users", href: "/users" },
+          { key: "users", label: "Settings", href: "/users" },
         ]
       : canEdit
         ? [{ key: "setup", label: "Setup", href: "/setup" }]

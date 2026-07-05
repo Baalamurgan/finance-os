@@ -1,9 +1,10 @@
 import { redirect } from "next/navigation";
+import { prisma } from "@/lib/prisma";
 import { loadCommon } from "@/lib/load";
 import { setWindDownDay } from "@/app/actions";
 import { NavHeader } from "@/components/NavHeader";
 import { MonthlySetup } from "@/components/MonthlySetup";
-import { PinSettings } from "@/components/PinSettings";
+import { RecurringSetup, type IncomeLine, type ExpenseLine } from "@/components/RecurringSetup";
 
 export default async function SetupPage({
   searchParams,
@@ -18,18 +19,48 @@ export default async function SetupPage({
   const readOnly = !c.isHead;
   const windDownDay = c.household.windDownDay ?? null;
 
-  // tracked categories + fixed bills carry the recurring config
+  // The recurring template = the current OPEN month's lines (never a draft).
+  const openPeriod = await prisma.period.findFirst({
+    where: { householdId: c.household.id, status: "open" },
+    orderBy: [{ year: "desc" }, { month: "desc" }],
+  });
+  const prevM = openPeriod ? (openPeriod.month === 1 ? 12 : openPeriod.month - 1) : 0;
+  const prevY = openPeriod ? (openPeriod.month === 1 ? openPeriod.year - 1 : openPeriod.year) : 0;
+  const prev = openPeriod
+    ? await prisma.period.findUnique({ where: { householdId_year_month: { householdId: c.household.id, year: prevY, month: prevM } } })
+    : null;
+
+  const [incomes, expenses, prevInc, prevExp] = await Promise.all([
+    openPeriod ? prisma.incomeEntry.findMany({ where: { periodId: openPeriod.id }, include: { owner: true }, orderBy: { amount: "desc" } }) : [],
+    openPeriod ? prisma.expenseEntry.findMany({ where: { periodId: openPeriod.id }, include: { category: true, member: true }, orderBy: { amount: "desc" } }) : [],
+    prev ? prisma.incomeEntry.findMany({ where: { periodId: prev.id }, select: { source: true } }) : [],
+    prev ? prisma.expenseEntry.findMany({ where: { periodId: prev.id }, select: { label: true } }) : [],
+  ]);
+  const prevIncSrc = new Set(prevInc.map((i) => i.source));
+  const prevExpLbl = new Set(prevExp.map((e) => e.label));
+
+  const incomeLines: IncomeLine[] = incomes.map((i) => ({
+    id: i.id, name: i.source, amount: i.amount, member: i.owner?.name ?? null,
+    repeats: !i.oneOff, isNew: !!prev && !prevIncSrc.has(i.source),
+  }));
+  const expenseLines: ExpenseLine[] = expenses.map((e) => {
+    const isSetupCat = e.category?.monthlyBudget != null; // template-driven → repeat = category onHold
+    return {
+      id: e.id, name: e.label, amount: e.amount, section: e.category?.section ?? "Monthly",
+      member: e.member?.name ?? null,
+      repeats: isSetupCat ? !e.category!.onHold : !e.oneOff,
+      isNew: !!prev && !prevExpLbl.has(e.label),
+      toggleKind: isSetupCat ? "category" : "expense",
+      targetId: isSetupCat ? e.categoryId : e.id,
+    };
+  });
+
+  // category budgets & sinking-fund template (amounts / cycles) — edited here
   const rows = c.categories
     .filter((cat) => cat.tracked || cat.fixed)
     .map((cat) => ({
-      id: cat.id,
-      name: cat.name,
-      section: cat.section,
-      monthlyBudget: cat.monthlyBudget,
-      sinking: cat.sinking,
-      cycleMonths: cat.cycleMonths,
-      onHold: cat.onHold,
-      fixed: cat.fixed,
+      id: cat.id, name: cat.name, section: cat.section, monthlyBudget: cat.monthlyBudget,
+      sinking: cat.sinking, cycleMonths: cat.cycleMonths, onHold: cat.onHold, fixed: cat.fixed,
       responsibleMemberId: cat.responsibleMemberId ?? null,
     }));
 
@@ -58,26 +89,44 @@ export default async function SetupPage({
 
       <main className="mx-auto max-w-4xl space-y-5 p-6">
         <div>
-          <h1 className="text-xl font-bold text-slate-900">Monthly setup</h1>
+          <h1 className="text-xl font-bold text-slate-900">Setup</h1>
           <p className="text-sm text-slate-500">
-            Set each category&apos;s recurring monthly budget. New months are pre-filled from
-            these (plus a copy of last month&apos;s sheet). Mark **sinking funds** (e.g. WiFi every
-            3 months, Mobile every 12) so their monthly share is held separately until the bill is
-            due, instead of going to the general Piggy.
+            Control what repeats into next month — from {openPeriod?.label ?? "the current month"}. Anything
+            you turn off stays one-off and won&apos;t copy forward (or into the next-month preview).
+            Edit the actual amounts on the Sheet.
           </p>
           {readOnly && (
             <p className="mt-2 rounded-md bg-slate-100 px-3 py-2 text-xs text-slate-600">
-              You have view-only access. Only the head can change these settings.
+              View-only access. Only the head can change these settings.
             </p>
           )}
         </div>
+
+        {openPeriod ? (
+          <RecurringSetup income={incomeLines} expenses={expenseLines} readOnly={readOnly} />
+        ) : (
+          <p className="rounded-xl border border-dashed border-slate-200 bg-white p-8 text-center text-sm text-slate-400">
+            No open month yet — start one on the Sheet tab first.
+          </p>
+        )}
+
+        {/* category budgets & sinking-fund template */}
+        <details className="rounded-xl border border-slate-200 bg-white">
+          <summary className="flex cursor-pointer list-none items-center justify-between px-4 py-3 [&::-webkit-details-marker]:hidden">
+            <span className="text-sm font-semibold text-slate-900">⚙️ Budgets &amp; sinking funds</span>
+            <span className="text-xs text-slate-400">amounts, sinking cycles, who&apos;s responsible</span>
+          </summary>
+          <div className="border-t border-slate-100 p-4">
+            <MonthlySetup rows={rows} householdId={c.household.id} members={c.members} readOnly={readOnly} />
+          </div>
+        </details>
 
         {/* Monthly close day — drives the 5-day wind-down reminder banner. */}
         <section className="rounded-xl border border-slate-200 bg-white p-4">
           <h2 className="text-sm font-semibold text-slate-900">Wind-down close day</h2>
           <p className="mt-0.5 text-xs text-slate-500">
-            The day of the month you aim to close & settle. Everyone sees an in-app reminder in
-            the 5 days before it. Leave blank for no reminder.
+            The day of the month you aim to close &amp; settle. Everyone sees an in-app reminder in the 5
+            days before it. Leave blank for no reminder.
           </p>
           <form action={setWindDownDay} className="mt-3 flex flex-wrap items-end gap-2">
             <label className="text-sm">
@@ -94,24 +143,12 @@ export default async function SetupPage({
               />
             </label>
             {!readOnly && (
-              <button
-                type="submit"
-                className="rounded-md bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-indigo-700"
-              >
+              <button type="submit" className="rounded-md bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-indigo-700">
                 Save
               </button>
             )}
           </form>
         </section>
-
-        <PinSettings isSet={c.pinEnabled} readOnly={readOnly} />
-
-        <MonthlySetup
-          rows={rows}
-          householdId={c.household.id}
-          members={c.members}
-          readOnly={readOnly}
-        />
       </main>
     </>
   );
