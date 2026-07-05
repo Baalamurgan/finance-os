@@ -18,9 +18,10 @@ export default async function SetupPage({
   const readOnly = !c.isHead;
   const windDownDay = c.household.windDownDay ?? null;
 
-  // tracked categories + fixed bills carry the recurring config
+  // the recurring monthly-expense template: anything with a monthly amount, plus
+  // sinking funds (tracked). Loans/chits/manual sheet lines are edited on the Sheet.
   const rows = c.categories
-    .filter((cat) => cat.tracked || cat.fixed)
+    .filter((cat) => cat.tracked || cat.monthlyBudget != null)
     .map((cat) => ({
       id: cat.id,
       name: cat.name,
@@ -29,7 +30,6 @@ export default async function SetupPage({
       sinking: cat.sinking,
       cycleMonths: cat.cycleMonths,
       onHold: cat.onHold,
-      fixed: cat.fixed,
       responsibleMemberId: cat.responsibleMemberId ?? null,
     }));
 

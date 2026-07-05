@@ -323,65 +323,43 @@ export async function getTrackedExpenses(householdId: number, periodId: number) 
 export type InHand = Awaited<ReturnType<typeof getInHand>>;
 
 /**
- * "How much is still in whose hand" for a month. Per person:
- *   net = (budgeted categories still unspent) + (fixed bills they cover)
- *         − (their misc/unbudgeted spend).
- * A positive net = cash they're still holding (budgets → Piggy at wind-down;
- * fixed bills earmarked to pay). A negative net = they fronted more than they
- * hold → reclaim from the treasurer, or deduct next month. Budgeted remaining +
- * fixed bills are by the responsible/paying member; misc spend is by whoever
- * logged it. The head's account total = Piggy + their own net + the shared net.
+ * "What should be in whose hand" for a month. Every monthly expense tagged to a
+ * person is money they hold to pay it, so per member:
+ *   net = Σ(their tagged Sheet expense lines) − their misc daily spends.
+ * The head's account total = accumulated Piggy + their own net + the shared
+ * (untagged / pool) net. No budget/fixed logic — a monthly expense counts because
+ * it's under your name, full stop. Sinking-fund share lines are flagged so the UI
+ * can note they're set aside for a later bill.
  */
 export async function getInHand(householdId: number, periodId: number) {
-  const [categories, budgets, spends, fixedLines, members, piggy] = await Promise.all([
-    prisma.category.findMany({ where: { householdId, tracked: true, onHold: false } }),
-    prisma.budget.findMany({ where: { periodId } }),
-    prisma.spend.findMany({ where: { periodId } }),
-    // fixed bills are Sheet expense lines tagged to whoever pays them
-    prisma.expenseEntry.findMany({ where: { periodId, category: { fixed: true } } }),
+  const [expenses, spends, members, piggy] = await Promise.all([
+    prisma.expenseEntry.findMany({ where: { periodId }, include: { category: true } }),
+    prisma.spend.findMany({ where: { periodId }, include: { category: true } }),
     prisma.member.findMany({ where: { householdId }, orderBy: { id: "asc" } }),
     getPiggyOverview(householdId),
   ]);
-  const plannedByCat = new Map(budgets.map((b) => [b.categoryId, b.planned]));
-  const spentByCat = new Map<number, number>();
-  for (const s of spends) spentByCat.set(s.categoryId, (spentByCat.get(s.categoryId) ?? 0) + s.amount);
 
-  const budgetedIds = new Set(categories.filter((c) => (plannedByCat.get(c.id) ?? 0) > 0).map((c) => c.id));
-
-  // budgeted category rows (by responsible member)
-  const rows = categories
-    .filter((c) => budgetedIds.has(c.id))
-    .map((cat) => ({
-      id: cat.id,
-      name: cat.name,
-      responsibleMemberId: cat.responsibleMemberId,
-      allocation: plannedByCat.get(cat.id) ?? 0,
-      spent: spentByCat.get(cat.id) ?? 0,
-      remaining: (plannedByCat.get(cat.id) ?? 0) - (spentByCat.get(cat.id) ?? 0),
-    }));
-
-  // misc / unbudgeted spend (by whoever logged it)
+  // misc = daily unplanned spends (not a sinking-fund bill payment), by spender
   const miscByMember = new Map<number | null, number>();
   for (const s of spends) {
-    if (budgetedIds.has(s.categoryId)) continue;
+    if (s.category?.sinking) continue;
     const k = s.memberId ?? null;
     miscByMember.set(k, (miscByMember.get(k) ?? 0) + s.amount);
   }
 
   const build = (key: number | null, name: string) => {
-    const cats = rows.filter((r) => (r.responsibleMemberId ?? null) === key);
-    const bills = fixedLines
+    const lines = expenses
       .filter((e) => (e.memberId ?? null) === key)
-      .map((e) => ({ name: e.label, amount: e.amount }));
-    const budgetRemaining = cats.reduce((s, r) => s + r.remaining, 0);
-    const fixedTotal = bills.reduce((s, b) => s + b.amount, 0);
+      .map((e) => ({ label: e.label, amount: e.amount, sinking: !!e.category?.sinking }))
+      .sort((a, b) => b.amount - a.amount);
+    const total = lines.reduce((s, l) => s + l.amount, 0);
     const miscSpent = miscByMember.get(key) ?? 0;
-    return { memberId: key, name, cats, bills, budgetRemaining, fixedTotal, miscSpent, net: budgetRemaining + fixedTotal - miscSpent };
+    return { memberId: key, name, lines, total, miscSpent, net: total - miscSpent };
   };
 
   const byPerson = members
     .map((m) => build(m.id, m.name))
-    .filter((g) => g.cats.length > 0 || g.miscSpent > 0 || g.bills.length > 0);
+    .filter((g) => g.lines.length > 0 || g.miscSpent > 0);
   const shared = build(null, "Shared / pool");
   const piggyTotal = piggy.generalTotal + piggy.sinking.reduce((s, x) => s + x.hold, 0);
 
