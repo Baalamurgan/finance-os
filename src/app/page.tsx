@@ -1,6 +1,7 @@
+import { redirect } from "next/navigation";
 import { formatINR } from "@/lib/format";
 import { loadCommon } from "@/lib/load";
-import { getRollup } from "@/lib/queries";
+import { getRollup, getWindDownPreview } from "@/lib/queries";
 import { NavHeader } from "@/components/NavHeader";
 import { RowActions } from "@/components/RowActions";
 import { ExpenseRowActions } from "@/components/ExpenseRowActions";
@@ -9,7 +10,8 @@ import { DetailsPersist } from "@/components/DetailsPersist";
 import { IncomeModal } from "@/components/IncomeModal";
 import { IncomeRowActions } from "@/components/IncomeRowActions";
 import { MoneyFlowDonut } from "@/components/Charts";
-import { createPeriod, deleteIncome } from "./actions";
+import { ConfirmForm } from "@/components/ConfirmForm";
+import { createPeriod, deleteIncome, createNextMonthDraft, rebuildDraft, discardDraft } from "./actions";
 
 const SECTION_COLOR: Record<string, string> = {
   Loans: "#ef4444",
@@ -122,6 +124,10 @@ export default async function SheetPage({
   const c = await loadCommon(sp);
   if (!c) return <SeedNotice />;
 
+  // Next-month preview draft: head-only. Non-head hitting the URL → send to current.
+  const isDraft = c.selected?.status === "draft";
+  if (isDraft && !c.isHead) redirect("/");
+
   const nav = (
     <NavHeader
       active="sheet"
@@ -174,6 +180,10 @@ export default async function SheetPage({
   const rollup = await getRollup(c.selected.id);
   const open = c.selected.status === "open";
 
+  // Draft estimate: what the current open month will carry in + leave in Piggy.
+  const draftSource = isDraft ? c.periods.find((p) => p.status === "open") ?? null : null;
+  const preview = draftSource ? await getWindDownPreview(c.household.id, draftSource.id) : null;
+
   // Safeguard: if the current calendar month has no period yet (e.g. the monthly
   // auto-create didn't run), nudge the head to start it so the family always has
   // an open month to log into.
@@ -182,9 +192,10 @@ export default async function SheetPage({
   const curM = now.getMonth() + 1;
   const currentMonthMissing = !c.periods.some((p) => p.year === curY && p.month === curM);
 
-  // Head + Manager edit open months; the head can also edit a closed (locked) month.
+  // Head + Manager edit open months; the head can also edit a closed (locked) month
+  // or a next-month draft.
   const canEditHere = c.canEdit && (open || c.isHead);
-  const editingClosed = canEditHere && !open; // head editing a locked month
+  const editingClosed = canEditHere && !open && !isDraft; // head editing a locked month
 
   // group expenses into the fixed section order
   const grouped = SECTION_ORDER.map((section) => {
@@ -207,6 +218,68 @@ export default async function SheetPage({
       {nav}
       <DetailsPersist />
       <main className="mx-auto max-w-[68rem] space-y-4 p-6">
+        {/* Next-month preview draft — head-only, distinct from real months */}
+        {isDraft && (
+          <div className="rounded-xl border-2 border-dashed border-violet-300 bg-violet-50 p-4">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div className="min-w-0">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-lg">🔮</span>
+                  <h2 className="font-bold text-violet-800">Next-month draft — {c.selected.label}</h2>
+                  <span className="rounded-full bg-violet-200 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-violet-700">
+                    Draft
+                  </span>
+                </div>
+                <p className="mt-0.5 text-xs leading-relaxed text-violet-700/80">
+                  A preview you can edit freely — add, remove, change amounts. It <b>won&apos;t affect{" "}
+                  {draftSource?.label ?? "this month"}&apos;s wind-down</b>; it becomes the real month when{" "}
+                  {draftSource?.label ?? "the current month"} closes.
+                </p>
+              </div>
+              <div className="flex shrink-0 items-center gap-2">
+                <a href="/" className="rounded-md border border-violet-300 px-3 py-1.5 text-xs font-medium text-violet-700 hover:bg-violet-100">
+                  ← Back to {draftSource?.label ?? "now"}
+                </a>
+                <form action={rebuildDraft}>
+                  <input type="hidden" name="periodId" value={c.selected.id} />
+                  <button className="rounded-md border border-violet-300 px-3 py-1.5 text-xs font-medium text-violet-700 hover:bg-violet-100">
+                    ↻ Rebuild
+                  </button>
+                </form>
+                <ConfirmForm action={discardDraft} message="Discard this next-month draft? You can preview again anytime.">
+                  <input type="hidden" name="periodId" value={c.selected.id} />
+                  <button className="rounded-md px-3 py-1.5 text-xs font-medium text-red-600 hover:bg-red-50">Discard</button>
+                </ConfirmForm>
+              </div>
+            </div>
+            {preview && (
+              <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3">
+                <div className="rounded-lg bg-white/70 p-2.5">
+                  <div className="text-[10px] font-medium uppercase tracking-wide text-violet-500">
+                    Opening balance (from {preview.label})
+                  </div>
+                  <div className="text-base font-bold tabular-nums text-violet-900">{formatINR(preview.carryOut)}</div>
+                </div>
+                <div className="rounded-lg bg-white/70 p-2.5">
+                  <div className="text-[10px] font-medium uppercase tracking-wide text-violet-500">
+                    🐷 Piggy after {preview.label} closes
+                  </div>
+                  <div className="text-base font-bold tabular-nums text-violet-900">{formatINR(preview.piggyAfter)}</div>
+                </div>
+                <div className="rounded-lg bg-white/70 p-2.5">
+                  <div className="text-[10px] font-medium uppercase tracking-wide text-violet-500">{preview.label} surplus</div>
+                  <div className={`text-base font-bold tabular-nums ${preview.surplus < 0 ? "text-red-600" : "text-violet-900"}`}>
+                    {formatINR(preview.surplus)}
+                  </div>
+                </div>
+              </div>
+            )}
+            <p className="mt-2 text-[10px] text-violet-600/70">
+              Estimates — final figures are set when you wind down {preview?.label ?? "the current month"}.
+            </p>
+          </div>
+        )}
+
         {c.isHead && currentMonthMissing && (
           <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3">
             <p className="text-sm font-medium text-amber-800">
@@ -242,12 +315,20 @@ export default async function SheetPage({
             >
               ↓ Export CSV
             </a>
+            {c.isHead && open && !isDraft && (
+              <form action={createNextMonthDraft}>
+                <input type="hidden" name="householdId" value={c.household.id} />
+                <button className="rounded-full border border-violet-300 bg-violet-50 px-3 py-1 text-xs font-medium text-violet-700 hover:bg-violet-100">
+                  🔮 Preview next month →
+                </button>
+              </form>
+            )}
             <span
               className={`rounded-full px-3 py-1 text-xs font-medium ${
-                open ? "bg-green-100 text-green-700" : "bg-slate-200 text-slate-600"
+                isDraft ? "bg-violet-100 text-violet-700" : open ? "bg-green-100 text-green-700" : "bg-slate-200 text-slate-600"
               }`}
             >
-              {open ? "Open" : "Closed"}
+              {isDraft ? "Draft" : open ? "Open" : "Closed"}
             </span>
           </div>
         </div>

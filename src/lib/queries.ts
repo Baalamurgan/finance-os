@@ -111,7 +111,7 @@ export async function getPiggyOverview(householdId: number) {
 // Month-over-month income/expense/balance across all periods (for trends).
 export async function getTrends(householdId: number) {
   const periods = await prisma.period.findMany({
-    where: { householdId },
+    where: { householdId, status: { not: "draft" } }, // exclude preview drafts
     orderBy: [{ year: "asc" }, { month: "asc" }],
   });
   const ids = periods.map((p) => p.id);
@@ -126,6 +126,50 @@ export async function getTrends(householdId: number) {
     const expense = expMap.get(p.id) ?? 0;
     return { label: p.label, year: p.year, month: p.month, income, expense, balance: income - expense };
   });
+}
+
+/**
+ * Read-only estimate of what winding down `periodId` (the current open month) will
+ * do — the opening balance it carries into next month, and the Piggy left over.
+ * Same math as windDownMonth / preview-rollover. Powers the next-month draft view.
+ */
+export async function getWindDownPreview(householdId: number, periodId: number) {
+  const period = await prisma.period.findUnique({ where: { id: periodId } });
+  if (!period) return null;
+  const [incomes, expenses, budgets, spends, trackedCats, piggy] = await Promise.all([
+    prisma.incomeEntry.findMany({ where: { periodId } }),
+    prisma.expenseEntry.findMany({ where: { periodId } }),
+    prisma.budget.findMany({ where: { periodId } }),
+    prisma.spend.findMany({ where: { periodId } }),
+    prisma.category.findMany({ where: { householdId, tracked: true, onHold: false } }),
+    getPiggyOverview(householdId),
+  ]);
+  const income = incomes.reduce((s, i) => s + i.amount, 0);
+  const expense = expenses.reduce((s, e) => s + e.amount, 0);
+  const carryOut = period.carryForward + income - expense;
+  const budgetOf = (c: number) => budgets.find((b) => b.categoryId === c)?.planned ?? 0;
+  const spentOf = (c: number) => spends.filter((s) => s.categoryId === c).reduce((a, s) => a + s.amount, 0);
+
+  let piggyAccrual = 0, sinkingAccrual = 0, carried = 0;
+  for (const c of trackedCats) {
+    const b = budgetOf(c.id);
+    if (b > 0) {
+      const rem = b - spentOf(c.id);
+      if (c.sinking) sinkingAccrual += rem;
+      else if (rem >= 0) piggyAccrual += rem;
+      else carried += -rem;
+    } else if (spentOf(c.id) > 0) {
+      carried += spentOf(c.id);
+    }
+  }
+  const piggyNow = piggy.generalTotal + piggy.sinking.reduce((s, x) => s + x.hold, 0);
+  return {
+    label: period.label,
+    income, expense, surplus: income - expense,
+    carryIn: period.carryForward, carryOut,
+    piggyAccrual, sinkingAccrual, carried,
+    piggyNow, piggyAfter: piggyNow + piggyAccrual + sinkingAccrual,
+  };
 }
 
 export type Loans = Awaited<ReturnType<typeof getLoans>>;

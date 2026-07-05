@@ -2,6 +2,7 @@
 
 import { prisma } from "@/lib/prisma";
 import { revalidatePath } from "next/cache";
+import { redirect } from "next/navigation";
 import { cookies } from "next/headers";
 import { auth, signOut } from "@/auth";
 import { isUnlocked } from "@/lib/applock";
@@ -809,6 +810,84 @@ export async function createPeriod(formData: FormData) {
   revalidatePath("/", "layout");
 }
 
+// ── Next-month preview (head-only draft) ─────────────────────────────────────
+// A draft is a Period with status "draft": it never resolves as the "current"
+// month (loadCommon prefers "open"), can't be wound down (windDownMonth requires
+// "open"), and is promoted to "open" when the month actually starts
+// (ensureCurrentMonth) or when the current month winds down into it.
+async function latestOpenPeriod(householdId: number) {
+  return prisma.period.findFirst({
+    where: { householdId, status: "open" },
+    orderBy: [{ year: "desc" }, { month: "desc" }],
+  });
+}
+
+function nextYM(year: number, month: number) {
+  return month === 12 ? { year: year + 1, month: 1 } : { year, month: month + 1 };
+}
+
+async function clearPeriodRows(tx: Tx, periodId: number) {
+  await tx.settlementRecord.deleteMany({ where: { periodId } });
+  await tx.piggyEntry.deleteMany({ where: { periodId } });
+  await tx.spend.deleteMany({ where: { periodId } });
+  await tx.budget.deleteMany({ where: { periodId } });
+  await tx.expenseEntry.deleteMany({ where: { periodId } });
+  await tx.incomeEntry.deleteMany({ where: { periodId } });
+}
+
+// Create (or just open) the draft for the month AFTER the current open month, then go to it.
+export async function createNextMonthDraft(formData: FormData) {
+  if (!(await isHead())) return;
+  const householdId = Number(formData.get("householdId"));
+  if (!householdId) return;
+  const current = await latestOpenPeriod(householdId);
+  if (!current) return;
+  const { year, month } = nextYM(current.year, current.month);
+  const label = `${new Date(year, month - 1, 1).toLocaleString("en-US", { month: "short" }).toUpperCase()} ${year}`;
+
+  const existing = await prisma.period.findUnique({
+    where: { householdId_year_month: { householdId, year, month } },
+  });
+  if (!existing) {
+    await prisma.$transaction(async (tx) => {
+      const p = await tx.period.create({ data: { householdId, year, month, label, status: "draft", carryForward: 0 } });
+      await clonePeriodInto(tx, current.id, p.id, householdId);
+    });
+  }
+  revalidatePath("/", "layout");
+  redirect(`/?y=${year}&m=${month}`);
+}
+
+// Rebuild the draft from the current open month's template (discards any draft edits).
+export async function rebuildDraft(formData: FormData) {
+  if (!(await isHead())) return;
+  const periodId = Number(formData.get("periodId"));
+  const draft = await prisma.period.findUnique({ where: { id: periodId } });
+  if (!draft || draft.status !== "draft") return;
+  const current = await latestOpenPeriod(draft.householdId);
+  if (!current) return;
+  await prisma.$transaction(async (tx) => {
+    await clearPeriodRows(tx, periodId);
+    await clonePeriodInto(tx, current.id, periodId, draft.householdId);
+  });
+  revalidatePath("/", "layout");
+  redirect(`/?y=${draft.year}&m=${draft.month}`);
+}
+
+// Throw the draft away entirely.
+export async function discardDraft(formData: FormData) {
+  if (!(await isHead())) return;
+  const periodId = Number(formData.get("periodId"));
+  const draft = await prisma.period.findUnique({ where: { id: periodId } });
+  if (!draft || draft.status !== "draft") return;
+  await prisma.$transaction(async (tx) => {
+    await clearPeriodRows(tx, periodId);
+    await tx.period.delete({ where: { id: periodId } });
+  });
+  revalidatePath("/", "layout");
+  redirect("/");
+}
+
 // derive a short member code from a name (initials, else first letters)
 function deriveCode(name: string): string {
   const words = name.trim().split(/\s+/).filter(Boolean);
@@ -982,7 +1061,9 @@ export async function windDownMonth(formData: FormData) {
     const next = await tx.period.upsert({
       where: { householdId_year_month: { householdId, year: nextYear, month: nextMonth } },
       create: { householdId, year: nextYear, month: nextMonth, label: nextLabel, carryForward: carryOut },
-      update: { carryForward: carryOut },
+      // if next month already exists as a preview draft, promote it to a real open
+      // month (keeping the head's edits — hasStructure below prevents re-cloning)
+      update: { carryForward: carryOut, status: "open" },
     });
 
     // clone recurring structure into the next month if it's empty

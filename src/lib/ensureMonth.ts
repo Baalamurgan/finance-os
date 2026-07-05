@@ -18,7 +18,14 @@ export async function ensureCurrentMonth(now = new Date()) {
     const existing = await prisma.period.findUnique({
       where: { householdId_year_month: { householdId: h.id, year, month } },
     });
-    if (existing) continue;
+    if (existing) {
+      // a preview draft became the current month → promote it to a real open month
+      if (existing.status === "draft") {
+        await prisma.period.update({ where: { id: existing.id }, data: { status: "open" } });
+        created.push(`household ${h.id}: ${label} (promoted draft)`);
+      }
+      continue;
+    }
 
     const latest = await prisma.period.findFirst({
       where: { householdId: h.id },
