@@ -339,6 +339,7 @@ export async function getTrackedExpenses(householdId: number, periodId: number) 
     return {
       id: cat.id,
       name: cat.name,
+      responsibleMemberId: cat.responsibleMemberId,
       allocation,
       spent,
       remaining: allocation - spent,

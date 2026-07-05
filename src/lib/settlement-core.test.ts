@@ -6,11 +6,17 @@ const members = [
   { id: 2, name: "Harish" },
   { id: 3, name: "KA" }, // treasurer/hub
 ];
-const exp = (memberId: number | null, amount: number, label = "x", cat = "Loan"): SettleTagged => ({
+const exp = (
+  memberId: number | null,
+  amount: number,
+  label = "x",
+  cat = "Loan",
+  responsibleMemberId: number | null = null,
+): SettleTagged => ({
   memberId,
   amount,
   label,
-  category: { name: cat },
+  category: { name: cat, responsibleMemberId },
 });
 
 describe("computeSettlement", () => {
@@ -42,6 +48,26 @@ describe("computeSettlement", () => {
     ]);
     // spend label carries the previous month tag
     expect(bala.paidItems.find((p) => p.kind === "spend")?.label).toBe("Veg (JUN 2026)");
+  });
+
+  it("a spend on your OWN category does not credit you (already covered by its monthly line)", () => {
+    const res = computeSettlement({
+      members,
+      incomes: [{ ownerId: 1, amount: 80_000 }],
+      expenses: [],
+      spends: [
+        exp(1, 500, "Recharge", "Mobile", 1), // Bala's own category → NOT credited
+        exp(1, 2_000, "Veg", "Misc", null), // shared → credited
+        exp(1, 1_500, "Fuel", "Car", 2), // Harish's category → credited
+      ],
+      records: [],
+      treasurerId: 3,
+      prevLabel: "JUN 2026",
+    });
+    const bala = res.rows.find((r) => r.id === 1)!;
+    expect(bala.paid).toBe(3_500); // 2_000 + 1_500, the 500 own-category spend excluded
+    expect(bala.paidItems.some((p) => p.label.startsWith("Recharge"))).toBe(false);
+    expect(bala.net).toBe(76_500);
   });
 
   it("negative net → the treasurer pays the member", () => {

@@ -865,22 +865,38 @@ async function addEstimatedCarry(
   for (const c of trackedCats) {
     const b = budgetOf(c.id);
     if (c.sinking && b > 0) continue; // sinking → its fund, never carried
-    let amount = 0;
-    let label = "";
     if (b > 0) {
+      // Budgeted category: only the over-budget excess carries, as one line.
       const rem = b - spentOf(c.id);
       if (rem >= 0) continue; // under budget → Piggy, not carried
-      amount = -rem;
-      label = `${c.name} over-budget (from ${source.label})`;
+      await tx.expenseEntry.create({
+        data: {
+          periodId: targetId,
+          categoryId: c.id,
+          label: `${c.name} over-budget (from ${source.label})`,
+          amount: -rem,
+          necessary: true,
+          oneOff: true,
+          note: CARRY_NOTE,
+        },
+      });
     } else {
-      const sp = spentOf(c.id);
-      if (sp <= 0) continue;
-      amount = sp;
-      label = `Misc (from ${source.label})`;
+      // No-budget / misc: carry EACH spend as its own line so next month reads
+      // like an itemised list (e.g. "JUL · Groceries") instead of one lump.
+      for (const s of spends.filter((sp) => sp.categoryId === c.id && sp.amount > 0)) {
+        await tx.expenseEntry.create({
+          data: {
+            periodId: targetId,
+            categoryId: c.id,
+            label: `${source.label} · ${s.label}`,
+            amount: s.amount,
+            necessary: true,
+            oneOff: true,
+            note: CARRY_NOTE,
+          },
+        });
+      }
     }
-    await tx.expenseEntry.create({
-      data: { periodId: targetId, categoryId: c.id, label, amount, necessary: true, oneOff: true, note: CARRY_NOTE },
-    });
   }
 }
 
@@ -1141,12 +1157,15 @@ export async function windDownMonth(formData: FormData) {
           });
         }
       } else if (spent > 0) {
-        // tracked, no budget = Misc → carry the spend into next month as an expense
-        carryToNext.push({
-          categoryId: cat.id,
-          amount: spent,
-          label: `Misc (from ${period.label})`,
-        });
+        // tracked, no budget = Misc → carry EACH spend as its own line next month
+        // (e.g. "JUL · Groceries") so it reads as an itemised list, not one lump.
+        for (const s of spends.filter((sp) => sp.categoryId === cat.id && sp.amount > 0)) {
+          carryToNext.push({
+            categoryId: cat.id,
+            amount: s.amount,
+            label: `${period.label} · ${s.label}`,
+          });
+        }
       }
     }
 

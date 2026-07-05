@@ -248,10 +248,25 @@ function SpendCard({
   currentMemberId?: number | null;
 }) {
   const pct = card.allocation > 0 ? Math.min((card.spent / card.allocation) * 100, 100) : 0;
+  const owner = card.responsibleMemberId
+    ? members.find((m) => m.id === card.responsibleMemberId)?.name ?? null
+    : null;
   return (
     <section className="flex flex-col rounded-xl border border-slate-200 bg-white">
       <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3">
-        <h2 className="font-semibold text-slate-800">{card.name}</h2>
+        <div className="flex min-w-0 items-center gap-2">
+          <h2 className="truncate font-semibold text-slate-800">{card.name}</h2>
+          <span
+            title={owner ? `Budget held under ${owner}` : "Shared budget — anyone can spend"}
+            className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium ${
+              owner
+                ? "bg-slate-100 text-slate-500"
+                : "bg-amber-50 text-amber-600"
+            }`}
+          >
+            {owner ? `👤 ${owner}` : "🤝 Shared"}
+          </span>
+        </div>
         {open && (
           <AddSpendModal
             periodId={periodId}
