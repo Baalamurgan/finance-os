@@ -29,7 +29,7 @@ export async function clonePeriodInto(
       where: { householdId },
       select: {
         id: true, name: true, sinking: true, monthlyBudget: true,
-        necessary: true, onHold: true, responsibleMemberId: true,
+        necessary: true, onHold: true, fixed: true, responsibleMemberId: true,
       },
     }),
   ]);
@@ -62,10 +62,9 @@ export async function clonePeriodInto(
     });
   }
 
-  // budgets: sinking funds only (they reconcile share-vs-spent → Piggy at wind-down).
-  // Flat monthly expenses need no budget — they're just tagged Sheet lines.
+  // budgets: Budget (tracked) categories only — fixed bills recur as Sheet lines
   for (const c of setupCats) {
-    if (!c.sinking) continue;
+    if (c.fixed) continue;
     await tx.budget.create({ data: { periodId: targetId, categoryId: c.id, planned: c.monthlyBudget! } });
   }
 }

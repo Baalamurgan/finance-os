@@ -437,18 +437,17 @@ export async function createCategory(
   if (!householdId || !name) return { ok: false, error: "Give the category a name.", n };
   const amountRaw = String(formData.get("monthlyBudget") ?? "").trim();
   const monthlyBudget = amountRaw === "" ? null : Number(amountRaw);
-  const sinking = formData.get("sinking") === "on";
+  const fixed = formData.get("fixed") === "on";
+  const sinking = !fixed && formData.get("sinking") === "on";
   const cycleRaw = String(formData.get("cycleMonths") ?? "").trim();
   const cycleMonths = sinking && cycleRaw ? Number(cycleRaw) : null;
   const paidByRaw = String(formData.get("responsibleMemberId") ?? "").trim();
   const responsibleMemberId = paidByRaw === "" ? null : Number(paidByRaw);
-  if (sinking && (!monthlyBudget || monthlyBudget <= 0 || !cycleMonths || cycleMonths < 1))
-    return { ok: false, error: "A sinking fund needs a monthly amount and a cycle.", n };
 
   try {
     await prisma.category.create({
-      // sinking funds are tracked (accrue to Piggy); everything else is a flat monthly expense
-      data: { householdId, name, section: "Monthly", tracked: sinking, monthlyBudget, sinking, cycleMonths, responsibleMemberId },
+      // fixed bills live on the Sheet (tracked=false); budgets are spend-tracked
+      data: { householdId, name, section: "Monthly", tracked: !fixed, monthlyBudget, sinking, cycleMonths, fixed, responsibleMemberId },
     });
   } catch {
     return { ok: false, error: `"${name}" already exists.`, n };
@@ -692,20 +691,23 @@ export async function saveRecurring(
   if (!id) return { ok: false, error: "Missing category.", n };
   const amountRaw = String(formData.get("monthlyBudget") ?? "").trim();
   const monthlyBudget = amountRaw === "" ? null : Number(amountRaw);
-  const sinking = formData.get("sinking") === "on";
+  const fixed = formData.get("fixed") === "on";
+  const sinking = !fixed && formData.get("sinking") === "on";
   const cycleRaw = String(formData.get("cycleMonths") ?? "").trim();
   const cycleMonths = sinking && cycleRaw ? Number(cycleRaw) : null;
   // sinking funds require a monthly amount AND a valid cycle
   if (sinking && (!monthlyBudget || monthlyBudget <= 0 || !cycleMonths || cycleMonths < 1))
     return { ok: false, error: "Sinking funds need a monthly amount and a cycle.", n };
-  // who pays this expense (tags the Sheet line → drives settlement + "in my account")
+  if (fixed && (!monthlyBudget || monthlyBudget <= 0))
+    return { ok: false, error: "A fixed bill needs a monthly amount.", n };
+  // responsible/default member: budget → over-budget owner; fixed → who pays it
   const respRaw = String(formData.get("responsibleMemberId") ?? "").trim();
   const responsibleMemberId = respRaw === "" ? null : Number(respRaw);
 
   const cat = await prisma.category.findUnique({ where: { id } });
   if (!cat) return { ok: false, error: "Category not found.", n };
-  // sinking funds are tracked (Piggy accrual); everything else is a flat monthly expense
-  const tracked = sinking;
+  // a fixed bill is a Sheet line, not spend-tracked; reverting to budget re-tracks it
+  const tracked = fixed ? false : cat.fixed ? true : cat.tracked;
 
   // name + section are head-editable in Setup (rename / move between sections)
   const name = String(formData.get("name") ?? "").trim() || cat.name;
@@ -717,13 +719,13 @@ export async function saveRecurring(
   try {
     await prisma.category.update({
       where: { id },
-      data: { name, section, monthlyBudget, sinking, cycleMonths, responsibleMemberId, tracked },
+      data: { name, section, monthlyBudget, sinking, cycleMonths, responsibleMemberId, fixed, tracked },
     });
   } catch {
     // unique-name clash → keep the old name, still apply the rest
     await prisma.category.update({
       where: { id },
-      data: { section, monthlyBudget, sinking, cycleMonths, responsibleMemberId, tracked },
+      data: { section, monthlyBudget, sinking, cycleMonths, responsibleMemberId, fixed, tracked },
     });
     revalidatePath("/", "layout");
     return { ok: false, error: `"${name}" is already taken — saved everything except the name.`, n };
