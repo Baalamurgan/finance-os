@@ -841,6 +841,49 @@ async function addEstimatedSurplus(
   }
 }
 
+// Marks the auto-carried "over-budget excess + misc spends" one-off expense lines
+// (estimate on a draft → final at wind-down), so they can be replaced not doubled.
+const CARRY_NOTE = "__carry__";
+
+// Add ESTIMATED carry-to-next-month expense lines to a draft from the source month:
+// over-budget excess + misc spends (tracked, no-budget categories) — the same rule
+// windDownMonth uses. Replaces any prior estimate.
+async function addEstimatedCarry(
+  tx: Tx,
+  source: { id: number; label: string; householdId: number },
+  targetId: number,
+) {
+  const [budgets, spends, trackedCats] = await Promise.all([
+    tx.budget.findMany({ where: { periodId: source.id } }),
+    tx.spend.findMany({ where: { periodId: source.id } }),
+    tx.category.findMany({ where: { householdId: source.householdId, tracked: true, onHold: false } }),
+  ]);
+  const budgetOf = (c: number) => budgets.find((b) => b.categoryId === c)?.planned ?? 0;
+  const spentOf = (c: number) => spends.filter((s) => s.categoryId === c).reduce((a, s) => a + s.amount, 0);
+
+  await tx.expenseEntry.deleteMany({ where: { periodId: targetId, note: CARRY_NOTE } });
+  for (const c of trackedCats) {
+    const b = budgetOf(c.id);
+    if (c.sinking && b > 0) continue; // sinking → its fund, never carried
+    let amount = 0;
+    let label = "";
+    if (b > 0) {
+      const rem = b - spentOf(c.id);
+      if (rem >= 0) continue; // under budget → Piggy, not carried
+      amount = -rem;
+      label = `${c.name} over-budget (from ${source.label})`;
+    } else {
+      const sp = spentOf(c.id);
+      if (sp <= 0) continue;
+      amount = sp;
+      label = `Misc (from ${source.label})`;
+    }
+    await tx.expenseEntry.create({
+      data: { periodId: targetId, categoryId: c.id, label, amount, necessary: true, oneOff: true, note: CARRY_NOTE },
+    });
+  }
+}
+
 // ── Next-month preview (head-only draft) ─────────────────────────────────────
 // A draft is a Period with status "draft": it never resolves as the "current"
 // month (loadCommon prefers "open"), can't be wound down (windDownMonth requires
@@ -883,6 +926,7 @@ export async function createNextMonthDraft(formData: FormData) {
     await prisma.$transaction(async (tx) => {
       const p = await tx.period.create({ data: { householdId, year, month, label, status: "draft", carryForward: 0 } });
       await clonePeriodInto(tx, current.id, p.id, householdId);
+      await addEstimatedCarry(tx, current, p.id);
       await addEstimatedSurplus(tx, current, p.id);
     });
   }
@@ -901,6 +945,7 @@ export async function rebuildDraft(formData: FormData) {
   await prisma.$transaction(async (tx) => {
     await clearPeriodRows(tx, periodId);
     await clonePeriodInto(tx, current.id, periodId, draft.householdId);
+    await addEstimatedCarry(tx, current, periodId);
     await addEstimatedSurplus(tx, current, periodId);
   });
   revalidatePath("/", "layout");
@@ -1123,7 +1168,9 @@ export async function windDownMonth(formData: FormData) {
     if (hasStructure === 0) await clonePeriodStructure(tx, periodId, next.id, householdId);
 
     // add the carried over-budget + misc as one-off expenses on next month's sheet
-    // (oneOff so they are NOT copied forward again into later months)
+    // (oneOff so they are NOT copied forward again into later months). Replace any
+    // estimate a draft already carried (CARRY_NOTE) so they aren't doubled.
+    await tx.expenseEntry.deleteMany({ where: { periodId: next.id, note: CARRY_NOTE } });
     for (const c of carryToNext) {
       await tx.expenseEntry.create({
         data: {
@@ -1133,6 +1180,7 @@ export async function windDownMonth(formData: FormData) {
           amount: c.amount,
           necessary: true,
           oneOff: true,
+          note: CARRY_NOTE,
         },
       });
     }

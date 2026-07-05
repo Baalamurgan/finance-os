@@ -269,10 +269,10 @@ export default async function SheetPage({
                   <div className="text-base font-bold tabular-nums text-violet-900">{formatINR(preview.piggyAfter)}</div>
                 </div>
                 <div className="rounded-lg bg-white/70 p-2.5">
-                  <div className="text-[10px] font-medium uppercase tracking-wide text-violet-500">{preview.label} surplus</div>
-                  <div className={`text-base font-bold tabular-nums ${preview.surplus < 0 ? "text-red-600" : "text-violet-900"}`}>
-                    {formatINR(preview.surplus)}
+                  <div className="text-[10px] font-medium uppercase tracking-wide text-violet-500">
+                    Misc carried in (from {preview.label})
                   </div>
+                  <div className="text-base font-bold tabular-nums text-violet-900">{formatINR(preview.carried)}</div>
                 </div>
               </div>
             )}
