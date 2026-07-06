@@ -50,7 +50,7 @@ export function NavHeader({
   selYear: number;
   selMonth: number;
   members: { id: number; name: string }[];
-  categories: { id: number; name: string; tracked?: boolean; section?: string }[];
+  categories: { id: number; name: string; tracked?: boolean; section?: string; sinking?: boolean }[];
   account: { name: string; email: string; image: string | null };
   isHead: boolean;
   piggyBalance: number;
@@ -68,6 +68,13 @@ export function NavHeader({
   const now = new Date();
   const curYear = now.getFullYear();
   const curMonth = now.getMonth() + 1;
+
+  // Add-spend picker: everyday budgeted categories first, sinking funds last (their
+  // spend categories are logged against rarely). Stable sort keeps each group's name order.
+  const spendCategories = categories
+    .filter((c) => c.tracked)
+    .sort((a, b) => Number(a.sinking ?? false) - Number(b.sinking ?? false))
+    .map((c) => ({ id: c.id, name: c.name, misc: c.section === "Misc" }));
 
   const tabs = [
     { key: "sheet", label: "Sheet", href: "/" },
@@ -172,7 +179,7 @@ export function NavHeader({
             <AddSpendModal
               periodId={periodId}
               trigger="primary"
-              categories={categories.filter((c) => c.tracked).map((c) => ({ id: c.id, name: c.name, misc: c.section === "Misc" }))}
+              categories={spendCategories}
               isHead={isHead}
               members={members}
               currentMemberId={currentMemberId}
@@ -218,7 +225,7 @@ export function NavHeader({
       <AddSpendModal
         periodId={periodId}
         trigger="fab"
-        categories={categories.filter((c) => c.tracked).map((c) => ({ id: c.id, name: c.name, misc: c.section === "Misc" }))}
+        categories={spendCategories}
         isHead={isHead}
         members={members}
         currentMemberId={currentMemberId}
