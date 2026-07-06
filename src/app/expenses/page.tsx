@@ -151,7 +151,7 @@ export default async function ExpensesPage({
             </summary>
             <div className="space-y-3 border-t border-slate-100 p-4">
               {c.isHead && (
-                <div className="rounded-xl bg-slate-900 p-4 text-white">
+                <div className="rounded-xl bg-slate-900 p-4 text-white dark:bg-slate-950">
                   <div className="text-[11px] font-medium uppercase tracking-wide text-slate-300">
                     Should be in {headMember?.name ?? "the"} account
                   </div>

@@ -1,5 +1,28 @@
 @import "tailwindcss";
 
+/* Class-based dark mode (toggle sets `.dark` on <html>). */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* Dark theme = remap the neutral (slate) palette + white so the whole app —
+   which is built on bg-white / text-slate-* / border-slate-* — inverts without
+   touching every component. Accent colours (indigo/green/red/…) stay vivid.
+   Intentionally-dark surfaces (modal overlays, dark cards) use black / arbitrary
+   hex so they stay dark in both themes. */
+.dark {
+  color-scheme: dark;
+  --color-white: #0f172a;
+  --color-slate-50: #131c30;
+  --color-slate-100: #1e293b;
+  --color-slate-200: #2b3a52;
+  --color-slate-300: #3b4a63;
+  --color-slate-400: #8ea0b8;
+  --color-slate-500: #a7b4c8;
+  --color-slate-600: #c3cddd;
+  --color-slate-700: #d9e0ec;
+  --color-slate-800: #eef2f8;
+  --color-slate-900: #f8fafc;
+}
+
 html {
   /* Always show the vertical scrollbar track so the centered layout doesn't
      shift sideways when expanding content makes a scrollbar appear. */
@@ -28,6 +51,10 @@ body {
   background: #f8fafc; /* slate-50 */
   color: #0f172a; /* slate-900 */
   font-family: var(--font-geist-sans), Arial, Helvetica, sans-serif;
+}
+.dark body {
+  background: #0b1220; /* a touch darker than the cards so they lift off it */
+  color: #f8fafc;
 }
 
 @layer components {

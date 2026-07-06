@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { AddSpendModal } from "@/components/AddSpendModal";
 import { UserMenu } from "@/components/UserMenu";
+import { ThemeToggle } from "@/components/ThemeToggle";
 import { WindDownBanner } from "@/components/WindDownBanner";
 import { setViewAs } from "@/app/actions";
 import { formatINR } from "@/lib/format";
@@ -178,6 +179,8 @@ export function NavHeader({
             />
           )}
 
+          <ThemeToggle />
+
           {/* identity */}
           <div className="border-l border-slate-200 pl-2">
             <UserMenu
@@ -260,7 +263,7 @@ function BottomNav({
     <>
       {/* tap-away + slide-up sheet for "More" */}
       {open && (
-        <div className="fixed inset-0 z-40 bg-slate-900/30 sm:hidden" onClick={() => setOpen(false)}>
+        <div className="fixed inset-0 z-40 bg-black/30 sm:hidden" onClick={() => setOpen(false)}>
           <div
             className="absolute inset-x-0 mx-2 overflow-hidden rounded-2xl border border-slate-200 bg-white py-1 shadow-xl"
             style={{ bottom: "calc(env(safe-area-inset-bottom) + 4.5rem)" }}

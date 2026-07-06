@@ -63,7 +63,7 @@ export function PersonalSpendModal({
       )}
 
       {open && (
-        <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-slate-900/40 p-4 sm:items-center" onClick={() => setOpen(false)}>
+        <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/40 p-4 sm:items-center" onClick={() => setOpen(false)}>
           <div className="my-auto flex w-full max-w-md flex-col rounded-2xl bg-white shadow-xl" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between border-b border-slate-100 px-5 py-3">
               <h2 className="text-lg font-bold text-slate-900">{isEdit ? "Edit spend" : "Add spend"}</h2>

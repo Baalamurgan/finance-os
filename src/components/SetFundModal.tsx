@@ -29,7 +29,7 @@ export function SetFundModal({ target, name, current }: { target: string; name: 
       </button>
 
       {open && (
-        <div className="fixed inset-0 z-50 flex items-end justify-center overflow-y-auto bg-slate-900/40 sm:items-center sm:p-4" onClick={() => setOpen(false)}>
+        <div className="fixed inset-0 z-50 flex items-end justify-center overflow-y-auto bg-black/40 sm:items-center sm:p-4" onClick={() => setOpen(false)}>
           <div className="w-full max-w-sm rounded-t-3xl bg-white shadow-xl sm:rounded-2xl" onClick={(e) => e.stopPropagation()} style={{ paddingBottom: "env(safe-area-inset-bottom)" }}>
             <div className="flex items-center justify-between border-b border-slate-100 px-5 py-4">
               <h2 className="text-base font-bold text-slate-900">Set {name} balance</h2>

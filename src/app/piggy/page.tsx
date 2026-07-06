@@ -67,7 +67,7 @@ export default async function PiggyPage({
           )}
         </div>
 
-        <div className="rounded-xl border border-slate-300 bg-slate-900 p-5 text-white">
+        <div className="rounded-xl border border-slate-300 bg-slate-900 p-5 text-white dark:bg-slate-950">
           <div className="text-xs font-medium uppercase tracking-wide text-slate-300">
             Total set aside in the account
           </div>

@@ -106,7 +106,7 @@ export default async function PersonalExpenses({
           <form action={addPersonalCategory} className="mt-3 flex gap-2">
             <input name="icon" placeholder="🔖" maxLength={2} className="input w-14 text-center" />
             <input name="name" placeholder="New category" className="input flex-1" required />
-            <button className="rounded-md bg-slate-800 px-3 py-2 text-sm font-medium text-white hover:bg-slate-900">Add</button>
+            <button className="rounded-md bg-slate-800 px-3 py-2 text-sm font-medium text-white hover:bg-slate-900 dark:bg-slate-950">Add</button>
           </form>
         </section>
       </main>

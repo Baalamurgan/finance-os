@@ -39,7 +39,7 @@ export function ServiceWorkerRegister() {
   if (!waiting) return null;
 
   return (
-    <div className="fixed inset-x-0 bottom-0 z-[60] flex items-center justify-between gap-3 bg-slate-900 px-4 py-3 text-sm text-white sm:inset-x-auto sm:bottom-4 sm:left-1/2 sm:-translate-x-1/2 sm:rounded-lg sm:shadow-lg">
+    <div className="fixed inset-x-0 bottom-0 z-[60] flex items-center justify-between gap-3 bg-slate-900 dark:bg-slate-950 px-4 py-3 text-sm text-white sm:inset-x-auto sm:bottom-4 sm:left-1/2 sm:-translate-x-1/2 sm:rounded-lg sm:shadow-lg">
       <span>A new version is available.</span>
       <button
         onClick={() => waiting.postMessage("SKIP_WAITING")}

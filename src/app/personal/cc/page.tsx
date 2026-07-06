@@ -92,7 +92,7 @@ export default async function PersonalCC({
               <input name="last4" placeholder="Last 4" maxLength={4} className="input" />
               <input name="limitAmt" type="number" placeholder="Limit ₹" className="input" />
               <input name="color" type="color" defaultValue="#6366f1" className="h-9 w-full rounded border border-slate-200" />
-              <button className="col-span-2 rounded-md bg-slate-800 px-3 py-2 text-sm font-medium text-white sm:col-span-1">Add card</button>
+              <button className="col-span-2 rounded-md bg-slate-800 px-3 py-2 text-sm font-medium text-white sm:col-span-1 dark:bg-slate-950">Add card</button>
             </form>
           </details>
         </section>
