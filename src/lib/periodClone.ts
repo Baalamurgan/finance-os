@@ -6,12 +6,13 @@ import type { Prisma } from "@prisma/client";
  * createPeriod / windDownMonth / ensureCurrentMonth / the next-month draft.
  *
  * Two sources, one place each:
- * - Income + non-budgeted expense lines (loans, fixed bills, cook, misc, installments)
- *   come from the active RecurringItems, tagged to their member.
- * - "Envelope" categories — tracked, non-held, with a monthlyBudget set — are the single
- *   source for their own monthly amount: each generates ONE expense line (= monthlyBudget,
- *   tagged to whoever's responsible) plus a Budget = monthlyBudget. Any RecurringItem in an
- *   envelope category is ignored here so nothing double-books.
+ * - Income + non-budgeted expense lines (loans, cook, misc, installments) come from the
+ *   active RecurringItems, tagged to their member.
+ * - "Budgeted" categories — non-held, with a monthlyBudget set (tracked envelopes AND
+ *   flat fixed bills) — are the single source for their own monthly amount: each generates
+ *   ONE expense line (= monthlyBudget, tagged to whoever's responsible). Tracked (spend-
+ *   tracked) categories additionally get a Budget = monthlyBudget; flat fixed bills get the
+ *   line only. Any RecurringItem in a budgeted category is ignored so nothing double-books.
  * The month's CARRY (surplus → income, misc-per-spend, over-budget) is added by the
  * callers (windDownMonth / the draft's addEstimatedSurplus + addEstimatedCarry),
  * exactly as before — this only replaces the "clone previous month" step.
@@ -27,12 +28,13 @@ export async function generateMonth(
     tx.category.findMany({ where: { householdId }, select: { id: true, name: true, tracked: true, sinking: true, onHold: true, necessary: true, monthlyBudget: true, responsibleMemberId: true } }),
   ]);
   const catById = new Map(cats.map((c) => [c.id, c]));
-  // An "envelope" category owns its own monthly amount (Budgets & sinking funds) — it's
-  // generated from the Category below, so its RecurringItems (if any) are skipped.
-  const isEnvelope = (categoryId: number | null): boolean => {
+  // A "budgeted" category (tracked envelope OR flat fixed bill) owns its own monthly amount
+  // in Budgets & sinking funds — it's generated from the Category below, so its
+  // RecurringItems (if any) are skipped so nothing double-books.
+  const isBudgeted = (categoryId: number | null): boolean => {
     if (categoryId == null) return false;
     const c = catById.get(categoryId);
-    return !!c && c.tracked && !c.onHold && c.monthlyBudget != null && c.monthlyBudget > 0;
+    return !!c && !c.onHold && c.monthlyBudget != null && c.monthlyBudget > 0;
   };
 
   // For a fixed-term installment, this month's payment number (or null if the item
@@ -58,7 +60,7 @@ export async function generateMonth(
     if (it.categoryId == null) continue;
     const cat = catById.get(it.categoryId);
     if (cat?.onHold) continue; // held category → not generated
-    if (isEnvelope(it.categoryId)) continue; // envelope category → generated from the Category, not the item
+    if (isBudgeted(it.categoryId)) continue; // budgeted category → generated from the Category, not the item
     await tx.expenseEntry.create({
       data: {
         periodId: targetId,
@@ -72,11 +74,12 @@ export async function generateMonth(
     });
   }
 
-  // Envelope categories: the single source for their monthly amount. One expense line
-  // (= monthlyBudget, tagged to who's responsible) + one budget, so the amount lives in
-  // exactly one place (Budgets & sinking funds) and always reflects on rebuild.
+  // Budgeted categories: the single source for their monthly amount. One expense line
+  // (= monthlyBudget, tagged to who's responsible) so the amount lives in exactly one
+  // place (Budgets & sinking funds) and always reflects on rebuild. Tracked (spend-tracked)
+  // categories also get a Budget envelope; flat fixed bills get the line only.
   for (const cat of cats) {
-    if (!cat.tracked || cat.onHold || cat.monthlyBudget == null || cat.monthlyBudget <= 0) continue;
+    if (cat.onHold || cat.monthlyBudget == null || cat.monthlyBudget <= 0) continue;
     const label = cat.sinking ? `${cat.name} (monthly share)` : cat.name;
     await tx.expenseEntry.create({
       data: {
@@ -89,6 +92,8 @@ export async function generateMonth(
         oneOff: false,
       },
     });
-    await tx.budget.create({ data: { periodId: targetId, categoryId: cat.id, planned: cat.monthlyBudget } });
+    if (cat.tracked) {
+      await tx.budget.create({ data: { periodId: targetId, categoryId: cat.id, planned: cat.monthlyBudget } });
+    }
   }
 }

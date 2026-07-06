@@ -120,12 +120,12 @@ async function promoteToTemplate(
   const period = await prisma.period.findUnique({ where: { id: periodId }, select: { householdId: true } });
   if (!period) return;
   const householdId = period.householdId;
-  // Envelope categories (tracked + budgeted) own their monthly amount in Budgets &
-  // sinking funds — generation builds their line from the Category, so a promoted
-  // template item would only clutter Setup (and is ignored anyway). Skip it.
+  // Budgeted categories (tracked envelopes AND flat fixed bills) own their monthly amount
+  // in Budgets & sinking funds — generation builds their line from the Category, so a
+  // promoted template item would only clutter Setup (and is ignored anyway). Skip it.
   if (kind === "expense" && categoryId != null) {
-    const cat = await prisma.category.findUnique({ where: { id: categoryId }, select: { tracked: true, monthlyBudget: true } });
-    if (cat?.tracked && cat.monthlyBudget != null) return;
+    const cat = await prisma.category.findUnique({ where: { id: categoryId }, select: { monthlyBudget: true } });
+    if (cat?.monthlyBudget != null && cat.monthlyBudget > 0) return;
   }
   const existing = await prisma.recurringItem.findFirst({
     where: { householdId, kind, name, ...(kind === "expense" ? { categoryId } : {}) },
