@@ -32,6 +32,7 @@ export function RecurringSetup({
         <div>
           <h2 className="text-sm font-semibold text-slate-900">🔁 Recurring template</h2>
           <p className="text-xs text-slate-500">The source of truth — every month is generated from these. Edits apply from next month.</p>
+          <p className="mt-0.5 text-[11px] text-slate-400">Budgeted &amp; sinking categories (Petrol, EB, insurance…) are managed in <b>Budgets &amp; sinking funds</b> below.</p>
         </div>
         <div className="inline-flex rounded-lg border border-slate-200 p-0.5 text-xs font-medium">
           <button onClick={() => setByMember(false)} className={`rounded-md px-2.5 py-1 ${!byMember ? "bg-indigo-600 text-white" : "text-slate-500"}`}>By type</button>
