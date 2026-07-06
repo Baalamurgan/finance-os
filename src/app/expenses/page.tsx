@@ -5,6 +5,7 @@ import { NavHeader } from "@/components/NavHeader";
 import { AddSpendModal } from "@/components/AddSpendModal";
 import { SpendDeleteButton } from "@/components/SpendDeleteButton";
 import { SpendSubCategoryPicker } from "@/components/SpendSubCategoryPicker";
+import { EditSpendModal } from "@/components/EditSpendModal";
 import { MISC_SUBCATEGORIES } from "@/lib/misc";
 
 export default async function ExpensesPage({
@@ -359,6 +360,16 @@ function SpendCard({
             </div>
             <div className="flex items-center gap-2">
               <span className="tabular-nums text-slate-700">{formatINR(s.amount)}</span>
+              {open && (isHead || s.memberId === currentMemberId) && (
+                <EditSpendModal
+                  spend={{ id: s.id, label: s.label, amount: s.amount, memberId: s.memberId, subCategory: s.subCategory }}
+                  categoryName={card.name}
+                  isMisc={isMisc}
+                  subCategories={isMisc ? MISC_SUBCATEGORIES : undefined}
+                  isHead={isHead}
+                  members={members}
+                />
+              )}
               {open && <SpendDeleteButton id={s.id} />}
             </div>
           </div>

@@ -389,6 +389,51 @@ export async function setSpendSubCategory(formData: FormData) {
   revalidatePath("/", "layout");
 }
 
+// Edit a spend in place — same category (card) and same date, just corrected data.
+// Head may edit anyone's; the owner may edit their own. Amount/label/(misc) kind, and
+// the head can also reassign who spent. Never touches settlement/budget math directly.
+export type EditSpendState = { ok: boolean; n: number };
+export async function editSpendAction(
+  prev: EditSpendState,
+  formData: FormData,
+): Promise<EditSpendState> {
+  const session = await auth();
+  if (!session?.user) return prev;
+  if (!(await unlocked())) return prev; // app-lock
+  const id = Number(formData.get("id"));
+  const label = String(formData.get("label") ?? "").trim();
+  const amount = Number(formData.get("amount"));
+  if (!id || !label || !amount) return prev;
+
+  const spend = await prisma.spend.findUnique({ where: { id }, include: { category: { select: { section: true, tracked: true } } } });
+  if (!spend) return prev;
+  if (!(await periodOpen(spend.periodId))) return prev;
+
+  const isHead = session.user.role === "head";
+  const isOwner = spend.memberId === session.user.memberId;
+  if (!isHead && !isOwner) return prev;
+
+  // misc spends must keep a sub-category; non-misc stay null
+  const misc = isMiscBucket(spend.category);
+  const subRaw = String(formData.get("subCategory") ?? "").trim();
+  if (misc && !MISC_SUBCATEGORIES.some((s) => s.name === subRaw)) return prev;
+  const subCategory = misc ? subRaw : null;
+
+  // Only the head may reassign who spent (incl. "Shared" = null); the owner's stays put.
+  // Non-head has no selector, so its field is absent → keep the existing attribution.
+  let memberId = spend.memberId;
+  if (isHead && formData.has("memberId")) {
+    const raw = String(formData.get("memberId") ?? "");
+    memberId = raw === "" ? null : Number(raw) || null;
+  }
+
+  // createdAt is intentionally left untouched — the date of spend stays as it was.
+  await prisma.spend.update({ where: { id }, data: { label, amount, subCategory, memberId } });
+  await logActivity("spend", "updated", `Edited spend “${label}” ${formatINR(amount)}`, spend.periodId);
+  revalidatePath("/", "layout");
+  return { ok: true, n: prev.n + 1 };
+}
+
 // Use Piggy money: reduce a Piggy/sinking bucket and add the amount as a ONE-OFF
 // income to the chosen month. No forced expense — the household then spends it
 // from any category via the normal add-spend/add-expense flow (the added income
