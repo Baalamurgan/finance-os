@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { startRegistration } from "@simplewebauthn/browser";
 import { doSignOut, setViewAs } from "@/app/actions";
 import { lockNow, removeMyBiometric } from "@/app/lock/actions";
+import { ThemeMenuRow } from "@/components/ThemeToggle";
 
 export function UserMenu({
   name,
@@ -114,6 +115,9 @@ export function UserMenu({
             <span className="text-base leading-none">🔒</span>
             Switch to Personal →
           </Link>
+          <div className="border-b border-slate-100">
+            <ThemeMenuRow />
+          </div>
           {actualIsHead && (
             <form action={setViewAs} className="border-b border-slate-100">
               <input type="hidden" name="mode" value={viewingAsMember ? "head" : "member"} />

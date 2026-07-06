@@ -9,16 +9,14 @@ const applyMode = (m: Mode) => {
   document.documentElement.classList.toggle("dark", dark);
 };
 
-/** Cycles System → Light → Dark. System follows the OS and updates live. */
-export function ThemeToggle() {
+const NEXT_OF: Record<Mode, Mode> = { system: "light", light: "dark", dark: "system" };
+const labelOf = (m: Mode) => (m === "dark" ? "Dark" : m === "light" ? "Light" : "System");
+
+function useThemeMode() {
   const [mode, setMode] = useState<Mode>("system");
-
   useEffect(() => {
-    const saved = (localStorage.getItem("theme") as Mode | null) ?? "system";
-    setMode(saved);
+    setMode((localStorage.getItem("theme") as Mode | null) ?? "system");
   }, []);
-
-  // when on "system", track live OS changes
   useEffect(() => {
     if (mode !== "system") return;
     const mq = window.matchMedia("(prefers-color-scheme: dark)");
@@ -26,24 +24,42 @@ export function ThemeToggle() {
     mq.addEventListener("change", handler);
     return () => mq.removeEventListener("change", handler);
   }, [mode]);
-
   const set = (m: Mode) => {
     localStorage.setItem("theme", m);
     applyMode(m);
     setMode(m);
   };
+  return { mode, cycle: () => set(NEXT_OF[mode]) };
+}
 
-  const nextOf: Record<Mode, Mode> = { system: "light", light: "dark", dark: "system" };
-  const label = mode === "dark" ? "Dark" : mode === "light" ? "Light" : "System";
+const iconFor = (m: Mode) => (m === "dark" ? <Moon /> : m === "light" ? <Sun /> : <Auto />);
 
+/** Round icon button (standalone). Cycles System → Light → Dark. */
+export function ThemeToggle() {
+  const { mode, cycle } = useThemeMode();
   return (
     <button
-      onClick={() => set(nextOf[mode])}
-      title={`Theme: ${label} — click for ${nextOf[mode]}`}
-      aria-label={`Theme: ${label}. Click to switch.`}
+      onClick={cycle}
+      title={`Theme: ${labelOf(mode)} — click for ${NEXT_OF[mode]}`}
+      aria-label={`Theme: ${labelOf(mode)}. Click to switch.`}
       className="flex h-8 w-8 items-center justify-center rounded-full border border-slate-200 text-slate-600 transition hover:bg-slate-100"
     >
-      {mode === "dark" ? <Moon /> : mode === "light" ? <Sun /> : <Auto />}
+      {iconFor(mode)}
+    </button>
+  );
+}
+
+/** Full-width row for the avatar dropdown. */
+export function ThemeMenuRow() {
+  const { mode, cycle } = useThemeMode();
+  return (
+    <button
+      onClick={cycle}
+      className="flex w-full items-center gap-2 px-4 py-3 text-left text-sm text-slate-700 hover:bg-slate-50"
+    >
+      <span className="text-slate-400">{iconFor(mode)}</span>
+      Theme: <span className="font-medium">{labelOf(mode)}</span>
+      <span className="ml-auto text-xs text-slate-400">tap to change</span>
     </button>
   );
 }

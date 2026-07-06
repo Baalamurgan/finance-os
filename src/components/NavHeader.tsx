@@ -5,7 +5,6 @@ import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { AddSpendModal } from "@/components/AddSpendModal";
 import { UserMenu } from "@/components/UserMenu";
-import { ThemeToggle } from "@/components/ThemeToggle";
 import { WindDownBanner } from "@/components/WindDownBanner";
 import { setViewAs } from "@/app/actions";
 import { formatINR } from "@/lib/format";
@@ -178,8 +177,6 @@ export function NavHeader({
               currentMemberId={currentMemberId}
             />
           )}
-
-          <ThemeToggle />
 
           {/* identity */}
           <div className="border-l border-slate-200 pl-2">
