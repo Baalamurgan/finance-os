@@ -19,6 +19,13 @@ export default async function SetupPage({
   const readOnly = !c.isHead;
   const windDownDay = c.household.windDownDay ?? null;
 
+  // the current open month — the "this month" anchor for installment display + the bridge label
+  const openPeriod = await prisma.period.findFirst({
+    where: { householdId: c.household.id, status: "open" },
+    orderBy: [{ year: "desc" }, { month: "desc" }],
+    select: { label: true, year: true, month: true },
+  });
+
   // The recurring template = the RecurringItem source of truth (edited here → next month).
   const rawItems = await prisma.recurringItem.findMany({
     where: { householdId: c.household.id },
@@ -26,6 +33,10 @@ export default async function SetupPage({
   });
   const catOf = new Map(c.categories.map((cat) => [cat.id, cat]));
   const memberName = (id: number | null) => (id == null ? null : c.members.find((m) => m.id === id)?.name ?? null);
+  const instCurrent = (it: (typeof rawItems)[number]) => {
+    if (it.installmentsTotal == null || it.installmentStartYear == null || it.installmentStartMonth == null || !openPeriod) return null;
+    return (openPeriod.year - it.installmentStartYear) * 12 + (openPeriod.month - it.installmentStartMonth) + 1;
+  };
   const templateItems: RItem[] = rawItems.map((it) => ({
     id: it.id,
     kind: it.kind === "income" ? "income" : "expense",
@@ -36,17 +47,10 @@ export default async function SetupPage({
     memberId: it.memberId,
     memberName: memberName(it.memberId),
     active: it.active,
+    installmentsTotal: it.installmentsTotal,
+    installmentCurrent: instCurrent(it),
   }));
-  const categoryOpts: CatOpt[] = c.categories
-    .filter((cat) => cat.section !== "Misc" || true)
-    .map((cat) => ({ id: cat.id, name: cat.name, section: cat.section }));
-
-  // the current open month — for the "Plan next month" bridge label
-  const openPeriod = await prisma.period.findFirst({
-    where: { householdId: c.household.id, status: "open" },
-    orderBy: [{ year: "desc" }, { month: "desc" }],
-    select: { label: true },
-  });
+  const categoryOpts: CatOpt[] = c.categories.map((cat) => ({ id: cat.id, name: cat.name, section: cat.section }));
 
   // category budgets & sinking-fund template (amounts / cycles) — edited here
   const rows = c.categories

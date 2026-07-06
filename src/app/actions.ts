@@ -986,19 +986,37 @@ export async function toggleExpenseRepeat(formData: FormData) {
 }
 
 // ── Recurring template CRUD (Setup = source of truth; months generate from it) ──
+
+// From an installment total + which payment is "this month" (the current open month),
+// compute the month of payment #1 (stored, so generation is deterministic/rebuild-safe).
+async function installmentStartFrom(householdId: number, total: number | null, current: number) {
+  if (!total || total <= 0) return { installmentsTotal: null, installmentStartYear: null, installmentStartMonth: null };
+  const anchor = await latestOpenPeriod(householdId);
+  const y0 = anchor?.year ?? new Date().getFullYear();
+  const m0 = anchor?.month ?? new Date().getMonth() + 1;
+  let y = y0, m = m0 - (Math.max(1, current) - 1);
+  while (m < 1) { m += 12; y -= 1; }
+  return { installmentsTotal: total, installmentStartYear: y, installmentStartMonth: m };
+}
+const stripInstNumber = (name: string) => name.replace(/\s+\d+\s*\/\s*\d+\s*$/, "").trim();
+
 export async function createRecurringItem(formData: FormData) {
   if (!(await isHead())) return;
   const householdId = Number(formData.get("householdId"));
   const kind = formData.get("kind") === "income" ? "income" : "expense";
-  const name = String(formData.get("name") ?? "").trim();
+  let name = String(formData.get("name") ?? "").trim();
   const amount = Number(formData.get("amount"));
   const categoryId = formData.get("categoryId") ? Number(formData.get("categoryId")) : null;
   const memberId = formData.get("memberId") ? Number(formData.get("memberId")) : null;
+  const total = formData.get("installmentsTotal") ? Number(formData.get("installmentsTotal")) : null;
+  const current = Number(formData.get("installmentCurrent")) || 1;
   if (!householdId || !name || !amount || amount <= 0) return;
   if (kind === "expense" && !categoryId) return;
+  const inst = await installmentStartFrom(householdId, total, current);
+  if (inst.installmentsTotal) name = stripInstNumber(name);
   const max = await prisma.recurringItem.aggregate({ where: { householdId }, _max: { sortOrder: true } });
   await prisma.recurringItem.create({
-    data: { householdId, kind, name, amount, categoryId: kind === "expense" ? categoryId : null, memberId, sortOrder: (max._max.sortOrder ?? 0) + 1 },
+    data: { householdId, kind, name, amount, categoryId: kind === "expense" ? categoryId : null, memberId, sortOrder: (max._max.sortOrder ?? 0) + 1, ...inst },
   });
   revalidatePath("/", "layout");
 }
@@ -1008,11 +1026,23 @@ export async function updateRecurringItem(formData: FormData) {
   const id = Number(formData.get("id"));
   const item = await prisma.recurringItem.findUnique({ where: { id } });
   if (!item) return;
-  const data: { amount?: number; name?: string; memberId?: number | null; categoryId?: number | null } = {};
+  const data: {
+    amount?: number; name?: string; memberId?: number | null; categoryId?: number | null;
+    installmentsTotal?: number | null; installmentStartYear?: number | null; installmentStartMonth?: number | null;
+  } = {};
   if (formData.has("amount")) { const a = Number(formData.get("amount")); if (a > 0) data.amount = a; }
   if (formData.has("name")) { const n = String(formData.get("name")).trim(); if (n) data.name = n; }
   if (formData.has("memberId")) data.memberId = formData.get("memberId") ? Number(formData.get("memberId")) : null;
   if (formData.has("categoryId") && item.kind === "expense" && formData.get("categoryId")) data.categoryId = Number(formData.get("categoryId"));
+  if (formData.has("installmentsTotal")) {
+    const total = formData.get("installmentsTotal") ? Number(formData.get("installmentsTotal")) : null;
+    const current = Number(formData.get("installmentCurrent")) || 1;
+    const inst = await installmentStartFrom(item.householdId, total, current);
+    data.installmentsTotal = inst.installmentsTotal;
+    data.installmentStartYear = inst.installmentStartYear;
+    data.installmentStartMonth = inst.installmentStartMonth;
+    if (inst.installmentsTotal && data.name) data.name = stripInstNumber(data.name);
+  }
   await prisma.recurringItem.update({ where: { id }, data });
   revalidatePath("/", "layout");
 }

@@ -8,6 +8,7 @@ import { createRecurringItem, updateRecurringItem, deleteRecurringItem, toggleRe
 export type RItem = {
   id: number; kind: "income" | "expense"; name: string; amount: number;
   categoryId: number | null; section: string; memberId: number | null; memberName: string | null; active: boolean;
+  installmentsTotal: number | null; installmentCurrent: number | null;
 };
 export type CatOpt = { id: number; name: string; section: string };
 export type MemberOpt = { id: number; name: string };
@@ -92,13 +93,25 @@ function ItemRow({ item, members, categories, readOnly }: { item: RItem; members
   const [amount, setAmount] = useState(String(item.amount));
   const [memberId, setMemberId] = useState(item.memberId != null ? String(item.memberId) : "");
   const [categoryId, setCategoryId] = useState(item.categoryId != null ? String(item.categoryId) : "");
-  const dirty = name !== item.name || amount !== String(item.amount) || memberId !== (item.memberId != null ? String(item.memberId) : "") || categoryId !== (item.categoryId != null ? String(item.categoryId) : "");
+  const [instTotal, setInstTotal] = useState(item.installmentsTotal != null ? String(item.installmentsTotal) : "");
+  const [instCurrent, setInstCurrent] = useState(item.installmentCurrent != null ? String(item.installmentCurrent) : "");
+  const baseTotal = item.installmentsTotal != null ? String(item.installmentsTotal) : "";
+  const baseCurrent = item.installmentCurrent != null ? String(item.installmentCurrent) : "";
+  const dirty =
+    name !== item.name || amount !== String(item.amount) ||
+    memberId !== (item.memberId != null ? String(item.memberId) : "") ||
+    categoryId !== (item.categoryId != null ? String(item.categoryId) : "") ||
+    instTotal !== baseTotal || instCurrent !== baseCurrent;
   const invalid = !name.trim() || !amount || Number(amount) <= 0;
 
   if (readOnly) {
     return (
       <div className="flex items-center justify-between gap-2 py-2 pl-2 text-sm">
-        <span className="truncate text-slate-700">{item.name}{item.memberName ? <span className="ml-1.5 text-[11px] text-slate-400">· {item.memberName}</span> : null}</span>
+        <span className="truncate text-slate-700">
+          {item.name}
+          {item.installmentsTotal != null && item.installmentCurrent != null && <span className="ml-1.5 text-[11px] text-indigo-500">{item.installmentCurrent}/{item.installmentsTotal}</span>}
+          {item.memberName ? <span className="ml-1.5 text-[11px] text-slate-400">· {item.memberName}</span> : null}
+        </span>
         <span className="tabular-nums text-slate-700">{formatINR(item.amount)}</span>
       </div>
     );
@@ -107,6 +120,11 @@ function ItemRow({ item, members, categories, readOnly }: { item: RItem; members
   return (
     <div className={`flex flex-wrap items-center gap-2 py-2 pl-2 pr-1 text-sm ${item.active ? "" : "opacity-50"}`}>
       <input value={name} onChange={(e) => setName(e.target.value)} className="input w-40 py-1 text-sm" />
+      {item.installmentsTotal != null && item.installmentCurrent != null && (
+        <span className="rounded-full bg-indigo-50 px-1.5 py-0.5 text-[10px] font-medium text-indigo-500" title="installment (this month / total)">
+          {item.installmentCurrent}/{item.installmentsTotal}
+        </span>
+      )}
       <div className="flex items-center gap-1">
         <span className="text-slate-400">₹</span>
         <input type="number" step="0.01" value={amount} onChange={(e) => setAmount(e.target.value)} className="input w-24 py-1 text-sm" />
@@ -120,6 +138,16 @@ function ItemRow({ item, members, categories, readOnly }: { item: RItem; members
           {categories.map((c) => <option key={c.id} value={String(c.id)}>{c.name}</option>)}
         </select>
       )}
+      <label className="flex items-center gap-1 text-[11px] text-slate-500" title="Installment: repeats N times then stops. Leave total blank for a normal repeat.">
+        EMI
+        <input type="number" min="0" value={instTotal} onChange={(e) => setInstTotal(e.target.value)} placeholder="×" className="input w-12 py-1 text-xs" title="total payments" />
+        {instTotal && Number(instTotal) > 0 && (
+          <>
+            <span>on</span>
+            <input type="number" min="1" value={instCurrent} onChange={(e) => setInstCurrent(e.target.value)} placeholder="#" className="input w-12 py-1 text-xs" title="which payment is THIS month" />
+          </>
+        )}
+      </label>
       <div className="ml-auto flex items-center gap-1">
         <form action={updateRecurringItem}>
           <input type="hidden" name="id" value={item.id} />
@@ -127,6 +155,8 @@ function ItemRow({ item, members, categories, readOnly }: { item: RItem; members
           <input type="hidden" name="amount" value={amount} />
           <input type="hidden" name="memberId" value={memberId} />
           <input type="hidden" name="categoryId" value={categoryId} />
+          <input type="hidden" name="installmentsTotal" value={instTotal} />
+          <input type="hidden" name="installmentCurrent" value={instCurrent || "1"} />
           <button disabled={!dirty || invalid} className="btn px-2 py-1 text-xs disabled:opacity-40">Save</button>
         </form>
         <form action={toggleRecurringActive} title={item.active ? "Active — click to pause" : "Paused — click to activate"}>
@@ -168,9 +198,17 @@ function AddItem({ householdId, categories, members }: { householdId: number; ca
             {categories.map((c) => <option key={c.id} value={String(c.id)}>{c.name} · {c.section}</option>)}
           </select>
         )}
+        <label className="flex items-center gap-1 text-[11px] text-slate-500" title="Installment (EMI): repeats a fixed number of times then stops. Leave blank for a normal repeat.">
+          EMI ×<input name="installmentsTotal" type="number" min="0" placeholder="total" className="input w-16" />
+          <span>on #</span>
+          <input name="installmentCurrent" type="number" min="1" placeholder="this mo" className="input w-16" />
+        </label>
         <button className="btn">Add</button>
       </form>
-      <p className="mt-2 text-xs text-slate-400">Applies from next month. This is the template — the current sheet stays frozen.</p>
+      <p className="mt-2 text-xs text-slate-400">
+        Applies from next month. This is the template — the current sheet stays frozen. <b>EMI</b>: set total
+        payments + which payment is <i>this</i> month; it auto-advances (3/6, 4/6…) and stops after the last.
+      </p>
     </div>
   );
 }

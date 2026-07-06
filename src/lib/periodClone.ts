@@ -17,16 +17,29 @@ export async function generateMonth(
   targetId: number,
   householdId: number,
 ) {
-  const [items, cats] = await Promise.all([
+  const [period, items, cats] = await Promise.all([
+    tx.period.findUnique({ where: { id: targetId }, select: { year: true, month: true } }),
     tx.recurringItem.findMany({ where: { householdId, active: true }, orderBy: { sortOrder: "asc" } }),
     tx.category.findMany({ where: { householdId }, select: { id: true, tracked: true, onHold: true, necessary: true, monthlyBudget: true } }),
   ]);
   const catById = new Map(cats.map((c) => [c.id, c]));
 
+  // For a fixed-term installment, this month's payment number (or null if the item
+  // isn't due this month — before it starts or after the last). Returns the label.
+  type Item = (typeof items)[number];
+  const dueLabel = (it: Item): string | null => {
+    if (it.installmentsTotal == null || it.installmentStartYear == null || it.installmentStartMonth == null) return it.name;
+    const n = (period!.year - it.installmentStartYear) * 12 + (period!.month - it.installmentStartMonth) + 1;
+    if (n < 1 || n > it.installmentsTotal) return null; // not due this month
+    return `${it.name} ${n}/${it.installmentsTotal}`;
+  };
+
   for (const it of items) {
+    const label = dueLabel(it);
+    if (label == null) continue; // installment outside its schedule
     if (it.kind === "income") {
       await tx.incomeEntry.create({
-        data: { periodId: targetId, source: it.name, amount: it.amount, ownerId: it.memberId, oneOff: false },
+        data: { periodId: targetId, source: label, amount: it.amount, ownerId: it.memberId, oneOff: false },
       });
       continue;
     }
@@ -37,7 +50,7 @@ export async function generateMonth(
     await tx.expenseEntry.create({
       data: {
         periodId: targetId,
-        label: it.name,
+        label,
         amount: it.amount,
         categoryId: it.categoryId,
         memberId: it.memberId,
@@ -48,10 +61,10 @@ export async function generateMonth(
   }
 
   // budgets: only intentionally-budgeted categories (tracked, non-held, with a
-  // monthlyBudget set) — NOT the misc bucket. Planned = Σ their active expense items.
+  // monthlyBudget set) — NOT the misc bucket. Planned = Σ their active items due this month.
   const budgetByCat = new Map<number, number>();
   for (const it of items) {
-    if (it.kind !== "expense" || it.categoryId == null) continue;
+    if (it.kind !== "expense" || it.categoryId == null || dueLabel(it) == null) continue;
     const cat = catById.get(it.categoryId);
     if (!cat?.tracked || cat.onHold || cat.monthlyBudget == null) continue;
     budgetByCat.set(it.categoryId, (budgetByCat.get(it.categoryId) ?? 0) + it.amount);
