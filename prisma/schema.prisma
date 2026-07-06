@@ -388,6 +388,7 @@ model Spend {
   memberId   Int?
   label      String
   amount     Float
+  subCategory String? // reporting-only tag for Personal/Misc spends (Food, Travel…); null = uncategorized
   imagePath  String? // /uploads/<file> for petrol receipts etc.
   createdAt  DateTime @default(now())
 }

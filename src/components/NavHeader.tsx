@@ -8,6 +8,7 @@ import { UserMenu } from "@/components/UserMenu";
 import { WindDownBanner } from "@/components/WindDownBanner";
 import { setViewAs } from "@/app/actions";
 import { formatINR } from "@/lib/format";
+import { MISC_SUBCATEGORIES } from "@/lib/misc";
 
 const MONTHS = [
   "Jan", "Feb", "Mar", "Apr", "May", "Jun",
@@ -49,7 +50,7 @@ export function NavHeader({
   selYear: number;
   selMonth: number;
   members: { id: number; name: string }[];
-  categories: { id: number; name: string; tracked?: boolean }[];
+  categories: { id: number; name: string; tracked?: boolean; section?: string }[];
   account: { name: string; email: string; image: string | null };
   isHead: boolean;
   piggyBalance: number;
@@ -171,10 +172,11 @@ export function NavHeader({
             <AddSpendModal
               periodId={periodId}
               trigger="primary"
-              categories={categories.filter((c) => c.tracked)}
+              categories={categories.filter((c) => c.tracked).map((c) => ({ id: c.id, name: c.name, misc: c.section === "Misc" }))}
               isHead={isHead}
               members={members}
               currentMemberId={currentMemberId}
+              subCategories={MISC_SUBCATEGORIES}
             />
           )}
 
@@ -216,10 +218,11 @@ export function NavHeader({
       <AddSpendModal
         periodId={periodId}
         trigger="fab"
-        categories={categories.filter((c) => c.tracked)}
+        categories={categories.filter((c) => c.tracked).map((c) => ({ id: c.id, name: c.name, misc: c.section === "Misc" }))}
         isHead={isHead}
         members={members}
         currentMemberId={currentMemberId}
+        subCategories={MISC_SUBCATEGORIES}
       />
     )}
 

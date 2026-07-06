@@ -345,6 +345,7 @@ export async function getTrackedExpenses(householdId: number, periodId: number) 
     return {
       id: cat.id,
       name: cat.name,
+      section: cat.section, // "Misc" (+ tracked) marks the Personal/Misc bucket
       allocation,
       spent,
       remaining: allocation - spent,
@@ -482,14 +483,25 @@ export async function getRollup(periodId: number) {
   const spendByCat = new Map<number, number>();
   for (const s of spends) spendByCat.set(s.categoryId, (spendByCat.get(s.categoryId) ?? 0) + s.amount);
 
+  // The Personal/Misc bucket (tracked, section "Misc") is expanded into its spend
+  // sub-categories (Food, Travel…) so the breakdown shows where misc money actually
+  // went. Totals are unchanged — the single "Personal/Misc" row is just split out.
+  const miscCat = cats.find((c) => c.section === "Misc" && c.tracked);
   const byCategory = cats
-    .map((cat) => ({
-      name: cat.name,
-      planned: plannedByCat.get(cat.id) ?? 0,
-      actual: cat.tracked
-        ? spendByCat.get(cat.id) ?? 0
-        : expenseByCat.get(cat.id) ?? 0,
-    }))
+    .flatMap((cat) => {
+      const planned = plannedByCat.get(cat.id) ?? 0;
+      const actual = cat.tracked ? spendByCat.get(cat.id) ?? 0 : expenseByCat.get(cat.id) ?? 0;
+      if (miscCat && cat.id === miscCat.id) {
+        const bySub = new Map<string, number>();
+        for (const s of spends) {
+          if (s.categoryId !== cat.id) continue;
+          const key = s.subCategory ?? "Uncategorized";
+          bySub.set(key, (bySub.get(key) ?? 0) + s.amount);
+        }
+        return [...bySub.entries()].map(([sub, amt]) => ({ name: `Misc · ${sub}`, planned: 0, actual: amt }));
+      }
+      return [{ name: cat.name, planned, actual }];
+    })
     .filter((r) => r.actual > 0 || r.planned > 0)
     .sort((a, b) => b.actual - a.actual);
 

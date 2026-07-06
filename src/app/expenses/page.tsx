@@ -4,6 +4,8 @@ import { getTrackedExpenses, getInHand, type InHand } from "@/lib/queries";
 import { NavHeader } from "@/components/NavHeader";
 import { AddSpendModal } from "@/components/AddSpendModal";
 import { SpendDeleteButton } from "@/components/SpendDeleteButton";
+import { SpendSubCategoryPicker } from "@/components/SpendSubCategoryPicker";
+import { MISC_SUBCATEGORIES } from "@/lib/misc";
 
 export default async function ExpensesPage({
   searchParams,
@@ -249,6 +251,7 @@ function SpendCard({
 }) {
   const pct = card.allocation > 0 ? Math.min((card.spent / card.allocation) * 100, 100) : 0;
   const owner = card.responsibleMemberId != null ? members.find((m) => m.id === card.responsibleMemberId)?.name ?? null : null;
+  const isMisc = card.section === "Misc"; // the Personal/Misc bucket — spends carry a sub-category
   return (
     <section className="flex flex-col rounded-xl border border-slate-200 bg-white">
       <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3">
@@ -265,10 +268,11 @@ function SpendCard({
           <AddSpendModal
             periodId={periodId}
             trigger="card"
-            fixedCategory={{ id: card.id, name: card.name }}
+            fixedCategory={{ id: card.id, name: card.name, misc: isMisc }}
             isHead={isHead}
             members={members}
             currentMemberId={currentMemberId}
+            subCategories={isMisc ? MISC_SUBCATEGORIES : undefined}
           />
         )}
       </div>
@@ -337,9 +341,19 @@ function SpendCard({
               )}
               <div className="min-w-0">
                 <div className="truncate font-medium text-slate-800">{s.label}</div>
-                <div className="text-[11px] text-slate-400">
-                  {s.member?.name ?? "Shared"} ·{" "}
-                  {new Date(s.createdAt).toLocaleDateString("en-IN", { day: "numeric", month: "short" })}
+                <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-slate-400">
+                  <span>
+                    {s.member?.name ?? "Shared"} ·{" "}
+                    {new Date(s.createdAt).toLocaleDateString("en-IN", { day: "numeric", month: "short" })}
+                  </span>
+                  {isMisc && (
+                    <SpendSubCategoryPicker
+                      id={s.id}
+                      value={s.subCategory}
+                      options={MISC_SUBCATEGORIES}
+                      canEdit={open && (isHead || s.memberId === currentMemberId)}
+                    />
+                  )}
                 </div>
               </div>
             </div>

@@ -4,7 +4,7 @@ import { useActionState, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { addSpendAction, type AddSpendState } from "@/app/actions";
 
-type Cat = { id: number; name: string };
+type Cat = { id: number; name: string; misc?: boolean }; // misc = the Personal/Misc bucket
 
 type Mem = { id: number; name: string };
 
@@ -16,6 +16,7 @@ export function AddSpendModal({
   isHead,
   members,
   currentMemberId,
+  subCategories,
 }: {
   periodId: number;
   trigger: "primary" | "card" | "fab";
@@ -24,12 +25,19 @@ export function AddSpendModal({
   isHead?: boolean; // head can log on behalf of another member
   members?: Mem[];
   currentMemberId?: number | null;
+  subCategories?: { name: string; icon: string }[]; // shown & required for misc spends
 }) {
   const [open, setOpen] = useState(false);
   const [mounted, setMounted] = useState(false);
   const [categoryId, setCategoryId] = useState<number | null>(fixedCategory?.id ?? null);
   const [justSaved, setJustSaved] = useState(false);
   const [keepAdding, setKeepAdding] = useState(false);
+  const [subCategory, setSubCategory] = useState("");
+
+  // Misc (Personal/Misc) spends must carry a reporting sub-category (Food, Travel…).
+  const selectedCat = fixedCategory ?? categories?.find((c) => c.id === categoryId);
+  const isMiscSelected = !!selectedCat?.misc && !!subCategories?.length;
+  const needSub = isMiscSelected && !subCategory;
 
   const [state, formAction, pending] = useActionState<AddSpendState, FormData>(
     addSpendAction,
@@ -56,6 +64,7 @@ export function AddSpendModal({
       prevN.current = state.n;
       if (keepAdding) {
         formRef.current?.reset(); // clears uncontrolled amount/what; category stays (controlled)
+        setSubCategory(""); // controlled — reset for the next item
         setJustSaved(true);
         amountRef.current?.focus();
         const t = setTimeout(() => setJustSaved(false), 2500);
@@ -159,6 +168,27 @@ export function AddSpendModal({
                     </div>
                   )}
 
+                  {/* sub-category — misc spends only (reporting: Food, Travel…) */}
+                  {isMiscSelected && (
+                    <div>
+                      <label className="text-sm font-medium text-slate-600">
+                        Kind of spend <span className="text-red-500">*</span>
+                      </label>
+                      <select
+                        name="subCategory"
+                        required
+                        value={subCategory}
+                        onChange={(e) => setSubCategory(e.target.value)}
+                        className="mt-1.5 w-full rounded-xl border-2 border-slate-300 px-4 py-3 text-base outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
+                      >
+                        <option value="" disabled>Pick a kind…</option>
+                        {subCategories!.map((s) => (
+                          <option key={s.name} value={s.name}>{s.icon} {s.name}</option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+
                   <div>
                     <label className="text-sm font-medium text-slate-600">What was bought</label>
                     <input
@@ -213,7 +243,7 @@ export function AddSpendModal({
                   </button>
                   <button
                     type="submit"
-                    disabled={!categoryId || pending}
+                    disabled={!categoryId || needSub || pending}
                     className="min-h-12 flex-1 rounded-xl bg-indigo-600 px-4 py-3 text-base font-semibold text-white shadow-sm active:bg-indigo-800 disabled:opacity-40"
                   >
                     {pending ? "Saving…" : "Save"}

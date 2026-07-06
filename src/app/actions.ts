@@ -8,6 +8,7 @@ import { auth, signOut } from "@/auth";
 import { isUnlocked } from "@/lib/applock";
 import { formatINR } from "@/lib/format";
 import { generateMonth } from "@/lib/periodClone";
+import { isMiscBucket, MISC_SUBCATEGORIES } from "@/lib/misc";
 
 // Record a money-affecting change for the head-only activity log (who + what + when).
 async function logActivity(
@@ -308,13 +309,21 @@ async function doAddSpend(formData: FormData): Promise<boolean> {
   if (!periodId || !categoryId || !amount || !label) return false;
   if (!(await periodOpen(periodId))) return false;
 
+  // Misc (Personal/Misc) spends must carry a reporting sub-category (Food, Travel…);
+  // other categories already are a category, so it stays null there.
+  const subCategoryRaw = String(formData.get("subCategory") ?? "").trim();
+  const cat = await prisma.category.findUnique({ where: { id: categoryId }, select: { section: true, tracked: true } });
+  const misc = cat ? isMiscBucket(cat) : false;
+  if (misc && !subCategoryRaw) return false; // mandatory for misc
+  const subCategory = misc && subCategoryRaw ? subCategoryRaw : null;
+
   // Only the head may log a spend on behalf of another member; everyone else = self.
   const overrideId = Number(formData.get("memberId")) || 0;
   const memberId = overrideId && session?.user?.role === "head" ? overrideId : selfId;
 
   const imagePath = await saveUpload(formData.get("image"));
   await prisma.spend.create({
-    data: { periodId, categoryId, memberId, label, amount, imagePath },
+    data: { periodId, categoryId, memberId, label, amount, subCategory, imagePath },
   });
   await logActivity("spend", "created", `Logged spend “${label}” ${formatINR(amount)}`, periodId);
   revalidatePath("/", "layout");
@@ -355,6 +364,28 @@ export async function deleteSpend(formData: FormData) {
   // (Receipt files are deferred/cloud-stored — nothing to unlink locally.)
   await prisma.spend.delete({ where: { id } });
   await logActivity("spend", "deleted", `Removed spend “${spend.label}” ${formatINR(spend.amount)}`, spend.periodId);
+  revalidatePath("/", "layout");
+}
+
+// Re-tag a misc spend's reporting sub-category (Food, Travel…). Reporting only — no
+// effect on settlement or budgets. Owner or head, on an open month.
+export async function setSpendSubCategory(formData: FormData) {
+  const session = await auth();
+  if (!session?.user) return;
+  if (!(await unlocked())) return; // app-lock
+  const id = Number(formData.get("id"));
+  const value = String(formData.get("subCategory") ?? "").trim();
+  if (!id) return;
+  const spend = await prisma.spend.findUnique({ where: { id }, include: { category: { select: { section: true, tracked: true } } } });
+  if (!spend) return;
+  if (!isMiscBucket(spend.category)) return; // only misc spends carry a sub-category
+  if (!(await periodOpen(spend.periodId))) return;
+
+  const isOwner = spend.memberId === session.user.memberId;
+  if (session.user.role !== "head" && !isOwner) return;
+
+  const valid = MISC_SUBCATEGORIES.some((s) => s.name === value);
+  await prisma.spend.update({ where: { id }, data: { subCategory: valid ? value : null } });
   revalidatePath("/", "layout");
 }
 
