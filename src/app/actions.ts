@@ -7,7 +7,7 @@ import { cookies } from "next/headers";
 import { auth, signOut } from "@/auth";
 import { isUnlocked } from "@/lib/applock";
 import { formatINR } from "@/lib/format";
-import { clonePeriodInto } from "@/lib/periodClone";
+import { generateMonth } from "@/lib/periodClone";
 
 // Record a money-affecting change for the head-only activity log (who + what + when).
 async function logActivity(
@@ -106,6 +106,33 @@ async function canEditNow(periodId: number) {
 // Success signal for useActionState-driven modals (close + reset only on real success).
 export type SaveState = { ok: boolean; n: number };
 
+// "Repeat every month" promotion: when a line is added with repeat on, ensure a
+// matching RecurringItem exists in the template (source of truth) so it generates
+// every month. Matched by household + kind + name (+ category for expenses).
+async function promoteToTemplate(
+  periodId: number,
+  kind: "income" | "expense",
+  name: string,
+  amount: number,
+  categoryId: number | null,
+  memberId: number | null,
+) {
+  const period = await prisma.period.findUnique({ where: { id: periodId }, select: { householdId: true } });
+  if (!period) return;
+  const householdId = period.householdId;
+  const existing = await prisma.recurringItem.findFirst({
+    where: { householdId, kind, name, ...(kind === "expense" ? { categoryId } : {}) },
+  });
+  if (existing) {
+    await prisma.recurringItem.update({ where: { id: existing.id }, data: { amount, memberId, active: true } });
+  } else {
+    const max = await prisma.recurringItem.aggregate({ where: { householdId }, _max: { sortOrder: true } });
+    await prisma.recurringItem.create({
+      data: { householdId, kind, name, amount, categoryId: kind === "expense" ? categoryId : null, memberId, sortOrder: (max._max.sortOrder ?? 0) + 1 },
+    });
+  }
+}
+
 // Create (no id) or update (id present). Head/Manager; head may edit closed months.
 // Returns true on success. Note (label) is REQUIRED.
 async function doSaveExpense(formData: FormData): Promise<boolean> {
@@ -160,11 +187,13 @@ async function doSaveExpense(formData: FormData): Promise<boolean> {
     ]);
     const bal = (inc._sum.amount ?? 0) - (exp._sum.amount ?? 0);
     if (amount > bal) return false; // blocked (UI also guards)
-    // "Repeat every month" (checkbox) → recurring (copies forward); unchecked → one-off (this month only)
+    // "Repeat every month" (checkbox) → also add to the recurring template so it's
+    // generated every month; unchecked → one-off (this month only)
     const oneOff = formData.get("repeat") !== "on";
     await prisma.expenseEntry.create({
       data: { periodId, categoryId, amount, label, memberId: finalMemberId, necessary, oneOff },
     });
+    if (!oneOff) await promoteToTemplate(periodId, "expense", label, amount, categoryId, finalMemberId);
     await logActivity("expense", "created", `Added expense “${label}” ${formatINR(amount)}`, periodId);
   }
   revalidatePath("/", "layout");
@@ -191,9 +220,10 @@ async function doAddIncome(formData: FormData): Promise<boolean> {
   if (!periodId || !source || !amount) return false;
   if (!(await canEditNow(periodId))) return false;
 
-  // "Repeat every month" → recurring; unchecked → one-time (not copied forward)
+  // "Repeat every month" → also add to the recurring template; unchecked → one-time
   const oneOff = formData.get("repeat") !== "on";
   await prisma.incomeEntry.create({ data: { periodId, source, amount, ownerId, oneOff } });
+  if (!oneOff) await promoteToTemplate(periodId, "income", source, amount, null, ownerId);
   await logActivity("income", "created", `Added income “${source}” ${formatINR(amount)}`, periodId);
   revalidatePath("/", "layout");
   return true;
@@ -753,30 +783,18 @@ export async function setWindDownDay(formData: FormData) {
 
 type Tx = Parameters<Parameters<typeof prisma.$transaction>[0]>[0];
 
-// Seed a new period's budgets from the recurring template (Category.monthlyBudget).
-// On-hold categories are skipped.
-async function seedBudgets(tx: Tx, householdId: number, periodId: number) {
-  const cats = await tx.category.findMany({
-    // fixed bills recur as Sheet expense lines (cloned), not as budgets
-    where: { householdId, monthlyBudget: { not: null }, onHold: false, fixed: false },
-  });
-  for (const c of cats) {
-    await tx.budget.create({
-      data: { periodId, categoryId: c.id, planned: c.monthlyBudget! },
-    });
-  }
-}
-
 // Clone last month's recurring structure (income + expense lines + budgets) into a
 // new period. Regenerates each Setup category's tagged line from the template.
 // Single source of truth in src/lib/periodClone.ts (shared with ensureCurrentMonth).
 async function clonePeriodStructure(
   tx: Tx,
-  sourceId: number,
+  _sourceId: number,
   targetId: number,
   householdId: number
 ) {
-  await clonePeriodInto(tx, sourceId, targetId, householdId);
+  // months are now GENERATED from the RecurringItem template (not cloned from the
+  // previous month); _sourceId is kept for the callers' signatures.
+  await generateMonth(tx, targetId, householdId);
 }
 
 export async function createPeriod(formData: FormData) {
@@ -797,15 +815,11 @@ export async function createPeriod(formData: FormData) {
   const label = `${new Date(year, month - 1, 1)
     .toLocaleString("en-US", { month: "short" })
     .toUpperCase()} ${year}`;
-  const latest = await prisma.period.findFirst({
-    where: { householdId },
-    orderBy: [{ year: "desc" }, { month: "desc" }],
-  });
 
   await prisma.$transaction(async (tx) => {
     const p = await tx.period.create({ data: { householdId, year, month, label } });
-    if (latest) await clonePeriodStructure(tx, latest.id, p.id, householdId);
-    else await seedBudgets(tx, householdId, p.id);
+    // always generate from the RecurringItem template (source of truth)
+    await generateMonth(tx, p.id, householdId);
   });
   revalidatePath("/", "layout");
 }
@@ -924,7 +938,7 @@ export async function createNextMonthDraft(formData: FormData) {
   if (!existing) {
     await prisma.$transaction(async (tx) => {
       const p = await tx.period.create({ data: { householdId, year, month, label, status: "draft", carryForward: 0 } });
-      await clonePeriodInto(tx, current.id, p.id, householdId);
+      await generateMonth(tx, p.id, householdId);
       await addEstimatedCarry(tx, current, p.id);
       await addEstimatedSurplus(tx, current, p.id);
     });
@@ -943,7 +957,7 @@ export async function rebuildDraft(formData: FormData) {
   if (!current) return;
   await prisma.$transaction(async (tx) => {
     await clearPeriodRows(tx, periodId);
-    await clonePeriodInto(tx, current.id, periodId, draft.householdId);
+    await generateMonth(tx, periodId, draft.householdId);
     await addEstimatedCarry(tx, current, periodId);
     await addEstimatedSurplus(tx, current, periodId);
   });
@@ -967,6 +981,54 @@ export async function toggleExpenseRepeat(formData: FormData) {
   const row = await prisma.expenseEntry.findUnique({ where: { id } });
   if (!row) return;
   await prisma.expenseEntry.update({ where: { id }, data: { oneOff: !row.oneOff } });
+  revalidatePath("/", "layout");
+}
+
+// ── Recurring template CRUD (Setup = source of truth; months generate from it) ──
+export async function createRecurringItem(formData: FormData) {
+  if (!(await isHead())) return;
+  const householdId = Number(formData.get("householdId"));
+  const kind = formData.get("kind") === "income" ? "income" : "expense";
+  const name = String(formData.get("name") ?? "").trim();
+  const amount = Number(formData.get("amount"));
+  const categoryId = formData.get("categoryId") ? Number(formData.get("categoryId")) : null;
+  const memberId = formData.get("memberId") ? Number(formData.get("memberId")) : null;
+  if (!householdId || !name || !amount || amount <= 0) return;
+  if (kind === "expense" && !categoryId) return;
+  const max = await prisma.recurringItem.aggregate({ where: { householdId }, _max: { sortOrder: true } });
+  await prisma.recurringItem.create({
+    data: { householdId, kind, name, amount, categoryId: kind === "expense" ? categoryId : null, memberId, sortOrder: (max._max.sortOrder ?? 0) + 1 },
+  });
+  revalidatePath("/", "layout");
+}
+
+export async function updateRecurringItem(formData: FormData) {
+  if (!(await isHead())) return;
+  const id = Number(formData.get("id"));
+  const item = await prisma.recurringItem.findUnique({ where: { id } });
+  if (!item) return;
+  const data: { amount?: number; name?: string; memberId?: number | null; categoryId?: number | null } = {};
+  if (formData.has("amount")) { const a = Number(formData.get("amount")); if (a > 0) data.amount = a; }
+  if (formData.has("name")) { const n = String(formData.get("name")).trim(); if (n) data.name = n; }
+  if (formData.has("memberId")) data.memberId = formData.get("memberId") ? Number(formData.get("memberId")) : null;
+  if (formData.has("categoryId") && item.kind === "expense" && formData.get("categoryId")) data.categoryId = Number(formData.get("categoryId"));
+  await prisma.recurringItem.update({ where: { id }, data });
+  revalidatePath("/", "layout");
+}
+
+export async function deleteRecurringItem(formData: FormData) {
+  if (!(await isHead())) return;
+  const id = Number(formData.get("id"));
+  await prisma.recurringItem.deleteMany({ where: { id } });
+  revalidatePath("/", "layout");
+}
+
+export async function toggleRecurringActive(formData: FormData) {
+  if (!(await isHead())) return;
+  const id = Number(formData.get("id"));
+  const item = await prisma.recurringItem.findUnique({ where: { id } });
+  if (!item) return;
+  await prisma.recurringItem.update({ where: { id }, data: { active: !item.active } });
   revalidatePath("/", "layout");
 }
 

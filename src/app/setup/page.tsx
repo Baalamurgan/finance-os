@@ -4,7 +4,7 @@ import { loadCommon } from "@/lib/load";
 import { setWindDownDay, createNextMonthDraft } from "@/app/actions";
 import { NavHeader } from "@/components/NavHeader";
 import { MonthlySetup } from "@/components/MonthlySetup";
-import { RecurringSetup, type IncomeLine, type ExpenseLine } from "@/components/RecurringSetup";
+import { RecurringSetup, type RItem, type CatOpt } from "@/components/RecurringSetup";
 
 export default async function SetupPage({
   searchParams,
@@ -19,40 +19,33 @@ export default async function SetupPage({
   const readOnly = !c.isHead;
   const windDownDay = c.household.windDownDay ?? null;
 
-  // The recurring template = the current OPEN month's lines (never a draft).
+  // The recurring template = the RecurringItem source of truth (edited here → next month).
+  const rawItems = await prisma.recurringItem.findMany({
+    where: { householdId: c.household.id },
+    orderBy: [{ kind: "asc" }, { sortOrder: "asc" }],
+  });
+  const catOf = new Map(c.categories.map((cat) => [cat.id, cat]));
+  const memberName = (id: number | null) => (id == null ? null : c.members.find((m) => m.id === id)?.name ?? null);
+  const templateItems: RItem[] = rawItems.map((it) => ({
+    id: it.id,
+    kind: it.kind === "income" ? "income" : "expense",
+    name: it.name,
+    amount: it.amount,
+    categoryId: it.categoryId,
+    section: it.categoryId != null ? catOf.get(it.categoryId)?.section ?? "Monthly" : "Monthly",
+    memberId: it.memberId,
+    memberName: memberName(it.memberId),
+    active: it.active,
+  }));
+  const categoryOpts: CatOpt[] = c.categories
+    .filter((cat) => cat.section !== "Misc" || true)
+    .map((cat) => ({ id: cat.id, name: cat.name, section: cat.section }));
+
+  // the current open month — for the "Plan next month" bridge label
   const openPeriod = await prisma.period.findFirst({
     where: { householdId: c.household.id, status: "open" },
     orderBy: [{ year: "desc" }, { month: "desc" }],
-  });
-  const prevM = openPeriod ? (openPeriod.month === 1 ? 12 : openPeriod.month - 1) : 0;
-  const prevY = openPeriod ? (openPeriod.month === 1 ? openPeriod.year - 1 : openPeriod.year) : 0;
-  const prev = openPeriod
-    ? await prisma.period.findUnique({ where: { householdId_year_month: { householdId: c.household.id, year: prevY, month: prevM } } })
-    : null;
-
-  const [incomes, expenses, prevInc, prevExp] = await Promise.all([
-    openPeriod ? prisma.incomeEntry.findMany({ where: { periodId: openPeriod.id }, include: { owner: true }, orderBy: { amount: "desc" } }) : [],
-    openPeriod ? prisma.expenseEntry.findMany({ where: { periodId: openPeriod.id }, include: { category: true, member: true }, orderBy: { amount: "desc" } }) : [],
-    prev ? prisma.incomeEntry.findMany({ where: { periodId: prev.id }, select: { source: true } }) : [],
-    prev ? prisma.expenseEntry.findMany({ where: { periodId: prev.id }, select: { label: true } }) : [],
-  ]);
-  const prevIncSrc = new Set(prevInc.map((i) => i.source));
-  const prevExpLbl = new Set(prevExp.map((e) => e.label));
-
-  const incomeLines: IncomeLine[] = incomes.map((i) => ({
-    id: i.id, name: i.source, amount: i.amount, member: i.owner?.name ?? null,
-    repeats: !i.oneOff, isNew: !!prev && !prevIncSrc.has(i.source),
-  }));
-  const expenseLines: ExpenseLine[] = expenses.map((e) => {
-    const isSetupCat = e.category?.monthlyBudget != null; // template-driven → repeat = category onHold
-    return {
-      id: e.id, name: e.label, amount: e.amount, section: e.category?.section ?? "Monthly",
-      member: e.member?.name ?? null,
-      repeats: isSetupCat ? !e.category!.onHold : !e.oneOff,
-      isNew: !!prev && !prevExpLbl.has(e.label),
-      toggleKind: isSetupCat ? "category" : "expense",
-      targetId: isSetupCat ? e.categoryId : e.id,
-    };
+    select: { label: true },
   });
 
   // category budgets & sinking-fund template (amounts / cycles) — edited here
@@ -91,9 +84,9 @@ export default async function SetupPage({
         <div>
           <h1 className="text-xl font-bold text-slate-900">Setup</h1>
           <p className="text-sm text-slate-500">
-            Control what repeats into next month — from {openPeriod?.label ?? "the current month"}. Anything
-            you turn off stays one-off and won&apos;t copy forward (or into the next-month preview).
-            Edit the actual amounts on the Sheet.
+            The recurring template — the single source of truth. Every month is generated from these
+            items. Add, edit amounts, pause or delete here; <b>changes apply from next month</b> and the
+            current sheet stays frozen.
           </p>
           {readOnly && (
             <p className="mt-2 rounded-md bg-slate-100 px-3 py-2 text-xs text-slate-600">
@@ -102,13 +95,13 @@ export default async function SetupPage({
           )}
         </div>
 
-        {openPeriod ? (
-          <RecurringSetup income={incomeLines} expenses={expenseLines} readOnly={readOnly} />
-        ) : (
-          <p className="rounded-xl border border-dashed border-slate-200 bg-white p-8 text-center text-sm text-slate-400">
-            No open month yet — start one on the Sheet tab first.
-          </p>
-        )}
+        <RecurringSetup
+          items={templateItems}
+          categories={categoryOpts}
+          members={c.members.map((m) => ({ id: m.id, name: m.name }))}
+          householdId={c.household.id}
+          readOnly={readOnly}
+        />
 
         {/* Edit next month: add / change amounts / remove — on the draft, so this
             month stays frozen. The draft is a full editable sheet. */}

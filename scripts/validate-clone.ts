@@ -1,26 +1,24 @@
-// DRY-RUN: build next month from the latest period using clonePeriodInto, print
-// what the sheet + settlement tags would look like, then ROLL BACK. Writes nothing.
+// DRY-RUN: generate a month from the RecurringItem template, print what the sheet
+// + settlement tags would look like, then ROLL BACK. Writes nothing.
 //   set -a; source .env.local; set +a; npx tsx scripts/validate-clone.ts
 import "dotenv/config";
 import { PrismaClient } from "@prisma/client";
 import { PrismaPg } from "@prisma/adapter-pg";
-import { clonePeriodInto } from "../src/lib/periodClone";
+import { generateMonth } from "../src/lib/periodClone";
 
 const prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL }) });
 
 async function main() {
   const h = await prisma.household.findFirst();
   if (!h) throw new Error("no household");
-  const latest = await prisma.period.findFirst({ where: { householdId: h.id }, orderBy: [{ year: "desc" }, { month: "desc" }] });
-  if (!latest) throw new Error("no period");
   const members = await prisma.member.findMany({ where: { householdId: h.id } });
   const nameOf = (id: number | null) => (id == null ? "— shared/pool" : members.find((m) => m.id === id)?.name ?? "?");
 
-  console.log(`Source: ${latest.label}\n`);
+  console.log(`Generating from template (${await prisma.recurringItem.count({ where: { householdId: h.id, active: true } })} active items)\n`);
   try {
     await prisma.$transaction(async (tx) => {
       const p = await tx.period.create({ data: { householdId: h.id, year: 2099, month: 12, label: "DRYRUN" } });
-      await clonePeriodInto(tx, latest.id, p.id, h.id);
+      await generateMonth(tx, p.id, h.id);
       const [inc, exp, bud] = await Promise.all([
         tx.incomeEntry.findMany({ where: { periodId: p.id } }),
         tx.expenseEntry.findMany({ where: { periodId: p.id }, include: { category: true } }),

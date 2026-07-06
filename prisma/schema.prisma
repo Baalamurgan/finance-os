@@ -80,6 +80,25 @@ model ActivityLog {
   @@index([householdId, createdAt])
 }
 
+// The recurring template = the single source of truth for what repeats every month.
+// Setup CRUDs these; each new month is GENERATED from the active items (+ that
+// month's carry), instead of cloning the previous month. Per-line (categories are
+// shared across many lines). Scalars only (no relations) like ActivityLog.
+model RecurringItem {
+  id          Int      @id @default(autoincrement())
+  householdId Int
+  kind        String // income | expense
+  name        String // income source / expense label
+  amount      Float
+  categoryId  Int? // expense → Category (section + sinking/budget behaviour)
+  memberId    Int? // income owner / expense payer (tags the generated line → settlement)
+  active      Boolean  @default(true) // paused (kept, not generated) vs deleted (gone)
+  sortOrder   Int      @default(0)
+  createdAt   DateTime @default(now())
+
+  @@index([householdId])
+}
+
 // A person in the household. `code` matches the sheet tags (H, B, L, KA, VL).
 model Member {
   id          Int            @id @default(autoincrement())

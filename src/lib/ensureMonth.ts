@@ -1,5 +1,5 @@
 import { prisma } from "@/lib/prisma";
-import { clonePeriodInto } from "@/lib/periodClone";
+import { generateMonth } from "@/lib/periodClone";
 
 const MONTHS = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"];
 
@@ -27,22 +27,10 @@ export async function ensureCurrentMonth(now = new Date()) {
       continue;
     }
 
-    const latest = await prisma.period.findFirst({
-      where: { householdId: h.id },
-      orderBy: [{ year: "desc" }, { month: "desc" }],
-    });
-
     await prisma.$transaction(async (tx) => {
       const p = await tx.period.create({ data: { householdId: h.id, year, month, label } });
-      if (latest) {
-        await clonePeriodInto(tx, latest.id, p.id, h.id);
-      } else {
-        // first-ever period: seed budgets from the template (Budget categories only)
-        const cats = await tx.category.findMany({
-          where: { householdId: h.id, monthlyBudget: { not: null }, onHold: false, fixed: false },
-        });
-        for (const c of cats) await tx.budget.create({ data: { periodId: p.id, categoryId: c.id, planned: c.monthlyBudget! } });
-      }
+      // months are generated from the RecurringItem template (source of truth)
+      await generateMonth(tx, p.id, h.id);
     });
     created.push(`household ${h.id}: ${label}`);
   }
