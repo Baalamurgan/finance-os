@@ -339,12 +339,12 @@ export async function getTrackedExpenses(householdId: number, periodId: number) 
     return {
       id: cat.id,
       name: cat.name,
-      responsibleMemberId: cat.responsibleMemberId,
       allocation,
       spent,
       remaining: allocation - spent,
       overBudget: allocation > 0 && spent > allocation,
       sinking: cat.sinking,
+      responsibleMemberId: cat.responsibleMemberId, // who holds this budget (null = shared)
       fund: sinkBal[cat.id] ?? 0, // current accumulated sinking-fund balance
       // spends are fetched newest-first, so rows[0] is the latest for this card
       lastSpentAt: rows[0]?.createdAt ?? null,

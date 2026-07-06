@@ -37,11 +37,10 @@ export function computeSettlement(opts: {
       ...expenses
         .filter((e) => e.memberId === m.id)
         .map((e) => ({ label: e.label, amount: e.amount, category: e.category.name, kind: "sheet" as const })),
-      // A spend credits the spender ONLY if the category isn't their own — spending
-      // on a category you already hold (e.g. Mobile) is covered by its monthly line,
-      // so crediting the spend too would double-count. Shared/misc or someone else's
-      // category → the spender fronted it, so it credits them.
       ...spends
+        // A spend only credits the spender when the category isn't THEIRS — spending
+        // your own held budget is already credited via its monthly-share expense line,
+        // so counting the spend too would double-credit. Others'/shared/misc → credit.
         .filter((sp) => sp.memberId === m.id && (sp.category.responsibleMemberId ?? null) !== m.id)
         .map((sp) => ({
           label: prevLabel ? `${sp.label} (${prevLabel})` : sp.label,

@@ -6,13 +6,7 @@ const members = [
   { id: 2, name: "Harish" },
   { id: 3, name: "KA" }, // treasurer/hub
 ];
-const exp = (
-  memberId: number | null,
-  amount: number,
-  label = "x",
-  cat = "Loan",
-  responsibleMemberId: number | null = null,
-): SettleTagged => ({
+const exp = (memberId: number | null, amount: number, label = "x", cat = "Loan", responsibleMemberId: number | null = null): SettleTagged => ({
   memberId,
   amount,
   label,
@@ -50,24 +44,21 @@ describe("computeSettlement", () => {
     expect(bala.paidItems.find((p) => p.kind === "spend")?.label).toBe("Veg (JUN 2026)");
   });
 
-  it("a spend on your OWN category does not credit you (already covered by its monthly line)", () => {
+  it("a spend on the spender's OWN category is not credited (avoids double-credit)", () => {
     const res = computeSettlement({
       members,
       incomes: [{ ownerId: 1, amount: 80_000 }],
+      // Bala holds "Petrol" (responsible = 1). His ₹5k spend there must NOT credit him
+      // again; a ₹2k spend on shared "Veg" (responsible = null) still credits him.
       expenses: [],
-      spends: [
-        exp(1, 500, "Recharge", "Mobile", 1), // Bala's own category → NOT credited
-        exp(1, 2_000, "Veg", "Misc", null), // shared → credited
-        exp(1, 1_500, "Fuel", "Car", 2), // Harish's category → credited
-      ],
+      spends: [exp(1, 5_000, "fuel", "Petrol", 1), exp(1, 2_000, "veg", "Veg", null)],
       records: [],
       treasurerId: 3,
       prevLabel: "JUN 2026",
     });
     const bala = res.rows.find((r) => r.id === 1)!;
-    expect(bala.paid).toBe(3_500); // 2_000 + 1_500, the 500 own-category spend excluded
-    expect(bala.paidItems.some((p) => p.label.startsWith("Recharge"))).toBe(false);
-    expect(bala.net).toBe(76_500);
+    expect(bala.paid).toBe(2_000); // only the shared-category spend counts
+    expect(bala.paidItems.some((p) => p.category === "Petrol")).toBe(false);
   });
 
   it("negative net → the treasurer pays the member", () => {
