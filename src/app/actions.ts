@@ -887,10 +887,11 @@ async function addEstimatedCarry(
         data: { periodId: targetId, categoryId: c.id, label: `${c.name} over-budget (from ${source.label})`, amount: -rem, necessary: true, oneOff: true, note: CARRY_NOTE },
       });
     } else {
-      // misc (no budget) → carry EACH spend as its own line, labelled "JUL · <spend>"
+      // misc (no budget) → carry EACH spend as its own line, tagged to whoever spent
+      // it (display only; excluded from settlement — the spend already credits them)
       for (const s of spends.filter((sp) => sp.categoryId === c.id)) {
         await tx.expenseEntry.create({
-          data: { periodId: targetId, categoryId: c.id, label: `${mon} · ${s.label}`, amount: s.amount, necessary: true, oneOff: true, note: CARRY_NOTE },
+          data: { periodId: targetId, categoryId: c.id, label: `${mon} · ${s.label}`, amount: s.amount, memberId: s.memberId, necessary: true, oneOff: true, note: CARRY_NOTE },
         });
       }
     }
@@ -1152,7 +1153,7 @@ export async function windDownMonth(formData: FormData) {
 
   let movedToPiggy = 0;
   // over-budget excess + misc spends are carried into NEXT month as one-off expenses
-  const carryToNext: { categoryId: number; amount: number; label: string }[] = [];
+  const carryToNext: { categoryId: number; amount: number; label: string; memberId?: number | null }[] = [];
 
   const nextMonth = period.month === 12 ? 1 : period.month + 1;
   const nextYear = period.month === 12 ? period.year + 1 : period.year;
@@ -1209,6 +1210,7 @@ export async function windDownMonth(formData: FormData) {
             categoryId: cat.id,
             amount: s.amount,
             label: `${mon} · ${s.label}`,
+            memberId: s.memberId, // tag to the spender (display; excluded from settlement)
           });
         }
       }
@@ -1242,6 +1244,7 @@ export async function windDownMonth(formData: FormData) {
           categoryId: c.categoryId,
           label: c.label,
           amount: c.amount,
+          memberId: c.memberId ?? null,
           necessary: true,
           oneOff: true,
           note: CARRY_NOTE,

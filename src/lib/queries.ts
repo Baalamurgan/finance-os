@@ -252,7 +252,10 @@ export async function getSettlement(
   const [members, incomes, expenses, spends, records] = await Promise.all([
     prisma.member.findMany({ where: { householdId }, orderBy: { id: "asc" } }),
     prisma.incomeEntry.findMany({ where: { periodId } }),
-    prisma.expenseEntry.findMany({ where: { periodId }, include: { category: true } }),
+    // exclude carried-misc lines (note "__carry__"): they're tagged to the spender for
+    // DISPLAY, but the credit already comes from last month's spend — counting the
+    // carried expense too would double-credit the spender.
+    prisma.expenseEntry.findMany({ where: { periodId, note: { not: "__carry__" } }, include: { category: true } }),
     prisma.spend.findMany({ where: { periodId: prevPeriod?.id ?? -1 }, include: { category: true } }),
     prisma.settlementRecord.findMany({ where: { periodId } }),
   ]);
