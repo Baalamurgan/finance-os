@@ -258,7 +258,7 @@ function SpendCard({
             className={`rounded-full px-1.5 py-0.5 text-[10px] font-medium ${owner ? "bg-indigo-50 text-indigo-500" : "bg-slate-100 text-slate-400"}`}
             title={owner ? `${owner} holds this budget — a spend here doesn't change their settlement` : "Shared budget — a spend here is credited to the spender at settlement"}
           >
-            {owner ? `held by ${owner}` : "shared"}
+            {owner ?? "shared"}
           </span>
         </div>
         {open && (

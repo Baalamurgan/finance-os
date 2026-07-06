@@ -124,9 +124,9 @@ export default async function SheetPage({
   const c = await loadCommon(sp);
   if (!c) return <SeedNotice />;
 
-  // Next-month preview draft: head-only. Non-head hitting the URL → send to current.
+  // Next-month preview draft: everyone can view; only head + manager can edit it.
   const isDraft = c.selected?.status === "draft";
-  if (isDraft && !c.isHead) redirect("/");
+  const draftPeriod = c.periods.find((p) => p.status === "draft") ?? null;
 
   const nav = (
     <NavHeader
@@ -192,9 +192,9 @@ export default async function SheetPage({
   const curM = now.getMonth() + 1;
   const currentMonthMissing = !c.periods.some((p) => p.year === curY && p.month === curM);
 
-  // Head + Manager edit open months; the head can also edit a closed (locked) month
-  // or a next-month draft.
-  const canEditHere = c.canEdit && (open || c.isHead);
+  // Head + Manager edit open months and the next-month draft; the head can also
+  // edit a closed (locked) month. Plain members are view-only everywhere.
+  const canEditHere = c.canEdit && (open || c.isHead || isDraft);
   const editingClosed = canEditHere && !open && !isDraft; // head editing a locked month
 
   // group expenses into the fixed section order
@@ -231,25 +231,39 @@ export default async function SheetPage({
                   </span>
                 </div>
                 <p className="mt-0.5 text-xs leading-relaxed text-violet-700/80">
-                  A preview you can edit freely — add, remove, change amounts. It <b>won&apos;t affect{" "}
-                  {draftSource?.label ?? "this month"}&apos;s wind-down</b>; it becomes the real month when{" "}
-                  {draftSource?.label ?? "the current month"} closes.
+                  {canEditHere ? (
+                    <>
+                      A preview you can edit freely — add, remove, change amounts. It{" "}
+                      <b>won&apos;t affect {draftSource?.label ?? "this month"}&apos;s wind-down</b>; it
+                      becomes the real month when {draftSource?.label ?? "the current month"} closes.
+                    </>
+                  ) : (
+                    <>
+                      A preview of next month. It becomes the real month when{" "}
+                      {draftSource?.label ?? "the current month"} closes. <b>View only</b> — the head or a
+                      manager makes changes.
+                    </>
+                  )}
                 </p>
               </div>
               <div className="flex shrink-0 items-center gap-2">
                 <a href="/" className="rounded-md border border-violet-300 px-3 py-1.5 text-xs font-medium text-violet-700 hover:bg-violet-100">
                   ← Back to {draftSource?.label ?? "now"}
                 </a>
-                <form action={rebuildDraft}>
-                  <input type="hidden" name="periodId" value={c.selected.id} />
-                  <button className="rounded-md border border-violet-300 px-3 py-1.5 text-xs font-medium text-violet-700 hover:bg-violet-100">
-                    ↻ Rebuild
-                  </button>
-                </form>
-                <ConfirmForm action={discardDraft} message="Discard this next-month draft? You can preview again anytime.">
-                  <input type="hidden" name="periodId" value={c.selected.id} />
-                  <button className="rounded-md px-3 py-1.5 text-xs font-medium text-red-600 hover:bg-red-50">Discard</button>
-                </ConfirmForm>
+                {canEditHere && (
+                  <>
+                    <form action={rebuildDraft}>
+                      <input type="hidden" name="periodId" value={c.selected.id} />
+                      <button className="rounded-md border border-violet-300 px-3 py-1.5 text-xs font-medium text-violet-700 hover:bg-violet-100">
+                        ↻ Rebuild
+                      </button>
+                    </form>
+                    <ConfirmForm action={discardDraft} message="Discard this next-month draft? You can preview again anytime.">
+                      <input type="hidden" name="periodId" value={c.selected.id} />
+                      <button className="rounded-md px-3 py-1.5 text-xs font-medium text-red-600 hover:bg-red-50">Discard</button>
+                    </ConfirmForm>
+                  </>
+                )}
               </div>
             </div>
             {preview && (
@@ -317,13 +331,21 @@ export default async function SheetPage({
             >
               ↓ Export CSV
             </a>
-            {c.isHead && open && !isDraft && (
+            {c.canEdit && open && !isDraft && (
               <form action={createNextMonthDraft}>
                 <input type="hidden" name="householdId" value={c.household.id} />
                 <button className="rounded-full border border-violet-300 bg-violet-50 px-3 py-1 text-xs font-medium text-violet-700 hover:bg-violet-100">
                   🔮 Preview next month →
                 </button>
               </form>
+            )}
+            {!c.canEdit && open && !isDraft && draftPeriod && (
+              <a
+                href={`/?y=${draftPeriod.year}&m=${draftPeriod.month}`}
+                className="rounded-full border border-violet-300 bg-violet-50 px-3 py-1 text-xs font-medium text-violet-700 hover:bg-violet-100"
+              >
+                🔮 View next month →
+              </a>
             )}
             <span
               className={`rounded-full px-3 py-1 text-xs font-medium ${
@@ -537,10 +559,21 @@ function Row({
   amount: number;
   children?: React.ReactNode;
 }) {
+  // pull a trailing installment marker ("Chimney EMI 2/6") out into a tag
+  const instMatch = label.match(/^(.*?)\s+(\d+\/\d+)$/);
+  const baseLabel = instMatch ? instMatch[1] : label;
+  const installment = instMatch ? instMatch[2] : null;
   return (
     <div className="flex items-center justify-between py-2.5 text-[15px]">
       <div className="min-w-0">
-        <div className="truncate font-medium text-slate-800">{label}</div>
+        <div className="flex items-center gap-1.5">
+          <span className="truncate font-medium text-slate-800">{baseLabel}</span>
+          {installment && (
+            <span className="shrink-0 rounded-full bg-indigo-50 px-1.5 py-0.5 text-[10px] font-semibold text-indigo-500" title="installment (this payment / total)">
+              {installment}
+            </span>
+          )}
+        </div>
         {(sub || tag) && (
           <div className="text-xs text-slate-400">
             {sub}

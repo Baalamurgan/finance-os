@@ -925,7 +925,7 @@ async function clearPeriodRows(tx: Tx, periodId: number) {
 
 // Create (or just open) the draft for the month AFTER the current open month, then go to it.
 export async function createNextMonthDraft(formData: FormData) {
-  if (!(await isHead())) return;
+  if (!(await canEdit())) return; // head + manager
   const householdId = Number(formData.get("householdId"));
   if (!householdId) return;
   const current = await latestOpenPeriod(householdId);
@@ -950,7 +950,7 @@ export async function createNextMonthDraft(formData: FormData) {
 
 // Rebuild the draft from the current open month's template (discards any draft edits).
 export async function rebuildDraft(formData: FormData) {
-  if (!(await isHead())) return;
+  if (!(await canEdit())) return; // head + manager
   const periodId = Number(formData.get("periodId"));
   const draft = await prisma.period.findUnique({ where: { id: periodId } });
   if (!draft || draft.status !== "draft") return;
@@ -1065,7 +1065,7 @@ export async function toggleRecurringActive(formData: FormData) {
 
 // Throw the draft away entirely.
 export async function discardDraft(formData: FormData) {
-  if (!(await isHead())) return;
+  if (!(await canEdit())) return; // head + manager
   const periodId = Number(formData.get("periodId"));
   const draft = await prisma.period.findUnique({ where: { id: periodId } });
   if (!draft || draft.status !== "draft") return;
