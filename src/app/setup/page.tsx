@@ -1,7 +1,7 @@
 import { redirect } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { loadCommon } from "@/lib/load";
-import { setWindDownDay } from "@/app/actions";
+import { setWindDownDay, createNextMonthDraft } from "@/app/actions";
 import { NavHeader } from "@/components/NavHeader";
 import { MonthlySetup } from "@/components/MonthlySetup";
 import { RecurringSetup, type IncomeLine, type ExpenseLine } from "@/components/RecurringSetup";
@@ -108,6 +108,28 @@ export default async function SetupPage({
           <p className="rounded-xl border border-dashed border-slate-200 bg-white p-8 text-center text-sm text-slate-400">
             No open month yet — start one on the Sheet tab first.
           </p>
+        )}
+
+        {/* Edit next month: add / change amounts / remove — on the draft, so this
+            month stays frozen. The draft is a full editable sheet. */}
+        {!readOnly && openPeriod && (
+          <section className="rounded-xl border border-violet-200 bg-violet-50 p-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h2 className="text-sm font-semibold text-violet-800">✏️ Add / edit next month</h2>
+                <p className="mt-0.5 text-xs text-violet-700/80">
+                  Add a new income/expense, change an amount, or remove a line for <b>next month</b> —
+                  it opens next month&apos;s draft (a full editable sheet). This month stays frozen.
+                </p>
+              </div>
+              <form action={createNextMonthDraft}>
+                <input type="hidden" name="householdId" value={c.household.id} />
+                <button className="whitespace-nowrap rounded-md bg-violet-600 px-3 py-2 text-sm font-medium text-white hover:bg-violet-700">
+                  Plan next month →
+                </button>
+              </form>
+            </div>
+          </section>
         )}
 
         {/* category budgets & sinking-fund template */}
