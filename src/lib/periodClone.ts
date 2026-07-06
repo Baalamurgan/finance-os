@@ -20,9 +20,14 @@ export async function generateMonth(
   const [period, items, cats] = await Promise.all([
     tx.period.findUnique({ where: { id: targetId }, select: { year: true, month: true } }),
     tx.recurringItem.findMany({ where: { householdId, active: true }, orderBy: { sortOrder: "asc" } }),
-    tx.category.findMany({ where: { householdId }, select: { id: true, tracked: true, onHold: true, necessary: true, monthlyBudget: true } }),
+    tx.category.findMany({ where: { householdId }, select: { id: true, name: true, tracked: true, sinking: true, onHold: true, necessary: true, monthlyBudget: true, responsibleMemberId: true } }),
   ]);
   const catById = new Map(cats.map((c) => [c.id, c]));
+  // categories that already produce a line via a recurring item — so we don't
+  // double-book the budget-only (orphan) synthesis below.
+  const catsWithItems = new Set(
+    items.filter((i) => i.kind === "expense" && i.categoryId != null).map((i) => i.categoryId as number),
+  );
 
   // For a fixed-term installment, this month's payment number (or null if the item
   // isn't due this month — before it starts or after the last). Returns the label.
@@ -69,6 +74,29 @@ export async function generateMonth(
     if (!cat?.tracked || cat.onHold || cat.monthlyBudget == null) continue;
     budgetByCat.set(it.categoryId, (budgetByCat.get(it.categoryId) ?? 0) + it.amount);
   }
+  // Budget-only categories: a tracked/sinking category budgeted in Setup's
+  // "Budgets & sinking funds" but with NO recurring line of its own (e.g. a sinking
+  // fund added straight there). Mirror what the item-backed ones get — a monthly-share
+  // expense line tagged to whoever's responsible + a budget — so next month counts it
+  // and settlement subtracts it. Guarded by catsWithItems so nothing double-books.
+  for (const cat of cats) {
+    if (!cat.tracked || cat.onHold || cat.monthlyBudget == null || cat.monthlyBudget <= 0) continue;
+    if (catsWithItems.has(cat.id)) continue; // already produced by a recurring item
+    const label = cat.sinking ? `${cat.name} (monthly share)` : cat.name;
+    await tx.expenseEntry.create({
+      data: {
+        periodId: targetId,
+        label,
+        amount: cat.monthlyBudget,
+        categoryId: cat.id,
+        memberId: cat.responsibleMemberId,
+        necessary: cat.necessary ?? true,
+        oneOff: false,
+      },
+    });
+    budgetByCat.set(cat.id, cat.monthlyBudget);
+  }
+
   for (const [categoryId, planned] of budgetByCat) {
     await tx.budget.create({ data: { periodId: targetId, categoryId, planned } });
   }
