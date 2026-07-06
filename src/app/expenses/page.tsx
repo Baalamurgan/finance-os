@@ -310,11 +310,14 @@ function SpendCard({
                   : `${formatINR(card.remaining)} left → Piggy`}
               </span>
             </div>
-            <div className="mt-1.5 h-2 w-full overflow-hidden rounded-full bg-slate-100">
+            <div className="relative mt-1.5 h-2 w-full overflow-hidden rounded-full bg-slate-100">
+              {/* green (plenty left) → yellow → red (near/over budget); the grey mask on
+                  the right hides the part not yet spent, so the fill edge shows the tone. */}
               <div
-                className={`h-full rounded-full ${card.overBudget ? "bg-red-500" : "bg-indigo-500"}`}
-                style={{ width: `${pct}%` }}
+                className="absolute inset-0"
+                style={{ background: "linear-gradient(to right, #22c55e 0%, #eab308 60%, #ef4444 100%)" }}
               />
+              <div className="absolute inset-y-0 right-0 bg-slate-100" style={{ width: `${100 - pct}%` }} />
             </div>
           </>
         ) : (

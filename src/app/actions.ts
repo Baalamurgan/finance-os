@@ -1006,6 +1006,16 @@ async function clearPeriodRows(tx: Tx, periodId: number) {
   await tx.incomeEntry.deleteMany({ where: { periodId } });
 }
 
+// Rebuild-safe clear: wipe ONLY the generated rows — template lines (oneOff:false),
+// carry/surplus estimates (marked notes) and budgets — so anything the family added by
+// hand in the preview (a well-planned one-off expense/income: oneOff:true, no marker
+// note) survives a rebuild. Manual spends are left untouched too.
+async function clearGeneratedRows(tx: Tx, periodId: number) {
+  await tx.budget.deleteMany({ where: { periodId } });
+  await tx.expenseEntry.deleteMany({ where: { periodId, OR: [{ oneOff: false }, { note: CARRY_NOTE }] } });
+  await tx.incomeEntry.deleteMany({ where: { periodId, OR: [{ oneOff: false }, { note: SURPLUS_NOTE }] } });
+}
+
 // Create (or just open) the draft for the month AFTER the current open month, then go to it.
 export async function createNextMonthDraft(formData: FormData) {
   if (!(await canEdit())) return; // head + manager
@@ -1040,7 +1050,7 @@ export async function rebuildDraft(formData: FormData) {
   const current = await latestOpenPeriod(draft.householdId);
   if (!current) return;
   await prisma.$transaction(async (tx) => {
-    await clearPeriodRows(tx, periodId);
+    await clearGeneratedRows(tx, periodId); // keep hand-added preview lines
     await generateMonth(tx, periodId, draft.householdId);
     await addEstimatedCarry(tx, current, periodId);
     await addEstimatedSurplus(tx, current, periodId);
