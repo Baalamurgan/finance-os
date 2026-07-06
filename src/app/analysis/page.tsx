@@ -220,21 +220,32 @@ function BudgetVsSpent({
         </p>
       )}
 
-      {unbudgeted.length > 0 && (
-        <div className="mt-5 border-t border-slate-100 pt-3">
-          <div className="mb-1 text-xs font-medium uppercase tracking-wide text-slate-400">
-            Spending with no budget set
+      {unbudgeted.length > 0 && (() => {
+        const unbudgetedTotal = unbudgeted.reduce((s, r) => s + r.actual, 0) || 1;
+        return (
+          <div className="mt-5 border-t border-slate-100 pt-3">
+            <div className="mb-1 text-xs font-medium uppercase tracking-wide text-slate-400">
+              Spending with no budget set
+            </div>
+            <ul className="space-y-1 text-sm">
+              {unbudgeted.map((r) => {
+                const pct = (r.actual / unbudgetedTotal) * 100;
+                return (
+                  <li key={r.name} className="flex items-baseline justify-between gap-2">
+                    <span className="text-slate-600">{r.name}</span>
+                    <span className="flex items-baseline gap-2">
+                      <span className="tabular-nums text-slate-700">{formatINR(r.actual)}</span>
+                      <span className="w-10 shrink-0 text-right text-xs text-slate-400">
+                        {pct < 1 ? "<1%" : `${Math.round(pct)}%`}
+                      </span>
+                    </span>
+                  </li>
+                );
+              })}
+            </ul>
           </div>
-          <ul className="space-y-1 text-sm">
-            {unbudgeted.map((r) => (
-              <li key={r.name} className="flex justify-between">
-                <span className="text-slate-600">{r.name}</span>
-                <span className="tabular-nums text-slate-700">{formatINR(r.actual)}</span>
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
+        );
+      })()}
     </section>
   );
 }
