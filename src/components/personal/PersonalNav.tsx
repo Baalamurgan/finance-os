@@ -8,7 +8,7 @@ const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "
 
 const TABS = [
   { key: "expenses", label: "Expenses", href: "/personal/expenses" },
-  { key: "sheet", label: "Sheet", href: "/personal" },
+  { key: "sheet", label: "Sheet", href: "/personal/sheet" },
   { key: "analysis", label: "Analysis", href: "/personal/analysis" },
   { key: "cc", label: "Cards", href: "/personal/cc" },
   { key: "setup", label: "Setup", href: "/personal/setup" },

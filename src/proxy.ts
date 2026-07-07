@@ -14,12 +14,31 @@ export function proxy(request: NextRequest) {
     return NextResponse.redirect(url);
   }
 
+  const path = request.nextUrl.pathname;
+  const isGet = request.method === "GET";
+
+  // Reopen where you left off: launching the app (GET "/") jumps to Personal if that
+  // was your last view. The personal PIN still gates it — its unlock is a session
+  // cookie, so a fresh launch re-locks Personal and shows its lock screen.
+  if (isGet && path === "/" && request.cookies.get("last-view")?.value === "personal") {
+    return NextResponse.redirect(new URL("/personal/expenses", request.url));
+  }
+
   const res = NextResponse.next();
+  const inPersonal = path.startsWith("/personal") || path.startsWith("/api/personal");
+
+  // Remember the current view (only real page loads, not actions/api) for next launch.
+  if (isGet && !path.startsWith("/api")) {
+    res.cookies.set("last-view", inPersonal ? "personal" : "family", {
+      path: "/",
+      sameSite: "lax",
+      maxAge: 60 * 60 * 24 * 365,
+    });
+  }
+
   // Personal is only unlocked while you're inside /personal. The moment you touch
   // any family route, drop the personal-unlock cookie — so handing the phone over
   // (family view) can never reach Personal without re-entering the personal PIN.
-  const path = request.nextUrl.pathname;
-  const inPersonal = path.startsWith("/personal") || path.startsWith("/api/personal");
   if (!inPersonal && request.cookies.has("personal-unlock")) {
     res.cookies.delete("personal-unlock");
   }

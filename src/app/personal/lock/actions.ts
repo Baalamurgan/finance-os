@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
+import { cookies } from "next/headers";
 import { prisma } from "@/lib/prisma";
 import { auth } from "@/auth";
 import { hashPin, lockoutMs, newSalt, pinMatches, pinRejectReason } from "@/lib/applock-core";
@@ -93,6 +94,9 @@ export async function setPersonalPin(
 // Switch back to the Family app — clears the personal unlock so re-entry re-asks.
 export async function exitToFamily(): Promise<void> {
   await clearPersonalUnlock();
+  // Switching back to Family makes it the remembered view, so the next launch (and
+  // this redirect to "/") lands on Family instead of bouncing back to Personal.
+  (await cookies()).set("last-view", "family", { path: "/", sameSite: "lax", maxAge: 60 * 60 * 24 * 365 });
   redirect("/");
 }
 

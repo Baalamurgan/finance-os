@@ -3,7 +3,7 @@
 import { useActionState, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { startAuthentication } from "@simplewebauthn/browser";
-import { verifyPersonalPin, type PersonalUnlockState } from "@/app/personal/lock/actions";
+import { verifyPersonalPin, exitToFamily, type PersonalUnlockState } from "@/app/personal/lock/actions";
 
 const INITIAL: PersonalUnlockState = { ok: false };
 
@@ -148,6 +148,13 @@ export function PersonalLockScreen({
         </button>
       )}
       {bioError && <p className="mt-3 text-[13px] text-[#b4685a]">{bioError}</p>}
+
+      {/* escape hatch — don't strand anyone on the PIN if they'd rather use Family */}
+      <form action={exitToFamily} className="mt-6">
+        <button type="submit" className="text-[13px] font-medium text-emerald-700/70 hover:text-emerald-800">
+          ← Use Family instead
+        </button>
+      </form>
     </div>
   );
 }
