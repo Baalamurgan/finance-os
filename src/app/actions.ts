@@ -6,7 +6,7 @@ import { redirect } from "next/navigation";
 import { cookies } from "next/headers";
 import { auth, signOut } from "@/auth";
 import { isUnlocked } from "@/lib/applock";
-import { formatINR } from "@/lib/format";
+import { formatINR, parseAmount } from "@/lib/format";
 import { generateMonth } from "@/lib/periodClone";
 import { isMiscBucket, MISC_SUBCATEGORIES } from "@/lib/misc";
 
@@ -149,7 +149,7 @@ async function doSaveExpense(formData: FormData): Promise<boolean> {
   const id = formData.get("id") ? Number(formData.get("id")) : null;
   const periodId = Number(formData.get("periodId"));
   let categoryId = Number(formData.get("categoryId")) || 0;
-  const amount = Number(formData.get("amount"));
+  const amount = parseAmount(formData.get("amount"));
   const label = String(formData.get("label") ?? "").trim();
   const memberRaw = formData.get("memberId");
   const memberId = memberRaw ? Number(memberRaw) : null;
@@ -221,7 +221,7 @@ async function doAddIncome(formData: FormData): Promise<boolean> {
   if (!(await canEdit())) return false;
   const periodId = Number(formData.get("periodId"));
   const source = String(formData.get("source") ?? "").trim();
-  const amount = Number(formData.get("amount"));
+  const amount = parseAmount(formData.get("amount"));
   const ownerRaw = formData.get("ownerId");
   const ownerId = ownerRaw ? Number(ownerRaw) : null;
 
@@ -251,7 +251,7 @@ export async function updateIncome(prev: SaveState, formData: FormData): Promise
   if (!(await isHead())) return { ok: false, n: prev.n };
   const id = Number(formData.get("id"));
   const source = String(formData.get("source") ?? "").trim();
-  const amount = Number(formData.get("amount"));
+  const amount = parseAmount(formData.get("amount"));
   const ownerRaw = formData.get("ownerId");
   const ownerId = ownerRaw ? Number(ownerRaw) : null;
   if (!id || !source || !amount) return { ok: false, n: prev.n };
@@ -303,7 +303,7 @@ async function doAddSpend(formData: FormData): Promise<boolean> {
 
   const periodId = Number(formData.get("periodId"));
   const categoryId = Number(formData.get("categoryId"));
-  const amount = Number(formData.get("amount"));
+  const amount = parseAmount(formData.get("amount"));
   const label = String(formData.get("label") ?? "").trim();
 
   if (!periodId || !categoryId || !amount || !label) return false;
@@ -402,7 +402,7 @@ export async function editSpendAction(
   if (!(await unlocked())) return prev; // app-lock
   const id = Number(formData.get("id"));
   const label = String(formData.get("label") ?? "").trim();
-  const amount = Number(formData.get("amount"));
+  const amount = parseAmount(formData.get("amount"));
   if (!id || !label || !amount) return prev;
 
   const spend = await prisma.spend.findUnique({ where: { id }, include: { category: { select: { section: true, tracked: true } } } });
@@ -442,7 +442,7 @@ export async function editSpendAction(
 export async function withdrawPiggy(formData: FormData) {
   if (!(await isHead())) return;
   const periodId = Number(formData.get("periodId"));
-  const amount = Number(formData.get("amount"));
+  const amount = parseAmount(formData.get("amount"));
   const source = String(formData.get("source") ?? "general"); // "general" | categoryId
   const note = String(formData.get("note") ?? "").trim() || "Piggy use";
   if (!periodId || !amount || amount <= 0) return;
@@ -484,7 +484,7 @@ export async function withdrawPiggy(formData: FormData) {
 // Head adds money into the general Piggy (e.g. a manual top-up). Positive entry.
 export async function depositPiggy(formData: FormData) {
   if (!(await isHead())) return;
-  const amount = Number(formData.get("amount"));
+  const amount = parseAmount(formData.get("amount"));
   const note = String(formData.get("note") ?? "").trim() || "Manual top-up";
   // target = "general" (general Piggy) or a sinking-fund categoryId
   const target = String(formData.get("target") ?? "general");
@@ -509,7 +509,7 @@ export async function depositPiggy(formData: FormData) {
 // as an "Adjustment" entry so the history stays intact. target = general | catId.
 export async function setFundBalance(formData: FormData) {
   if (!(await isHead())) return;
-  const targetAmount = Number(formData.get("amount"));
+  const targetAmount = parseAmount(formData.get("amount"));
   const target = String(formData.get("target") ?? "general");
   if (Number.isNaN(targetAmount)) return;
   const household = await prisma.household.findFirst();
@@ -550,7 +550,7 @@ export async function createCategory(
   const name = String(formData.get("name") ?? "").trim();
   if (!householdId || !name) return { ok: false, error: "Give the category a name.", n };
   const amountRaw = String(formData.get("monthlyBudget") ?? "").trim();
-  const monthlyBudget = amountRaw === "" ? null : Number(amountRaw);
+  const monthlyBudget = amountRaw === "" ? null : parseAmount(amountRaw);
   const fixed = formData.get("fixed") === "on";
   const sinking = !fixed && formData.get("sinking") === "on";
   const cycleRaw = String(formData.get("cycleMonths") ?? "").trim();
@@ -631,7 +631,7 @@ export async function markSettled(formData: FormData) {
   const periodId = Number(formData.get("periodId"));
   const fromMemberId = Number(formData.get("fromMemberId"));
   const toMemberId = Number(formData.get("toMemberId"));
-  const amount = Number(formData.get("amount"));
+  const amount = parseAmount(formData.get("amount"));
   const note = String(formData.get("note") ?? "").trim() || null;
   if (!householdId || !periodId || !fromMemberId || !toMemberId || !amount) return;
   if (!(await unlocked())) return; // app-lock
@@ -704,7 +704,7 @@ export async function recordLoanPayment(formData: FormData) {
   if (!(await isHead())) return;
   const loanId = Number(formData.get("loanId"));
   const periodId = formData.get("periodId") ? Number(formData.get("periodId")) : null;
-  const amount = Number(formData.get("amount")) || 0;
+  const amount = parseAmount(formData.get("amount")) || 0;
   const principalPart = Number(formData.get("principalPart")) || 0;
   const dividend = Number(formData.get("dividend")) || 0; // chit: dividend received this month
   const note = String(formData.get("note") ?? "").trim() || null;
@@ -804,7 +804,7 @@ export async function saveRecurring(
   const id = Number(formData.get("categoryId"));
   if (!id) return { ok: false, error: "Missing category.", n };
   const amountRaw = String(formData.get("monthlyBudget") ?? "").trim();
-  const monthlyBudget = amountRaw === "" ? null : Number(amountRaw);
+  const monthlyBudget = amountRaw === "" ? null : parseAmount(amountRaw);
   const fixed = formData.get("fixed") === "on";
   const sinking = !fixed && formData.get("sinking") === "on";
   const cycleRaw = String(formData.get("cycleMonths") ?? "").trim();
@@ -1098,7 +1098,7 @@ export async function createRecurringItem(formData: FormData) {
   const householdId = Number(formData.get("householdId"));
   const kind = formData.get("kind") === "income" ? "income" : "expense";
   let name = String(formData.get("name") ?? "").trim();
-  const amount = Number(formData.get("amount"));
+  const amount = parseAmount(formData.get("amount"));
   const categoryId = formData.get("categoryId") ? Number(formData.get("categoryId")) : null;
   const memberId = formData.get("memberId") ? Number(formData.get("memberId")) : null;
   const total = formData.get("installmentsTotal") ? Number(formData.get("installmentsTotal")) : null;
@@ -1123,7 +1123,7 @@ export async function updateRecurringItem(formData: FormData) {
     amount?: number; name?: string; memberId?: number | null; categoryId?: number | null;
     installmentsTotal?: number | null; installmentStartYear?: number | null; installmentStartMonth?: number | null;
   } = {};
-  if (formData.has("amount")) { const a = Number(formData.get("amount")); if (a > 0) data.amount = a; }
+  if (formData.has("amount")) { const a = parseAmount(formData.get("amount")); if (a > 0) data.amount = a; }
   if (formData.has("name")) { const n = String(formData.get("name")).trim(); if (n) data.name = n; }
   if (formData.has("memberId")) data.memberId = formData.get("memberId") ? Number(formData.get("memberId")) : null;
   if (formData.has("categoryId") && item.kind === "expense" && formData.get("categoryId")) data.categoryId = Number(formData.get("categoryId"));

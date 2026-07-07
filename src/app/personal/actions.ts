@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { auth } from "@/auth";
+import { parseAmount } from "@/lib/format";
 import { ensurePersonalMonth, seedPersonalCategories } from "@/lib/personal";
 
 async function me() {
@@ -35,7 +36,7 @@ export async function finishPersonalOnboarding(formData: FormData) {
   await seedPersonalCategories(member.id);
   const period = await ensurePersonalMonth(member.id);
 
-  const income = Number(formData.get("income")) || 0;
+  const income = parseAmount(formData.get("income")) || 0;
   await prisma.personalPeriod.update({ where: { id: period.id }, data: { income } });
 
   // fixed monthly expenses: recurLabel[] / recurCat[] / recurAmt[]
@@ -59,7 +60,7 @@ export async function setPersonalIncome(formData: FormData) {
   const member = await me();
   if (!member) return;
   const periodId = Number(formData.get("periodId"));
-  const income = Number(formData.get("income")) || 0;
+  const income = parseAmount(formData.get("income")) || 0;
   if (!(await ownsPeriod(member.id, periodId))) return;
   await prisma.personalPeriod.update({ where: { id: periodId }, data: { income } });
   rev();
@@ -72,7 +73,7 @@ export async function addPersonalIncome(formData: FormData) {
   if (!member) return;
   const periodId = Number(formData.get("periodId"));
   const source = String(formData.get("source") ?? "").trim();
-  const amount = Number(formData.get("amount"));
+  const amount = parseAmount(formData.get("amount"));
   if (!source || !amount || amount <= 0) return;
   if (!(await ownsPeriod(member.id, periodId))) return;
   await prisma.personalIncome.create({ data: { memberId: member.id, periodId, source, amount } });
@@ -113,7 +114,7 @@ export async function addPersonalExpense(
   const periodId = Number(formData.get("periodId"));
   const label = String(formData.get("label") ?? "").trim();
   const categoryId = Number(formData.get("categoryId"));
-  const amount = Number(formData.get("amount"));
+  const amount = parseAmount(formData.get("amount"));
   const recurring = formData.get("recurring") === "on";
   if (!periodId || !label || !categoryId || !amount || amount <= 0)
     return { ok: false, error: "Enter a name, category and amount.", n };
@@ -135,7 +136,7 @@ export async function updatePersonalExpense(
   const id = Number(formData.get("id"));
   const label = String(formData.get("label") ?? "").trim();
   const categoryId = Number(formData.get("categoryId"));
-  const amount = Number(formData.get("amount"));
+  const amount = parseAmount(formData.get("amount"));
   const recurring = formData.get("recurring") === "on";
   const e = await prisma.personalExpense.findUnique({ where: { id } });
   if (!e || e.memberId !== member.id) return { ok: false, error: "Not found.", n };
@@ -166,7 +167,7 @@ export async function addPersonalSpend(
   if (!member) return { ok: false, error: "Signed out.", n };
   const periodId = Number(formData.get("periodId"));
   const categoryId = Number(formData.get("categoryId"));
-  const amount = Number(formData.get("amount"));
+  const amount = parseAmount(formData.get("amount"));
   const note = String(formData.get("note") ?? "").trim();
   if (!periodId || !categoryId || !amount || amount <= 0 || !note)
     return { ok: false, error: "Enter a name, category and amount.", n };
@@ -187,7 +188,7 @@ export async function updatePersonalSpend(
   if (!member) return { ok: false, error: "Signed out.", n };
   const id = Number(formData.get("id"));
   const categoryId = Number(formData.get("categoryId"));
-  const amount = Number(formData.get("amount"));
+  const amount = parseAmount(formData.get("amount"));
   const note = String(formData.get("note") ?? "").trim();
   const s = await prisma.personalSpend.findUnique({ where: { id } });
   if (!s || s.memberId !== member.id) return { ok: false, error: "Not found.", n };
@@ -250,7 +251,7 @@ export async function addPersonalLoan(formData: FormData) {
   if (!member) return;
   const direction = String(formData.get("direction")) === "borrowed" ? "borrowed" : "lent";
   const counterparty = String(formData.get("counterparty") ?? "").trim();
-  const amount = Number(formData.get("amount"));
+  const amount = parseAmount(formData.get("amount"));
   const note = String(formData.get("note") ?? "").trim() || null;
   if (!counterparty || !amount || amount <= 0) return;
   await prisma.personalLoan.create({
@@ -263,7 +264,7 @@ export async function recordPersonalLoanPayment(formData: FormData) {
   const member = await me();
   if (!member) return;
   const id = Number(formData.get("id"));
-  const pay = Number(formData.get("amount"));
+  const pay = parseAmount(formData.get("amount"));
   const loan = await prisma.personalLoan.findUnique({ where: { id } });
   if (!loan || loan.memberId !== member.id || !pay || pay <= 0) return;
   const outstanding = Math.max(0, loan.outstanding - pay);
