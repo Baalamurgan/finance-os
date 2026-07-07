@@ -36,8 +36,9 @@ async function main() {
     personalExpense: await prisma.personalExpense.findMany(),
     personalSpend: await prisma.personalSpend.findMany(),
     personalLoan: await prisma.personalLoan.findMany(),
-    personalCard: await prisma.personalCard.findMany(),
-    personalCardTxn: await prisma.personalCardTxn.findMany(),
+    financeAccount: await prisma.financeAccount.findMany(),
+    creditCardDetail: await prisma.creditCardDetail.findMany(),
+    accountTransaction: await prisma.accountTransaction.findMany(),
   };
 
   mkdirSync("backups", { recursive: true });

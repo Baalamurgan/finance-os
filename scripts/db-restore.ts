@@ -42,8 +42,9 @@ async function main() {
 
   await prisma.$transaction(async (tx) => {
     // delete children → parents (personal/webauthn also cascade off Member, but be explicit)
-    await tx.personalCardTxn.deleteMany();
-    await tx.personalCard.deleteMany();
+    await tx.accountTransaction.deleteMany();
+    await tx.creditCardDetail.deleteMany();
+    await tx.financeAccount.deleteMany();
     await tx.personalSpend.deleteMany();
     await tx.personalExpense.deleteMany();
     await tx.personalIncome.deleteMany();
@@ -86,8 +87,9 @@ async function main() {
     if (d.personalExpense?.length) await tx.personalExpense.createMany({ data: d.personalExpense });
     if (d.personalSpend?.length) await tx.personalSpend.createMany({ data: d.personalSpend });
     if (d.personalLoan?.length) await tx.personalLoan.createMany({ data: d.personalLoan });
-    if (d.personalCard?.length) await tx.personalCard.createMany({ data: d.personalCard });
-    if (d.personalCardTxn?.length) await tx.personalCardTxn.createMany({ data: d.personalCardTxn });
+    if (d.financeAccount?.length) await tx.financeAccount.createMany({ data: d.financeAccount });
+    if (d.creditCardDetail?.length) await tx.creditCardDetail.createMany({ data: d.creditCardDetail });
+    if (d.accountTransaction?.length) await tx.accountTransaction.createMany({ data: d.accountTransaction });
   });
 
   // Restored rows keep their original ids, so bump each id sequence past the max

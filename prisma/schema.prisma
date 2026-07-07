@@ -132,8 +132,8 @@ model Member {
   personalSpends     PersonalSpend[]
   personalIncomes    PersonalIncome[]
   personalLoans      PersonalLoan[]
-  personalCards      PersonalCard[]
-  personalCardTxns   PersonalCardTxn[]
+  financeAccounts    FinanceAccount[]
+  accountTxns        AccountTransaction[]
 
   @@unique([householdId, code])
 }
@@ -250,38 +250,62 @@ model PersonalLoan {
   createdAt    DateTime @default(now())
 }
 
-// A credit card. Transactions are imported from statements (PDF → AI extract).
-model PersonalCard {
-  id        Int      @id @default(autoincrement())
-  member    Member   @relation(fields: [memberId], references: [id], onDelete: Cascade)
-  memberId  Int
-  name      String   // "SBI SimplyClick"
-  bank      String?  // "SBI"
-  last4     String?  // "1234"
-  limitAmt  Float?   // credit limit
-  color     String   @default("#6366f1")
-  archived  Boolean  @default(false)
-  txns      PersonalCardTxn[]
-  createdAt DateTime @default(now())
+// ── Finance (Wallet) — foundation for cards, and later bank/loan/investment ──────
+// A financial account the member owns. Base record; type-specific detail (e.g. credit
+// limit + billing cycle) lives in a 1:1 detail table so new account types extend cleanly.
+model FinanceAccount {
+  id          Int      @id @default(autoincrement())
+  member      Member   @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  memberId    Int
+  type        String   // credit_card | debit_card  (future: bank | loan | investment)
+  name        String   // "SBI SimplyClick"
+  institution String?  // bank / issuer, e.g. "SBI"
+  network     String?  // visa | mastercard | rupay | amex | diners
+  last4       String?
+  color       String   @default("#6366f1")
+  active      Boolean  @default(true)
+  sortOrder   Int      @default(0)
+  credit      CreditCardDetail?
+  txns        AccountTransaction[]
+  createdAt   DateTime @default(now())
+
+  @@index([memberId])
 }
 
-// One line off a card statement. `bucket` mirrors the 50/30/20 tag so card spends
-// can later fold into the same Analysis view.
-model PersonalCardTxn {
-  id         Int      @id @default(autoincrement())
-  member     Member   @relation(fields: [memberId], references: [id], onDelete: Cascade)
-  memberId   Int
-  card       PersonalCard @relation(fields: [cardId], references: [id], onDelete: Cascade)
-  cardId     Int
-  date       DateTime
-  merchant   String
-  amount     Float    // rupees, positive
-  type       String   @default("spend") // spend | payment | refund
-  category   String?  // free-text category from the statement / user
-  bucket     String?  // need | want | invest (optional)
-  createdAt  DateTime @default(now())
+// Credit-card specifics. Cycles are DERIVED from statementDay + dueOffsetDays (no
+// Statement entity yet — that arrives in the statement-pipeline phase).
+model CreditCardDetail {
+  id            Int      @id @default(autoincrement())
+  account       FinanceAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  accountId     Int      @unique
+  creditLimit   Float?
+  statementDay  Int?     // 1–28: day of month the statement generates
+  dueOffsetDays Int?     // days after the statement date the payment is due
+}
+
+// One ledger line on an account. The dashboard computes ONLY from these confirmed rows.
+// Sign convention: spend/fee/interest/charge increase owed; payment/refund/cashback
+// decrease owed; reward = points only (no rupee effect); adjustment = ±.
+model AccountTransaction {
+  id           Int      @id @default(autoincrement())
+  member       Member   @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  memberId     Int
+  account      FinanceAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  accountId    Int
+  date         DateTime
+  merchant     String
+  amount       Float    // rupees, positive
+  type         String   @default("spend") // spend|payment|refund|cashback|reward|fee|interest|charge|adjustment
+  rewardPoints Float?   // points earned/redeemed on this line
+  category     String?  // free-text category from the statement / user
+  bucket       String?  // need | want | invest (optional)
+  confidence   Float?   // 0–1 from extraction; low → needsReview
+  needsReview  Boolean  @default(false)
+  source       String   @default("manual") // manual | import
+  createdAt    DateTime @default(now())
 
   @@index([memberId, date])
+  @@index([accountId, date])
 }
 
 // A month (e.g. MAR 2026).
