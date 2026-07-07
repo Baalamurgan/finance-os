@@ -151,3 +151,65 @@ export async function deleteTransaction(formData: FormData) {
   await prisma.accountTransaction.delete({ where: { id } });
   rev();
 }
+
+// ── Net-worth holdings ─────────────────────────────────────────────────────────
+export type ItemFormState = { ok: boolean; error?: string; n: number };
+
+export async function addNetWorthItem(prev: ItemFormState, formData: FormData): Promise<ItemFormState> {
+  const n = (prev?.n ?? 0) + 1;
+  const member = await me();
+  if (!member) return { ok: false, error: "Signed out.", n };
+  const category = String(formData.get("category") ?? "");
+  const type = String(formData.get("type") ?? "").trim();
+  const name = String(formData.get("name") ?? "").trim();
+  const value = num(formData.get("value"));
+  if (category !== "asset" && category !== "liability") return { ok: false, error: "Pick asset or liability.", n };
+  if (!type || !name) return { ok: false, error: "Name it and pick a type.", n };
+  if (value == null || value < 0) return { ok: false, error: "Enter a valid amount.", n };
+  await prisma.netWorthItem.create({
+    data: {
+      memberId: member.id,
+      category,
+      type,
+      name: name.slice(0, 120),
+      value: Math.round(value * 100) / 100,
+      quantity: num(formData.get("quantity")),
+      institution: String(formData.get("institution") ?? "").trim() || null,
+      notes: String(formData.get("notes") ?? "").trim() || null,
+    },
+  });
+  rev();
+  return { ok: true, n };
+}
+
+export async function updateNetWorthItem(prev: ItemFormState, formData: FormData): Promise<ItemFormState> {
+  const n = (prev?.n ?? 0) + 1;
+  const member = await me();
+  if (!member) return { ok: false, error: "Signed out.", n };
+  const id = Number(formData.get("id"));
+  const item = await prisma.netWorthItem.findFirst({ where: { id, memberId: member.id } });
+  if (!item) return { ok: false, error: "Not found.", n };
+  const value = num(formData.get("value"));
+  await prisma.netWorthItem.update({
+    where: { id },
+    data: {
+      name: String(formData.get("name") ?? item.name).trim() || item.name,
+      value: value != null && value >= 0 ? Math.round(value * 100) / 100 : item.value,
+      quantity: num(formData.get("quantity")),
+      institution: String(formData.get("institution") ?? "").trim() || null,
+      notes: String(formData.get("notes") ?? "").trim() || null,
+    },
+  });
+  rev();
+  return { ok: true, n };
+}
+
+export async function deleteNetWorthItem(formData: FormData) {
+  const member = await me();
+  if (!member) return;
+  const id = Number(formData.get("id"));
+  const item = await prisma.netWorthItem.findFirst({ where: { id, memberId: member.id } });
+  if (!item) return;
+  await prisma.netWorthItem.delete({ where: { id } });
+  rev();
+}

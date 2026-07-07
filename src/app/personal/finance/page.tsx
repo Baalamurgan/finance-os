@@ -1,9 +1,16 @@
 import Link from "next/link";
 import { formatINR } from "@/lib/format";
 import { loadPersonal } from "@/lib/loadPersonal";
-import { getWalletAccounts } from "@/lib/finance/queries";
+import { getNetWorth, getWalletAccounts } from "@/lib/finance/queries";
+import { netWorthTypeMeta } from "@/lib/finance/types";
 import { PersonalNav } from "@/components/personal/PersonalNav";
+import { NetWorthItemModal } from "@/components/personal/NetWorthItemModal";
 import { AddAccountModal } from "@/components/personal/AddAccountModal";
+import { ConfirmForm } from "@/components/ConfirmForm";
+import { MoneyFlowDonut } from "@/components/Charts";
+import { deleteNetWorthItem } from "@/app/personal/finance/actions";
+
+const ALLOC_COLORS = ["#10b981", "#0ea5e9", "#f59e0b", "#8b5cf6", "#ef4444", "#14b8a6", "#ec4899", "#84cc16", "#6366f1", "#f97316", "#06b6d4", "#a855f7"];
 
 export default async function FinancePage({
   searchParams,
@@ -12,102 +19,173 @@ export default async function FinancePage({
 }) {
   const sp = await searchParams;
   const c = await loadPersonal(sp);
-  const items = await getWalletAccounts(c.member.id);
-  const credit = items.filter((i) => i.account.type === "credit_card");
-  const debit = items.filter((i) => i.account.type === "debit_card");
+  const nw = await getNetWorth(c.member.id);
+  const wallet = await getWalletAccounts(c.member.id);
+
+  const donutSegments = nw.allocation.map((a, i) => ({
+    name: `${a.icon} ${a.label}`,
+    value: a.value,
+    color: ALLOC_COLORS[i % ALLOC_COLORS.length],
+  }));
 
   return (
     <>
       <PersonalNav active="finance" name={c.account.name} selYear={c.selYear} selMonth={c.selMonth} />
       <main className="mx-auto max-w-3xl space-y-5 p-4 pb-24 sm:p-6">
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-xl font-bold text-slate-900">Finance</h1>
-            <p className="text-sm text-slate-500">Your cards and their spending.</p>
-          </div>
-          <AddAccountModal />
+        <div>
+          <h1 className="text-xl font-bold text-slate-900">Net worth</h1>
+          <p className="text-sm text-slate-500">Everything you own minus everything you owe.</p>
         </div>
 
-        {items.length === 0 && (
-          <div className="rounded-xl border border-dashed border-slate-300 bg-white p-8 text-center text-sm text-slate-500">
-            No cards yet. Add your first credit or debit card to get started.
+        {/* hero */}
+        <div className="rounded-2xl border border-slate-200 bg-gradient-to-br from-emerald-50 to-white p-5">
+          <div className="text-[11px] font-medium uppercase tracking-wide text-slate-500">Total net worth</div>
+          <div className={`mt-1 text-4xl font-extrabold tabular-nums ${nw.netWorth < 0 ? "text-red-600" : "text-emerald-700"}`}>
+            {formatINR(nw.netWorth)}
+          </div>
+          <div className="mt-3 flex gap-6 text-sm">
+            <span className="text-slate-500">Assets <b className="tabular-nums text-emerald-700">{formatINR(nw.totalAssets)}</b></span>
+            <span className="text-slate-500">Liabilities <b className="tabular-nums text-red-600">{formatINR(nw.totalLiabilities)}</b></span>
+          </div>
+        </div>
+
+        {!nw.hasAny && (
+          <div className="rounded-xl border border-dashed border-slate-300 bg-white p-6 text-center text-sm text-slate-500">
+            Start by adding what you own (stocks, MF, FDs, PF, property, gold…) and what you owe.
+            Your cards and lending/borrowing fold in automatically.
           </div>
         )}
 
-        {credit.length > 0 && (
-          <section className="space-y-3">
-            <h2 className="text-[11px] font-semibold uppercase tracking-widest text-slate-400">Credit cards</h2>
-            {credit.map(({ account, summary }) => (
-              <Link
-                key={account.id}
-                href={`/personal/finance/${account.id}`}
-                className="block rounded-xl border border-slate-200 bg-white p-4 transition hover:border-emerald-300 hover:shadow-sm"
-              >
-                <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <div className="flex items-center gap-2">
-                      <span className="h-3 w-3 shrink-0 rounded-full" style={{ background: account.color }} />
-                      <span className="truncate font-semibold text-slate-800">{account.name}</span>
-                      {!account.active && <span className="rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-400">inactive</span>}
-                    </div>
-                    <div className="mt-0.5 text-xs text-slate-400">
-                      {[account.institution, account.network?.toUpperCase(), account.last4 && `•• ${account.last4}`].filter(Boolean).join(" · ") || "credit card"}
-                    </div>
-                  </div>
-                  <span className="shrink-0 text-slate-300">›</span>
-                </div>
-
-                {summary?.hasLimit ? (
-                  <div className="mt-3">
-                    <UtilBar pct={summary.utilPct ?? 0} />
-                    <div className="mt-1 flex justify-between text-xs">
-                      <span className="text-slate-500">
-                        Outstanding <b className="tabular-nums text-slate-700">{formatINR(summary.outstanding)}</b>
-                      </span>
-                      <span className="tabular-nums text-slate-400">
-                        {Math.round(summary.utilPct ?? 0)}% of {formatINR(account.credit?.creditLimit ?? 0)}
-                      </span>
-                    </div>
-                  </div>
-                ) : (
-                  <p className="mt-3 text-xs text-amber-600">Set a credit limit &amp; statement day to see your dashboard →</p>
-                )}
-              </Link>
-            ))}
-          </section>
+        {/* allocation */}
+        {nw.totalAssets > 0 && donutSegments.length > 0 && (
+          <div className="rounded-xl border border-slate-200 bg-white p-5">
+            <h2 className="mb-3 text-sm font-semibold text-slate-800">Where your money is</h2>
+            <MoneyFlowDonut segments={donutSegments} centerLabel="Assets" centerValue={formatINR(nw.totalAssets)} />
+          </div>
         )}
 
-        {debit.length > 0 && (
-          <section className="space-y-3">
-            <h2 className="text-[11px] font-semibold uppercase tracking-widest text-slate-400">Debit cards</h2>
-            {debit.map(({ account }) => (
-              <div key={account.id} className="flex items-center justify-between rounded-xl border border-slate-200 bg-white p-4">
-                <div className="flex items-center gap-2">
-                  <span className="h-3 w-3 shrink-0 rounded-full" style={{ background: account.color }} />
-                  <div>
-                    <div className="font-semibold text-slate-800">{account.name}</div>
-                    <div className="text-xs text-slate-400">
-                      {[account.institution, account.network?.toUpperCase(), account.last4 && `•• ${account.last4}`].filter(Boolean).join(" · ") || "debit card"}
+        {/* assets */}
+        <section className="rounded-xl border border-slate-200 bg-white">
+          <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3">
+            <h2 className="text-sm font-semibold text-slate-900">Assets <span className="tabular-nums text-emerald-700">{formatINR(nw.totalAssets)}</span></h2>
+            <NetWorthItemModal category="asset" />
+          </div>
+          <ul className="divide-y divide-slate-100">
+            {nw.assetItems.map((it) => (
+              <ItemRow key={it.id} item={it} tone="emerald" />
+            ))}
+            {nw.lentOutstanding > 0 && (
+              <AutoRow icon="🤝" name="Money lent to others" sub="from Lending & borrowing" value={nw.lentOutstanding} href="/personal/loans" tone="emerald" />
+            )}
+            {nw.assetItems.length === 0 && nw.lentOutstanding === 0 && (
+              <li className="px-4 py-5 text-center text-sm text-slate-400">No assets yet — add stocks, MF, FDs, PF, property…</li>
+            )}
+          </ul>
+        </section>
+
+        {/* liabilities */}
+        <section className="rounded-xl border border-slate-200 bg-white">
+          <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3">
+            <h2 className="text-sm font-semibold text-slate-900">Liabilities <span className="tabular-nums text-red-600">{formatINR(nw.totalLiabilities)}</span></h2>
+            <NetWorthItemModal category="liability" />
+          </div>
+          <ul className="divide-y divide-slate-100">
+            {nw.liabilityItems.map((it) => (
+              <ItemRow key={it.id} item={it} tone="red" />
+            ))}
+            {nw.borrowedOutstanding > 0 && (
+              <AutoRow icon="🤝" name="Money you borrowed" sub="from Lending & borrowing" value={nw.borrowedOutstanding} href="/personal/loans" tone="red" />
+            )}
+            {nw.cards.map((card) => (
+              <AutoRow key={card.id} icon="💳" name={card.name} sub="credit card outstanding" value={card.outstanding} href={`/personal/finance/${card.id}`} tone="red" dot={card.color} />
+            ))}
+            {nw.liabilityItems.length === 0 && nw.borrowedOutstanding === 0 && nw.cards.length === 0 && (
+              <li className="px-4 py-5 text-center text-sm text-slate-400">No liabilities — loans and card dues show up here.</li>
+            )}
+          </ul>
+        </section>
+
+        {/* manage cards */}
+        <details className="rounded-xl border border-slate-200 bg-white">
+          <summary className="flex cursor-pointer list-none items-center justify-between px-4 py-3 [&::-webkit-details-marker]:hidden">
+            <span className="text-sm font-semibold text-slate-800">💳 Cards</span>
+            <span className="text-xs text-slate-400">{wallet.length} card{wallet.length === 1 ? "" : "s"} · manage &amp; import</span>
+          </summary>
+          <div className="space-y-2 border-t border-slate-100 p-4">
+            <div className="flex justify-end"><AddAccountModal /></div>
+            {wallet.map(({ account, summary }) => {
+              const inner = (
+                <div className="flex items-center justify-between rounded-lg border border-slate-200 p-3">
+                  <div className="flex items-center gap-2">
+                    <span className="h-3 w-3 rounded-full" style={{ background: account.color }} />
+                    <div>
+                      <div className="text-sm font-medium text-slate-800">{account.name}</div>
+                      <div className="text-[11px] text-slate-400">
+                        {[account.type === "credit_card" ? "Credit" : "Debit", account.institution, account.last4 && `•• ${account.last4}`].filter(Boolean).join(" · ")}
+                      </div>
                     </div>
                   </div>
+                  {account.type === "credit_card"
+                    ? <span className="text-xs tabular-nums text-slate-500">{summary?.hasLimit ? `${Math.round(summary.utilPct ?? 0)}% used ›` : "set up ›"}</span>
+                    : <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] text-slate-400">info</span>}
                 </div>
-                <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-medium text-slate-400">info only</span>
-              </div>
-            ))}
-          </section>
-        )}
+              );
+              return account.type === "credit_card"
+                ? <Link key={account.id} href={`/personal/finance/${account.id}`} className="block hover:opacity-80">{inner}</Link>
+                : <div key={account.id}>{inner}</div>;
+            })}
+            {wallet.length === 0 && <p className="text-center text-sm text-slate-400">No cards yet.</p>}
+          </div>
+        </details>
+
+        <p className="text-center text-[11px] text-slate-400">
+          Values are what you enter — update them anytime. Lending/borrowing and card dues are pulled in automatically.
+        </p>
       </main>
     </>
   );
 }
 
-// green (low) → amber → red (high) utilisation bar; the grey mask hides the unused part.
-function UtilBar({ pct }: { pct: number }) {
-  const w = Math.max(0, Math.min(100, pct));
+type Item = { id: number; type: string; category: string; name: string; value: number; quantity: number | null; institution: string | null; notes: string | null };
+
+function ItemRow({ item, tone }: { item: Item; tone: "emerald" | "red" }) {
+  const meta = netWorthTypeMeta(item.type);
   return (
-    <div className="relative h-2 w-full overflow-hidden rounded-full bg-slate-100">
-      <div className="absolute inset-0" style={{ background: "linear-gradient(to right, #22c55e 0%, #eab308 60%, #ef4444 100%)" }} />
-      <div className="absolute inset-y-0 right-0 bg-slate-100" style={{ width: `${100 - w}%` }} />
-    </div>
+    <li className="flex items-center justify-between gap-2 px-4 py-2.5 text-sm">
+      <div className="flex min-w-0 items-center gap-2.5">
+        <span className="text-lg">{meta.icon}</span>
+        <div className="min-w-0">
+          <div className="truncate font-medium text-slate-800">{item.name}</div>
+          <div className="text-[11px] text-slate-400">
+            {[meta.label, item.institution, item.quantity != null ? `${item.quantity} units` : null].filter(Boolean).join(" · ")}
+          </div>
+        </div>
+      </div>
+      <div className="flex items-center gap-2">
+        <span className={`tabular-nums font-medium ${tone === "red" ? "text-red-600" : "text-slate-800"}`}>{formatINR(item.value)}</span>
+        <NetWorthItemModal category={item.category as "asset" | "liability"} initial={item} trigger="pencil" />
+        <ConfirmForm action={deleteNetWorthItem} message={`Remove ${item.name}?`}>
+          <input type="hidden" name="id" value={item.id} />
+          <button className="text-slate-300 hover:text-red-600">✕</button>
+        </ConfirmForm>
+      </div>
+    </li>
+  );
+}
+
+function AutoRow({ icon, name, sub, value, href, tone, dot }: { icon: string; name: string; sub: string; value: number; href: string; tone: "emerald" | "red"; dot?: string }) {
+  return (
+    <li>
+      <Link href={href} className="flex items-center justify-between gap-2 px-4 py-2.5 text-sm hover:bg-slate-50">
+        <div className="flex min-w-0 items-center gap-2.5">
+          {dot ? <span className="h-3 w-3 rounded-full" style={{ background: dot }} /> : <span className="text-lg">{icon}</span>}
+          <div className="min-w-0">
+            <div className="truncate font-medium text-slate-800">{name}</div>
+            <div className="text-[11px] text-slate-400">{sub} · auto ›</div>
+          </div>
+        </div>
+        <span className={`tabular-nums font-medium ${tone === "red" ? "text-red-600" : "text-slate-800"}`}>{formatINR(value)}</span>
+      </Link>
+    </li>
   );
 }

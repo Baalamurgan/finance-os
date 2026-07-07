@@ -39,6 +39,7 @@ async function main() {
     financeAccount: await prisma.financeAccount.findMany(),
     creditCardDetail: await prisma.creditCardDetail.findMany(),
     accountTransaction: await prisma.accountTransaction.findMany(),
+    netWorthItem: await prisma.netWorthItem.findMany(),
   };
 
   mkdirSync("backups", { recursive: true });

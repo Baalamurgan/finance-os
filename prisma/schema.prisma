@@ -134,6 +134,7 @@ model Member {
   personalLoans      PersonalLoan[]
   financeAccounts    FinanceAccount[]
   accountTxns        AccountTransaction[]
+  netWorthItems      NetWorthItem[]
 
   @@unique([householdId, code])
 }
@@ -248,6 +249,26 @@ model PersonalLoan {
   note         String?
   status       String   @default("open") // open | settled
   createdAt    DateTime @default(now())
+}
+
+// A net-worth holding: a manually-valued asset or liability (stocks, MF, FD, PF, gold,
+// property, land, loans…). Net worth also auto-includes credit-card outstanding
+// (AccountTransaction) and open lending/borrowing (PersonalLoan) — those aren't stored here.
+model NetWorthItem {
+  id          Int      @id @default(autoincrement())
+  member      Member   @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  memberId    Int
+  category    String   // asset | liability
+  type        String   // stock | mutual_fund | fd | epf | ppf | nps | gold | cash | bank | property | land | vehicle | insurance | *_loan | other_*
+  name        String
+  value       Float    // current ₹ value (liabilities stored as a positive number)
+  quantity    Float?   // units held (stocks / MF / gold) — optional
+  institution String?  // broker / bank / fund house — optional
+  notes       String?
+  updatedAt   DateTime @updatedAt
+  createdAt   DateTime @default(now())
+
+  @@index([memberId])
 }
 
 // ── Finance (Wallet) — foundation for cards, and later bank/loan/investment ──────
