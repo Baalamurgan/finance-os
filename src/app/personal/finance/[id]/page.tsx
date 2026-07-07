@@ -4,7 +4,6 @@ import { formatINR } from "@/lib/format";
 import { loadPersonal } from "@/lib/loadPersonal";
 import { getAccountDetail } from "@/lib/finance/queries";
 import { PersonalNav } from "@/components/personal/PersonalNav";
-import { StatementImporter } from "@/components/personal/StatementImporter";
 import { ConfirmForm } from "@/components/ConfirmForm";
 import { setCreditConfig, deleteTransaction, addManualTransaction } from "@/app/personal/finance/actions";
 import { TXN_TYPES } from "@/lib/finance/types";
@@ -27,7 +26,6 @@ export default async function CreditCardDetail({
 
   const { account, txns, dashboard: d } = detail;
   const cfg = account.credit;
-  const aiReady = !!process.env.ANTHROPIC_API_KEY;
 
   return (
     <>
@@ -104,16 +102,6 @@ export default async function CreditCardDetail({
             </div>
           </form>
         </details>
-
-        {/* import */}
-        {aiReady ? (
-          <StatementImporter accountId={account.id} />
-        ) : (
-          <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
-            <b>Statement import</b> reads a PDF automatically using AI — it switches on once
-            <code className="mx-1 rounded bg-amber-100 px-1">ANTHROPIC_API_KEY</code> is set on the server.
-          </div>
-        )}
 
         {/* transactions */}
         <section className="rounded-xl border border-slate-200 bg-white">
