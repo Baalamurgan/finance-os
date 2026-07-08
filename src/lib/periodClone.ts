@@ -1,5 +1,5 @@
 import type { Prisma } from "@prisma/client";
-import { scheduleOccurrence, scheduleLabel } from "@/lib/schedule";
+import { scheduleOccurrence, scheduleLabel, isLumpDue } from "@/lib/schedule";
 
 /**
  * Generate a month's structure from the RecurringItem TEMPLATE (the source of
@@ -26,12 +26,13 @@ export async function generateMonth(
   const [period, items, cats] = await Promise.all([
     tx.period.findUnique({ where: { id: targetId }, select: { year: true, month: true } }),
     tx.recurringItem.findMany({ where: { householdId, active: true }, orderBy: { sortOrder: "asc" } }),
-    tx.category.findMany({ where: { householdId }, select: { id: true, name: true, tracked: true, sinking: true, onHold: true, necessary: true, monthlyBudget: true, responsibleMemberId: true } }),
+    tx.category.findMany({ where: { householdId }, select: { id: true, name: true, tracked: true, sinking: true, onHold: true, necessary: true, monthlyBudget: true, responsibleMemberId: true, billEveryMonths: true, billMonth: true, billAmount: true } }),
   ]);
   const catById = new Map(cats.map((c) => [c.id, c]));
   // A "budgeted" category (tracked envelope OR flat fixed bill) owns its own monthly amount
   // in Budgets & sinking funds — it's generated from the Category below, so its
-  // RecurringItems (if any) are skipped so nothing double-books.
+  // RecurringItems (if any) are skipped so nothing double-books. (Full-bill categories have
+  // monthlyBudget = null, so they are naturally excluded here and handled by their own loop.)
   const isBudgeted = (categoryId: number | null): boolean => {
     if (categoryId == null) return false;
     const c = catById.get(categoryId);
@@ -61,6 +62,7 @@ export async function generateMonth(
     const cat = catById.get(it.categoryId);
     if (cat?.onHold) continue; // held category → not generated
     if (isBudgeted(it.categoryId)) continue; // budgeted category → generated from the Category, not the item
+    if (cat?.billEveryMonths != null) continue; // full-bill category → generated from the Category (below), never double-booked
     await tx.expenseEntry.create({
       data: {
         periodId: targetId,
@@ -95,5 +97,25 @@ export async function generateMonth(
     if (cat.tracked) {
       await tx.budget.create({ data: { periodId: targetId, categoryId: cat.id, planned: cat.monthlyBudget } });
     }
+  }
+
+  // Full-bill categories: the whole bill lands as ONE expense line only in its due month(s)
+  // (yearly insurance, every-2-months EMI) — no monthly share, no fund. The alternative to
+  // a sinking fund for a periodic bill. Just a normal expense in its month → counts in the
+  // sheet total, carry and settlement like any other line.
+  for (const cat of cats) {
+    if (cat.onHold || cat.billEveryMonths == null || cat.billAmount == null || cat.billAmount <= 0) continue;
+    if (!isLumpDue(cat.billMonth ?? 1, cat.billEveryMonths, period!)) continue;
+    await tx.expenseEntry.create({
+      data: {
+        periodId: targetId,
+        label: cat.name,
+        amount: cat.billAmount,
+        categoryId: cat.id,
+        memberId: cat.responsibleMemberId,
+        necessary: cat.necessary ?? true,
+        oneOff: false,
+      },
+    });
   }
 }

@@ -13,60 +13,33 @@ export type RItem = {
   intervalMonths: number; installmentStartYear: number | null; installmentStartMonth: number | null; dueDay: number | null;
 };
 
-// ── Schedule editor (every month | installment N times | every N months) ────────
-type SchedKind = "monthly" | "installment" | "periodic";
-type SchedState = { kind: SchedKind; interval: string; month: string; year: string; day: string; count: string; total: string; current: string };
-
-const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-const INTERVALS: { v: string; label: string }[] = [
-  { v: "2", label: "every 2 months" }, { v: "3", label: "quarterly" },
-  { v: "6", label: "half-yearly" }, { v: "12", label: "yearly" },
-];
+// ── Schedule editor (every month | installment N times) ─────────────────────────
+// Periodic "every N months" bills live on the Category now (Budgets & sinking funds →
+// "Full bill"), so recurring items are just monthly lines or fixed-term installments.
+type SchedKind = "monthly" | "installment";
+type SchedState = { kind: SchedKind; total: string; current: string };
 
 function initSched(item?: RItem): SchedState {
-  const now = new Date();
-  const kind: SchedKind =
-    item && item.intervalMonths > 1 ? "periodic" : item && item.installmentsTotal != null ? "installment" : "monthly";
+  const kind: SchedKind = item && item.installmentsTotal != null && item.intervalMonths <= 1 ? "installment" : "monthly";
   return {
     kind,
-    interval: item && item.intervalMonths > 1 ? String(item.intervalMonths) : "12",
-    month: String(item?.installmentStartMonth ?? now.getMonth() + 1),
-    year: String(item?.installmentStartYear ?? now.getFullYear()),
-    day: item?.dueDay != null ? String(item.dueDay) : "",
-    count: item && item.intervalMonths > 1 && item.installmentsTotal != null ? String(item.installmentsTotal) : "",
     total: item && item.intervalMonths <= 1 && item.installmentsTotal != null ? String(item.installmentsTotal) : "",
     current: item?.installmentCurrent != null ? String(item.installmentCurrent) : "",
   };
 }
-// serialise for the dirty-check
-const schedKey = (s: SchedState) => [s.kind, s.interval, s.month, s.year, s.day, s.count, s.total, s.current].join("|");
+const schedKey = (s: SchedState) => [s.kind, s.total, s.current].join("|");
 
 function ScheduleEditor({ s, set }: { s: SchedState; set: (s: SchedState) => void }) {
-  const now = new Date();
   return (
     <span className="flex flex-wrap items-center gap-1 text-[11px] text-slate-600">
       <select value={s.kind} onChange={(e) => set({ ...s, kind: e.target.value as SchedKind })} className="input py-1 text-xs" title="How often this repeats">
         <option value="monthly">every month</option>
         <option value="installment">installment (N times)</option>
-        <option value="periodic">every N months</option>
       </select>
       {s.kind === "installment" && (
         <span className="flex items-center gap-1 text-indigo-600">
           ×<input type="number" min="1" value={s.total} onChange={(e) => set({ ...s, total: e.target.value })} placeholder="total" className="input w-14 py-1 text-xs" title="total payments" />
           on #<input type="number" min="1" value={s.current} onChange={(e) => set({ ...s, current: e.target.value })} placeholder="this mo" className="input w-14 py-1 text-xs" title="which payment is THIS month" />
-        </span>
-      )}
-      {s.kind === "periodic" && (
-        <span className="flex flex-wrap items-center gap-1 text-violet-700">
-          <select value={s.interval} onChange={(e) => set({ ...s, interval: e.target.value })} className="input py-1 text-xs">
-            {INTERVALS.map((i) => <option key={i.v} value={i.v}>{i.label}</option>)}
-          </select>
-          from
-          <select value={s.month} onChange={(e) => set({ ...s, month: e.target.value })} className="input py-1 text-xs" title="the month it's due">
-            {MONTHS.map((m, i) => <option key={m} value={String(i + 1)}>{m}</option>)}
-          </select>
-          <input type="number" value={s.year} onChange={(e) => set({ ...s, year: e.target.value })} className="input w-16 py-1 text-xs" title="starting year" min={now.getFullYear() - 1} />
-          <input type="number" min="1" max="31" value={s.day} onChange={(e) => set({ ...s, day: e.target.value })} placeholder="day" className="input w-12 py-1 text-xs" title="day of month (optional, shown as due date)" />
         </span>
       )}
     </span>
@@ -82,15 +55,6 @@ function SchedHidden({ s }: { s: SchedState }) {
         <>
           <input type="hidden" name="installmentsTotal" value={s.total} />
           <input type="hidden" name="installmentCurrent" value={s.current || "1"} />
-        </>
-      )}
-      {s.kind === "periodic" && (
-        <>
-          <input type="hidden" name="intervalMonths" value={s.interval} />
-          <input type="hidden" name="periodicMonth" value={s.month} />
-          <input type="hidden" name="periodicYear" value={s.year} />
-          <input type="hidden" name="dueDay" value={s.day} />
-          <input type="hidden" name="periodicCount" value={s.count} />
         </>
       )}
     </>
@@ -282,7 +246,7 @@ function AddItem({ householdId, categories, members }: { householdId: number; ca
       <p className="mt-2 text-xs text-slate-400">
         Applies from next month. This is the template — the current sheet stays frozen.{" "}
         {sched.kind === "installment" && <><b>Installment</b>: total payments + which is <i>this</i> month; auto-advances (3/6…) then stops.</>}
-        {sched.kind === "periodic" && <><b>Every N months</b>: the full amount lands only in the chosen month each cycle (e.g. yearly insurance) — no monthly share.</>}
+        {" "}Periodic bills (yearly insurance, every-2-months EMI) are set up in <b>Budgets &amp; sinking funds</b>.
       </p>
     </div>
   );

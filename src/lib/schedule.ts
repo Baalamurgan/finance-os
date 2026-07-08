@@ -38,6 +38,18 @@ export function scheduleLabel(name: string, total: number | null | undefined, n:
   return total != null && n != null ? `${name} ${n}/${total}` : name;
 }
 
+/**
+ * Is a "full bill on due month" category due in this month? The bill recurs every
+ * `everyMonths` (a divisor of 12: 2/3/4/6/12) anchored to `billMonth`, so it's due when
+ * the month-of-year offset from the anchor is a multiple of the cycle. Year-agnostic —
+ * the pattern repeats each year (e.g. yearly-July → every July; every-2-months-Aug →
+ * Aug, Oct, Dec, Feb, Apr, Jun).
+ */
+export function isLumpDue(billMonth: number, everyMonths: number, period: { month: number }): boolean {
+  const c = Math.max(1, Math.round(everyMonths));
+  return ((((period.month - billMonth) % c) + c) % c) === 0;
+}
+
 const MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
 /** Short human summary of a PERIODIC schedule (interval>1), else null. Installments are

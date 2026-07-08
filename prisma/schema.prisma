@@ -390,6 +390,13 @@ model Category {
   cycleMonths  Int?           // payment cycle for sinking funds (WiFi=3, Mobile=12...)
   onHold       Boolean        @default(false) // paused: skipped when seeding new months & wind-down
   fixed        Boolean        @default(false) // fixed monthly bill (e.g. subscription): a recurring Sheet expense tagged to the payer, not a budget
+  // "Full bill on due month" (the alternative to a sinking fund for a periodic bill):
+  // the whole billAmount lands as an expense ONLY in its due month(s) — no monthly share,
+  // no fund. billEveryMonths != null marks the category as this mode.
+  billEveryMonths Int?        // 2 | 3 | 6 | 12 — how often the full bill recurs (null = not this mode)
+  billMonth       Int?        // 1–12: the month the bill is due
+  billDay         Int?        // optional day-of-month (informational)
+  billAmount      Float?      // the full bill amount charged on the due month
   responsibleMemberId Int?     // budget: over-budget excess owner; fixed bill: who pays it (settlement credit)
   expenses     ExpenseEntry[]
   budgets      Budget[]

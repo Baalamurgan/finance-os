@@ -540,6 +540,40 @@ export async function setFundBalance(formData: FormData) {
 // Add a new recurring/tracked category (Setup screen). useActionState-shaped.
 export type CreateCategoryState = { ok: boolean; error?: string; n: number };
 
+const CATEGORY_SECTIONS = ["Loans", "Chits", "Monthly", "Yearly", "Misc"] as const;
+
+// The billing shape of a category from the Setup form. `billingMode` chooses one of three
+// mutually-exclusive treatments; every field not relevant to the chosen mode is cleared, so
+// switching modes never leaves stale sinking/lump config behind.
+type BillingFields = {
+  monthlyBudget: number | null; sinking: boolean; cycleMonths: number | null; fixed: boolean; tracked: boolean;
+  billEveryMonths: number | null; billMonth: number | null; billDay: number | null; billAmount: number | null;
+};
+function parseBillingFields(formData: FormData): { ok: true; fields: BillingFields } | { ok: false; error: string } {
+  const blank: BillingFields = { monthlyBudget: null, sinking: false, cycleMonths: null, fixed: false, tracked: false, billEveryMonths: null, billMonth: null, billDay: null, billAmount: null };
+  const mode = String(formData.get("billingMode") ?? "monthly");
+  const round = (x: number) => Math.round(x * 100) / 100;
+  if (mode === "lump") {
+    const every = Number(formData.get("billEveryMonths")) || 12;
+    if (![2, 3, 4, 6, 12].includes(every)) return { ok: false, error: "Pick a valid frequency." };
+    const amt = parseAmount(formData.get("billAmount"));
+    if (!amt || amt <= 0) return { ok: false, error: "A full bill needs an amount." };
+    const day = Number(formData.get("billDay"));
+    return { ok: true, fields: { ...blank, billEveryMonths: every, billMonth: Math.min(12, Math.max(1, Number(formData.get("billMonth")) || 1)), billDay: day >= 1 && day <= 31 ? day : null, billAmount: round(amt) } };
+  }
+  if (mode === "sinking") {
+    const share = parseAmount(formData.get("monthlyBudget"));
+    const cycle = Number(formData.get("cycleMonths"));
+    if (!share || share <= 0 || !cycle || cycle < 1) return { ok: false, error: "Sinking funds need a monthly amount and a cycle." };
+    return { ok: true, fields: { ...blank, sinking: true, tracked: true, monthlyBudget: round(share), cycleMonths: cycle } };
+  }
+  const fixed = formData.get("fixed") === "on";
+  const raw = String(formData.get("monthlyBudget") ?? "").trim();
+  const amt = raw === "" ? null : parseAmount(raw);
+  if (fixed && (!amt || amt <= 0)) return { ok: false, error: "A fixed bill needs a monthly amount." };
+  return { ok: true, fields: { ...blank, fixed, tracked: !fixed, monthlyBudget: amt != null ? round(amt) : null } };
+}
+
 export async function createCategory(
   prev: CreateCategoryState,
   formData: FormData,
@@ -549,19 +583,16 @@ export async function createCategory(
   const householdId = Number(formData.get("householdId"));
   const name = String(formData.get("name") ?? "").trim();
   if (!householdId || !name) return { ok: false, error: "Give the category a name.", n };
-  const amountRaw = String(formData.get("monthlyBudget") ?? "").trim();
-  const monthlyBudget = amountRaw === "" ? null : parseAmount(amountRaw);
-  const fixed = formData.get("fixed") === "on";
-  const sinking = !fixed && formData.get("sinking") === "on";
-  const cycleRaw = String(formData.get("cycleMonths") ?? "").trim();
-  const cycleMonths = sinking && cycleRaw ? Number(cycleRaw) : null;
+  const billing = parseBillingFields(formData);
+  if (!billing.ok) return { ok: false, error: billing.error, n };
   const paidByRaw = String(formData.get("responsibleMemberId") ?? "").trim();
   const responsibleMemberId = paidByRaw === "" ? null : Number(paidByRaw);
+  const sectionRaw = String(formData.get("section") ?? "").trim();
+  const section = (CATEGORY_SECTIONS as readonly string[]).includes(sectionRaw) ? sectionRaw : "Monthly";
 
   try {
     await prisma.category.create({
-      // fixed bills live on the Sheet (tracked=false); budgets are spend-tracked
-      data: { householdId, name, section: "Monthly", tracked: !fixed, monthlyBudget, sinking, cycleMonths, fixed, responsibleMemberId },
+      data: { householdId, name, section, responsibleMemberId, ...billing.fields },
     });
   } catch {
     return { ok: false, error: `"${name}" already exists.`, n };
@@ -803,43 +834,29 @@ export async function saveRecurring(
   if (!(await isHead())) return { ok: false, error: "Only the head can edit setup.", n };
   const id = Number(formData.get("categoryId"));
   if (!id) return { ok: false, error: "Missing category.", n };
-  const amountRaw = String(formData.get("monthlyBudget") ?? "").trim();
-  const monthlyBudget = amountRaw === "" ? null : parseAmount(amountRaw);
-  const fixed = formData.get("fixed") === "on";
-  const sinking = !fixed && formData.get("sinking") === "on";
-  const cycleRaw = String(formData.get("cycleMonths") ?? "").trim();
-  const cycleMonths = sinking && cycleRaw ? Number(cycleRaw) : null;
-  // sinking funds require a monthly amount AND a valid cycle
-  if (sinking && (!monthlyBudget || monthlyBudget <= 0 || !cycleMonths || cycleMonths < 1))
-    return { ok: false, error: "Sinking funds need a monthly amount and a cycle.", n };
-  if (fixed && (!monthlyBudget || monthlyBudget <= 0))
-    return { ok: false, error: "A fixed bill needs a monthly amount.", n };
-  // responsible/default member: budget → over-budget owner; fixed → who pays it
+  const billing = parseBillingFields(formData);
+  if (!billing.ok) return { ok: false, error: billing.error, n };
   const respRaw = String(formData.get("responsibleMemberId") ?? "").trim();
   const responsibleMemberId = respRaw === "" ? null : Number(respRaw);
 
   const cat = await prisma.category.findUnique({ where: { id } });
   if (!cat) return { ok: false, error: "Category not found.", n };
-  // a fixed bill is a Sheet line, not spend-tracked; reverting to budget re-tracks it
-  const tracked = fixed ? false : cat.fixed ? true : cat.tracked;
 
   // name + section are head-editable in Setup (rename / move between sections)
   const name = String(formData.get("name") ?? "").trim() || cat.name;
   const sectionRaw = String(formData.get("section") ?? "").trim();
-  const section = ["Loans", "Chits", "Monthly", "Misc"].includes(sectionRaw)
-    ? sectionRaw
-    : cat.section;
+  const section = (CATEGORY_SECTIONS as readonly string[]).includes(sectionRaw) ? sectionRaw : cat.section;
 
   try {
     await prisma.category.update({
       where: { id },
-      data: { name, section, monthlyBudget, sinking, cycleMonths, responsibleMemberId, fixed, tracked },
+      data: { name, section, responsibleMemberId, ...billing.fields },
     });
   } catch {
     // unique-name clash → keep the old name, still apply the rest
     await prisma.category.update({
       where: { id },
-      data: { section, monthlyBudget, sinking, cycleMonths, responsibleMemberId, fixed, tracked },
+      data: { section, responsibleMemberId, ...billing.fields },
     });
     revalidatePath("/", "layout");
     return { ok: false, error: `"${name}" is already taken — saved everything except the name.`, n };

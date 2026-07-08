@@ -20,7 +20,7 @@ const SECTION_COLOR: Record<string, string> = {
   Misc: "#a855f7",
 };
 
-const SECTION_ORDER = ["Loans", "Chits", "Monthly", "Misc"] as const;
+const SECTION_ORDER = ["Loans", "Chits", "Monthly", "Yearly", "Misc"] as const;
 const SECTION_LABEL: Record<string, string> = {
   Loans: "Loans",
   Chits: "Chits",
