@@ -397,6 +397,11 @@ model Category {
   billMonth       Int?        // 1–12: the month the bill is due
   billDay         Int?        // optional day-of-month (informational)
   billAmount      Float?      // the full bill amount charged on the due month
+  // "Bill with a fund" (goal-based): fundingStyle set = this category is a periodic bill
+  // funded by its sinking bucket. auto = set aside (billAmount − fund) ÷ months-left each
+  // month; fixed = set aside monthlyBudget; none = pay it whole on the due month. The due
+  // month shows the full bill + a fund credit (net = out-of-pocket). See src/lib/schedule.ts.
+  fundingStyle    String?     // auto | fixed | none  (null = not a bill-with-a-fund)
   responsibleMemberId Int?     // budget: over-budget excess owner; fixed bill: who pays it (settlement credit)
   expenses     ExpenseEntry[]
   budgets      Budget[]

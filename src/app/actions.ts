@@ -9,6 +9,7 @@ import { isUnlocked } from "@/lib/applock";
 import { formatINR, parseAmount } from "@/lib/format";
 import { generateMonth } from "@/lib/periodClone";
 import { isMiscBucket, MISC_SUBCATEGORIES } from "@/lib/misc";
+import { planBillMonth, type FundingStyle } from "@/lib/schedule";
 
 // Record a money-affecting change for the head-only activity log (who + what + when).
 async function logActivity(
@@ -1302,13 +1303,16 @@ export async function windDownMonth(formData: FormData) {
   if (!period || period.status !== "open") return;
   const householdId = period.householdId;
 
-  const [incomes, expenses, budgets, spends, trackedCats] = await Promise.all([
+  const [incomes, expenses, budgets, spends, trackedCats, billFundCats, sinkFunds] = await Promise.all([
     prisma.incomeEntry.findMany({ where: { periodId } }),
     prisma.expenseEntry.findMany({ where: { periodId } }),
     prisma.budget.findMany({ where: { periodId } }),
     prisma.spend.findMany({ where: { periodId } }),
     prisma.category.findMany({ where: { householdId, tracked: true, onHold: false } }),
+    prisma.category.findMany({ where: { householdId, onHold: false, NOT: { fundingStyle: null } } }),
+    prisma.piggyEntry.groupBy({ by: ["categoryId"], where: { householdId, kind: "sinking" }, _sum: { amount: true } }),
   ]);
+  const fundBalance = (catId: number) => sinkFunds.find((f) => f.categoryId === catId)?._sum.amount ?? 0;
 
   const income = incomes.reduce((s, i) => s + i.amount, 0);
   const expense = expenses.reduce((s, e) => s + e.amount, 0);
@@ -1381,6 +1385,28 @@ export async function windDownMonth(formData: FormData) {
             memberId: s.memberId, // tag to the spender (display; excluded from settlement)
           });
         }
+      }
+    }
+
+    // Goal-based "bill with a fund": the set-aside accrues into the fund; at the due month
+    // the bill draws from it. Recomputed from the same inputs generateMonth used, so the
+    // fund tracks exactly what the sheet showed.
+    for (const cat of billFundCats) {
+      if (cat.billAmount == null || cat.billAmount <= 0 || cat.billMonth == null || cat.billEveryMonths == null) continue;
+      const plan = planBillMonth({
+        billAmount: cat.billAmount,
+        billMonth: cat.billMonth,
+        everyMonths: cat.billEveryMonths,
+        fund: fundBalance(cat.id),
+        fundingStyle: cat.fundingStyle as FundingStyle,
+        fixedShare: cat.monthlyBudget,
+        month: period.month,
+      });
+      const delta = plan.kind === "save" ? plan.contribution : plan.kind === "bill" ? -plan.fromFund : 0;
+      if (delta !== 0) {
+        await tx.piggyEntry.create({
+          data: { householdId, periodId, categoryId: cat.id, kind: "sinking", amount: delta, note: `${period.label} · ${cat.name}` },
+        });
       }
     }
 

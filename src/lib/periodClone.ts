@@ -1,5 +1,5 @@
 import type { Prisma } from "@prisma/client";
-import { scheduleOccurrence, scheduleLabel, isLumpDue } from "@/lib/schedule";
+import { scheduleOccurrence, scheduleLabel, isLumpDue, planBillMonth, type FundingStyle } from "@/lib/schedule";
 
 /**
  * Generate a month's structure from the RecurringItem TEMPLATE (the source of
@@ -23,12 +23,21 @@ export async function generateMonth(
   targetId: number,
   householdId: number,
 ) {
-  const [period, items, cats] = await Promise.all([
+  const [period, items, cats, funds] = await Promise.all([
     tx.period.findUnique({ where: { id: targetId }, select: { year: true, month: true } }),
     tx.recurringItem.findMany({ where: { householdId, active: true }, orderBy: { sortOrder: "asc" } }),
-    tx.category.findMany({ where: { householdId }, select: { id: true, name: true, tracked: true, sinking: true, onHold: true, necessary: true, monthlyBudget: true, responsibleMemberId: true, billEveryMonths: true, billMonth: true, billAmount: true } }),
+    tx.category.findMany({ where: { householdId }, select: { id: true, name: true, tracked: true, sinking: true, onHold: true, necessary: true, monthlyBudget: true, responsibleMemberId: true, billEveryMonths: true, billMonth: true, billAmount: true, fundingStyle: true } }),
+    tx.piggyEntry.groupBy({ by: ["categoryId"], where: { householdId, kind: "sinking" }, _sum: { amount: true } }),
   ]);
   const catById = new Map(cats.map((c) => [c.id, c]));
+  // current fund balance per category (goal-based bills read this to size the set-aside)
+  const fundByCat = new Map<number, number>();
+  for (const f of funds) if (f.categoryId != null) fundByCat.set(f.categoryId, f._sum.amount ?? 0);
+  const isBillWithFund = (categoryId: number | null): boolean => {
+    if (categoryId == null) return false;
+    const c = catById.get(categoryId);
+    return !!c && c.fundingStyle != null;
+  };
   // A "budgeted" category (tracked envelope OR flat fixed bill) owns its own monthly amount
   // in Budgets & sinking funds — it's generated from the Category below, so its
   // RecurringItems (if any) are skipped so nothing double-books. (Full-bill categories have
@@ -36,7 +45,7 @@ export async function generateMonth(
   const isBudgeted = (categoryId: number | null): boolean => {
     if (categoryId == null) return false;
     const c = catById.get(categoryId);
-    return !!c && !c.onHold && c.monthlyBudget != null && c.monthlyBudget > 0;
+    return !!c && c.fundingStyle == null && !c.onHold && c.monthlyBudget != null && c.monthlyBudget > 0;
   };
 
   // Schedule (every month / installment N times / periodic every N months) → this month's
@@ -62,6 +71,7 @@ export async function generateMonth(
     const cat = catById.get(it.categoryId);
     if (cat?.onHold) continue; // held category → not generated
     if (isBudgeted(it.categoryId)) continue; // budgeted category → generated from the Category, not the item
+    if (isBillWithFund(it.categoryId)) continue; // goal-based bill → generated from the Category (below)
     if (cat?.billEveryMonths != null) continue; // full-bill category → generated from the Category (below), never double-booked
     await tx.expenseEntry.create({
       data: {
@@ -104,6 +114,7 @@ export async function generateMonth(
   // a sinking fund for a periodic bill. Just a normal expense in its month → counts in the
   // sheet total, carry and settlement like any other line.
   for (const cat of cats) {
+    if (cat.fundingStyle != null) continue; // goal-based bill-with-a-fund → handled below
     if (cat.onHold || cat.billEveryMonths == null || cat.billAmount == null || cat.billAmount <= 0) continue;
     if (!isLumpDue(cat.billMonth ?? 1, cat.billEveryMonths, period!)) continue;
     await tx.expenseEntry.create({
@@ -117,5 +128,32 @@ export async function generateMonth(
         oneOff: false,
       },
     });
+  }
+
+  // Goal-based "bill with a fund": each month either sets aside toward the bill, pays it
+  // (full bill + a fund credit → net out-of-pocket), or does nothing (pay-in-full style).
+  // All lines are tagged to the responsible member, so settlement nets them automatically.
+  const mkLine = (cat: (typeof cats)[number], label: string, amount: number) =>
+    tx.expenseEntry.create({
+      data: { periodId: targetId, label, amount, categoryId: cat.id, memberId: cat.responsibleMemberId, necessary: cat.necessary ?? true, oneOff: false },
+    });
+  for (const cat of cats) {
+    if (cat.fundingStyle == null || cat.onHold) continue;
+    if (cat.billAmount == null || cat.billAmount <= 0 || cat.billMonth == null || cat.billEveryMonths == null) continue;
+    const plan = planBillMonth({
+      billAmount: cat.billAmount,
+      billMonth: cat.billMonth,
+      everyMonths: cat.billEveryMonths,
+      fund: fundByCat.get(cat.id) ?? 0,
+      fundingStyle: cat.fundingStyle as FundingStyle,
+      fixedShare: cat.monthlyBudget,
+      month: period!.month,
+    });
+    if (plan.kind === "bill") {
+      await mkLine(cat, cat.name, plan.bill);
+      if (plan.fromFund > 0) await mkLine(cat, `${cat.name} — from fund`, -plan.fromFund);
+    } else if (plan.kind === "save" && plan.contribution > 0) {
+      await mkLine(cat, `${cat.name} (saving)`, plan.contribution);
+    }
   }
 }
