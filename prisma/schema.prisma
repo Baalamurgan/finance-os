@@ -94,11 +94,18 @@ model RecurringItem {
   memberId    Int? // income owner / expense payer (tags the generated line → settlement)
   active      Boolean  @default(true) // paused (kept, not generated) vs deleted (gone)
   sortOrder   Int      @default(0)
-  // Fixed-term installment (e.g. an EMI): repeats installmentsTotal times then stops.
-  // Generated label = "name N/total"; N = months since (start) + 1. null = repeats forever.
+  // Schedule (anchored by installmentStart*): the item is DUE when months-since-start is
+  // a multiple of intervalMonths. intervalMonths=1 = every month. installmentsTotal caps
+  // the number of occurrences (null = forever). Generated label = "name N/total" only for
+  // fixed-term installments; periodic items (interval>1) just show the name.
+  //   • every month  → start=null (interval ignored)
+  //   • installment  → interval=1, start set, total=N   (e.g. an EMI, N times)
+  //   • periodic     → interval=N (2/6/12…), start=first-due month, total=null (or N times)
+  intervalMonths      Int      @default(1)
   installmentsTotal   Int?
   installmentStartYear  Int?
   installmentStartMonth Int?
+  dueDay              Int?     // informational day-of-month the bill lands (display only)
   createdAt   DateTime @default(now())
 
   @@index([householdId])

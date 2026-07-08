@@ -1,4 +1,5 @@
 import type { Prisma } from "@prisma/client";
+import { scheduleOccurrence, scheduleLabel } from "@/lib/schedule";
 
 /**
  * Generate a month's structure from the RecurringItem TEMPLATE (the source of
@@ -37,14 +38,13 @@ export async function generateMonth(
     return !!c && !c.onHold && c.monthlyBudget != null && c.monthlyBudget > 0;
   };
 
-  // For a fixed-term installment, this month's payment number (or null if the item
-  // isn't due this month — before it starts or after the last). Returns the label.
+  // Schedule (every month / installment N times / periodic every N months) → this month's
+  // label, or null if the item isn't due this month. See src/lib/schedule.ts.
   type Item = (typeof items)[number];
   const dueLabel = (it: Item): string | null => {
-    if (it.installmentsTotal == null || it.installmentStartYear == null || it.installmentStartMonth == null) return it.name;
-    const n = (period!.year - it.installmentStartYear) * 12 + (period!.month - it.installmentStartMonth) + 1;
-    if (n < 1 || n > it.installmentsTotal) return null; // not due this month
-    return `${it.name} ${n}/${it.installmentsTotal}`;
+    const { due, n } = scheduleOccurrence(it, period!);
+    if (!due) return null;
+    return scheduleLabel(it.name, it.installmentsTotal, n);
   };
 
   for (const it of items) {

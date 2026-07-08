@@ -49,6 +49,10 @@ export default async function SetupPage({
     active: it.active,
     installmentsTotal: it.installmentsTotal,
     installmentCurrent: instCurrent(it),
+    intervalMonths: it.intervalMonths,
+    installmentStartYear: it.installmentStartYear,
+    installmentStartMonth: it.installmentStartMonth,
+    dueDay: it.dueDay,
   }));
   const categoryOpts: CatOpt[] = c.categories.map((cat) => ({ id: cat.id, name: cat.name, section: cat.section }));
 

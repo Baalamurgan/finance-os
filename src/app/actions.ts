@@ -1093,6 +1093,35 @@ async function installmentStartFrom(householdId: number, total: number | null, c
 }
 const stripInstNumber = (name: string) => name.replace(/\s+\d+\s*\/\s*\d+\s*$/, "").trim();
 
+type ScheduleFields = {
+  intervalMonths: number;
+  installmentsTotal: number | null;
+  installmentStartYear: number | null;
+  installmentStartMonth: number | null;
+  dueDay: number | null;
+};
+
+// Build the schedule (every-month | installment N-times | periodic every-N-months) from
+// the Setup form. `scheduleKind` selects the mode; unknown/absent → plain monthly.
+async function scheduleFromForm(householdId: number, formData: FormData): Promise<ScheduleFields> {
+  const kind = String(formData.get("scheduleKind") ?? "monthly");
+  if (kind === "installment") {
+    const total = formData.get("installmentsTotal") ? Number(formData.get("installmentsTotal")) : null;
+    const current = Number(formData.get("installmentCurrent")) || 1;
+    const inst = await installmentStartFrom(householdId, total, current);
+    return { intervalMonths: 1, dueDay: null, ...inst };
+  }
+  if (kind === "periodic") {
+    const interval = Math.min(60, Math.max(2, Number(formData.get("intervalMonths")) || 12));
+    const y = Number(formData.get("periodicYear")) || new Date().getFullYear();
+    const m = Math.min(12, Math.max(1, Number(formData.get("periodicMonth")) || 1));
+    const total = formData.get("periodicCount") ? Math.max(1, Number(formData.get("periodicCount"))) : null;
+    const dueDay = formData.get("dueDay") ? Math.min(31, Math.max(1, Number(formData.get("dueDay")))) : null;
+    return { intervalMonths: interval, installmentsTotal: total, installmentStartYear: y, installmentStartMonth: m, dueDay };
+  }
+  return { intervalMonths: 1, installmentsTotal: null, installmentStartYear: null, installmentStartMonth: null, dueDay: null };
+}
+
 export async function createRecurringItem(formData: FormData) {
   if (!(await isHead())) return;
   const householdId = Number(formData.get("householdId"));
@@ -1101,15 +1130,13 @@ export async function createRecurringItem(formData: FormData) {
   const amount = parseAmount(formData.get("amount"));
   const categoryId = formData.get("categoryId") ? Number(formData.get("categoryId")) : null;
   const memberId = formData.get("memberId") ? Number(formData.get("memberId")) : null;
-  const total = formData.get("installmentsTotal") ? Number(formData.get("installmentsTotal")) : null;
-  const current = Number(formData.get("installmentCurrent")) || 1;
   if (!householdId || !name || !amount || amount <= 0) return;
   if (kind === "expense" && !categoryId) return;
-  const inst = await installmentStartFrom(householdId, total, current);
-  if (inst.installmentsTotal) name = stripInstNumber(name);
+  const sched = await scheduleFromForm(householdId, formData);
+  if (sched.installmentsTotal && sched.intervalMonths === 1) name = stripInstNumber(name);
   const max = await prisma.recurringItem.aggregate({ where: { householdId }, _max: { sortOrder: true } });
   await prisma.recurringItem.create({
-    data: { householdId, kind, name, amount, categoryId: kind === "expense" ? categoryId : null, memberId, sortOrder: (max._max.sortOrder ?? 0) + 1, ...inst },
+    data: { householdId, kind, name, amount, categoryId: kind === "expense" ? categoryId : null, memberId, sortOrder: (max._max.sortOrder ?? 0) + 1, ...sched },
   });
   revalidatePath("/", "layout");
 }
@@ -1121,20 +1148,21 @@ export async function updateRecurringItem(formData: FormData) {
   if (!item) return;
   const data: {
     amount?: number; name?: string; memberId?: number | null; categoryId?: number | null;
-    installmentsTotal?: number | null; installmentStartYear?: number | null; installmentStartMonth?: number | null;
+    intervalMonths?: number; installmentsTotal?: number | null;
+    installmentStartYear?: number | null; installmentStartMonth?: number | null; dueDay?: number | null;
   } = {};
   if (formData.has("amount")) { const a = parseAmount(formData.get("amount")); if (a > 0) data.amount = a; }
   if (formData.has("name")) { const n = String(formData.get("name")).trim(); if (n) data.name = n; }
   if (formData.has("memberId")) data.memberId = formData.get("memberId") ? Number(formData.get("memberId")) : null;
   if (formData.has("categoryId") && item.kind === "expense" && formData.get("categoryId")) data.categoryId = Number(formData.get("categoryId"));
-  if (formData.has("installmentsTotal")) {
-    const total = formData.get("installmentsTotal") ? Number(formData.get("installmentsTotal")) : null;
-    const current = Number(formData.get("installmentCurrent")) || 1;
-    const inst = await installmentStartFrom(item.householdId, total, current);
-    data.installmentsTotal = inst.installmentsTotal;
-    data.installmentStartYear = inst.installmentStartYear;
-    data.installmentStartMonth = inst.installmentStartMonth;
-    if (inst.installmentsTotal && data.name) data.name = stripInstNumber(data.name);
+  if (formData.has("scheduleKind")) {
+    const sched = await scheduleFromForm(item.householdId, formData);
+    data.intervalMonths = sched.intervalMonths;
+    data.installmentsTotal = sched.installmentsTotal;
+    data.installmentStartYear = sched.installmentStartYear;
+    data.installmentStartMonth = sched.installmentStartMonth;
+    data.dueDay = sched.dueDay;
+    if (sched.installmentsTotal && sched.intervalMonths === 1 && data.name) data.name = stripInstNumber(data.name);
   }
   await prisma.recurringItem.update({ where: { id }, data });
   revalidatePath("/", "layout");
