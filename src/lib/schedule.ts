@@ -50,6 +50,46 @@ export function isLumpDue(billMonth: number, everyMonths: number, period: { mont
   return ((((period.month - billMonth) % c) + c) % c) === 0;
 }
 
+/** Months from `month` to the NEXT due month (≥1). Only meaningful in a non-due month. */
+export function monthsUntilNextDue(billMonth: number, everyMonths: number, month: number): number {
+  const c = Math.max(1, Math.round(everyMonths));
+  const k = (((billMonth - month) % c) + c) % c; // 0 = due this month
+  return k === 0 ? c : k; // in a saving month k∈[1,c-1]; guard 0 → a full cycle away
+}
+
+export type FundingStyle = "auto" | "fixed" | "none";
+
+// What a "bill with a fund" category does in a given month (pure — no side effects).
+//  • due month  → the full bill lands; the fund credits up to the bill; net = out-of-pocket
+//  • saving month, auto  → set aside (bill − fund) ÷ months-left (self-correcting)
+//  • saving month, fixed → set aside the user's fixed share
+//  • saving month, none  → nothing (you'll pay it whole on the due month)
+export type BillMonthPlan =
+  | { kind: "bill"; bill: number; fromFund: number; outOfPocket: number }
+  | { kind: "save"; contribution: number }
+  | { kind: "none" };
+
+export function planBillMonth(input: {
+  billAmount: number;
+  billMonth: number;
+  everyMonths: number;
+  fund: number;
+  fundingStyle: FundingStyle;
+  fixedShare?: number | null;
+  month: number;
+}): BillMonthPlan {
+  const { billAmount, billMonth, everyMonths, fund, fundingStyle, fixedShare, month } = input;
+  if (isLumpDue(billMonth, everyMonths, { month })) {
+    const fromFund = Math.max(0, Math.min(fund, billAmount));
+    return { kind: "bill", bill: billAmount, fromFund, outOfPocket: Math.round((billAmount - fromFund) * 100) / 100 };
+  }
+  if (fundingStyle === "none") return { kind: "none" };
+  if (fundingStyle === "fixed") return { kind: "save", contribution: Math.max(0, fixedShare ?? 0) };
+  const left = monthsUntilNextDue(billMonth, everyMonths, month);
+  const remaining = Math.max(0, billAmount - fund);
+  return { kind: "save", contribution: Math.round((remaining / left) * 100) / 100 };
+}
+
 const MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
 /** Short human summary of a PERIODIC schedule (interval>1), else null. Installments are

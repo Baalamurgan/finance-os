@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { scheduleOccurrence, scheduleLabel, isLumpDue } from "@/lib/schedule";
+import { scheduleOccurrence, scheduleLabel, isLumpDue, planBillMonth, monthsUntilNextDue } from "@/lib/schedule";
 
 const P = (year: number, month: number) => ({ year, month });
 
@@ -65,6 +65,46 @@ describe("isLumpDue (full-bill categories)", () => {
   });
   it("quarterly (3) anchored to Jan → Jan, Apr, Jul, Oct", () => {
     for (let m = 1; m <= 12; m++) expect(isLumpDue(1, 3, { month: m })).toBe([1, 4, 7, 10].includes(m));
+  });
+});
+
+describe("planBillMonth — goal-based 'bill with a fund' (₹12,000 car insurance, due July)", () => {
+  const base = { billAmount: 12000, billMonth: 7, everyMonths: 12, fundingStyle: "auto" as const };
+
+  it("auto-save spreads from the month after the last bill (Aug → 11 months)", () => {
+    expect(planBillMonth({ ...base, fund: 0, month: 8 })).toEqual({ kind: "save", contribution: 1090.91 });
+    expect(monthsUntilNextDue(7, 12, 8)).toBe(11);
+  });
+
+  it("auto-save stays ~level when the fund is on-track", () => {
+    // June, one month left, fund at 10,909 → tops up the last 1,091
+    expect(planBillMonth({ ...base, fund: 10909, month: 6 })).toEqual({ kind: "save", contribution: 1091 });
+  });
+
+  it("due month: full bill shows, fund credits it, net = out-of-pocket", () => {
+    expect(planBillMonth({ ...base, fund: 12000, month: 7 })).toEqual({ kind: "bill", bill: 12000, fromFund: 12000, outOfPocket: 0 });
+  });
+
+  it("Q3 — withdrew from the fund → next month's save jumps to catch up", () => {
+    // Jan, 6 months to July, fund dropped to 2,000 → (12000−2000)/6 ≈ 1,667 (vs the ~1,091 level)
+    expect(planBillMonth({ ...base, fund: 2000, month: 1 })).toEqual({ kind: "save", contribution: 1666.67 });
+  });
+
+  it("Q1 — switch to pay-in-full mid-cycle → only the shortfall is out-of-pocket", () => {
+    // fund 6,000 saved, style now none → nothing in saving months
+    expect(planBillMonth({ ...base, fundingStyle: "none", fund: 6000, month: 3 })).toEqual({ kind: "none" });
+    // at July: 12,000 bill − 6,000 fund = 6,000 out of pocket
+    expect(planBillMonth({ ...base, fundingStyle: "none", fund: 6000, month: 7 })).toEqual({ kind: "bill", bill: 12000, fromFund: 6000, outOfPocket: 6000 });
+  });
+
+  it("Q2 — switch to auto with 3 months left and nothing saved → bill ÷ 3", () => {
+    // April → 3 months to July, fund 0 → 12,000 / 3 = 4,000 each for Apr/May/Jun
+    expect(planBillMonth({ ...base, fund: 0, month: 4 })).toEqual({ kind: "save", contribution: 4000 });
+    expect(monthsUntilNextDue(7, 12, 4)).toBe(3);
+  });
+
+  it("non-due month with fund already ≥ bill → contributes 0 (nothing more needed)", () => {
+    expect(planBillMonth({ ...base, fund: 12000, month: 5 })).toEqual({ kind: "save", contribution: 0 });
   });
 });
 
