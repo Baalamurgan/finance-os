@@ -24,6 +24,7 @@ type Row = {
   billMonth: number | null;
   billDay: number | null;
   billAmount: number | null;
+  fundingStyle: string | null;
 };
 
 type MemberLite = { id: number; name: string };
@@ -34,7 +35,7 @@ const FREQS: { v: string; label: string }[] = [
   { v: "2", label: "every 2 months" }, { v: "3", label: "quarterly" },
   { v: "6", label: "half-yearly" }, { v: "12", label: "yearly" },
 ];
-type BillMode = "monthly" | "sinking" | "lump";
+type BillMode = "monthly" | "sinking" | "billfund";
 
 export function MonthlySetup({
   rows,
@@ -85,12 +86,15 @@ function SetupRow({ r, members, readOnly }: { r: Row; members: MemberLite[]; rea
   const toast = useToast();
   const [name, setName] = useState(r.name);
   const [section, setSection] = useState(r.section);
-  const initMode: BillMode = r.billEveryMonths != null ? "lump" : r.sinking ? "sinking" : "monthly";
+  const isBill = r.fundingStyle != null || r.billEveryMonths != null;
+  const initMode: BillMode = isBill ? "billfund" : r.sinking ? "sinking" : "monthly";
   const [mode, setMode] = useState<BillMode>(initMode);
-  // one amount box: monthly/sinking share OR the full bill (lump), routed by mode on submit
-  const [amount, setAmount] = useState(((r.billEveryMonths != null ? r.billAmount : r.monthlyBudget) ?? "").toString());
+  // one amount box: monthly/sinking share OR the bill target (billfund), routed by mode on submit
+  const [amount, setAmount] = useState(((isBill ? r.billAmount : r.monthlyBudget) ?? "").toString());
   const [cycle, setCycle] = useState(r.cycleMonths?.toString() ?? "");
   const [fixed, setFixed] = useState(r.fixed);
+  const initStyle = r.fundingStyle ?? (r.billEveryMonths != null ? "none" : "auto");
+  const [fundingStyle, setFundingStyle] = useState(initStyle);
   const [every, setEvery] = useState(r.billEveryMonths != null ? String(r.billEveryMonths) : "12");
   const [billMonth, setBillMonth] = useState(String(r.billMonth ?? new Date().getMonth() + 1));
   const [billDay, setBillDay] = useState(r.billDay != null ? String(r.billDay) : "");
@@ -104,10 +108,11 @@ function SetupRow({ r, members, readOnly }: { r: Row; members: MemberLite[]; rea
   }, [state.n]);
 
   const baseResp = r.responsibleMemberId != null ? String(r.responsibleMemberId) : "";
-  const baseAmount = ((r.billEveryMonths != null ? r.billAmount : r.monthlyBudget) ?? "").toString();
+  const baseAmount = ((isBill ? r.billAmount : r.monthlyBudget) ?? "").toString();
   const dirty =
     name.trim() !== r.name || section !== r.section || mode !== initMode ||
     amount !== baseAmount || cycle !== (r.cycleMonths?.toString() ?? "") || fixed !== r.fixed ||
+    fundingStyle !== initStyle ||
     every !== (r.billEveryMonths != null ? String(r.billEveryMonths) : "12") ||
     billMonth !== String(r.billMonth ?? new Date().getMonth() + 1) ||
     billDay !== (r.billDay != null ? String(r.billDay) : "") || resp !== baseResp;
@@ -115,7 +120,7 @@ function SetupRow({ r, members, readOnly }: { r: Row; members: MemberLite[]; rea
   const invalid =
     !name.trim() ||
     (mode === "sinking" && (!amount || Number(amount) <= 0 || !cycle || Number(cycle) < 1)) ||
-    (mode === "lump" && (!amount || Number(amount) <= 0)) ||
+    (mode === "billfund" && (!amount || Number(amount) <= 0)) ||
     (mode === "monthly" && fixed && (!amount || Number(amount) <= 0));
   // if the saved responsible member isn't in the list (edge case), still show it
   const respMissing = resp !== "" && !members.some((m) => String(m.id) === resp);
@@ -130,13 +135,14 @@ function SetupRow({ r, members, readOnly }: { r: Row; members: MemberLite[]; rea
           <input type="hidden" name="name" value={name} />
           <input type="hidden" name="section" value={section} />
           <input type="hidden" name="billingMode" value={mode} />
-          <input type="hidden" name="monthlyBudget" value={mode === "lump" ? "" : amount} />
+          <input type="hidden" name="monthlyBudget" value={mode === "billfund" ? "" : amount} />
           <input type="hidden" name="cycleMonths" value={mode === "sinking" ? cycle : ""} />
           <input type="hidden" name="fixed" value={mode === "monthly" && fixed ? "on" : ""} />
-          <input type="hidden" name="billEveryMonths" value={mode === "lump" ? every : ""} />
-          <input type="hidden" name="billMonth" value={mode === "lump" ? billMonth : ""} />
-          <input type="hidden" name="billDay" value={mode === "lump" ? billDay : ""} />
-          <input type="hidden" name="billAmount" value={mode === "lump" ? amount : ""} />
+          <input type="hidden" name="fundingStyle" value={mode === "billfund" ? fundingStyle : ""} />
+          <input type="hidden" name="billEveryMonths" value={mode === "billfund" ? every : ""} />
+          <input type="hidden" name="billMonth" value={mode === "billfund" ? billMonth : ""} />
+          <input type="hidden" name="billDay" value={mode === "billfund" ? billDay : ""} />
+          <input type="hidden" name="billAmount" value={mode === "billfund" ? amount : ""} />
           <input type="hidden" name="responsibleMemberId" value={resp} />
         </form>
         <input
@@ -204,7 +210,7 @@ function SetupRow({ r, members, readOnly }: { r: Row; members: MemberLite[]; rea
         >
           <option value="monthly">Monthly</option>
           <option value="sinking">Sinking fund</option>
-          <option value="lump">Full bill</option>
+          <option value="billfund">Bill with a fund</option>
         </select>
       </td>
       {/* mode detail: sinking cycle | lump schedule | monthly note */}
@@ -218,8 +224,12 @@ function SetupRow({ r, members, readOnly }: { r: Row; members: MemberLite[]; rea
             </div>
             {lumpEquiv ? <div className="mt-0.5 text-[11px] text-slate-400">≈ {formatINR(lumpEquiv)} per bill</div> : null}
           </div>
-        ) : mode === "lump" ? (
+        ) : mode === "billfund" ? (
           <div className="flex flex-wrap items-center gap-1 text-xs text-violet-700">
+            <select value={fundingStyle} onChange={(e) => setFundingStyle(e.target.value)} disabled={readOnly} className="input py-1 text-xs disabled:bg-slate-100" title="how the fund is filled">
+              <option value="auto">auto-save</option>
+              <option value="none">pay in full</option>
+            </select>
             <select value={every} onChange={(e) => setEvery(e.target.value)} disabled={readOnly} className="input py-1 text-xs disabled:bg-slate-100">
               {FREQS.map((f) => <option key={f.v} value={f.v}>{f.label}</option>)}
             </select>
@@ -323,6 +333,7 @@ function AddCategory({ householdId, members }: { householdId: number; members: M
   const [every, setEvery] = useState("12");
   const [billMonth, setBillMonth] = useState(String(new Date().getMonth() + 1));
   const [billDay, setBillDay] = useState("");
+  const [fundingStyle, setFundingStyle] = useState("auto");
   const [section, setSection] = useState("Monthly");
   const [paidBy, setPaidBy] = useState("");
   const [state, formAction, pending] = useActionState(createCategory, { ok: false, n: 0 });
@@ -330,7 +341,7 @@ function AddCategory({ householdId, members }: { householdId: number; members: M
   useEffect(() => {
     if (state.n === 0) return;
     if (state.ok) {
-      setName(""); setMode("monthly"); setFixed(false); setAmount(""); setCycle(""); setEvery("12"); setBillDay(""); setPaidBy("");
+      setName(""); setMode("monthly"); setFixed(false); setAmount(""); setCycle(""); setEvery("12"); setBillDay(""); setFundingStyle("auto"); setPaidBy("");
       toast("Category added", "success");
     } else toast(state.error ?? "Couldn't add category", "error");
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -344,19 +355,20 @@ function AddCategory({ householdId, members }: { householdId: number; members: M
         <input type="hidden" name="billingMode" value={mode} />
         <input type="hidden" name="section" value={section} />
         <input type="hidden" name="fixed" value={mode === "monthly" && fixed ? "on" : ""} />
-        <input type="hidden" name="monthlyBudget" value={mode === "lump" ? "" : amount} />
+        <input type="hidden" name="monthlyBudget" value={mode === "billfund" ? "" : amount} />
         <input type="hidden" name="cycleMonths" value={mode === "sinking" ? cycle : ""} />
-        <input type="hidden" name="billEveryMonths" value={mode === "lump" ? every : ""} />
-        <input type="hidden" name="billMonth" value={mode === "lump" ? billMonth : ""} />
-        <input type="hidden" name="billDay" value={mode === "lump" ? billDay : ""} />
-        <input type="hidden" name="billAmount" value={mode === "lump" ? amount : ""} />
+        <input type="hidden" name="fundingStyle" value={mode === "billfund" ? fundingStyle : ""} />
+        <input type="hidden" name="billEveryMonths" value={mode === "billfund" ? every : ""} />
+        <input type="hidden" name="billMonth" value={mode === "billfund" ? billMonth : ""} />
+        <input type="hidden" name="billDay" value={mode === "billfund" ? billDay : ""} />
+        <input type="hidden" name="billAmount" value={mode === "billfund" ? amount : ""} />
 
         <input name="name" placeholder="Name *" value={name} onChange={(e) => setName(e.target.value)} required className="input w-36" />
-        <input type="number" step="0.01" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder={mode === "lump" ? "₹ full bill" : "₹ / month"} className="input w-28" />
+        <input type="number" step="0.01" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder={mode === "billfund" ? "₹ full bill" : "₹ / month"} className="input w-28" />
         <select value={mode} onChange={(e) => setMode(e.target.value as BillMode)} className="input w-32 text-xs" title="How it's charged">
           <option value="monthly">Monthly</option>
           <option value="sinking">Sinking fund</option>
-          <option value="lump">Full bill (periodic)</option>
+          <option value="billfund">Bill with a fund</option>
         </select>
         <select value={section} onChange={(e) => setSection(e.target.value)} className="input w-24 text-xs">
           {SECTIONS.map((s) => <option key={s} value={s}>{s}</option>)}
@@ -376,8 +388,12 @@ function AddCategory({ householdId, members }: { householdId: number; members: M
         {mode === "sinking" && (
           <span className="flex items-center gap-1 text-xs text-slate-600">every <input type="number" min="1" value={cycle} onChange={(e) => setCycle(e.target.value)} placeholder="mo" className="input w-14" /> mo</span>
         )}
-        {mode === "lump" && (
+        {mode === "billfund" && (
           <span className="flex flex-wrap items-center gap-1 text-xs text-violet-700">
+            <select value={fundingStyle} onChange={(e) => setFundingStyle(e.target.value)} className="input py-1 text-xs" title="how the fund is filled">
+              <option value="auto">auto-save</option>
+              <option value="none">pay in full</option>
+            </select>
             <select value={every} onChange={(e) => setEvery(e.target.value)} className="input py-1 text-xs">
               {FREQS.map((f) => <option key={f.v} value={f.v}>{f.label}</option>)}
             </select>
@@ -391,8 +407,9 @@ function AddCategory({ householdId, members }: { householdId: number; members: M
         <button disabled={!name.trim() || pending} className="btn disabled:opacity-40">{pending ? "Adding…" : "Add"}</button>
       </form>
       <p className="mt-2 text-xs text-slate-400">
-        Applies from <b>next month</b>. <b>Sinking fund</b> = save the monthly share into a fund. <b>Full bill</b> =
-        the whole amount lands only in its due month (yearly insurance, every-2-months EMI) — no monthly share.
+        Applies from <b>next month</b>. <b>Bill with a fund</b> (yearly insurance, periodic EMI): set the full
+        amount + due month; <i>auto-save</i> sets aside (target − fund) ÷ months-left each month, or <i>pay in
+        full</i> lands the whole bill on its month. The fund always covers the bill when it&apos;s due.
       </p>
     </div>
   );

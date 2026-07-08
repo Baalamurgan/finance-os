@@ -58,12 +58,13 @@ export default async function SetupPage({
 
   // category budgets & sinking-fund template (amounts / cycles / full bills) — edited here
   const rows = c.categories
-    .filter((cat) => cat.tracked || cat.fixed || cat.billEveryMonths != null)
+    .filter((cat) => cat.tracked || cat.fixed || cat.billEveryMonths != null || cat.fundingStyle != null)
     .map((cat) => ({
       id: cat.id, name: cat.name, section: cat.section, monthlyBudget: cat.monthlyBudget,
       sinking: cat.sinking, cycleMonths: cat.cycleMonths, onHold: cat.onHold, fixed: cat.fixed,
       responsibleMemberId: cat.responsibleMemberId ?? null,
       billEveryMonths: cat.billEveryMonths, billMonth: cat.billMonth, billDay: cat.billDay, billAmount: cat.billAmount,
+      fundingStyle: cat.fundingStyle,
     }));
 
   return (

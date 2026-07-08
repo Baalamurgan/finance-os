@@ -549,18 +549,33 @@ const CATEGORY_SECTIONS = ["Loans", "Chits", "Monthly", "Yearly", "Misc"] as con
 type BillingFields = {
   monthlyBudget: number | null; sinking: boolean; cycleMonths: number | null; fixed: boolean; tracked: boolean;
   billEveryMonths: number | null; billMonth: number | null; billDay: number | null; billAmount: number | null;
+  fundingStyle: string | null;
 };
 function parseBillingFields(formData: FormData): { ok: true; fields: BillingFields } | { ok: false; error: string } {
-  const blank: BillingFields = { monthlyBudget: null, sinking: false, cycleMonths: null, fixed: false, tracked: false, billEveryMonths: null, billMonth: null, billDay: null, billAmount: null };
+  const blank: BillingFields = { monthlyBudget: null, sinking: false, cycleMonths: null, fixed: false, tracked: false, billEveryMonths: null, billMonth: null, billDay: null, billAmount: null, fundingStyle: null };
   const mode = String(formData.get("billingMode") ?? "monthly");
   const round = (x: number) => Math.round(x * 100) / 100;
+  const billDayOf = () => { const d = Number(formData.get("billDay")); return d >= 1 && d <= 31 ? d : null; };
+  const everyOf = () => Number(formData.get("billEveryMonths")) || 12;
+  const monthOf = () => Math.min(12, Math.max(1, Number(formData.get("billMonth")) || 1));
+  // Goal-based "bill with a fund": target amount + due month + cycle + funding style.
+  if (mode === "billfund") {
+    const every = everyOf();
+    if (![2, 3, 4, 6, 12].includes(every)) return { ok: false, error: "Pick a valid frequency." };
+    const amt = parseAmount(formData.get("billAmount"));
+    if (!amt || amt <= 0) return { ok: false, error: "A bill needs a target amount." };
+    const style = String(formData.get("fundingStyle") ?? "auto");
+    const fundingStyle = ["auto", "fixed", "none"].includes(style) ? style : "auto";
+    const fixedShare = fundingStyle === "fixed" ? parseAmount(formData.get("monthlyBudget")) : null;
+    if (fundingStyle === "fixed" && (!fixedShare || fixedShare <= 0)) return { ok: false, error: "A fixed set-aside needs a monthly amount." };
+    return { ok: true, fields: { ...blank, tracked: false, billEveryMonths: every, billMonth: monthOf(), billDay: billDayOf(), billAmount: round(amt), fundingStyle, monthlyBudget: fixedShare != null ? round(fixedShare) : null } };
+  }
   if (mode === "lump") {
-    const every = Number(formData.get("billEveryMonths")) || 12;
+    const every = everyOf();
     if (![2, 3, 4, 6, 12].includes(every)) return { ok: false, error: "Pick a valid frequency." };
     const amt = parseAmount(formData.get("billAmount"));
     if (!amt || amt <= 0) return { ok: false, error: "A full bill needs an amount." };
-    const day = Number(formData.get("billDay"));
-    return { ok: true, fields: { ...blank, billEveryMonths: every, billMonth: Math.min(12, Math.max(1, Number(formData.get("billMonth")) || 1)), billDay: day >= 1 && day <= 31 ? day : null, billAmount: round(amt) } };
+    return { ok: true, fields: { ...blank, billEveryMonths: every, billMonth: monthOf(), billDay: billDayOf(), billAmount: round(amt) } };
   }
   if (mode === "sinking") {
     const share = parseAmount(formData.get("monthlyBudget"));
