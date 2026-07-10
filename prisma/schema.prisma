@@ -486,3 +486,18 @@ model Budget {
 
   @@unique([periodId, categoryId])
 }
+
+// A one-off "skip this month's set-aside" for a bill-with-a-fund category. Its presence
+// means: don't put this bill's monthly set-aside on that period's sheet and don't accrue
+// it to the fund at wind-down. The remaining months auto-recompute higher. Source of truth
+// (survives a preview rebuild). Removed = the set-aside is back to normal.
+model SetAsideSkip {
+  id          Int      @id @default(autoincrement())
+  householdId Int
+  categoryId  Int
+  periodId    Int
+  createdAt   DateTime @default(now())
+
+  @@unique([categoryId, periodId])
+  @@index([periodId])
+}

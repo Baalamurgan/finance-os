@@ -1,7 +1,7 @@
 import { redirect } from "next/navigation";
 import { formatINR } from "@/lib/format";
 import { loadCommon } from "@/lib/load";
-import { getRollup, getWindDownPreview } from "@/lib/queries";
+import { getRollup, getWindDownPreview, getSkippedSetAsides } from "@/lib/queries";
 import { NavHeader } from "@/components/NavHeader";
 import { RowActions } from "@/components/RowActions";
 import { ExpenseRowActions } from "@/components/ExpenseRowActions";
@@ -11,7 +11,7 @@ import { IncomeModal } from "@/components/IncomeModal";
 import { IncomeRowActions } from "@/components/IncomeRowActions";
 import { MoneyFlowDonut } from "@/components/Charts";
 import { ConfirmForm } from "@/components/ConfirmForm";
-import { createPeriod, deleteIncome, createNextMonthDraft, rebuildDraft, discardDraft } from "./actions";
+import { createPeriod, deleteIncome, createNextMonthDraft, rebuildDraft, discardDraft, skipSetAside, restoreSetAside } from "./actions";
 
 const SECTION_COLOR: Record<string, string> = {
   Loans: "#ef4444",
@@ -51,9 +51,19 @@ function ExpenseRow({
   members: MemLite[];
   periodId: number;
 }) {
+  const isSetAside = e.category.fundingStyle != null && e.label.endsWith("(saving)");
   return (
     <Row label={e.label} sub={e.category.name} tag={e.member?.name} amount={e.amount}>
-      {canEditHere && (
+      {canEditHere && isSetAside && (
+        <form action={skipSetAside}>
+          <input type="hidden" name="categoryId" value={e.categoryId} />
+          <input type="hidden" name="periodId" value={periodId} />
+          <button className="rounded-md px-2 py-1 text-[11px] font-medium text-amber-600 hover:bg-amber-50" title="Skip this month's set-aside — frees the money now; it re-spreads over the coming months">
+            skip
+          </button>
+        </form>
+      )}
+      {canEditHere && !isSetAside && (
         <ExpenseRowActions
           categories={categories}
           members={members}
@@ -178,6 +188,7 @@ export default async function SheetPage({
   }
 
   const rollup = await getRollup(c.selected.id);
+  const skipped = await getSkippedSetAsides(c.household.id, c.selected.id);
   const open = c.selected.status === "open";
 
   // Draft estimate: what the current open month will carry in + leave in Piggy.
@@ -500,6 +511,35 @@ export default async function SheetPage({
             </div>
           </details>
         </div>
+
+        {/* skipped set-asides — freed this month; re-spread over the coming months */}
+        {skipped.length > 0 && (
+          <div className="rounded-xl border border-amber-200 bg-amber-50 p-4">
+            <h2 className="text-sm font-semibold text-amber-800">⏭️ Skipped this month</h2>
+            <p className="mt-0.5 text-xs text-amber-700/80">
+              These set-asides were skipped, so the money stayed available this month. Each one re-spreads over the coming months until its bill.
+            </p>
+            <ul className="mt-3 divide-y divide-amber-100">
+              {skipped.map((s) => (
+                <li key={s.categoryId} className="flex items-center justify-between gap-2 py-2 text-sm">
+                  <div className="min-w-0">
+                    <div className="truncate font-medium text-amber-900">{s.name}</div>
+                    <div className="text-[11px] text-amber-700/70">would have set aside {formatINR(s.amount)} · now spread across the coming months</div>
+                  </div>
+                  {canEditHere && (
+                    <form action={restoreSetAside}>
+                      <input type="hidden" name="categoryId" value={s.categoryId} />
+                      <input type="hidden" name="periodId" value={c.selected!.id} />
+                      <button className="shrink-0 rounded-md border border-amber-300 bg-white px-2.5 py-1 text-xs font-medium text-amber-700 hover:bg-amber-100">
+                        Add back to expenses
+                      </button>
+                    </form>
+                  )}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
 
         {/* balance + piggy */}
         <div className="grid grid-cols-2 gap-4 rounded-xl border border-slate-200 bg-white p-5">

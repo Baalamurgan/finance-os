@@ -23,12 +23,14 @@ export async function generateMonth(
   targetId: number,
   householdId: number,
 ) {
-  const [period, items, cats, funds] = await Promise.all([
+  const [period, items, cats, funds, _skips] = await Promise.all([
     tx.period.findUnique({ where: { id: targetId }, select: { year: true, month: true } }),
     tx.recurringItem.findMany({ where: { householdId, active: true }, orderBy: { sortOrder: "asc" } }),
     tx.category.findMany({ where: { householdId }, select: { id: true, name: true, tracked: true, sinking: true, onHold: true, necessary: true, monthlyBudget: true, responsibleMemberId: true, billEveryMonths: true, billMonth: true, billAmount: true, fundingStyle: true } }),
     tx.piggyEntry.groupBy({ by: ["categoryId"], where: { householdId, kind: "sinking" }, _sum: { amount: true } }),
+    tx.setAsideSkip.findMany({ where: { periodId: targetId }, select: { categoryId: true } }),
   ]);
+  const skippedSetAside = new Set(_skips.map((s) => s.categoryId)); // bills whose set-aside is skipped this month
   const catById = new Map(cats.map((c) => [c.id, c]));
   // current fund balance per category (goal-based bills read this to size the set-aside)
   const fundByCat = new Map<number, number>();
@@ -152,7 +154,7 @@ export async function generateMonth(
     if (plan.kind === "bill") {
       await mkLine(cat, cat.name, plan.bill);
       if (plan.fromFund > 0) await mkLine(cat, `${cat.name} — from fund`, -plan.fromFund);
-    } else if (plan.kind === "save" && plan.contribution > 0) {
+    } else if (plan.kind === "save" && plan.contribution > 0 && !skippedSetAside.has(cat.id)) {
       await mkLine(cat, `${cat.name} (saving)`, plan.contribution);
     }
   }

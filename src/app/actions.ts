@@ -541,6 +541,58 @@ export async function setFundBalance(formData: FormData) {
 // Add a new recurring/tracked category (Setup screen). useActionState-shaped.
 export type CreateCategoryState = { ok: boolean; error?: string; n: number };
 
+// Skip a bill-with-a-fund's set-aside for a single month (head/manager). Removes the
+// set-aside line from that month's sheet (frees the money) and records the skip so it's
+// not re-added on a rebuild and not accrued at wind-down. The remaining months recompute
+// higher on their own (the fund is short).
+export async function skipSetAside(formData: FormData) {
+  if (!(await canEdit())) return;
+  const categoryId = Number(formData.get("categoryId"));
+  const periodId = Number(formData.get("periodId"));
+  if (!categoryId || !periodId || !(await canEditNow(periodId))) return;
+  const cat = await prisma.category.findUnique({ where: { id: categoryId } });
+  if (!cat || cat.fundingStyle == null) return;
+  const period = await prisma.period.findUnique({ where: { id: periodId }, select: { householdId: true } });
+  if (!period) return;
+  await prisma.$transaction(async (tx) => {
+    await tx.setAsideSkip.upsert({
+      where: { categoryId_periodId: { categoryId, periodId } },
+      create: { householdId: period.householdId, categoryId, periodId },
+      update: {},
+    });
+    await tx.expenseEntry.deleteMany({ where: { periodId, categoryId, label: { endsWith: "(saving)" } } });
+  });
+  await logActivity("expense", "updated", `Skipped this month's set-aside for “${cat.name}”`, periodId);
+  revalidatePath("/", "layout");
+}
+
+// Undo a skip — put the set-aside back on the sheet (recomputed from the current fund).
+export async function restoreSetAside(formData: FormData) {
+  if (!(await canEdit())) return;
+  const categoryId = Number(formData.get("categoryId"));
+  const periodId = Number(formData.get("periodId"));
+  if (!categoryId || !periodId || !(await canEditNow(periodId))) return;
+  const [cat, period, fundAgg] = await Promise.all([
+    prisma.category.findUnique({ where: { id: categoryId } }),
+    prisma.period.findUnique({ where: { id: periodId }, select: { month: true } }),
+    prisma.piggyEntry.aggregate({ where: { categoryId, kind: "sinking" }, _sum: { amount: true } }),
+  ]);
+  if (!cat || cat.fundingStyle == null || !period || cat.billAmount == null || cat.billMonth == null || cat.billEveryMonths == null) return;
+  const plan = planBillMonth({
+    billAmount: cat.billAmount, billMonth: cat.billMonth, everyMonths: cat.billEveryMonths,
+    fund: fundAgg._sum.amount ?? 0, fundingStyle: cat.fundingStyle as FundingStyle, fixedShare: cat.monthlyBudget, month: period.month,
+  });
+  await prisma.$transaction(async (tx) => {
+    await tx.setAsideSkip.deleteMany({ where: { categoryId, periodId } });
+    await tx.expenseEntry.deleteMany({ where: { periodId, categoryId, label: { endsWith: "(saving)" } } });
+    if (plan.kind === "save" && plan.contribution > 0) {
+      await tx.expenseEntry.create({ data: { periodId, label: `${cat.name} (saving)`, amount: plan.contribution, categoryId, memberId: cat.responsibleMemberId, necessary: cat.necessary ?? true, oneOff: false } });
+    }
+  });
+  await logActivity("expense", "updated", `Restored the set-aside for “${cat.name}”`, periodId);
+  revalidatePath("/", "layout");
+}
+
 const CATEGORY_SECTIONS = ["Loans", "Chits", "Monthly", "Yearly", "Misc"] as const;
 
 // The billing shape of a category from the Setup form. `billingMode` chooses one of three
@@ -1318,7 +1370,7 @@ export async function windDownMonth(formData: FormData) {
   if (!period || period.status !== "open") return;
   const householdId = period.householdId;
 
-  const [incomes, expenses, budgets, spends, trackedCats, billFundCats, sinkFunds] = await Promise.all([
+  const [incomes, expenses, budgets, spends, trackedCats, billFundCats, sinkFunds, setAsideSkips] = await Promise.all([
     prisma.incomeEntry.findMany({ where: { periodId } }),
     prisma.expenseEntry.findMany({ where: { periodId } }),
     prisma.budget.findMany({ where: { periodId } }),
@@ -1326,8 +1378,10 @@ export async function windDownMonth(formData: FormData) {
     prisma.category.findMany({ where: { householdId, tracked: true, onHold: false } }),
     prisma.category.findMany({ where: { householdId, onHold: false, NOT: { fundingStyle: null } } }),
     prisma.piggyEntry.groupBy({ by: ["categoryId"], where: { householdId, kind: "sinking" }, _sum: { amount: true } }),
+    prisma.setAsideSkip.findMany({ where: { periodId }, select: { categoryId: true } }),
   ]);
   const fundBalance = (catId: number) => sinkFunds.find((f) => f.categoryId === catId)?._sum.amount ?? 0;
+  const skippedSetAside = new Set(setAsideSkips.map((s) => s.categoryId));
 
   const income = incomes.reduce((s, i) => s + i.amount, 0);
   const expense = expenses.reduce((s, e) => s + e.amount, 0);
@@ -1417,7 +1471,8 @@ export async function windDownMonth(formData: FormData) {
         fixedShare: cat.monthlyBudget,
         month: period.month,
       });
-      const delta = plan.kind === "save" ? plan.contribution : plan.kind === "bill" ? -plan.fromFund : 0;
+      const skipped = skippedSetAside.has(cat.id);
+      const delta = plan.kind === "save" ? (skipped ? 0 : plan.contribution) : plan.kind === "bill" ? -plan.fromFund : 0;
       if (delta !== 0) {
         await tx.piggyEntry.create({
           data: { householdId, periodId, categoryId: cat.id, kind: "sinking", amount: delta, note: `${period.label} · ${cat.name}` },

@@ -42,6 +42,7 @@ async function main() {
 
   await prisma.$transaction(async (tx) => {
     // delete children → parents (personal/webauthn also cascade off Member, but be explicit)
+    await tx.setAsideSkip.deleteMany();
     await tx.netWorthItem.deleteMany();
     await tx.accountTransaction.deleteMany();
     await tx.creditCardDetail.deleteMany();
@@ -92,6 +93,7 @@ async function main() {
     if (d.creditCardDetail?.length) await tx.creditCardDetail.createMany({ data: d.creditCardDetail });
     if (d.accountTransaction?.length) await tx.accountTransaction.createMany({ data: d.accountTransaction });
     if (d.netWorthItem?.length) await tx.netWorthItem.createMany({ data: d.netWorthItem });
+    if (d.setAsideSkip?.length) await tx.setAsideSkip.createMany({ data: d.setAsideSkip });
   });
 
   // Restored rows keep their original ids, so bump each id sequence past the max

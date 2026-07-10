@@ -1,5 +1,29 @@
 import { prisma } from "@/lib/prisma";
 import { computeSettlement } from "@/lib/settlement-core";
+import { planBillMonth, type FundingStyle } from "@/lib/schedule";
+
+// Bills whose set-aside was skipped for this month — shown in the sheet's "Skipped" section
+// with the amount that would have been set aside (so it can be added back).
+export async function getSkippedSetAsides(householdId: number, periodId: number) {
+  const skips = await prisma.setAsideSkip.findMany({ where: { periodId } });
+  if (skips.length === 0) return [];
+  const ids = skips.map((s) => s.categoryId);
+  const [cats, period, funds] = await Promise.all([
+    prisma.category.findMany({ where: { id: { in: ids } } }),
+    prisma.period.findUnique({ where: { id: periodId }, select: { month: true } }),
+    prisma.piggyEntry.groupBy({ by: ["categoryId"], where: { householdId, kind: "sinking", categoryId: { in: ids } }, _sum: { amount: true } }),
+  ]);
+  const fundOf = (id: number) => funds.find((f) => f.categoryId === id)?._sum.amount ?? 0;
+  return cats
+    .filter((c) => c.fundingStyle != null && c.billAmount != null && c.billMonth != null && c.billEveryMonths != null)
+    .map((c) => {
+      const plan = planBillMonth({
+        billAmount: c.billAmount!, billMonth: c.billMonth!, everyMonths: c.billEveryMonths!,
+        fund: fundOf(c.id), fundingStyle: c.fundingStyle as FundingStyle, fixedShare: c.monthlyBudget, month: period!.month,
+      });
+      return { categoryId: c.id, name: c.name, section: c.section, amount: plan.kind === "save" ? plan.contribution : 0 };
+    });
+}
 
 export type Rollup = Awaited<ReturnType<typeof getRollup>>;
 
