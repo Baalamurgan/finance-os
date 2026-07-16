@@ -62,7 +62,7 @@ export default async function SetupPage({
     .map((cat) => ({
       id: cat.id, name: cat.name, section: cat.section, monthlyBudget: cat.monthlyBudget,
       sinking: cat.sinking, cycleMonths: cat.cycleMonths, onHold: cat.onHold, fixed: cat.fixed,
-      responsibleMemberId: cat.responsibleMemberId ?? null,
+      responsibleMemberId: cat.responsibleMemberId ?? null, payerMemberId: cat.payerMemberId ?? null,
       billEveryMonths: cat.billEveryMonths, billMonth: cat.billMonth, billDay: cat.billDay, billAmount: cat.billAmount,
       fundingStyle: cat.fundingStyle, saveEveryMonths: cat.saveEveryMonths, needsReview: cat.needsReview,
     }));

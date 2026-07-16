@@ -11,6 +11,7 @@ import { IncomeModal } from "@/components/IncomeModal";
 import { IncomeRowActions } from "@/components/IncomeRowActions";
 import { MoneyFlowDonut } from "@/components/Charts";
 import { ConfirmForm } from "@/components/ConfirmForm";
+import { monthsUntilNextDue } from "@/lib/schedule";
 import { createPeriod, deleteIncome, createNextMonthDraft, rebuildDraft, discardDraft, skipSetAside, restoreSetAside } from "./actions";
 
 const SECTION_COLOR: Record<string, string> = {
@@ -56,24 +57,42 @@ function ExpenseRow({
   categories,
   members,
   periodId,
+  periodMonth,
 }: {
   e: ExpRow;
   canEditHere: boolean;
   categories: CatLite[];
   members: MemLite[];
   periodId: number;
+  periodMonth: number;
 }) {
   const isSetAside = e.category.fundingStyle != null && e.label.endsWith("(saving)");
+  // Removing this set-aside frees e.amount now; the remaining cadence saves rise to keep the
+  // fund on track. saves-left this month = months-until-due ÷ cadence; after removing one,
+  // each remaining share ≈ current × savesLeft/(savesLeft−1). savesLeft 1 → last save → the
+  // shortfall lands out-of-pocket at the due month.
+  const savesLeft =
+    isSetAside && e.category.billMonth != null && e.category.billEveryMonths != null
+      ? monthsUntilNextDue(e.category.billMonth, e.category.billEveryMonths, periodMonth) / Math.max(1, e.category.saveEveryMonths ?? 1)
+      : 0;
+  const newShare = savesLeft > 1 ? Math.round(((e.amount * savesLeft) / (savesLeft - 1)) * 100) / 100 : null;
+  const removeMsg =
+    `Remove this month's set-aside for “${e.category.name}”?\n\n` +
+    `Frees ${formatINR(e.amount)} now. ` +
+    (newShare != null
+      ? `The remaining months' share rises to about ${formatINR(newShare)} to keep the fund on track for the due month.`
+      : `This was the last set-aside before the bill — the shortfall will be paid out-of-pocket on the due month.`) +
+    `\n\nIt won't come back on a rebuild; Setup stays the template.`;
   return (
     <Row label={e.label} sub={e.category.name} tag={e.member?.name} amount={e.amount}>
       {canEditHere && isSetAside && (
-        <form action={skipSetAside}>
+        <ConfirmForm action={skipSetAside} message={removeMsg}>
           <input type="hidden" name="categoryId" value={e.categoryId} />
           <input type="hidden" name="periodId" value={periodId} />
-          <button className="rounded-md px-2 py-1 text-[11px] font-medium text-amber-600 hover:bg-amber-50" title="Skip this month's set-aside — frees the money now; it re-spreads over the coming months">
-            skip
+          <button className="rounded-md px-2 py-1 text-[11px] font-medium text-amber-600 hover:bg-amber-50" title="Remove this month's set-aside — frees the money now; the remaining months' share rises">
+            remove
           </button>
-        </form>
+        </ConfirmForm>
       )}
       {canEditHere && !isSetAside && (
         <ExpenseRowActions
@@ -100,12 +119,14 @@ function ExpenseSection({
   categories,
   members,
   periodId,
+  periodMonth,
 }: {
   g: { section: string; rows: ExpRow[]; subtotal: number };
   canEditHere: boolean;
   categories: CatLite[];
   members: MemLite[];
   periodId: number;
+  periodMonth: number;
 }) {
   return (
     <details data-persist={`sec-${g.section}`} className="group border-b border-slate-100 last:border-0">
@@ -130,6 +151,7 @@ function ExpenseSection({
             categories={categories}
             members={members}
             periodId={periodId}
+            periodMonth={periodMonth}
           />
         ))}
       </div>
@@ -458,6 +480,7 @@ export default async function SheetPage({
                       categories={c.categories}
                       members={c.members}
                       periodId={c.selected!.id}
+                      periodMonth={c.selected!.month}
                     />
                   ))}
                   {canEditHere && (
@@ -505,6 +528,7 @@ export default async function SheetPage({
                           categories={c.categories}
                           members={c.members}
                           periodId={c.selected!.id}
+                          periodMonth={c.selected!.month}
                         />
                       ))
                     )}
@@ -554,6 +578,7 @@ export default async function SheetPage({
                           categories={c.categories}
                           members={c.members}
                           periodId={c.selected!.id}
+                          periodMonth={c.selected!.month}
                         />
                       ))
                     )}

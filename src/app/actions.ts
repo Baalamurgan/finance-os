@@ -606,17 +606,18 @@ type BillingFields = {
   billEveryMonths: number | null; billMonth: number | null; billDay: number | null; billAmount: number | null;
   fundingStyle: string | null; saveEveryMonths: number | null;
 };
-function parseBillingFields(formData: FormData): { ok: true; fields: BillingFields } | { ok: false; error: string } {
+type Getter = (k: string) => string | null;
+function parseBilling(get: Getter): { ok: true; fields: BillingFields } | { ok: false; error: string } {
   const blank: BillingFields = { monthlyBudget: null, sinking: false, cycleMonths: null, fixed: false, tracked: false, billEveryMonths: null, billMonth: null, billDay: null, billAmount: null, fundingStyle: null, saveEveryMonths: null };
   const round = (x: number) => Math.round(x * 100) / 100;
-  const cycle = Math.max(1, Math.round(Number(formData.get("billEveryMonths")) || 1));
-  const billDayOf = () => { const d = Number(formData.get("billDay")); return d >= 1 && d <= 31 ? d : null; };
-  const monthOf = () => Math.min(12, Math.max(1, Number(formData.get("billMonth")) || 1));
+  const cycle = Math.max(1, Math.round(Number(get("billEveryMonths")) || 1));
+  const billDayOf = () => { const d = Number(get("billDay")); return d >= 1 && d <= 31 ? d : null; };
+  const monthOf = () => Math.min(12, Math.max(1, Number(get("billMonth")) || 1));
 
   // Monthly (cycle 1): variable budget (tracked, leftover → Piggy) or flat fixed bill.
   if (cycle <= 1) {
-    const fixed = formData.get("fixed") === "on";
-    const raw = String(formData.get("monthlyBudget") ?? "").trim();
+    const fixed = get("fixed") === "on";
+    const raw = String(get("monthlyBudget") ?? "").trim();
     const amt = raw === "" ? null : parseAmount(raw);
     if (fixed && (!amt || amt <= 0)) return { ok: false, error: "A fixed bill needs a monthly amount." };
     return { ok: true, fields: { ...blank, fixed, tracked: !fixed, monthlyBudget: amt != null ? round(amt) : null } };
@@ -624,17 +625,20 @@ function parseBillingFields(formData: FormData): { ok: true; fields: BillingFiel
 
   // Periodic bill (cycle 2/3/4/6/12): full amount + due month + funding.
   if (![2, 3, 4, 6, 12].includes(cycle)) return { ok: false, error: "Pick a valid billing cycle." };
-  const amt = parseAmount(formData.get("billAmount"));
+  const amt = parseAmount(get("billAmount"));
   if (!amt || amt <= 0) return { ok: false, error: "A periodic bill needs an amount." };
-  const style = String(formData.get("fundingStyle") ?? "auto");
+  const style = String(get("fundingStyle") ?? "auto");
   const fundingStyle = style === "none" ? "none" : "auto"; // save the share, or pay in full
   let saveEveryMonths: number | null = null;
   if (fundingStyle === "auto") {
-    const s = Math.max(1, Math.round(Number(formData.get("saveEveryMonths")) || 1));
+    const s = Math.max(1, Math.round(Number(get("saveEveryMonths")) || 1));
     if (cycle % s !== 0) return { ok: false, error: "Save cadence must divide the billing cycle." };
     saveEveryMonths = s;
   }
   return { ok: true, fields: { ...blank, tracked: false, billEveryMonths: cycle, billMonth: monthOf(), billDay: billDayOf(), billAmount: round(amt), fundingStyle, saveEveryMonths } };
+}
+function parseBillingFields(formData: FormData) {
+  return parseBilling((k) => { const v = formData.get(k); return v == null ? null : String(v); });
 }
 
 export async function createCategory(
@@ -650,12 +654,14 @@ export async function createCategory(
   if (!billing.ok) return { ok: false, error: billing.error, n };
   const paidByRaw = String(formData.get("responsibleMemberId") ?? "").trim();
   const responsibleMemberId = paidByRaw === "" ? null : Number(paidByRaw);
+  const payerRaw = String(formData.get("payerMemberId") ?? "").trim();
+  const payerMemberId = payerRaw === "" ? null : Number(payerRaw);
   const sectionRaw = String(formData.get("section") ?? "").trim();
   const section = (CATEGORY_SECTIONS as readonly string[]).includes(sectionRaw) ? sectionRaw : "Monthly";
 
   try {
     await prisma.category.create({
-      data: { householdId, name, section, responsibleMemberId, ...billing.fields },
+      data: { householdId, name, section, responsibleMemberId, payerMemberId, ...billing.fields },
     });
   } catch {
     return { ok: false, error: `"${name}" already exists.`, n };
@@ -955,6 +961,58 @@ export async function saveRecurring(
   // Setup edits define the recurring TEMPLATE only — the current open month is left
   // untouched. The change takes effect from next month (clonePeriodInto regenerates
   // each Setup category's tagged Sheet line + budget from the template).
+  revalidatePath("/", "layout");
+  return { ok: true, n };
+}
+
+// Batch-save every edited Setup row in ONE go (the single "Save changes" bar). `rows` is a
+// JSON array of the changed rows; each is validated then applied in a transaction (all-or-nothing).
+export async function saveAllRecurring(
+  prev: SaveRecurringState,
+  formData: FormData,
+): Promise<SaveRecurringState> {
+  const n = (prev?.n ?? 0) + 1;
+  if (!(await isHead())) return { ok: false, error: "Only the head can edit setup.", n };
+  let rows: Record<string, string>[];
+  try {
+    rows = JSON.parse(String(formData.get("rows") ?? "[]"));
+  } catch {
+    return { ok: false, error: "Couldn't read the changes.", n };
+  }
+  if (!Array.isArray(rows) || rows.length === 0) return { ok: true, n };
+
+  const parsed: { id: number; name: string; section: string; responsibleMemberId: number | null; payerMemberId: number | null; fields: BillingFields }[] = [];
+  for (const r of rows) {
+    const id = Number(r.id);
+    if (!id) continue;
+    const name = String(r.name ?? "").trim();
+    if (!name) return { ok: false, error: "Every row needs a name.", n };
+    const billing = parseBilling((k) => (r[k] != null ? String(r[k]) : null));
+    if (!billing.ok) return { ok: false, error: `${name}: ${billing.error}`, n };
+    const sectionRaw = String(r.section ?? "").trim();
+    const section = (CATEGORY_SECTIONS as readonly string[]).includes(sectionRaw) ? sectionRaw : "Monthly";
+    parsed.push({
+      id,
+      name,
+      section,
+      responsibleMemberId: r.responsibleMemberId ? Number(r.responsibleMemberId) : null,
+      payerMemberId: r.payerMemberId ? Number(r.payerMemberId) : null,
+      fields: billing.fields,
+    });
+  }
+  try {
+    await prisma.$transaction(
+      parsed.map((u) =>
+        prisma.category.update({
+          where: { id: u.id },
+          // saving is an explicit review → clears the migrated "review due month" flag
+          data: { name: u.name, section: u.section, responsibleMemberId: u.responsibleMemberId, payerMemberId: u.payerMemberId, needsReview: false, ...u.fields },
+        }),
+      ),
+    );
+  } catch {
+    return { ok: false, error: "Couldn't save — a category name may already be taken.", n };
+  }
   revalidatePath("/", "layout");
   return { ok: true, n };
 }
