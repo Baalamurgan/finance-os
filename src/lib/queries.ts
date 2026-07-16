@@ -468,25 +468,31 @@ export type InHand = Awaited<ReturnType<typeof getInHand>>;
 export async function getInHand(householdId: number, periodId: number) {
   const [household, period, categories, budgets, spends, billLines, miscLines, members, piggy, incomeAgg, expenseAgg] = await Promise.all([
     prisma.household.findUnique({ where: { id: householdId }, select: { treasurerMemberId: true, piggyHolderMemberId: true } }),
-    prisma.period.findUnique({ where: { id: periodId }, select: { treasurerMemberId: true } }),
+    prisma.period.findUnique({ where: { id: periodId }, select: { treasurerMemberId: true, status: true } }),
     prisma.category.findMany({ where: { householdId, tracked: true, onHold: false } }),
     prisma.budget.findMany({ where: { periodId } }),
     prisma.spend.findMany({ where: { periodId } }),
     // "bills" = tagged Sheet expense lines the person was handed money to pay: loans, chits,
-    // interest, fixed bills, plain "pay someone" (cook, milk…). Excludes tracked-budget lines
-    // (handled via budgets), goal-based bill funds (fundingStyle), Misc (subtracted below),
-    // and carried misc (note set).
-    prisma.expenseEntry.findMany({ where: { periodId, note: null, category: { tracked: false, fundingStyle: null, section: { not: "Misc" } } } }),
-    // Own-period misc entered as Sheet expense lines (Misc section, no carry marker). In a
-    // draft/preview month spends can't be logged, so this is the only misc there; in open
-    // months it sits alongside logged Spends. Carried misc (note "__carry__") stays excluded —
-    // it's settled at the start of the month, not held cash.
+    // interest, fixed bills, plain "pay someone" (cook, milk…), AND hand-added Misc lines
+    // (tracked:false). Each shows with a "paid" toggle. Excludes tracked-budget lines
+    // (handled via budgets), goal-based bill funds (fundingStyle) and carried misc (note set).
+    prisma.expenseEntry.findMany({ where: { periodId, note: null, category: { tracked: false, fundingStyle: null } }, include: { category: { select: { section: true } } } }),
+    // Preview/draft ONLY: own-period misc Sheet lines (Misc section, no carry marker),
+    // subtracted as an estimated lump — a draft can't log Spends or mark bills paid, so misc
+    // is just a planned reduction. In an OPEN/closed month these same lines instead ride in
+    // `billLines` above (with a paid toggle), so we do NOT lump them there. Carried misc
+    // (note "__carry__") stays excluded either way — settled at month start, not held cash.
     prisma.expenseEntry.findMany({ where: { periodId, note: null, category: { section: "Misc" } }, select: { amount: true, memberId: true } }),
     prisma.member.findMany({ where: { householdId }, orderBy: { id: "asc" } }),
     getPiggyOverview(householdId),
     prisma.incomeEntry.aggregate({ where: { periodId }, _sum: { amount: true } }),
     prisma.expenseEntry.aggregate({ where: { periodId }, _sum: { amount: true } }),
   ]);
+  const isDraft = period?.status === "draft";
+  // In a draft, Misc lines are a lump estimate (below), so keep them OUT of the bill list.
+  // In an open/closed month, Misc lines stay in the bill list (paid-toggleable), as before.
+  const bills = isDraft ? billLines.filter((e) => e.category.section !== "Misc") : billLines;
+
   const plannedByCat = new Map(budgets.map((b) => [b.categoryId, b.planned]));
   const spentByCat = new Map<number, number>();
   for (const s of spends) spentByCat.set(s.categoryId, (spentByCat.get(s.categoryId) ?? 0) + s.amount);
@@ -506,22 +512,24 @@ export async function getInHand(householdId: number, periodId: number) {
     }));
 
   // misc / unbudgeted spend (by whoever logged it) — already spent, subtracts from in-hand.
-  // Two sources: logged Spends (open months) and own-period Misc Sheet lines (draft months,
-  // and any hand-added Misc line in an open month) — both are real misc the person spent.
   const miscByMember = new Map<number | null, number>();
   for (const s of spends) {
     if (budgetedIds.has(s.categoryId)) continue;
     const k = s.memberId ?? null;
     miscByMember.set(k, (miscByMember.get(k) ?? 0) + s.amount);
   }
-  for (const e of miscLines) {
-    const k = e.memberId ?? null;
-    miscByMember.set(k, (miscByMember.get(k) ?? 0) + e.amount);
+  // Draft/preview only: planned Misc Sheet lines subtract as an estimated lump (no Spends,
+  // no paid toggle yet). Open/closed months show these as paid-toggleable bills instead.
+  if (isDraft) {
+    for (const e of miscLines) {
+      const k = e.memberId ?? null;
+      miscByMember.set(k, (miscByMember.get(k) ?? 0) + e.amount);
+    }
   }
 
   const build = (key: number | null, name: string) => {
     const cats = rows.filter((r) => (r.responsibleMemberId ?? null) === key);
-    const memberBills = billLines
+    const memberBills = bills
       .filter((e) => (e.memberId ?? null) === key)
       .map((e) => ({ id: e.id, name: e.label, amount: e.amount, paid: e.paid }));
     const unpaidBills = memberBills.filter((b) => !b.paid);
