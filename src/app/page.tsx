@@ -652,7 +652,7 @@ export default async function SheetPage({
               <div className="rounded-xl border border-slate-200 bg-white p-5">
                 <h2 className="mb-1 text-sm font-semibold text-slate-800">Where the income went</h2>
                 <p className="mb-4 text-xs text-slate-500">
-                  {formatINR(rollup.totalIncome)} came in this month. Here&apos;s where it went —
+                  {formatINR(rollup.totalIncome)}{" "}came in this month. Here&apos;s where it went —
                   and what&apos;s left.
                 </p>
                 <MoneyFlowDonut

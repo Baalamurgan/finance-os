@@ -1,6 +1,6 @@
 import { prisma } from "@/lib/prisma";
 import { computeSettlement } from "@/lib/settlement-core";
-import { planBillMonth, type FundingStyle } from "@/lib/schedule";
+import { planBillMonth, isLumpDue, type FundingStyle } from "@/lib/schedule";
 
 // Bills whose set-aside was skipped for this month — shown in the sheet's "Skipped" section
 // with the amount that would have been set aside (so it can be added back).
@@ -140,12 +140,14 @@ export async function getPiggyOverview(householdId: number) {
  * Returns the getPiggyOverview shape plus a projected per-category `sinkingBalances`.
  */
 export async function getProjectedPiggy(householdId: number, sourcePeriodId: number) {
-  const [base, baseBalances, budgets, spends, trackedCats] = await Promise.all([
+  const [base, baseBalances, budgets, spends, trackedCats, billSetAsides] = await Promise.all([
     getPiggyOverview(householdId),
     getSinkingBalances(householdId),
     prisma.budget.findMany({ where: { periodId: sourcePeriodId } }),
     prisma.spend.findMany({ where: { periodId: sourcePeriodId } }),
     prisma.category.findMany({ where: { householdId, tracked: true, onHold: false } }),
+    // bill-with-a-fund set-asides in the source month accrue to their fund at wind-down
+    prisma.expenseEntry.findMany({ where: { periodId: sourcePeriodId, category: { fundingStyle: { not: null } }, OR: [{ label: { endsWith: "(saving)" } }, { label: { endsWith: "(monthly share)" } }] }, select: { categoryId: true, amount: true, category: { select: { name: true } } } }),
   ]);
   const budgetOf = (c: number) => budgets.find((b) => b.categoryId === c)?.planned ?? 0;
   const spentOf = (c: number) => spends.filter((s) => s.categoryId === c).reduce((a, s) => a + s.amount, 0);
@@ -161,6 +163,13 @@ export async function getProjectedPiggy(householdId: number, sourcePeriodId: num
       const rem = b - spentOf(c.id);
       if (rem >= 0) piggyAccrual += rem; // shortfalls carry as an expense, not out of Piggy
     }
+  }
+
+  // bill-with-a-fund categories accrue their set-aside into the same fund (projected)
+  for (const e of billSetAsides) {
+    if (e.categoryId == null) continue;
+    accrualByCat.set(e.categoryId, (accrualByCat.get(e.categoryId) ?? 0) + e.amount);
+    nameById.set(e.categoryId, e.category.name);
   }
 
   // projected per-fund balances (by categoryId) for the sinking-fund list
@@ -466,9 +475,9 @@ export type InHand = Awaited<ReturnType<typeof getInHand>>;
  * default to the head and always appear even with no personal in-hand.
  */
 export async function getInHand(householdId: number, periodId: number) {
-  const [household, period, categories, budgets, spends, billLines, miscLines, fundLines, fundCats, members, piggy, incomeAgg, expenseAgg] = await Promise.all([
+  const [household, period, categories, budgets, spends, billLines, miscLines, fundLines, fundCats, sinkBal, billPayments, members, piggy, incomeAgg, expenseAgg] = await Promise.all([
     prisma.household.findUnique({ where: { id: householdId }, select: { treasurerMemberId: true, piggyHolderMemberId: true } }),
-    prisma.period.findUnique({ where: { id: periodId }, select: { treasurerMemberId: true, status: true } }),
+    prisma.period.findUnique({ where: { id: periodId }, select: { treasurerMemberId: true, status: true, month: true } }),
     prisma.category.findMany({ where: { householdId, tracked: true, onHold: false } }),
     prisma.budget.findMany({ where: { periodId } }),
     prisma.spend.findMany({ where: { periodId } }),
@@ -486,7 +495,11 @@ export async function getInHand(householdId: number, periodId: number) {
     // Bill-with-a-fund lines: the "(saving)" set-aside (tagged to the SAVER — held/earmarked),
     // the due-month full bill and its "— from fund" credit (tagged to the PAYER — net out-of-pocket).
     prisma.expenseEntry.findMany({ where: { periodId, note: null, category: { fundingStyle: { not: null } } }, select: { id: true, label: true, amount: true, memberId: true, paid: true, categoryId: true, category: { select: { name: true } } } }),
-    prisma.category.findMany({ where: { householdId, fundingStyle: { not: null } }, select: { id: true } }),
+    // bill-with-a-fund categories (config) — for the misc exclusion AND to synthesize the
+    // due-month "to pay" bill (auto bills don't put the bill on the Sheet anymore).
+    prisma.category.findMany({ where: { householdId, fundingStyle: { not: null }, onHold: false }, select: { id: true, name: true, fundingStyle: true, billAmount: true, billMonth: true, billEveryMonths: true, responsibleMemberId: true, payerMemberId: true } }),
+    getSinkingBalances(householdId),
+    prisma.billPayment.findMany({ where: { periodId }, select: { categoryId: true, memberId: true } }),
     prisma.member.findMany({ where: { householdId }, orderBy: { id: "asc" } }),
     getPiggyOverview(householdId),
     prisma.incomeEntry.aggregate({ where: { periodId }, _sum: { amount: true } }),
@@ -533,16 +546,18 @@ export async function getInHand(householdId: number, periodId: number) {
     }
   }
 
-  // Bill-with-a-fund lines split by role. Set-asides = held/earmarked cash for the SAVER;
-  // the due-month bill + its "— from fund" credit = a to-pay bill for the PAYER (net = the
-  // out-of-pocket the fund doesn't cover, usually 0).
-  // set-aside labels: current bills use "(saving)"; older sinking-fund months (pre-billing-
-  // redesign, still frozen in their open month) use "(monthly share)" — both are held savings.
+  // Set-asides = held/earmarked cash for the SAVER (from the Sheet "(saving)"/"(monthly share)"
+  // lines — the latter appear in older sinking-fund months still frozen in their open month).
   const isSaveLine = (lbl: string) => lbl.endsWith("(saving)") || lbl.endsWith("(monthly share)");
   const savingLines = fundLines.filter((e) => isSaveLine(e.label));
-  const creditByCat = new Map<number, number>(); // categoryId → fund credit (negative)
-  for (const e of fundLines) if (e.label.endsWith("— from fund")) creditByCat.set(e.categoryId, (creditByCat.get(e.categoryId) ?? 0) + e.amount);
-  const billLinesF = fundLines.filter((e) => !isSaveLine(e.label) && !e.label.endsWith("— from fund"));
+
+  // Due-month periodic bills to pay — synthesized from config (auto bills no longer put the bill
+  // on the Sheet). Tagged to the PAYER; net-neutral in-hand (paid from the fund/Piggy in the pay
+  // modal, any out-of-pocket becomes a Misc Spend then). "Pay in full" bills stay a Sheet expense.
+  const paidCats = new Map(billPayments.map((p) => [p.categoryId, p]));
+  const dueBills = fundCats
+    .filter((c) => c.fundingStyle === "auto" && c.billAmount != null && c.billAmount > 0 && c.billMonth != null && c.billEveryMonths != null && isLumpDue(c.billMonth, c.billEveryMonths, { month: period?.month ?? 0 }))
+    .map((c) => ({ categoryId: c.id, name: c.name, bill: c.billAmount!, payer: c.payerMemberId ?? c.responsibleMemberId ?? null, fund: Math.round((sinkBal[c.id] ?? 0) * 100) / 100, paid: paidCats.has(c.id) }));
 
   const build = (key: number | null, name: string) => {
     const cats = rows.filter((r) => (r.responsibleMemberId ?? null) === key);
@@ -555,25 +570,19 @@ export async function getInHand(householdId: number, periodId: number) {
     const earmarked = savingLines
       .filter((e) => (e.memberId ?? null) === key)
       .map((e) => ({ id: e.id, name: e.category.name, amount: e.amount }));
-    // periodic bills this member must pay this month (payer); fund credit offsets the bill
-    const periodicBills = billLinesF
-      .filter((e) => (e.memberId ?? null) === key)
-      .map((e) => {
-        const fromFund = -(creditByCat.get(e.categoryId) ?? 0);
-        return { id: e.id, name: e.category.name, bill: e.amount, fromFund, outOfPocket: Math.round((e.amount - fromFund) * 100) / 100, paid: e.paid };
-      });
-    const unpaidPeriodic = periodicBills.filter((b) => !b.paid);
-    const paidPeriodic = periodicBills.filter((b) => b.paid);
+    // due-month periodic bills this member pays (net-neutral; paid from fund/Piggy in the modal)
+    const memberDue = dueBills.filter((b) => b.payer === key);
+    const unpaidPeriodic = memberDue.filter((b) => !b.paid).map((b) => ({ categoryId: b.categoryId, name: b.name, bill: b.bill, fund: b.fund }));
+    const paidPeriodic = memberDue.filter((b) => b.paid).map((b) => ({ categoryId: b.categoryId, name: b.name, bill: b.bill, fund: b.fund }));
 
     const budgetRemaining = cats.reduce((s, r) => s + r.remaining, 0);
     const unpaidTotal = unpaidBills.reduce((s, b) => s + b.amount, 0);
     const earmarkedTotal = earmarked.reduce((s, e) => s + e.amount, 0);
-    const periodicOutOfPocket = unpaidPeriodic.reduce((s, b) => s + b.outOfPocket, 0);
     const miscSpent = miscByMember.get(key) ?? 0;
     return {
       memberId: key, name, cats, unpaidBills, paidBills, earmarked, unpaidPeriodic, paidPeriodic,
-      budgetRemaining, unpaidTotal, earmarkedTotal, periodicOutOfPocket, miscSpent,
-      net: budgetRemaining + unpaidTotal + earmarkedTotal + periodicOutOfPocket - miscSpent,
+      budgetRemaining, unpaidTotal, earmarkedTotal, miscSpent,
+      net: budgetRemaining + unpaidTotal + earmarkedTotal - miscSpent,
     };
   };
 
@@ -592,7 +601,7 @@ export async function getInHand(householdId: number, periodId: number) {
   // the treasurer additionally holds the family pool: shared in-hand + the month's balance
   const treasurerPool = shared.net + monthBalance;
 
-  return { byPerson, shared, piggyTotal, treasurerId, piggyHolderId, monthBalance, treasurerPool };
+  return { byPerson, shared, piggyTotal, generalPiggy: piggy.generalTotal, treasurerId, piggyHolderId, monthBalance, treasurerPool };
 }
 
 /**

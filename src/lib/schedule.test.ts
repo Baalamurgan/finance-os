@@ -81,8 +81,10 @@ describe("planBillMonth — goal-based 'bill with a fund' (₹12,000 car insuran
     expect(planBillMonth({ ...base, fund: 10909, month: 6 })).toEqual({ kind: "save", contribution: 1091 });
   });
 
-  it("due month: full bill shows, fund credits it, net = out-of-pocket", () => {
-    expect(planBillMonth({ ...base, fund: 12000, month: 7 })).toEqual({ kind: "bill", bill: 12000, fromFund: 12000, outOfPocket: 0 });
+  it("auto due month → sets aside a normal share (the bill is paid from the fund in In Hand, not a Sheet line)", () => {
+    // July is the due month; auto no longer drops the full bill — it sets aside the normal ~1,000 share
+    expect(planBillMonth({ ...base, fund: 12000, month: 7 })).toEqual({ kind: "save", contribution: 1000 });
+    expect(planBillMonth({ ...base, fund: 0, month: 7 })).toEqual({ kind: "save", contribution: 1000 });
   });
 
   it("Q3 — withdrew from the fund → next month's save jumps to catch up", () => {
@@ -128,8 +130,8 @@ describe("planBillMonth — save cadence (yearly ₹12,000 due July)", () => {
     }
   });
 
-  it("save quarterly → the due month still lands the full bill from the fund", () => {
-    expect(planBillMonth({ ...base, saveEveryMonths: 3, fund: 12000, month: 7 })).toEqual({ kind: "bill", bill: 12000, fromFund: 12000, outOfPocket: 0 });
+  it("save quarterly → the due month sets aside a normal share (¼ of the year), not the bill", () => {
+    expect(planBillMonth({ ...base, saveEveryMonths: 3, fund: 12000, month: 7 })).toEqual({ kind: "save", contribution: 3000 });
   });
 
   it("save every 6 months → a single ₹12,000 set-aside in January", () => {
@@ -143,7 +145,7 @@ describe("planBillMonth — save cadence (yearly ₹12,000 due July)", () => {
     expect(planBillMonth({ ...six, fund: 0, month: 3 })).toEqual({ kind: "save", contribution: 3000 });
     expect(planBillMonth({ ...six, fund: 3000, month: 5 })).toEqual({ kind: "save", contribution: 3000 });
     expect(planBillMonth({ ...six, fund: 0, month: 4 })).toEqual({ kind: "none" }); // off-cadence
-    expect(planBillMonth({ ...six, fund: 6000, month: 1 })).toEqual({ kind: "bill", bill: 6000, fromFund: 6000, outOfPocket: 0 }); // Jan is a due month too
+    expect(planBillMonth({ ...six, fund: 6000, month: 1 })).toEqual({ kind: "save", contribution: 2000 }); // Jan is a due month → normal share (⅓ of 6,000), not the bill
   });
 });
 

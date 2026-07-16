@@ -1,0 +1,109 @@
+"use client";
+
+import { useEffect, useState } from "react";
+import { payPeriodicBill } from "@/app/actions";
+import { formatINR } from "@/lib/format";
+
+// Pay a due-month "save the share" bill. The bill's own fund is used first & fully; if it's
+// short, the user picks where the remainder comes from — general Piggy or out-of-pocket.
+export function PayBillModal({
+  categoryId,
+  periodId,
+  name,
+  bill,
+  fund,
+  generalPiggy,
+}: {
+  categoryId: number;
+  periodId: number;
+  name: string;
+  bill: number;
+  fund: number;
+  generalPiggy: number;
+}) {
+  const [open, setOpen] = useState(false);
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open]);
+
+  const fromFund = Math.min(fund, bill);
+  const remaining = Math.round((bill - fromFund) * 100) / 100;
+  const fundCovers = remaining <= 0;
+
+  const hidden = (source: string) => (
+    <>
+      <input type="hidden" name="categoryId" value={categoryId} />
+      <input type="hidden" name="periodId" value={periodId} />
+      <input type="hidden" name="source" value={source} />
+    </>
+  );
+
+  return (
+    <>
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        title="Pay this bill"
+        className="rounded-full border border-teal-200 px-2 py-0.5 text-[10px] font-medium text-teal-600 hover:border-teal-400 hover:bg-teal-50"
+      >
+        pay
+      </button>
+
+      {open && (
+        <div className="fixed inset-0 z-50 flex items-end justify-center overflow-y-auto bg-black/40 sm:items-center sm:p-4" onClick={() => setOpen(false)}>
+          <div className="w-full max-w-sm rounded-t-3xl bg-white shadow-xl sm:rounded-2xl" onClick={(e) => e.stopPropagation()} style={{ paddingBottom: "env(safe-area-inset-bottom)" }}>
+            <div className="flex items-center justify-between border-b border-slate-100 px-5 py-4">
+              <h2 className="text-base font-bold text-slate-900">Pay {name}</h2>
+              <button type="button" onClick={() => setOpen(false)} aria-label="Close" className="rounded-md px-2 text-2xl leading-none text-slate-400 hover:bg-slate-100">✕</button>
+            </div>
+            <div className="space-y-4 px-5 py-5">
+              <div className="rounded-xl bg-slate-50 p-3 text-sm">
+                <div className="flex justify-between"><span className="text-slate-500">Bill</span><span className="font-semibold tabular-nums">{formatINR(bill)}</span></div>
+                <div className="flex justify-between"><span className="text-slate-500">From its fund</span><span className="tabular-nums text-teal-700">− {formatINR(fromFund)}</span></div>
+                {!fundCovers && (
+                  <div className="mt-1 flex justify-between border-t border-slate-200 pt-1 font-medium"><span className="text-slate-600">Remaining</span><span className="tabular-nums text-red-600">{formatINR(remaining)}</span></div>
+                )}
+              </div>
+
+              {fundCovers ? (
+                <form action={payPeriodicBill} onSubmit={() => setOpen(false)} className="space-y-3">
+                  {hidden("fund")}
+                  <p className="text-xs text-slate-500">The fund fully covers this bill.</p>
+                  <div className="flex items-center gap-3">
+                    <button type="button" onClick={() => setOpen(false)} className="min-h-11 flex-1 rounded-xl border-2 border-slate-200 px-4 py-2.5 text-sm font-medium text-slate-600">Cancel</button>
+                    <button type="submit" className="min-h-11 flex-1 rounded-xl bg-teal-600 px-4 py-2.5 text-sm font-semibold text-white">Pay from fund</button>
+                  </div>
+                </form>
+              ) : (
+                <div className="space-y-3">
+                  <p className="text-xs text-slate-500">
+                    The fund is short by {formatINR(remaining)}. Take the rest from the Piggy bank
+                    ({formatINR(generalPiggy)} available) or out-of-pocket (logged as the payer&apos;s misc).
+                  </p>
+                  <div className="grid grid-cols-1 gap-2">
+                    <form action={payPeriodicBill} onSubmit={() => setOpen(false)}>
+                      {hidden("piggy")}
+                      <button type="submit" className="min-h-11 w-full rounded-xl bg-amber-500 px-4 py-2.5 text-sm font-semibold text-white hover:bg-amber-600">
+                        Remaining from Piggy{generalPiggy < remaining ? ` (₹${Math.round(generalPiggy).toLocaleString("en-IN")} + rest out-of-pocket)` : ""}
+                      </button>
+                    </form>
+                    <form action={payPeriodicBill} onSubmit={() => setOpen(false)}>
+                      {hidden("pocket")}
+                      <button type="submit" className="min-h-11 w-full rounded-xl bg-slate-700 px-4 py-2.5 text-sm font-semibold text-white hover:bg-slate-800">
+                        Remaining out-of-pocket
+                      </button>
+                    </form>
+                    <button type="button" onClick={() => setOpen(false)} className="min-h-11 w-full rounded-xl border-2 border-slate-200 px-4 py-2.5 text-sm font-medium text-slate-600">Discard</button>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}

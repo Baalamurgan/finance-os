@@ -735,6 +735,72 @@ export async function toggleBillPaid(formData: FormData) {
   revalidatePath("/", "layout");
 }
 
+// Pay a due-month "save the share" bill from the In Hand tab (head/manager, open month).
+// The bill's own fund is used FIRST and fully; any remainder comes from the general Piggy or
+// out-of-pocket (recorded as the payer's Misc spend). Idempotent via BillPayment (one per
+// category+period), so it survives a rebuild.
+export async function payPeriodicBill(formData: FormData) {
+  if (!(await canEdit())) return; // head + manager
+  const categoryId = Number(formData.get("categoryId"));
+  const periodId = Number(formData.get("periodId"));
+  if (!categoryId || !periodId) return;
+  if (!(await periodOpen(periodId))) return; // only pay in an open month
+  const cat = await prisma.category.findUnique({ where: { id: categoryId } });
+  if (!cat || cat.fundingStyle !== "auto" || cat.billAmount == null || cat.billAmount <= 0) return;
+  const bill = cat.billAmount;
+  const payer = cat.payerMemberId ?? cat.responsibleMemberId ?? null;
+
+  const [fundAgg, piggyAgg, already] = await Promise.all([
+    prisma.piggyEntry.aggregate({ where: { householdId: cat.householdId, categoryId, kind: "sinking" }, _sum: { amount: true } }),
+    prisma.piggyEntry.aggregate({ where: { householdId: cat.householdId, kind: "piggy" }, _sum: { amount: true } }),
+    prisma.billPayment.findUnique({ where: { categoryId_periodId: { categoryId, periodId } } }),
+  ]);
+  if (already) return; // already paid this period
+  const round = (x: number) => Math.round(x * 100) / 100;
+  const fund = Math.max(0, fundAgg._sum.amount ?? 0);
+  const piggyAvail = Math.max(0, piggyAgg._sum.amount ?? 0);
+  const source = String(formData.get("source") ?? "pocket"); // where the REMAINDER comes from: piggy | pocket
+
+  const fromFund = round(Math.min(fund, bill)); // fund first & fully
+  let remaining = round(bill - fromFund);
+  let fromPiggy = 0;
+  if (remaining > 0 && source === "piggy") {
+    fromPiggy = round(Math.min(piggyAvail, remaining));
+    remaining = round(remaining - fromPiggy);
+  }
+  const outOfPocket = remaining; // whatever's left is out-of-pocket
+
+  const miscCat = outOfPocket > 0 ? await prisma.category.findFirst({ where: { householdId: cat.householdId, section: "Misc", tracked: true } }) : null;
+  await prisma.$transaction(async (tx) => {
+    if (fromFund > 0) await tx.piggyEntry.create({ data: { householdId: cat.householdId, periodId, categoryId, kind: "sinking", amount: -fromFund, note: `${cat.name} bill paid` } });
+    if (fromPiggy > 0) await tx.piggyEntry.create({ data: { householdId: cat.householdId, periodId, kind: "piggy", amount: -fromPiggy, note: `${cat.name} bill paid` } });
+    if (outOfPocket > 0 && miscCat) await tx.spend.create({ data: { periodId, categoryId: miscCat.id, memberId: payer, label: `${cat.name} bill (out-of-pocket)`, amount: outOfPocket, subCategory: null } });
+    await tx.billPayment.create({ data: { householdId: cat.householdId, categoryId, periodId, memberId: payer, fromFund, fromPiggy, outOfPocket } });
+  });
+  await logActivity("expense", "created", `Paid ${cat.name} bill ${formatINR(bill)}`, periodId);
+  revalidatePath("/", "layout");
+}
+
+// Undo a periodic-bill payment (head/manager, open month): reverse the fund/Piggy draws and the
+// out-of-pocket Misc spend, and drop the BillPayment record.
+export async function unpayPeriodicBill(formData: FormData) {
+  if (!(await canEdit())) return; // head + manager
+  const categoryId = Number(formData.get("categoryId"));
+  const periodId = Number(formData.get("periodId"));
+  if (!categoryId || !periodId) return;
+  if (!(await periodOpen(periodId))) return;
+  const bp = await prisma.billPayment.findUnique({ where: { categoryId_periodId: { categoryId, periodId } } });
+  if (!bp) return;
+  const cat = await prisma.category.findUnique({ where: { id: categoryId }, select: { name: true } });
+  await prisma.$transaction(async (tx) => {
+    if (bp.fromFund > 0) await tx.piggyEntry.create({ data: { householdId: bp.householdId, periodId, categoryId, kind: "sinking", amount: bp.fromFund, note: `${cat?.name ?? "bill"} payment undone` } });
+    if (bp.fromPiggy > 0) await tx.piggyEntry.create({ data: { householdId: bp.householdId, periodId, kind: "piggy", amount: bp.fromPiggy, note: `${cat?.name ?? "bill"} payment undone` } });
+    if (bp.outOfPocket > 0) await tx.spend.deleteMany({ where: { periodId, memberId: bp.memberId, amount: bp.outOfPocket, label: { endsWith: "(out-of-pocket)" } } });
+    await tx.billPayment.delete({ where: { id: bp.id } });
+  });
+  revalidatePath("/", "layout");
+}
+
 // Choose who holds the Piggy / pool in the in-hand view (head + manager). Default = head.
 export async function setPiggyHolder(formData: FormData) {
   if (!(await canEdit())) return; // head + manager

@@ -376,6 +376,23 @@ model PiggyEntry {
   createdAt   DateTime   @default(now())
 }
 
+// A due-month periodic bill (bill-with-a-fund) that's been paid, and how it was funded.
+// One per (category, period); survives draft rebuilds so a paid bill stays paid. Scalar ids
+// (no relations) keep it decoupled from the other models.
+model BillPayment {
+  id          Int      @id @default(autoincrement())
+  householdId Int
+  categoryId  Int
+  periodId    Int
+  memberId    Int? // the payer
+  fromFund    Float    @default(0) // drawn from the bill's own sinking fund
+  fromPiggy   Float    @default(0) // drawn from the general Piggy
+  outOfPocket Float    @default(0) // paid out-of-pocket (also logged as a Misc Spend on the payer)
+  paidAt      DateTime @default(now())
+
+  @@unique([categoryId, periodId])
+}
+
 // Expense category (Veg, Loan, Utilities...) with a necessary/other default.
 model Category {
   id          Int            @id @default(autoincrement())

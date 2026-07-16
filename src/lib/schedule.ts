@@ -60,10 +60,13 @@ export function monthsUntilNextDue(billMonth: number, everyMonths: number, month
 export type FundingStyle = "auto" | "fixed" | "none";
 
 // What a "bill with a fund" category does in a given month (pure — no side effects).
-//  • due month           → the full bill lands; the fund credits up to the bill; net = out-of-pocket
-//  • save-cadence month, auto  → set aside (bill − fund) × cadence ÷ months-left (self-correcting)
-//  • save month, fixed   → set aside the user's fixed share
-//  • off-cadence / none  → nothing (auto only saves on cadence months; none pays whole at due)
+//  • auto, save-cadence month  → set aside (bill − fund) × cadence ÷ months-left (self-correcting)
+//  • auto, due month           → set aside a normal share (fund treated as reset by the payment);
+//                                the full bill is NOT a Sheet line — it's paid from the fund in In Hand
+//  • auto, off-cadence month   → nothing
+//  • fixed                     → set aside the user's fixed share (every month)
+//  • none, due month           → the full bill lands as a Sheet expense (fund, if any, credits it)
+//  • none, other month         → nothing
 //
 // `saveEveryMonths` (S, default 1) is the save cadence: auto sets aside only on months whose
 // distance to the due month is a multiple of S, and each contribution is scaled so the fund
@@ -84,13 +87,25 @@ export function planBillMonth(input: {
   month: number;
 }): BillMonthPlan {
   const { billAmount, billMonth, everyMonths, fund, fundingStyle, fixedShare, saveEveryMonths, month } = input;
-  if (isLumpDue(billMonth, everyMonths, { month })) {
+  const due = isLumpDue(billMonth, everyMonths, { month });
+
+  // pay-in-full: the whole bill lands as a Sheet expense on its due month (a fund, if any, credits it)
+  if (fundingStyle === "none") {
+    if (!due) return { kind: "none" };
     const fromFund = Math.max(0, Math.min(fund, billAmount));
     return { kind: "bill", bill: billAmount, fromFund, outOfPocket: Math.round((billAmount - fromFund) * 100) / 100 };
   }
-  if (fundingStyle === "none") return { kind: "none" };
-  if (fundingStyle === "fixed") return { kind: "save", contribution: Math.max(0, fixedShare ?? 0) };
+
+  // save-the-share (auto / legacy fixed): a set-aside EVERY month, INCLUDING the due month. The
+  // full bill is never a Sheet line here — it's paid from the fund in the In Hand tab.
   const S = Math.max(1, Math.round(saveEveryMonths ?? 1));
+  if (due) {
+    // the due month still shows a normal-sized share — as if the fund resets when the bill is paid
+    const postPay = Math.max(0, fund - billAmount);
+    const share = fundingStyle === "fixed" ? Math.max(0, fixedShare ?? 0) : ((billAmount - postPay) * S) / everyMonths;
+    return { kind: "save", contribution: Math.round(share * 100) / 100 };
+  }
+  if (fundingStyle === "fixed") return { kind: "save", contribution: Math.max(0, fixedShare ?? 0) };
   const left = monthsUntilNextDue(billMonth, everyMonths, month); // 1..everyMonths-1 in saving months
   if (left % S !== 0) return { kind: "none" }; // not a save-cadence month
   const remaining = Math.max(0, billAmount - fund);

@@ -2,7 +2,8 @@ import { formatINR } from "@/lib/format";
 import { loadCommon } from "@/lib/load";
 import { getInHand, type InHand } from "@/lib/queries";
 import { NavHeader } from "@/components/NavHeader";
-import { toggleBillPaid } from "@/app/actions";
+import { toggleBillPaid, unpayPeriodicBill } from "@/app/actions";
+import { PayBillModal } from "@/components/PayBillModal";
 
 export default async function InHandPage({
   searchParams,
@@ -48,8 +49,9 @@ export default async function InHandPage({
   }
 
   const open = c.selected.status === "open";
+  const periodId = c.selected.id;
   // Real cash each person holds: budget left + bills to pay + savings held − misc spent.
-  const inHand = await getInHand(c.household.id, c.selected.id);
+  const inHand = await getInHand(c.household.id, periodId);
   const currentMemberId = c.currentMember?.id ?? null;
   const visibleGroups = c.isHead
     ? inHand.byPerson
@@ -83,6 +85,8 @@ export default async function InHandPage({
                 isPiggyHolder={g.memberId === inHand.piggyHolderId}
                 piggy={inHand.piggyTotal}
                 canToggle={canToggle}
+                periodId={periodId}
+                generalPiggy={inHand.generalPiggy}
               />
             ))}
           </div>
@@ -109,6 +113,8 @@ function PersonGroup({
   isPiggyHolder,
   piggy,
   canToggle,
+  periodId,
+  generalPiggy,
 }: {
   group: InHand["byPerson"][number];
   isTreasurer: boolean;
@@ -118,6 +124,8 @@ function PersonGroup({
   isPiggyHolder: boolean;
   piggy: number;
   canToggle: boolean;
+  periodId: number;
+  generalPiggy: number;
 }) {
   const { name, cats, unpaidBills, paidBills, earmarked, unpaidPeriodic, paidPeriodic, miscSpent, net } = group;
   const poolAmt = isTreasurer ? pool : 0;
@@ -167,16 +175,20 @@ function PersonGroup({
             <span className="shrink-0 tabular-nums text-teal-700">{formatINR(e.amount)}</span>
           </li>
         ))}
-        {/* Periodic bills this person pays this month — fund covers most/all; mark when paid */}
+        {/* Periodic bills this person pays this month — paid from the fund (+Piggy/pocket) */}
         {unpaidPeriodic.map((b) => (
-          <li key={`pb${b.id}`} className="flex items-center justify-between gap-2 text-xs">
+          <li key={`pb${b.categoryId}`} className="flex items-center justify-between gap-2 text-xs">
             <span className="truncate text-slate-500">
               {b.name} <span className="text-[10px] text-teal-500">bill due</span>
-              {b.fromFund > 0 && <span className="text-[10px] text-slate-400"> · {formatINR(b.fromFund)} from fund</span>}
+              <span className="text-[10px] text-slate-400"> · fund {formatINR(b.fund)}</span>
             </span>
             <span className="flex shrink-0 items-center gap-1.5">
               <span className="tabular-nums text-slate-600">{formatINR(b.bill)}</span>
-              {canToggle && <PaidToggle id={b.id} title="Mark this bill paid" label="✓ paid" />}
+              {canToggle ? (
+                <PayBillModal categoryId={b.categoryId} periodId={periodId} name={b.name} bill={b.bill} fund={b.fund} generalPiggy={generalPiggy} />
+              ) : (
+                <span className="rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-400">to pay</span>
+              )}
             </span>
           </li>
         ))}
@@ -220,11 +232,17 @@ function PersonGroup({
               </li>
             ))}
             {paidPeriodic.map((b) => (
-              <li key={`pb${b.id}`} className="flex items-center justify-between gap-2 text-xs text-slate-400">
+              <li key={`pb${b.categoryId}`} className="flex items-center justify-between gap-2 text-xs text-slate-400">
                 <span className="truncate line-through">{b.name}</span>
                 <span className="flex shrink-0 items-center gap-1.5">
                   <span className="tabular-nums">{formatINR(b.bill)}</span>
-                  {canToggle && <PaidToggle id={b.id} title="Mark unpaid" label="undo" />}
+                  {canToggle && (
+                    <form action={unpayPeriodicBill}>
+                      <input type="hidden" name="categoryId" value={b.categoryId} />
+                      <input type="hidden" name="periodId" value={periodId} />
+                      <button type="submit" title="Undo payment" className="rounded-full border border-slate-200 px-1.5 py-0.5 text-[10px] text-slate-400 hover:text-slate-600">undo</button>
+                    </form>
+                  )}
                 </span>
               </li>
             ))}

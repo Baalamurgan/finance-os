@@ -23,18 +23,22 @@ export async function generateMonth(
   targetId: number,
   householdId: number,
 ) {
-  const [period, items, cats, funds, _skips] = await Promise.all([
+  const [period, items, cats, funds, pending, _skips] = await Promise.all([
     tx.period.findUnique({ where: { id: targetId }, select: { year: true, month: true } }),
     tx.recurringItem.findMany({ where: { householdId, active: true }, orderBy: { sortOrder: "asc" } }),
     tx.category.findMany({ where: { householdId }, select: { id: true, name: true, tracked: true, sinking: true, onHold: true, necessary: true, monthlyBudget: true, responsibleMemberId: true, payerMemberId: true, billEveryMonths: true, billMonth: true, billAmount: true, fundingStyle: true, saveEveryMonths: true } }),
     tx.piggyEntry.groupBy({ by: ["categoryId"], where: { householdId, kind: "sinking" }, _sum: { amount: true } }),
+    // set-asides in the CURRENT open month(s) that haven't accrued to the fund yet (accrual is at
+    // wind-down) — count them so a draft's shares reflect what the fund WILL hold, not what it holds now.
+    tx.expenseEntry.findMany({ where: { periodId: { not: targetId }, period: { householdId, status: "open" }, category: { fundingStyle: { not: null } }, OR: [{ label: { endsWith: "(saving)" } }, { label: { endsWith: "(monthly share)" } }] }, select: { categoryId: true, amount: true } }),
     tx.setAsideSkip.findMany({ where: { periodId: targetId }, select: { categoryId: true } }),
   ]);
   const skippedSetAside = new Set(_skips.map((s) => s.categoryId)); // bills whose set-aside is skipped this month
   const catById = new Map(cats.map((c) => [c.id, c]));
-  // current fund balance per category (goal-based bills read this to size the set-aside)
+  // fund a goal-based bill can count on = accrued piggyEntry + this month's not-yet-accrued set-aside
   const fundByCat = new Map<number, number>();
   for (const f of funds) if (f.categoryId != null) fundByCat.set(f.categoryId, f._sum.amount ?? 0);
+  for (const e of pending) if (e.categoryId != null) fundByCat.set(e.categoryId, (fundByCat.get(e.categoryId) ?? 0) + e.amount);
   const isBillWithFund = (categoryId: number | null): boolean => {
     if (categoryId == null) return false;
     const c = catById.get(categoryId);
