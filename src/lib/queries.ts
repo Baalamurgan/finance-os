@@ -466,7 +466,7 @@ export type InHand = Awaited<ReturnType<typeof getInHand>>;
  * default to the head and always appear even with no personal in-hand.
  */
 export async function getInHand(householdId: number, periodId: number) {
-  const [household, period, categories, budgets, spends, billLines, miscLines, fundLines, members, piggy, incomeAgg, expenseAgg] = await Promise.all([
+  const [household, period, categories, budgets, spends, billLines, miscLines, fundLines, fundCats, members, piggy, incomeAgg, expenseAgg] = await Promise.all([
     prisma.household.findUnique({ where: { id: householdId }, select: { treasurerMemberId: true, piggyHolderMemberId: true } }),
     prisma.period.findUnique({ where: { id: periodId }, select: { treasurerMemberId: true, status: true } }),
     prisma.category.findMany({ where: { householdId, tracked: true, onHold: false } }),
@@ -486,6 +486,7 @@ export async function getInHand(householdId: number, periodId: number) {
     // Bill-with-a-fund lines: the "(saving)" set-aside (tagged to the SAVER — held/earmarked),
     // the due-month full bill and its "— from fund" credit (tagged to the PAYER — net out-of-pocket).
     prisma.expenseEntry.findMany({ where: { periodId, note: null, category: { fundingStyle: { not: null } } }, select: { id: true, label: true, amount: true, memberId: true, paid: true, categoryId: true, category: { select: { name: true } } } }),
+    prisma.category.findMany({ where: { householdId, fundingStyle: { not: null } }, select: { id: true } }),
     prisma.member.findMany({ where: { householdId }, orderBy: { id: "asc" } }),
     getPiggyOverview(householdId),
     prisma.incomeEntry.aggregate({ where: { periodId }, _sum: { amount: true } }),
@@ -515,9 +516,11 @@ export async function getInHand(householdId: number, periodId: number) {
     }));
 
   // misc / unbudgeted spend (by whoever logged it) — already spent, subtracts from in-hand.
+  const fundCatIds = new Set(fundCats.map((c) => c.id)); // bill-with-fund categories
   const miscByMember = new Map<number | null, number>();
   for (const s of spends) {
     if (budgetedIds.has(s.categoryId)) continue;
+    if (fundCatIds.has(s.categoryId)) continue; // a spend against a bill's fund isn't misc (it draws the fund)
     const k = s.memberId ?? null;
     miscByMember.set(k, (miscByMember.get(k) ?? 0) + s.amount);
   }

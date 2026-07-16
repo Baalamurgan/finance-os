@@ -32,11 +32,9 @@ const SECTION_LABEL: Record<string, string> = {
 };
 
 // Which Sheet section an expense line DISPLAYS under (independent of its category's tab):
-// a set-aside/share line always sits under Monthly; a periodic bill (or its fund credit)
-// sits under Yearly; everything else follows its category's section.
+// every line of a periodic bill — its set-aside/share, the due-month bill, the fund credit —
+// sits together under Yearly / periodic bills; everything else follows its category's section.
 function sheetSection(e: ExpRow): string {
-  const lbl = e.label ?? "";
-  if (lbl.endsWith("(saving)") || lbl.endsWith("(monthly share)")) return "Monthly";
   if (e.category.billEveryMonths != null && e.category.billEveryMonths > 1) return "Yearly";
   return e.category.section;
 }
