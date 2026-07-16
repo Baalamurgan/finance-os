@@ -17,6 +17,7 @@ const SECTION_COLOR: Record<string, string> = {
   Loans: "#ef4444",
   Chits: "#f59e0b",
   Monthly: "#6366f1",
+  Yearly: "#14b8a6",
   Misc: "#a855f7",
 };
 
@@ -25,8 +26,19 @@ const SECTION_LABEL: Record<string, string> = {
   Loans: "Loans",
   Chits: "Chits",
   Monthly: "Monthly Expense",
+  Yearly: "Yearly / Periodic bills",
   Misc: "Miscellaneous",
 };
+
+// Which Sheet section an expense line DISPLAYS under (independent of its category's tab):
+// a set-aside/share line always sits under Monthly; a periodic bill (or its fund credit)
+// sits under Yearly; everything else follows its category's section.
+function sheetSection(e: ExpRow): string {
+  const lbl = e.label ?? "";
+  if (lbl.endsWith("(saving)") || lbl.endsWith("(monthly share)")) return "Monthly";
+  if (e.category.billEveryMonths != null && e.category.billEveryMonths > 1) return "Yearly";
+  return e.category.section;
+}
 
 function monthLabel(month: number, year: number) {
   return `${new Date(year, month - 1, 1)
@@ -208,20 +220,24 @@ export default async function SheetPage({
   const canEditHere = c.canEdit && (open || c.isHead || isDraft);
   const editingClosed = canEditHere && !open && !isDraft; // head editing a locked month
 
-  // group expenses into the fixed section order
+  // group expenses by their DISPLAY section (sheetSection: shares → Monthly, periodic
+  // bills → Yearly) in the fixed section order
   const grouped = SECTION_ORDER.map((section) => {
-    const rows = rollup.expenses.filter((e) => e.category.section === section);
+    const rows = rollup.expenses.filter((e) => sheetSection(e) === section);
     return { section, rows, subtotal: rows.reduce((s, e) => s + e.amount, 0) };
   }).filter((g) => g.rows.length > 0);
 
-  // split the Expense column into two blocks: fixed monthly (Loans+Chits+Monthly)
-  // vs miscellaneous/extra (Misc). Each has its own subtotal + Add expense.
+  // split the Expense column into blocks: fixed monthly (Loans+Chits+Monthly), the
+  // always-shown Yearly/periodic-bills block, and miscellaneous/extra (Misc).
   const FIXED_SECTIONS = ["Loans", "Chits", "Monthly"];
   const fixedGroups = grouped.filter((g) => FIXED_SECTIONS.includes(g.section));
-  const miscRows = rollup.expenses.filter((e) => e.category.section === "Misc");
+  const yearlyRows = rollup.expenses.filter((e) => sheetSection(e) === "Yearly");
+  const yearlySubtotal = yearlyRows.reduce((s, e) => s + e.amount, 0);
+  const miscRows = rollup.expenses.filter((e) => sheetSection(e) === "Misc");
   const fixedSubtotal = fixedGroups.reduce((s, g) => s + g.subtotal, 0);
   const miscSubtotal = miscRows.reduce((s, e) => s + e.amount, 0);
   const fixedCats = c.categories.filter((cat) => FIXED_SECTIONS.includes(cat.section));
+  const yearlyCats = c.categories.filter((cat) => cat.section === "Yearly" || (cat.billEveryMonths != null && cat.billEveryMonths > 1));
   const miscCats = c.categories.filter((cat) => cat.section === "Misc");
 
   return (
@@ -454,6 +470,55 @@ export default async function SheetPage({
                         balance={rollup.balance}
                         sheetLabel="+ Add fixed expense"
                         newCategoryDefaultSection="Monthly"
+                      />
+                    </div>
+                  )}
+                </div>
+              </details>
+
+              {/* Yearly / periodic bills — always shown, even when nothing is due this month */}
+              <details open data-persist="yearly" className="group/yr border-b border-slate-100">
+                <summary className="sticky top-[6.5rem] z-10 flex cursor-pointer list-none items-center justify-between rounded-lg bg-white px-2 py-2 hover:bg-slate-50 [&::-webkit-details-marker]:hidden sm:static">
+                  <span className="flex items-center gap-1.5">
+                    <svg width="14" height="14" viewBox="0 0 20 20" className="text-slate-400 transition-transform group-open/yr:rotate-90">
+                      <path fill="currentColor" d="M7 5l6 5-6 5z" />
+                    </svg>
+                    <span className="text-[11px] font-bold uppercase tracking-wider text-teal-600">
+                      Yearly / periodic bills
+                    </span>
+                    <span className="text-[10px] text-slate-400">({yearlyRows.length})</span>
+                  </span>
+                  <span className="text-sm font-bold tabular-nums text-slate-700">
+                    {formatINR(yearlySubtotal)}
+                  </span>
+                </summary>
+                <div className="pl-3">
+                  <div className="divide-y divide-slate-100 px-2 pb-1">
+                    {yearlyRows.length === 0 ? (
+                      <p className="py-2 text-xs text-slate-400">No annual / periodic bills due this month.</p>
+                    ) : (
+                      yearlyRows.map((e) => (
+                        <ExpenseRow
+                          key={e.id}
+                          e={e}
+                          canEditHere={canEditHere}
+                          categories={c.categories}
+                          members={c.members}
+                          periodId={c.selected!.id}
+                        />
+                      ))
+                    )}
+                  </div>
+                  {canEditHere && (
+                    <div className="px-2 py-2">
+                      <ExpenseModal
+                        categories={yearlyCats}
+                        members={c.members}
+                        periodId={c.selected!.id}
+                        trigger="sheet"
+                        balance={rollup.balance}
+                        sheetLabel="+ Add yearly bill"
+                        newCategoryDefaultSection="Yearly"
                       />
                     </div>
                   )}

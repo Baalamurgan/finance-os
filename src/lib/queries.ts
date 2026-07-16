@@ -19,7 +19,7 @@ export async function getSkippedSetAsides(householdId: number, periodId: number)
     .map((c) => {
       const plan = planBillMonth({
         billAmount: c.billAmount!, billMonth: c.billMonth!, everyMonths: c.billEveryMonths!,
-        fund: fundOf(c.id), fundingStyle: c.fundingStyle as FundingStyle, fixedShare: c.monthlyBudget, month: period!.month,
+        fund: fundOf(c.id), fundingStyle: c.fundingStyle as FundingStyle, fixedShare: c.monthlyBudget, saveEveryMonths: c.saveEveryMonths, month: period!.month,
       });
       return { categoryId: c.id, name: c.name, section: c.section, amount: plan.kind === "save" ? plan.contribution : 0 };
     });

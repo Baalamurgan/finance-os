@@ -580,7 +580,7 @@ export async function restoreSetAside(formData: FormData) {
   if (!cat || cat.fundingStyle == null || !period || cat.billAmount == null || cat.billMonth == null || cat.billEveryMonths == null) return;
   const plan = planBillMonth({
     billAmount: cat.billAmount, billMonth: cat.billMonth, everyMonths: cat.billEveryMonths,
-    fund: fundAgg._sum.amount ?? 0, fundingStyle: cat.fundingStyle as FundingStyle, fixedShare: cat.monthlyBudget, month: period.month,
+    fund: fundAgg._sum.amount ?? 0, fundingStyle: cat.fundingStyle as FundingStyle, fixedShare: cat.monthlyBudget, saveEveryMonths: cat.saveEveryMonths, month: period.month,
   });
   await prisma.$transaction(async (tx) => {
     await tx.setAsideSkip.deleteMany({ where: { categoryId, periodId } });
@@ -595,51 +595,46 @@ export async function restoreSetAside(formData: FormData) {
 
 const CATEGORY_SECTIONS = ["Loans", "Chits", "Monthly", "Yearly", "Misc"] as const;
 
-// The billing shape of a category from the Setup form. `billingMode` chooses one of three
-// mutually-exclusive treatments; every field not relevant to the chosen mode is cleared, so
-// switching modes never leaves stale sinking/lump config behind.
+// The billing shape of a category from the Setup form. Unified model: the billing CYCLE
+// (`billEveryMonths`; 1 = monthly) drives everything. Monthly → a monthly budget/fixed bill;
+// any longer cycle → a periodic bill funded by saving the share (auto, on a chosen cadence)
+// or paying in full at the due month. Every field not relevant to the choice is cleared, so
+// switching cycles never leaves stale config behind. (Legacy `sinking`/`cycleMonths` are
+// always blanked — rolling sinking funds were folded into the periodic model.)
 type BillingFields = {
   monthlyBudget: number | null; sinking: boolean; cycleMonths: number | null; fixed: boolean; tracked: boolean;
   billEveryMonths: number | null; billMonth: number | null; billDay: number | null; billAmount: number | null;
-  fundingStyle: string | null;
+  fundingStyle: string | null; saveEveryMonths: number | null;
 };
 function parseBillingFields(formData: FormData): { ok: true; fields: BillingFields } | { ok: false; error: string } {
-  const blank: BillingFields = { monthlyBudget: null, sinking: false, cycleMonths: null, fixed: false, tracked: false, billEveryMonths: null, billMonth: null, billDay: null, billAmount: null, fundingStyle: null };
-  const mode = String(formData.get("billingMode") ?? "monthly");
+  const blank: BillingFields = { monthlyBudget: null, sinking: false, cycleMonths: null, fixed: false, tracked: false, billEveryMonths: null, billMonth: null, billDay: null, billAmount: null, fundingStyle: null, saveEveryMonths: null };
   const round = (x: number) => Math.round(x * 100) / 100;
+  const cycle = Math.max(1, Math.round(Number(formData.get("billEveryMonths")) || 1));
   const billDayOf = () => { const d = Number(formData.get("billDay")); return d >= 1 && d <= 31 ? d : null; };
-  const everyOf = () => Number(formData.get("billEveryMonths")) || 12;
   const monthOf = () => Math.min(12, Math.max(1, Number(formData.get("billMonth")) || 1));
-  // Goal-based "bill with a fund": target amount + due month + cycle + funding style.
-  if (mode === "billfund") {
-    const every = everyOf();
-    if (![2, 3, 4, 6, 12].includes(every)) return { ok: false, error: "Pick a valid frequency." };
-    const amt = parseAmount(formData.get("billAmount"));
-    if (!amt || amt <= 0) return { ok: false, error: "A bill needs a target amount." };
-    const style = String(formData.get("fundingStyle") ?? "auto");
-    const fundingStyle = ["auto", "fixed", "none"].includes(style) ? style : "auto";
-    const fixedShare = fundingStyle === "fixed" ? parseAmount(formData.get("monthlyBudget")) : null;
-    if (fundingStyle === "fixed" && (!fixedShare || fixedShare <= 0)) return { ok: false, error: "A fixed set-aside needs a monthly amount." };
-    return { ok: true, fields: { ...blank, tracked: false, billEveryMonths: every, billMonth: monthOf(), billDay: billDayOf(), billAmount: round(amt), fundingStyle, monthlyBudget: fixedShare != null ? round(fixedShare) : null } };
+
+  // Monthly (cycle 1): variable budget (tracked, leftover → Piggy) or flat fixed bill.
+  if (cycle <= 1) {
+    const fixed = formData.get("fixed") === "on";
+    const raw = String(formData.get("monthlyBudget") ?? "").trim();
+    const amt = raw === "" ? null : parseAmount(raw);
+    if (fixed && (!amt || amt <= 0)) return { ok: false, error: "A fixed bill needs a monthly amount." };
+    return { ok: true, fields: { ...blank, fixed, tracked: !fixed, monthlyBudget: amt != null ? round(amt) : null } };
   }
-  if (mode === "lump") {
-    const every = everyOf();
-    if (![2, 3, 4, 6, 12].includes(every)) return { ok: false, error: "Pick a valid frequency." };
-    const amt = parseAmount(formData.get("billAmount"));
-    if (!amt || amt <= 0) return { ok: false, error: "A full bill needs an amount." };
-    return { ok: true, fields: { ...blank, billEveryMonths: every, billMonth: monthOf(), billDay: billDayOf(), billAmount: round(amt) } };
+
+  // Periodic bill (cycle 2/3/4/6/12): full amount + due month + funding.
+  if (![2, 3, 4, 6, 12].includes(cycle)) return { ok: false, error: "Pick a valid billing cycle." };
+  const amt = parseAmount(formData.get("billAmount"));
+  if (!amt || amt <= 0) return { ok: false, error: "A periodic bill needs an amount." };
+  const style = String(formData.get("fundingStyle") ?? "auto");
+  const fundingStyle = style === "none" ? "none" : "auto"; // save the share, or pay in full
+  let saveEveryMonths: number | null = null;
+  if (fundingStyle === "auto") {
+    const s = Math.max(1, Math.round(Number(formData.get("saveEveryMonths")) || 1));
+    if (cycle % s !== 0) return { ok: false, error: "Save cadence must divide the billing cycle." };
+    saveEveryMonths = s;
   }
-  if (mode === "sinking") {
-    const share = parseAmount(formData.get("monthlyBudget"));
-    const cycle = Number(formData.get("cycleMonths"));
-    if (!share || share <= 0 || !cycle || cycle < 1) return { ok: false, error: "Sinking funds need a monthly amount and a cycle." };
-    return { ok: true, fields: { ...blank, sinking: true, tracked: true, monthlyBudget: round(share), cycleMonths: cycle } };
-  }
-  const fixed = formData.get("fixed") === "on";
-  const raw = String(formData.get("monthlyBudget") ?? "").trim();
-  const amt = raw === "" ? null : parseAmount(raw);
-  if (fixed && (!amt || amt <= 0)) return { ok: false, error: "A fixed bill needs a monthly amount." };
-  return { ok: true, fields: { ...blank, fixed, tracked: !fixed, monthlyBudget: amt != null ? round(amt) : null } };
+  return { ok: true, fields: { ...blank, tracked: false, billEveryMonths: cycle, billMonth: monthOf(), billDay: billDayOf(), billAmount: round(amt), fundingStyle, saveEveryMonths } };
 }
 
 export async function createCategory(
@@ -944,13 +939,14 @@ export async function saveRecurring(
   try {
     await prisma.category.update({
       where: { id },
-      data: { name, section, responsibleMemberId, ...billing.fields },
+      // saving is an explicit review → clear the migrated "review due month" flag
+      data: { name, section, responsibleMemberId, needsReview: false, ...billing.fields },
     });
   } catch {
     // unique-name clash → keep the old name, still apply the rest
     await prisma.category.update({
       where: { id },
-      data: { section, responsibleMemberId, ...billing.fields },
+      data: { section, responsibleMemberId, needsReview: false, ...billing.fields },
     });
     revalidatePath("/", "layout");
     return { ok: false, error: `"${name}" is already taken — saved everything except the name.`, n };
@@ -1495,6 +1491,7 @@ export async function windDownMonth(formData: FormData) {
         fund: fundBalance(cat.id),
         fundingStyle: cat.fundingStyle as FundingStyle,
         fixedShare: cat.monthlyBudget,
+        saveEveryMonths: cat.saveEveryMonths,
         month: period.month,
       });
       const skipped = skippedSetAside.has(cat.id);

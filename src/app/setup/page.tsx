@@ -64,7 +64,7 @@ export default async function SetupPage({
       sinking: cat.sinking, cycleMonths: cat.cycleMonths, onHold: cat.onHold, fixed: cat.fixed,
       responsibleMemberId: cat.responsibleMemberId ?? null,
       billEveryMonths: cat.billEveryMonths, billMonth: cat.billMonth, billDay: cat.billDay, billAmount: cat.billAmount,
-      fundingStyle: cat.fundingStyle,
+      fundingStyle: cat.fundingStyle, saveEveryMonths: cat.saveEveryMonths, needsReview: cat.needsReview,
     }));
 
   return (

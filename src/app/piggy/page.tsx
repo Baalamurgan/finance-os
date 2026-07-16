@@ -26,7 +26,10 @@ export default async function PiggyPage({
   const sinkingTotal = sinking.reduce((s, x) => s + x.hold, 0);
   const sinkingBalances = projected ? projected.sinkingBalances : await getSinkingBalances(c.household.id);
   const history = await getPiggyHistory(c.household.id);
-  const sinkingCats = c.categories.filter((cat) => cat.sinking);
+  // A category has a fund bucket if it's a (legacy) sinking fund OR a bill-with-a-fund
+  // (periodic bill funded by auto-saving). Both accrue into piggyEntry kind "sinking".
+  const hasFund = (cat: { sinking: boolean; fundingStyle: string | null }) => cat.sinking || cat.fundingStyle != null;
+  const sinkingCats = c.categories.filter(hasFund);
   const sinkingFunds = sinkingCats.map((cat) => ({ id: cat.id, name: cat.name }));
   const headId = c.members.find((m) => m.role === "head")?.id ?? null;
   const piggyHolderId = c.household.piggyHolderMemberId ?? headId;
@@ -67,7 +70,7 @@ export default async function PiggyPage({
                   categories={c.categories.map((cat) => ({
                     id: cat.id,
                     name: cat.name,
-                    sinking: cat.sinking,
+                    sinking: hasFund(cat),
                   }))}
                   available={{ general: generalTotal, sinking: sinkingBalances }}
                 />
@@ -192,9 +195,9 @@ export default async function PiggyPage({
                 <li key={cat.id} className="flex items-center justify-between py-2">
                   <div>
                     <span className="font-medium text-slate-700">{cat.name}</span>
-                    {cat.cycleMonths && (
+                    {(cat.billEveryMonths ?? cat.cycleMonths) && (
                       <span className="ml-2 rounded-full bg-slate-100 px-2 py-0.5 text-[11px] text-slate-500">
-                        every {cat.cycleMonths} mo
+                        every {cat.billEveryMonths ?? cat.cycleMonths} mo
                       </span>
                     )}
                     {cat.onHold && (

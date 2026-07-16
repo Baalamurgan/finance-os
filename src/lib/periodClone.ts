@@ -26,7 +26,7 @@ export async function generateMonth(
   const [period, items, cats, funds, _skips] = await Promise.all([
     tx.period.findUnique({ where: { id: targetId }, select: { year: true, month: true } }),
     tx.recurringItem.findMany({ where: { householdId, active: true }, orderBy: { sortOrder: "asc" } }),
-    tx.category.findMany({ where: { householdId }, select: { id: true, name: true, tracked: true, sinking: true, onHold: true, necessary: true, monthlyBudget: true, responsibleMemberId: true, billEveryMonths: true, billMonth: true, billAmount: true, fundingStyle: true } }),
+    tx.category.findMany({ where: { householdId }, select: { id: true, name: true, tracked: true, sinking: true, onHold: true, necessary: true, monthlyBudget: true, responsibleMemberId: true, billEveryMonths: true, billMonth: true, billAmount: true, fundingStyle: true, saveEveryMonths: true } }),
     tx.piggyEntry.groupBy({ by: ["categoryId"], where: { householdId, kind: "sinking" }, _sum: { amount: true } }),
     tx.setAsideSkip.findMany({ where: { periodId: targetId }, select: { categoryId: true } }),
   ]);
@@ -149,6 +149,7 @@ export async function generateMonth(
       fund: fundByCat.get(cat.id) ?? 0,
       fundingStyle: cat.fundingStyle as FundingStyle,
       fixedShare: cat.monthlyBudget,
+      saveEveryMonths: cat.saveEveryMonths,
       month: period!.month,
     });
     if (plan.kind === "bill") {

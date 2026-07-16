@@ -106,6 +106,45 @@ describe("planBillMonth — goal-based 'bill with a fund' (₹12,000 car insuran
   it("non-due month with fund already ≥ bill → contributes 0 (nothing more needed)", () => {
     expect(planBillMonth({ ...base, fund: 12000, month: 5 })).toEqual({ kind: "save", contribution: 0 });
   });
+
+  it("no saveEveryMonths given → monthly cadence (back-compat with the cases above)", () => {
+    expect(planBillMonth({ ...base, fund: 0, month: 8 })).toEqual({ kind: "save", contribution: 1090.91 });
+  });
+});
+
+describe("planBillMonth — save cadence (yearly ₹12,000 due July)", () => {
+  const base = { billAmount: 12000, billMonth: 7, everyMonths: 12, fundingStyle: "auto" as const };
+
+  it("save quarterly → only Oct / Jan / Apr contribute (₹4,000 each), fund fills by July", () => {
+    // save months are those whose distance to July is a multiple of 3: Oct(9), Jan(6), Apr(3)
+    expect(planBillMonth({ ...base, saveEveryMonths: 3, fund: 0, month: 10 })).toEqual({ kind: "save", contribution: 4000 });
+    expect(planBillMonth({ ...base, saveEveryMonths: 3, fund: 4000, month: 1 })).toEqual({ kind: "save", contribution: 4000 });
+    expect(planBillMonth({ ...base, saveEveryMonths: 3, fund: 8000, month: 4 })).toEqual({ kind: "save", contribution: 4000 });
+  });
+
+  it("save quarterly → off-cadence months set aside nothing", () => {
+    for (const m of [8, 9, 11, 12, 2, 3, 5, 6]) {
+      expect(planBillMonth({ ...base, saveEveryMonths: 3, fund: 0, month: m })).toEqual({ kind: "none" });
+    }
+  });
+
+  it("save quarterly → the due month still lands the full bill from the fund", () => {
+    expect(planBillMonth({ ...base, saveEveryMonths: 3, fund: 12000, month: 7 })).toEqual({ kind: "bill", bill: 12000, fromFund: 12000, outOfPocket: 0 });
+  });
+
+  it("save every 6 months → a single ₹12,000 set-aside in January", () => {
+    expect(planBillMonth({ ...base, saveEveryMonths: 6, fund: 0, month: 1 })).toEqual({ kind: "save", contribution: 12000 });
+    expect(planBillMonth({ ...base, saveEveryMonths: 6, fund: 0, month: 4 })).toEqual({ kind: "none" });
+  });
+
+  it("6-monthly bill saved every 2 months (₹6,000, due Jan & Jul) → Mar/May contribute ₹3,000", () => {
+    const six = { billAmount: 6000, billMonth: 7, everyMonths: 6, fundingStyle: "auto" as const, saveEveryMonths: 2 };
+    // everyMonths 6 anchored to Jul → due Jan AND Jul; save months (distance-to-due ÷ 2) = Mar(4), May(2)
+    expect(planBillMonth({ ...six, fund: 0, month: 3 })).toEqual({ kind: "save", contribution: 3000 });
+    expect(planBillMonth({ ...six, fund: 3000, month: 5 })).toEqual({ kind: "save", contribution: 3000 });
+    expect(planBillMonth({ ...six, fund: 0, month: 4 })).toEqual({ kind: "none" }); // off-cadence
+    expect(planBillMonth({ ...six, fund: 6000, month: 1 })).toEqual({ kind: "bill", bill: 6000, fromFund: 6000, outOfPocket: 0 }); // Jan is a due month too
+  });
 });
 
 describe("scheduleLabel", () => {

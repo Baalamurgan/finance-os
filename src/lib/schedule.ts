@@ -60,10 +60,14 @@ export function monthsUntilNextDue(billMonth: number, everyMonths: number, month
 export type FundingStyle = "auto" | "fixed" | "none";
 
 // What a "bill with a fund" category does in a given month (pure — no side effects).
-//  • due month  → the full bill lands; the fund credits up to the bill; net = out-of-pocket
-//  • saving month, auto  → set aside (bill − fund) ÷ months-left (self-correcting)
-//  • saving month, fixed → set aside the user's fixed share
-//  • saving month, none  → nothing (you'll pay it whole on the due month)
+//  • due month           → the full bill lands; the fund credits up to the bill; net = out-of-pocket
+//  • save-cadence month, auto  → set aside (bill − fund) × cadence ÷ months-left (self-correcting)
+//  • save month, fixed   → set aside the user's fixed share
+//  • off-cadence / none  → nothing (auto only saves on cadence months; none pays whole at due)
+//
+// `saveEveryMonths` (S, default 1) is the save cadence: auto sets aside only on months whose
+// distance to the due month is a multiple of S, and each contribution is scaled so the fund
+// still fills exactly by the due month. S = 1 reproduces the plain monthly self-correcting save.
 export type BillMonthPlan =
   | { kind: "bill"; bill: number; fromFund: number; outOfPocket: number }
   | { kind: "save"; contribution: number }
@@ -76,18 +80,22 @@ export function planBillMonth(input: {
   fund: number;
   fundingStyle: FundingStyle;
   fixedShare?: number | null;
+  saveEveryMonths?: number | null;
   month: number;
 }): BillMonthPlan {
-  const { billAmount, billMonth, everyMonths, fund, fundingStyle, fixedShare, month } = input;
+  const { billAmount, billMonth, everyMonths, fund, fundingStyle, fixedShare, saveEveryMonths, month } = input;
   if (isLumpDue(billMonth, everyMonths, { month })) {
     const fromFund = Math.max(0, Math.min(fund, billAmount));
     return { kind: "bill", bill: billAmount, fromFund, outOfPocket: Math.round((billAmount - fromFund) * 100) / 100 };
   }
   if (fundingStyle === "none") return { kind: "none" };
   if (fundingStyle === "fixed") return { kind: "save", contribution: Math.max(0, fixedShare ?? 0) };
-  const left = monthsUntilNextDue(billMonth, everyMonths, month);
+  const S = Math.max(1, Math.round(saveEveryMonths ?? 1));
+  const left = monthsUntilNextDue(billMonth, everyMonths, month); // 1..everyMonths-1 in saving months
+  if (left % S !== 0) return { kind: "none" }; // not a save-cadence month
   const remaining = Math.max(0, billAmount - fund);
-  return { kind: "save", contribution: Math.round((remaining / left) * 100) / 100 };
+  const savesLeft = left / S; // cadence saves from now (inclusive) through the month before due
+  return { kind: "save", contribution: Math.round((remaining / savesLeft) * 100) / 100 };
 }
 
 const MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
