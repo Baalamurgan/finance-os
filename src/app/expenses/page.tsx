@@ -7,6 +7,7 @@ import { SpendDeleteButton } from "@/components/SpendDeleteButton";
 import { SpendSubCategoryPicker } from "@/components/SpendSubCategoryPicker";
 import { EditSpendModal } from "@/components/EditSpendModal";
 import { MISC_SUBCATEGORIES } from "@/lib/misc";
+import { toggleBillPaid } from "@/app/actions";
 
 export default async function ExpensesPage({
   searchParams,
@@ -57,16 +58,16 @@ export default async function ExpensesPage({
   const miscCards = cards.filter((card) => card.allocation === 0);
   const open = c.selected.status === "open";
 
-  // "Budget left in hand" — per-person net (budget left − misc spent) + (head) account total.
+  // "Budget left in hand" — per-person real cash: budget left + tagged bills still to pay
+  // − misc spent. The treasurer's row also carries the family pool (shared + month balance);
+  // the piggy-holder's row also carries the Piggy bank.
   const inHand = await getInHand(c.household.id, c.selected.id);
   const currentMemberId = c.currentMember?.id ?? null;
-  const headMember = c.members.find((m) => m.role === "head") ?? null;
-  const headGroup = inHand.byPerson.find((g) => g.memberId === headMember?.id) ?? null;
-  const accountTotal = inHand.piggyTotal + (headGroup?.net ?? 0) + inHand.shared.net;
-  const myGroup = inHand.byPerson.find((g) => g.memberId === currentMemberId) ?? null;
-  const visibleGroups = c.isHead ? inHand.byPerson : myGroup ? [myGroup] : [];
-  const showShared = c.isHead && (inHand.shared.cats.length > 0 || inHand.shared.miscSpent > 0 || inHand.shared.bills.length > 0);
-  const showInHand = visibleGroups.length > 0 || (c.isHead && (showShared || inHand.piggyTotal !== 0));
+  const visibleGroups = c.isHead
+    ? inHand.byPerson
+    : inHand.byPerson.filter((g) => g.memberId === currentMemberId);
+  const canToggle = c.canEdit && open;
+  const showInHand = visibleGroups.length > 0;
 
   return (
     <>
@@ -143,39 +144,39 @@ export default async function ExpensesPage({
           </section>
         )}
 
-        {/* Budget left in hand — who still holds what (after misc, since it nets misc out) */}
-        {showInHand && (
+        {/* Budget left in hand — who still holds what (budget left + bills to pay − misc) */}
+        {showInHand ? (
           <details open className="rounded-xl border border-slate-200 bg-white">
             <summary className="flex cursor-pointer list-none items-center justify-between border-t-2 border-dashed border-slate-200 px-4 py-3 [&::-webkit-details-marker]:hidden">
               <span className="text-sm font-semibold text-slate-800">💰 Budget left in hand</span>
               <span className="text-xs text-slate-400">
-                {c.isHead ? "who still holds what (budget left − misc spent)" : "your budget left − your misc spend"}
+                {c.isHead ? "who still holds what (budget left + bills to pay − misc)" : "your budget left + bills to pay − misc"}
               </span>
             </summary>
             <div className="space-y-3 border-t border-slate-100 p-4">
-              {c.isHead && (
-                <div className="rounded-xl bg-slate-900 p-4 text-white dark:bg-slate-950">
-                  <div className="text-[11px] font-medium uppercase tracking-wide text-slate-300">
-                    Should be in {headMember?.name ?? "the"} account
-                  </div>
-                  <div className="mt-0.5 text-2xl font-extrabold tabular-nums">{formatINR(accountTotal)}</div>
-                  <div className="mt-1 text-xs text-slate-400">
-                    Piggy {formatINR(inHand.piggyTotal)} + your net {formatINR(headGroup?.net ?? 0)}
-                    {inHand.shared.net !== 0 ? ` + shared ${formatINR(inHand.shared.net)}` : ""}
-                  </div>
-                </div>
-              )}
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                 {visibleGroups.map((g) => (
-                  <PersonGroup key={g.memberId} group={g} />
+                  <PersonGroup
+                    key={g.memberId}
+                    group={g}
+                    isTreasurer={g.memberId === inHand.treasurerId}
+                    pool={inHand.treasurerPool}
+                    sharedNet={inHand.shared.net}
+                    monthBalance={inHand.monthBalance}
+                    isPiggyHolder={g.memberId === inHand.piggyHolderId}
+                    piggy={inHand.piggyTotal}
+                    canToggle={canToggle}
+                  />
                 ))}
-                {showShared && <PersonGroup group={inHand.shared} />}
               </div>
-              {!c.isHead && !myGroup && (
-                <p className="text-sm text-slate-400">You have no budgeted categories or misc spends this month.</p>
-              )}
             </div>
           </details>
+        ) : (
+          !c.isHead && (
+            <p className="text-center text-xs text-slate-400">
+              You have no budget, bills, or misc this month.
+            </p>
+          )
         )}
 
         {!open && (
@@ -188,15 +189,40 @@ export default async function ExpensesPage({
   );
 }
 
-function PersonGroup({ group }: { group: InHand["byPerson"][number] | InHand["shared"] }) {
-  const { name, cats, bills, miscSpent, net } = group;
+function PersonGroup({
+  group,
+  isTreasurer,
+  pool,
+  sharedNet,
+  monthBalance,
+  isPiggyHolder,
+  piggy,
+  canToggle,
+}: {
+  group: InHand["byPerson"][number];
+  isTreasurer: boolean;
+  pool: number;
+  sharedNet: number;
+  monthBalance: number;
+  isPiggyHolder: boolean;
+  piggy: number;
+  canToggle: boolean;
+}) {
+  const { name, cats, unpaidBills, paidBills, miscSpent, net } = group;
+  const poolAmt = isTreasurer ? pool : 0;
+  const piggyAmt = isPiggyHolder ? piggy : 0;
+  const total = net + poolAmt + piggyAmt;
   return (
     <div className="rounded-xl border border-slate-200 p-3">
       <div className="flex items-baseline justify-between gap-2">
-        <span className="text-sm font-semibold text-slate-800">{name}</span>
-        <span className={`text-right text-sm font-bold tabular-nums ${net < 0 ? "text-red-600" : "text-emerald-700"}`}>
-          {formatINR(net)}
-          <span className="ml-1 text-[10px] font-normal text-slate-400">{net < 0 ? "to reclaim" : "in hand"}</span>
+        <span className="text-sm font-semibold text-slate-800">
+          {name}
+          {isTreasurer && <span className="ml-1 text-[10px] font-normal text-indigo-500">treasurer</span>}
+          {isPiggyHolder && <span className="ml-1 text-[10px] font-normal text-pink-500">piggy</span>}
+        </span>
+        <span className={`text-right text-sm font-bold tabular-nums ${total < 0 ? "text-red-600" : "text-emerald-700"}`}>
+          {formatINR(total)}
+          <span className="ml-1 text-[10px] font-normal text-slate-400">{total < 0 ? "to reclaim" : "in hand"}</span>
         </span>
       </div>
       <ul className="mt-2 space-y-1">
@@ -209,12 +235,26 @@ function PersonGroup({ group }: { group: InHand["byPerson"][number] | InHand["sh
             </span>
           </li>
         ))}
-        {bills.map((b, i) => (
-          <li key={`b${i}`} className="flex items-center justify-between gap-2 text-xs">
+        {unpaidBills.map((b) => (
+          <li key={b.id} className="flex items-center justify-between gap-2 text-xs">
             <span className="truncate text-slate-500">
-              {b.name} <span className="text-[10px] text-indigo-400">fixed bill</span>
+              {b.name} <span className="text-[10px] text-indigo-400">bill</span>
             </span>
-            <span className="shrink-0 tabular-nums text-slate-600">{formatINR(b.amount)}</span>
+            <span className="flex shrink-0 items-center gap-1.5">
+              <span className="tabular-nums text-slate-600">{formatINR(b.amount)}</span>
+              {canToggle && (
+                <form action={toggleBillPaid}>
+                  <input type="hidden" name="id" value={b.id} />
+                  <button
+                    type="submit"
+                    title="Mark this bill paid"
+                    className="rounded-full border border-slate-200 px-1.5 py-0.5 text-[10px] text-slate-400 hover:border-emerald-300 hover:text-emerald-600"
+                  >
+                    ✓ paid
+                  </button>
+                </form>
+              )}
+            </span>
           </li>
         ))}
         {miscSpent > 0 && (
@@ -223,7 +263,53 @@ function PersonGroup({ group }: { group: InHand["byPerson"][number] | InHand["sh
             <span className="shrink-0 tabular-nums text-red-600">− {formatINR(miscSpent)}</span>
           </li>
         )}
+        {isTreasurer && (
+          <li className="flex items-center justify-between gap-2 border-t border-dashed border-slate-100 pt-1 text-xs">
+            <span className="truncate text-indigo-600">
+              Family pool{" "}
+              <span className="text-[10px] text-slate-400">
+                shared {formatINR(sharedNet)} + month bal {formatINR(monthBalance)}
+              </span>
+            </span>
+            <span className="shrink-0 tabular-nums font-medium text-indigo-700">{formatINR(pool)}</span>
+          </li>
+        )}
+        {isPiggyHolder && piggy !== 0 && (
+          <li className="flex items-center justify-between gap-2 text-xs">
+            <span className="truncate text-pink-600">🐷 Piggy bank held</span>
+            <span className="shrink-0 tabular-nums font-medium text-pink-700">{formatINR(piggy)}</span>
+          </li>
+        )}
       </ul>
+      {paidBills.length > 0 && (
+        <details className="mt-2">
+          <summary className="cursor-pointer list-none text-[11px] text-slate-400 [&::-webkit-details-marker]:hidden">
+            ✓ Paid this month ({paidBills.length})
+          </summary>
+          <ul className="mt-1 space-y-1">
+            {paidBills.map((b) => (
+              <li key={b.id} className="flex items-center justify-between gap-2 text-xs text-slate-400">
+                <span className="truncate line-through">{b.name}</span>
+                <span className="flex shrink-0 items-center gap-1.5">
+                  <span className="tabular-nums">{formatINR(b.amount)}</span>
+                  {canToggle && (
+                    <form action={toggleBillPaid}>
+                      <input type="hidden" name="id" value={b.id} />
+                      <button
+                        type="submit"
+                        title="Mark unpaid"
+                        className="rounded-full border border-slate-200 px-1.5 py-0.5 text-[10px] text-slate-400 hover:text-slate-600"
+                      >
+                        undo
+                      </button>
+                    </form>
+                  )}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
       {net < 0 && (
         <p className="mt-2 text-[11px] leading-tight text-amber-600">
           Fronted more than budget — reclaim from the treasurer at wind-down, or deduct from next month.

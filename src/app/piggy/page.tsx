@@ -5,6 +5,7 @@ import { NavHeader } from "@/components/NavHeader";
 import { WithdrawPiggyModal } from "@/components/WithdrawPiggyModal";
 import { DepositPiggyModal } from "@/components/DepositPiggyModal";
 import { SetFundModal } from "@/components/SetFundModal";
+import { setPiggyHolder } from "@/app/actions";
 
 export default async function PiggyPage({
   searchParams,
@@ -21,6 +22,8 @@ export default async function PiggyPage({
   const history = await getPiggyHistory(c.household.id);
   const sinkingCats = c.categories.filter((cat) => cat.sinking);
   const sinkingFunds = sinkingCats.map((cat) => ({ id: cat.id, name: cat.name }));
+  const headId = c.members.find((m) => m.role === "head")?.id ?? null;
+  const piggyHolderId = c.household.piggyHolderMemberId ?? headId;
 
   return (
     <>
@@ -77,6 +80,35 @@ export default async function PiggyPage({
             live in your one bank account; the split below is just how it&apos;s earmarked.
           </div>
         </div>
+
+        {c.canEdit && (
+          <div className="rounded-xl border border-slate-200 bg-white p-4 dark:bg-slate-900">
+            <div className="text-sm font-semibold text-slate-800 dark:text-slate-100">🐷 Piggy holder</div>
+            <p className="mt-0.5 text-xs text-slate-400">
+              Whose &quot;budget left in hand&quot; the Piggy bank shows under, in the Expenses tab. Default: head of the family. Only head &amp; manager can change this.
+            </p>
+            <form action={setPiggyHolder} className="mt-2 flex flex-wrap items-center gap-2">
+              <select
+                name="memberId"
+                defaultValue={piggyHolderId ?? ""}
+                className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm text-slate-800 dark:bg-slate-800 dark:text-slate-100"
+              >
+                {c.members.map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {m.name}
+                    {m.role === "head" ? " (head)" : ""}
+                  </option>
+                ))}
+              </select>
+              <button
+                type="submit"
+                className="rounded-lg bg-slate-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-700 dark:bg-slate-100 dark:text-slate-900"
+              >
+                Save holder
+              </button>
+            </form>
+          </div>
+        )}
 
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <div className="rounded-xl border border-amber-200 bg-amber-50 p-5">

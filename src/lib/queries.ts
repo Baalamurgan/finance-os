@@ -400,23 +400,32 @@ export type InHand = Awaited<ReturnType<typeof getInHand>>;
 
 /**
  * "How much is still in whose hand" for a month. Per person:
- *   net = (budgeted categories still unspent) + (fixed bills they cover)
+ *   net = (budgeted categories still unspent) + (tagged bills still to pay)
  *         − (their misc/unbudgeted spend).
- * A positive net = cash they're still holding (budgets → Piggy at wind-down;
- * fixed bills earmarked to pay). A negative net = they fronted more than they
- * hold → reclaim from the treasurer, or deduct next month. Budgeted remaining +
- * fixed bills are by the responsible/paying member; misc spend is by whoever
- * logged it. The head's account total = Piggy + their own net + the shared net.
+ * "Bills" = every tagged non-tracked expense line they were handed money to pay
+ * — loans, chits, interest, fixed bills, plain "pay someone" (cook, milk). Each
+ * can be marked paid (drops out of the net into a "paid this month" list). A
+ * positive net = cash they're still holding; negative = they fronted more than
+ * they hold → reclaim from the treasurer, or deduct next month. Additionally:
+ * the treasurer's row carries the family pool (shared net + month's income −
+ * expense balance); the piggy-holder's row carries the Piggy bank. Both roles
+ * default to the head and always appear even with no personal in-hand.
  */
 export async function getInHand(householdId: number, periodId: number) {
-  const [categories, budgets, spends, fixedLines, members, piggy] = await Promise.all([
+  const [household, period, categories, budgets, spends, billLines, members, piggy, incomeAgg, expenseAgg] = await Promise.all([
+    prisma.household.findUnique({ where: { id: householdId }, select: { treasurerMemberId: true, piggyHolderMemberId: true } }),
+    prisma.period.findUnique({ where: { id: periodId }, select: { treasurerMemberId: true } }),
     prisma.category.findMany({ where: { householdId, tracked: true, onHold: false } }),
     prisma.budget.findMany({ where: { periodId } }),
     prisma.spend.findMany({ where: { periodId } }),
-    // fixed bills are Sheet expense lines tagged to whoever pays them
-    prisma.expenseEntry.findMany({ where: { periodId, category: { fixed: true } } }),
+    // "bills" = tagged Sheet expense lines the person was handed money to pay: loans, chits,
+    // interest, fixed bills, plain "pay someone" (cook, milk…). Excludes tracked-budget lines
+    // (handled via budgets), goal-based bill funds (fundingStyle), and carried misc (note set).
+    prisma.expenseEntry.findMany({ where: { periodId, note: null, category: { tracked: false, fundingStyle: null } } }),
     prisma.member.findMany({ where: { householdId }, orderBy: { id: "asc" } }),
     getPiggyOverview(householdId),
+    prisma.incomeEntry.aggregate({ where: { periodId }, _sum: { amount: true } }),
+    prisma.expenseEntry.aggregate({ where: { periodId }, _sum: { amount: true } }),
   ]);
   const plannedByCat = new Map(budgets.map((b) => [b.categoryId, b.planned]));
   const spentByCat = new Map<number, number>();
@@ -436,7 +445,7 @@ export async function getInHand(householdId: number, periodId: number) {
       remaining: (plannedByCat.get(cat.id) ?? 0) - (spentByCat.get(cat.id) ?? 0),
     }));
 
-  // misc / unbudgeted spend (by whoever logged it)
+  // misc / unbudgeted spend (by whoever logged it) — already spent, subtracts from in-hand
   const miscByMember = new Map<number | null, number>();
   for (const s of spends) {
     if (budgetedIds.has(s.categoryId)) continue;
@@ -446,22 +455,33 @@ export async function getInHand(householdId: number, periodId: number) {
 
   const build = (key: number | null, name: string) => {
     const cats = rows.filter((r) => (r.responsibleMemberId ?? null) === key);
-    const bills = fixedLines
+    const memberBills = billLines
       .filter((e) => (e.memberId ?? null) === key)
-      .map((e) => ({ name: e.label, amount: e.amount }));
+      .map((e) => ({ id: e.id, name: e.label, amount: e.amount, paid: e.paid }));
+    const unpaidBills = memberBills.filter((b) => !b.paid);
+    const paidBills = memberBills.filter((b) => b.paid);
     const budgetRemaining = cats.reduce((s, r) => s + r.remaining, 0);
-    const fixedTotal = bills.reduce((s, b) => s + b.amount, 0);
+    const unpaidTotal = unpaidBills.reduce((s, b) => s + b.amount, 0);
     const miscSpent = miscByMember.get(key) ?? 0;
-    return { memberId: key, name, cats, bills, budgetRemaining, fixedTotal, miscSpent, net: budgetRemaining + fixedTotal - miscSpent };
+    return { memberId: key, name, cats, unpaidBills, paidBills, budgetRemaining, unpaidTotal, miscSpent, net: budgetRemaining + unpaidTotal - miscSpent };
   };
 
+  const headId = members.find((m) => m.role === "head")?.id ?? null;
+  const treasurerId = period?.treasurerMemberId ?? household?.treasurerMemberId ?? headId;
+  const piggyHolderId = household?.piggyHolderMemberId ?? headId;
+
+  // keep a member if they hold anything — OR they're the treasurer/piggy-holder (so their
+  // pool/piggy row always shows, even with no personal in-hand).
   const byPerson = members
     .map((m) => build(m.id, m.name))
-    .filter((g) => g.cats.length > 0 || g.miscSpent > 0 || g.bills.length > 0);
+    .filter((g) => g.cats.length > 0 || g.miscSpent > 0 || g.unpaidBills.length > 0 || g.paidBills.length > 0 || g.memberId === treasurerId || g.memberId === piggyHolderId);
   const shared = build(null, "Shared / pool");
   const piggyTotal = piggy.generalTotal + piggy.sinking.reduce((s, x) => s + x.hold, 0);
+  const monthBalance = (incomeAgg._sum.amount ?? 0) - (expenseAgg._sum.amount ?? 0);
+  // the treasurer additionally holds the family pool: shared in-hand + the month's balance
+  const treasurerPool = shared.net + monthBalance;
 
-  return { byPerson, shared, piggyTotal };
+  return { byPerson, shared, piggyTotal, treasurerId, piggyHolderId, monthBalance, treasurerPool };
 }
 
 /**

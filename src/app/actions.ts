@@ -723,6 +723,32 @@ export async function setTreasurer(formData: FormData) {
   revalidatePath("/", "layout");
 }
 
+// Mark / unmark a bill as paid — head/manager, on an open month. A paid bill drops out
+// of "budget left in hand" (that cash went out) and into the "Paid this month" list.
+export async function toggleBillPaid(formData: FormData) {
+  if (!(await canEdit())) return; // head + manager
+  const id = Number(formData.get("id"));
+  const e = await prisma.expenseEntry.findUnique({ where: { id } });
+  if (!e || !(await canEditNow(e.periodId))) return;
+  await prisma.expenseEntry.update({ where: { id }, data: { paid: !e.paid } });
+  revalidatePath("/", "layout");
+}
+
+// Choose who holds the Piggy / pool in the in-hand view (head + manager). Default = head.
+export async function setPiggyHolder(formData: FormData) {
+  if (!(await canEdit())) return; // head + manager
+  const raw = formData.get("memberId");
+  const memberId = raw ? Number(raw) : null;
+  const household = await prisma.household.findFirst({ select: { id: true } });
+  if (!household) return;
+  if (memberId != null) {
+    const m = await prisma.member.findFirst({ where: { id: memberId, householdId: household.id } });
+    if (!m) return;
+  }
+  await prisma.household.update({ where: { id: household.id }, data: { piggyHolderMemberId: memberId } });
+  revalidatePath("/", "layout");
+}
+
 // Mark one settlement transfer (from → to) as paid for a month. Head-only.
 export async function markSettled(formData: FormData) {
   const session = await auth();
