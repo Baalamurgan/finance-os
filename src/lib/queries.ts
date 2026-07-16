@@ -533,10 +533,13 @@ export async function getInHand(householdId: number, periodId: number) {
   // Bill-with-a-fund lines split by role. Set-asides = held/earmarked cash for the SAVER;
   // the due-month bill + its "— from fund" credit = a to-pay bill for the PAYER (net = the
   // out-of-pocket the fund doesn't cover, usually 0).
-  const savingLines = fundLines.filter((e) => e.label.endsWith("(saving)"));
+  // set-aside labels: current bills use "(saving)"; older sinking-fund months (pre-billing-
+  // redesign, still frozen in their open month) use "(monthly share)" — both are held savings.
+  const isSaveLine = (lbl: string) => lbl.endsWith("(saving)") || lbl.endsWith("(monthly share)");
+  const savingLines = fundLines.filter((e) => isSaveLine(e.label));
   const creditByCat = new Map<number, number>(); // categoryId → fund credit (negative)
   for (const e of fundLines) if (e.label.endsWith("— from fund")) creditByCat.set(e.categoryId, (creditByCat.get(e.categoryId) ?? 0) + e.amount);
-  const billLinesF = fundLines.filter((e) => !e.label.endsWith("(saving)") && !e.label.endsWith("— from fund"));
+  const billLinesF = fundLines.filter((e) => !isSaveLine(e.label) && !e.label.endsWith("— from fund"));
 
   const build = (key: number | null, name: string) => {
     const cats = rows.filter((r) => (r.responsibleMemberId ?? null) === key);
