@@ -466,7 +466,7 @@ export type InHand = Awaited<ReturnType<typeof getInHand>>;
  * default to the head and always appear even with no personal in-hand.
  */
 export async function getInHand(householdId: number, periodId: number) {
-  const [household, period, categories, budgets, spends, billLines, miscLines, members, piggy, incomeAgg, expenseAgg] = await Promise.all([
+  const [household, period, categories, budgets, spends, billLines, miscLines, fundLines, members, piggy, incomeAgg, expenseAgg] = await Promise.all([
     prisma.household.findUnique({ where: { id: householdId }, select: { treasurerMemberId: true, piggyHolderMemberId: true } }),
     prisma.period.findUnique({ where: { id: periodId }, select: { treasurerMemberId: true, status: true } }),
     prisma.category.findMany({ where: { householdId, tracked: true, onHold: false } }),
@@ -483,6 +483,9 @@ export async function getInHand(householdId: number, periodId: number) {
     // `billLines` above (with a paid toggle), so we do NOT lump them there. Carried misc
     // (note "__carry__") stays excluded either way — settled at month start, not held cash.
     prisma.expenseEntry.findMany({ where: { periodId, note: null, category: { section: "Misc" } }, select: { amount: true, memberId: true } }),
+    // Bill-with-a-fund lines: the "(saving)" set-aside (tagged to the SAVER — held/earmarked),
+    // the due-month full bill and its "— from fund" credit (tagged to the PAYER — net out-of-pocket).
+    prisma.expenseEntry.findMany({ where: { periodId, note: null, category: { fundingStyle: { not: null } } }, select: { id: true, label: true, amount: true, memberId: true, paid: true, categoryId: true, category: { select: { name: true } } } }),
     prisma.member.findMany({ where: { householdId }, orderBy: { id: "asc" } }),
     getPiggyOverview(householdId),
     prisma.incomeEntry.aggregate({ where: { periodId }, _sum: { amount: true } }),
@@ -527,6 +530,14 @@ export async function getInHand(householdId: number, periodId: number) {
     }
   }
 
+  // Bill-with-a-fund lines split by role. Set-asides = held/earmarked cash for the SAVER;
+  // the due-month bill + its "— from fund" credit = a to-pay bill for the PAYER (net = the
+  // out-of-pocket the fund doesn't cover, usually 0).
+  const savingLines = fundLines.filter((e) => e.label.endsWith("(saving)"));
+  const creditByCat = new Map<number, number>(); // categoryId → fund credit (negative)
+  for (const e of fundLines) if (e.label.endsWith("— from fund")) creditByCat.set(e.categoryId, (creditByCat.get(e.categoryId) ?? 0) + e.amount);
+  const billLinesF = fundLines.filter((e) => !e.label.endsWith("(saving)") && !e.label.endsWith("— from fund"));
+
   const build = (key: number | null, name: string) => {
     const cats = rows.filter((r) => (r.responsibleMemberId ?? null) === key);
     const memberBills = bills
@@ -534,10 +545,30 @@ export async function getInHand(householdId: number, periodId: number) {
       .map((e) => ({ id: e.id, name: e.label, amount: e.amount, paid: e.paid }));
     const unpaidBills = memberBills.filter((b) => !b.paid);
     const paidBills = memberBills.filter((b) => b.paid);
+    // set-asides this member is holding toward a bill (saver)
+    const earmarked = savingLines
+      .filter((e) => (e.memberId ?? null) === key)
+      .map((e) => ({ id: e.id, name: e.category.name, amount: e.amount }));
+    // periodic bills this member must pay this month (payer); fund credit offsets the bill
+    const periodicBills = billLinesF
+      .filter((e) => (e.memberId ?? null) === key)
+      .map((e) => {
+        const fromFund = -(creditByCat.get(e.categoryId) ?? 0);
+        return { id: e.id, name: e.category.name, bill: e.amount, fromFund, outOfPocket: Math.round((e.amount - fromFund) * 100) / 100, paid: e.paid };
+      });
+    const unpaidPeriodic = periodicBills.filter((b) => !b.paid);
+    const paidPeriodic = periodicBills.filter((b) => b.paid);
+
     const budgetRemaining = cats.reduce((s, r) => s + r.remaining, 0);
     const unpaidTotal = unpaidBills.reduce((s, b) => s + b.amount, 0);
+    const earmarkedTotal = earmarked.reduce((s, e) => s + e.amount, 0);
+    const periodicOutOfPocket = unpaidPeriodic.reduce((s, b) => s + b.outOfPocket, 0);
     const miscSpent = miscByMember.get(key) ?? 0;
-    return { memberId: key, name, cats, unpaidBills, paidBills, budgetRemaining, unpaidTotal, miscSpent, net: budgetRemaining + unpaidTotal - miscSpent };
+    return {
+      memberId: key, name, cats, unpaidBills, paidBills, earmarked, unpaidPeriodic, paidPeriodic,
+      budgetRemaining, unpaidTotal, earmarkedTotal, periodicOutOfPocket, miscSpent,
+      net: budgetRemaining + unpaidTotal + earmarkedTotal + periodicOutOfPocket - miscSpent,
+    };
   };
 
   const headId = members.find((m) => m.role === "head")?.id ?? null;
@@ -548,7 +579,7 @@ export async function getInHand(householdId: number, periodId: number) {
   // pool/piggy row always shows, even with no personal in-hand).
   const byPerson = members
     .map((m) => build(m.id, m.name))
-    .filter((g) => g.cats.length > 0 || g.miscSpent > 0 || g.unpaidBills.length > 0 || g.paidBills.length > 0 || g.memberId === treasurerId || g.memberId === piggyHolderId);
+    .filter((g) => g.cats.length > 0 || g.miscSpent > 0 || g.unpaidBills.length > 0 || g.paidBills.length > 0 || g.earmarked.length > 0 || g.unpaidPeriodic.length > 0 || g.paidPeriodic.length > 0 || g.memberId === treasurerId || g.memberId === piggyHolderId);
   const shared = build(null, "Shared / pool");
   const piggyTotal = piggy.generalTotal + piggy.sinking.reduce((s, x) => s + x.hold, 0);
   const monthBalance = (incomeAgg._sum.amount ?? 0) - (expenseAgg._sum.amount ?? 0);

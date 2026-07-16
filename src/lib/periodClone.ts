@@ -26,7 +26,7 @@ export async function generateMonth(
   const [period, items, cats, funds, _skips] = await Promise.all([
     tx.period.findUnique({ where: { id: targetId }, select: { year: true, month: true } }),
     tx.recurringItem.findMany({ where: { householdId, active: true }, orderBy: { sortOrder: "asc" } }),
-    tx.category.findMany({ where: { householdId }, select: { id: true, name: true, tracked: true, sinking: true, onHold: true, necessary: true, monthlyBudget: true, responsibleMemberId: true, billEveryMonths: true, billMonth: true, billAmount: true, fundingStyle: true, saveEveryMonths: true } }),
+    tx.category.findMany({ where: { householdId }, select: { id: true, name: true, tracked: true, sinking: true, onHold: true, necessary: true, monthlyBudget: true, responsibleMemberId: true, payerMemberId: true, billEveryMonths: true, billMonth: true, billAmount: true, fundingStyle: true, saveEveryMonths: true } }),
     tx.piggyEntry.groupBy({ by: ["categoryId"], where: { householdId, kind: "sinking" }, _sum: { amount: true } }),
     tx.setAsideSkip.findMany({ where: { periodId: targetId }, select: { categoryId: true } }),
   ]);
@@ -134,14 +134,18 @@ export async function generateMonth(
 
   // Goal-based "bill with a fund": each month either sets aside toward the bill, pays it
   // (full bill + a fund credit → net out-of-pocket), or does nothing (pay-in-full style).
-  // All lines are tagged to the responsible member, so settlement nets them automatically.
-  const mkLine = (cat: (typeof cats)[number], label: string, amount: number) =>
+  // The SAVE line is tagged to the saver (responsibleMemberId); the DUE-MONTH bill + fund
+  // credit are tagged to the PAYER (payerMemberId ?? saver) — settlement nets each by member,
+  // so the saver bears the cost and the payer nets ~0.
+  const mkLine = (cat: (typeof cats)[number], label: string, amount: number, memberId: number | null) =>
     tx.expenseEntry.create({
-      data: { periodId: targetId, label, amount, categoryId: cat.id, memberId: cat.responsibleMemberId, necessary: cat.necessary ?? true, oneOff: false },
+      data: { periodId: targetId, label, amount, categoryId: cat.id, memberId, necessary: cat.necessary ?? true, oneOff: false },
     });
   for (const cat of cats) {
     if (cat.fundingStyle == null || cat.onHold) continue;
     if (cat.billAmount == null || cat.billAmount <= 0 || cat.billMonth == null || cat.billEveryMonths == null) continue;
+    const saver = cat.responsibleMemberId;
+    const payer = cat.payerMemberId ?? cat.responsibleMemberId;
     const plan = planBillMonth({
       billAmount: cat.billAmount,
       billMonth: cat.billMonth,
@@ -153,10 +157,10 @@ export async function generateMonth(
       month: period!.month,
     });
     if (plan.kind === "bill") {
-      await mkLine(cat, cat.name, plan.bill);
-      if (plan.fromFund > 0) await mkLine(cat, `${cat.name} — from fund`, -plan.fromFund);
+      await mkLine(cat, cat.name, plan.bill, payer);
+      if (plan.fromFund > 0) await mkLine(cat, `${cat.name} — from fund`, -plan.fromFund, payer);
     } else if (plan.kind === "save" && plan.contribution > 0 && !skippedSetAside.has(cat.id)) {
-      await mkLine(cat, `${cat.name} (saving)`, plan.contribution);
+      await mkLine(cat, `${cat.name} (saving)`, plan.contribution, saver);
     }
   }
 }

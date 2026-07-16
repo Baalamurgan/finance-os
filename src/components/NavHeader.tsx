@@ -38,6 +38,7 @@ export function NavHeader({
   active:
     | "sheet"
     | "expenses"
+    | "in-hand"
     | "activity"
     | "analysis"
     | "piggy"
@@ -79,6 +80,7 @@ export function NavHeader({
   const tabs = [
     { key: "sheet", label: "Sheet", href: "/" },
     { key: "expenses", label: "Expenses", href: "/expenses" },
+    { key: "in-hand", label: "In Hand", href: "/in-hand" },
     { key: "settlement", label: "Settlement", href: "/settlement" },
     { key: "activity", label: "Activity", href: "/activity" },
     { key: "analysis", label: "Analysis", href: "/analysis" },
@@ -96,7 +98,7 @@ export function NavHeader({
         : []),
   ];
 
-  const primaryTabs = tabs.slice(0, 3); // Sheet · Expenses · Settlement
+  const primaryTabs = tabs.slice(0, 3); // Sheet · Expenses · In Hand
   const moreTabs = tabs.slice(3); // Analysis · Piggy · Loans · Wind Down · …
 
   const q = `?y=${selYear}&m=${selMonth}`;

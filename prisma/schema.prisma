@@ -406,7 +406,8 @@ model Category {
   fundingStyle    String?     // auto | fixed | none  (null = not a bill-with-a-fund)
   saveEveryMonths Int?        // save cadence for auto funding: 1 | 2 | 3 | 6 (null → 1/monthly). Divides billEveryMonths.
   needsReview     Boolean        @default(false) // migrated rolling sinking fund whose due month is a guess — prompt user to confirm
-  responsibleMemberId Int?     // budget: over-budget excess owner; fixed bill: who pays it (settlement credit)
+  responsibleMemberId Int?     // budget: over-budget excess owner; bill-with-a-fund: the SAVER who sets aside the share & holds it (bears the cost)
+  payerMemberId       Int?     // bill-with-a-fund: who physically PAYS the bill on its due month (null → same as the saver). Bill + fund credit tag to them → net ~0.
   expenses     ExpenseEntry[]
   budgets      Budget[]
   spends       Spend[]
