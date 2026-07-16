@@ -132,6 +132,60 @@ export async function getPiggyOverview(householdId: number) {
   return { generalTotal, generalByCategory, sinking };
 }
 
+/**
+ * Projected Piggy state as if `sourcePeriodId` (the current open month) were wound
+ * down — powers the Piggy tab while viewing the next-month draft. Same accrual rule
+ * as getWindDownPreview / windDownMonth: each budgeted non-sinking category's positive
+ * remainder → General Piggy; each sinking category's (budget − spent) → its own hold.
+ * Returns the getPiggyOverview shape plus a projected per-category `sinkingBalances`.
+ */
+export async function getProjectedPiggy(householdId: number, sourcePeriodId: number) {
+  const [base, baseBalances, budgets, spends, trackedCats] = await Promise.all([
+    getPiggyOverview(householdId),
+    getSinkingBalances(householdId),
+    prisma.budget.findMany({ where: { periodId: sourcePeriodId } }),
+    prisma.spend.findMany({ where: { periodId: sourcePeriodId } }),
+    prisma.category.findMany({ where: { householdId, tracked: true, onHold: false } }),
+  ]);
+  const budgetOf = (c: number) => budgets.find((b) => b.categoryId === c)?.planned ?? 0;
+  const spentOf = (c: number) => spends.filter((s) => s.categoryId === c).reduce((a, s) => a + s.amount, 0);
+
+  let piggyAccrual = 0;
+  const accrualByCat = new Map<number, number>();
+  const nameById = new Map<number, string>();
+  for (const c of trackedCats) {
+    const b = budgetOf(c.id);
+    if (c.sinking) {
+      if (b > 0) { accrualByCat.set(c.id, b - spentOf(c.id)); nameById.set(c.id, c.name); }
+    } else if (b > 0) {
+      const rem = b - spentOf(c.id);
+      if (rem >= 0) piggyAccrual += rem; // shortfalls carry as an expense, not out of Piggy
+    }
+  }
+
+  // projected per-fund balances (by categoryId) for the sinking-fund list
+  const sinkingBalances: Record<number, number> = { ...baseBalances };
+  for (const [id, acc] of accrualByCat) sinkingBalances[id] = (sinkingBalances[id] ?? 0) + acc;
+
+  // projected sinking list (by name, mirrors getPiggyOverview) for the header total
+  const byName = new Map(base.sinking.map((s) => [s.name, { ...s }]));
+  for (const [id, acc] of accrualByCat) {
+    const name = nameById.get(id)!;
+    const cur = byName.get(name) ?? { name, hold: 0, cycleMonths: null as number | null };
+    cur.hold += acc;
+    byName.set(name, cur);
+  }
+  const sinking = [...byName.values()].sort((a, b) => b.hold - a.hold);
+
+  const generalTotal = base.generalTotal + piggyAccrual;
+  const generalByCategory =
+    piggyAccrual > 0
+      ? [...base.generalByCategory, { name: "This month's estimated remainders", amount: piggyAccrual }].sort((a, b) => b.amount - a.amount)
+      : base.generalByCategory;
+
+  return { generalTotal, generalByCategory, sinking, sinkingBalances };
+}
+
 // Month-over-month income/expense/balance across all periods (for trends).
 export async function getTrends(householdId: number) {
   const periods = await prisma.period.findMany({
@@ -412,7 +466,7 @@ export type InHand = Awaited<ReturnType<typeof getInHand>>;
  * default to the head and always appear even with no personal in-hand.
  */
 export async function getInHand(householdId: number, periodId: number) {
-  const [household, period, categories, budgets, spends, billLines, members, piggy, incomeAgg, expenseAgg] = await Promise.all([
+  const [household, period, categories, budgets, spends, billLines, miscLines, members, piggy, incomeAgg, expenseAgg] = await Promise.all([
     prisma.household.findUnique({ where: { id: householdId }, select: { treasurerMemberId: true, piggyHolderMemberId: true } }),
     prisma.period.findUnique({ where: { id: periodId }, select: { treasurerMemberId: true } }),
     prisma.category.findMany({ where: { householdId, tracked: true, onHold: false } }),
@@ -420,8 +474,14 @@ export async function getInHand(householdId: number, periodId: number) {
     prisma.spend.findMany({ where: { periodId } }),
     // "bills" = tagged Sheet expense lines the person was handed money to pay: loans, chits,
     // interest, fixed bills, plain "pay someone" (cook, milk…). Excludes tracked-budget lines
-    // (handled via budgets), goal-based bill funds (fundingStyle), and carried misc (note set).
-    prisma.expenseEntry.findMany({ where: { periodId, note: null, category: { tracked: false, fundingStyle: null } } }),
+    // (handled via budgets), goal-based bill funds (fundingStyle), Misc (subtracted below),
+    // and carried misc (note set).
+    prisma.expenseEntry.findMany({ where: { periodId, note: null, category: { tracked: false, fundingStyle: null, section: { not: "Misc" } } } }),
+    // Own-period misc entered as Sheet expense lines (Misc section, no carry marker). In a
+    // draft/preview month spends can't be logged, so this is the only misc there; in open
+    // months it sits alongside logged Spends. Carried misc (note "__carry__") stays excluded —
+    // it's settled at the start of the month, not held cash.
+    prisma.expenseEntry.findMany({ where: { periodId, note: null, category: { section: "Misc" } }, select: { amount: true, memberId: true } }),
     prisma.member.findMany({ where: { householdId }, orderBy: { id: "asc" } }),
     getPiggyOverview(householdId),
     prisma.incomeEntry.aggregate({ where: { periodId }, _sum: { amount: true } }),
@@ -445,12 +505,18 @@ export async function getInHand(householdId: number, periodId: number) {
       remaining: (plannedByCat.get(cat.id) ?? 0) - (spentByCat.get(cat.id) ?? 0),
     }));
 
-  // misc / unbudgeted spend (by whoever logged it) — already spent, subtracts from in-hand
+  // misc / unbudgeted spend (by whoever logged it) — already spent, subtracts from in-hand.
+  // Two sources: logged Spends (open months) and own-period Misc Sheet lines (draft months,
+  // and any hand-added Misc line in an open month) — both are real misc the person spent.
   const miscByMember = new Map<number | null, number>();
   for (const s of spends) {
     if (budgetedIds.has(s.categoryId)) continue;
     const k = s.memberId ?? null;
     miscByMember.set(k, (miscByMember.get(k) ?? 0) + s.amount);
+  }
+  for (const e of miscLines) {
+    const k = e.memberId ?? null;
+    miscByMember.set(k, (miscByMember.get(k) ?? 0) + e.amount);
   }
 
   const build = (key: number | null, name: string) => {

@@ -1,6 +1,6 @@
 import { formatINR } from "@/lib/format";
 import { loadCommon } from "@/lib/load";
-import { getPiggyOverview, getSinkingBalances, getPiggyHistory } from "@/lib/queries";
+import { getPiggyOverview, getSinkingBalances, getPiggyHistory, getProjectedPiggy } from "@/lib/queries";
 import { NavHeader } from "@/components/NavHeader";
 import { WithdrawPiggyModal } from "@/components/WithdrawPiggyModal";
 import { DepositPiggyModal } from "@/components/DepositPiggyModal";
@@ -16,9 +16,15 @@ export default async function PiggyPage({
   const c = await loadCommon(sp);
   if (!c) return null;
 
-  const { generalTotal, generalByCategory, sinking } = await getPiggyOverview(c.household.id);
+  // Viewing the next-month draft? Show the Piggy as it WILL be once the current open
+  // month winds down (projected general + per-fund holds), read-only. Otherwise the
+  // live balances. (Withdraw is already hidden on drafts; deposit/set are too, below.)
+  const isDraft = c.selected?.status === "draft";
+  const draftSource = isDraft ? c.periods.find((p) => p.status === "open") ?? null : null;
+  const projected = isDraft && draftSource ? await getProjectedPiggy(c.household.id, draftSource.id) : null;
+  const { generalTotal, generalByCategory, sinking } = projected ?? (await getPiggyOverview(c.household.id));
   const sinkingTotal = sinking.reduce((s, x) => s + x.hold, 0);
-  const sinkingBalances = await getSinkingBalances(c.household.id);
+  const sinkingBalances = projected ? projected.sinkingBalances : await getSinkingBalances(c.household.id);
   const history = await getPiggyHistory(c.household.id);
   const sinkingCats = c.categories.filter((cat) => cat.sinking);
   const sinkingFunds = sinkingCats.map((cat) => ({ id: cat.id, name: cat.name }));
@@ -51,7 +57,7 @@ export default async function PiggyPage({
       <main className="mx-auto max-w-4xl space-y-6 p-6">
         <div className="flex items-center justify-between gap-2">
           <h1 className="text-xl font-bold text-slate-900">🐷 Piggy &amp; savings</h1>
-          {c.isHead && (
+          {c.isHead && !isDraft && (
             <div className="flex items-center gap-2">
               <DepositPiggyModal sinkingFunds={sinkingFunds} />
               {c.selected && c.selected.status === "open" && (
@@ -70,9 +76,17 @@ export default async function PiggyPage({
           )}
         </div>
 
+        {isDraft && (
+          <div className="rounded-xl border border-violet-200 bg-violet-50 px-4 py-3 text-sm text-violet-800">
+            <b>Preview.</b> Projected Piggy &amp; sinking funds as they&apos;ll be once{" "}
+            {draftSource?.label ?? "the current month"} winds down. Read-only estimate —
+            deposits, withdrawals and set-points act on the real month.
+          </div>
+        )}
+
         <div className="rounded-xl border border-slate-300 bg-slate-900 p-5 text-white dark:bg-slate-950">
           <div className="text-xs font-medium uppercase tracking-wide text-slate-300">
-            Total set aside in the account
+            {isDraft ? "Projected total set aside" : "Total set aside in the account"}
           </div>
           <div className="mt-1 text-3xl font-extrabold">{formatINR(generalTotal + sinkingTotal)}</div>
           <div className="mt-1 text-xs text-slate-400">
@@ -81,7 +95,7 @@ export default async function PiggyPage({
           </div>
         </div>
 
-        {c.canEdit && (
+        {c.canEdit && !isDraft && (
           <div className="rounded-xl border border-slate-200 bg-white p-4 dark:bg-slate-900">
             <div className="text-sm font-semibold text-slate-800 dark:text-slate-100">🐷 Piggy holder</div>
             <p className="mt-0.5 text-xs text-slate-400">
@@ -116,7 +130,7 @@ export default async function PiggyPage({
               <div className="text-xs font-medium uppercase tracking-wide text-amber-700">
                 General Piggy
               </div>
-              {c.isHead && <SetFundModal target="general" name="General Piggy" current={generalTotal} />}
+              {c.isHead && !isDraft && <SetFundModal target="general" name="General Piggy" current={generalTotal} />}
             </div>
             <div className="mt-1 text-3xl font-extrabold text-amber-800">
               {formatINR(generalTotal)}
@@ -194,7 +208,7 @@ export default async function PiggyPage({
                       {formatINR(sinkingBalances[cat.id] ?? 0)}{" "}
                       <span className="text-xs font-normal text-slate-400">held</span>
                     </span>
-                    {c.isHead && (
+                    {c.isHead && !isDraft && (
                       <SetFundModal target={String(cat.id)} name={cat.name} current={sinkingBalances[cat.id] ?? 0} />
                     )}
                   </div>
