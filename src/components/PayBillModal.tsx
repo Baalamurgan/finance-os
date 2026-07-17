@@ -69,14 +69,17 @@ export function PayBillModal({
               </div>
 
               {fundCovers ? (
-                <form action={payPeriodicBill} onSubmit={() => setOpen(false)} className="space-y-3">
-                  {hidden("fund")}
-                  <p className="text-xs text-slate-500">The fund fully covers this bill.</p>
-                  <div className="flex items-center gap-3">
-                    <button type="button" onClick={() => setOpen(false)} className="min-h-11 flex-1 rounded-xl border-2 border-slate-200 px-4 py-2.5 text-sm font-medium text-slate-600">Cancel</button>
-                    <button type="submit" className="min-h-11 flex-1 rounded-xl bg-teal-600 px-4 py-2.5 text-sm font-semibold text-white">Pay from fund</button>
-                  </div>
-                </form>
+                <div className="space-y-3">
+                  <form action={payPeriodicBill} onSubmit={() => setOpen(false)} className="space-y-3">
+                    {hidden("fund")}
+                    <p className="text-xs text-slate-500">The fund fully covers this bill.</p>
+                    <div className="flex items-center gap-3">
+                      <button type="button" onClick={() => setOpen(false)} className="min-h-11 flex-1 rounded-xl border-2 border-slate-200 px-4 py-2.5 text-sm font-medium text-slate-600">Cancel</button>
+                      <button type="submit" className="min-h-11 flex-1 rounded-xl bg-teal-600 px-4 py-2.5 text-sm font-semibold text-white">Pay from fund</button>
+                    </div>
+                  </form>
+                  <AlreadyPaidButton hidden={hidden} onDone={() => setOpen(false)} />
+                </div>
               ) : (
                 <div className="space-y-3">
                   <p className="text-xs text-slate-500">
@@ -96,6 +99,7 @@ export function PayBillModal({
                         Remaining out-of-pocket
                       </button>
                     </form>
+                    <AlreadyPaidButton hidden={hidden} onDone={() => setOpen(false)} />
                     <button type="button" onClick={() => setOpen(false)} className="min-h-11 w-full rounded-xl border-2 border-slate-200 px-4 py-2.5 text-sm font-medium text-slate-600">Discard</button>
                   </div>
                 </div>
@@ -105,5 +109,29 @@ export function PayBillModal({
         </div>
       )}
     </>
+  );
+}
+
+// "Already paid outside the app" — records the bill as paid with no money movement
+// (fund/Piggy untouched, no misc spend). Reversible via Undo in the paid list.
+function AlreadyPaidButton({
+  hidden,
+  onDone,
+}: {
+  hidden: (source: string) => React.ReactNode;
+  onDone: () => void;
+}) {
+  return (
+    <form action={payPeriodicBill} onSubmit={onDone}>
+      {hidden("already")}
+      <button
+        type="submit"
+        title="It was already paid outside the app — just record it, don't move any money"
+        className="min-h-11 w-full rounded-xl border-2 border-slate-200 px-4 py-2.5 text-sm font-medium text-slate-600 hover:border-slate-300 hover:bg-slate-50"
+      >
+        Mark as already paid
+        <span className="ml-1 text-[11px] text-slate-400">· no money moves</span>
+      </button>
+    </form>
   );
 }

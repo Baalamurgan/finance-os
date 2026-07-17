@@ -749,7 +749,8 @@ export async function toggleBillPaid(formData: FormData) {
 // out-of-pocket (recorded as the payer's Misc spend). Idempotent via BillPayment (one per
 // category+period), so it survives a rebuild.
 export async function payPeriodicBill(formData: FormData) {
-  if (!(await canEdit())) return; // head + manager
+  const session = await auth();
+  if (!(await unlocked())) return; // app-lock
   const categoryId = Number(formData.get("categoryId"));
   const periodId = Number(formData.get("periodId"));
   if (!categoryId || !periodId) return;
@@ -758,17 +759,32 @@ export async function payPeriodicBill(formData: FormData) {
   if (!cat || cat.fundingStyle !== "auto" || cat.billAmount == null || cat.billAmount <= 0) return;
   const bill = cat.billAmount;
   const payer = cat.payerMemberId ?? cat.responsibleMemberId ?? null;
+  // where the payment comes from: fund | piggy | pocket, or "already" = paid outside the app.
+  const source = String(formData.get("source") ?? "pocket");
 
-  const [fundAgg, piggyAgg, already] = await Promise.all([
+  // Head + manager may pay any way; the bill's own payer may also mark it "already paid".
+  const isEditor = await canEdit();
+  const isPayer = session?.user?.memberId != null && session.user.memberId === payer;
+  if (!isEditor && !(isPayer && source === "already")) return;
+
+  const already = await prisma.billPayment.findUnique({ where: { categoryId_periodId: { categoryId, periodId } } });
+  if (already) return; // already paid this period
+
+  // "Already paid" — pure record, no money moves (fund/Piggy untouched, no misc spend).
+  if (source === "already") {
+    await prisma.billPayment.create({ data: { householdId: cat.householdId, categoryId, periodId, memberId: payer, fromFund: 0, fromPiggy: 0, outOfPocket: 0 } });
+    await logActivity("expense", "created", `Marked ${cat.name} bill already paid (outside)`, periodId);
+    revalidatePath("/", "layout");
+    return;
+  }
+
+  const [fundAgg, piggyAgg] = await Promise.all([
     prisma.piggyEntry.aggregate({ where: { householdId: cat.householdId, categoryId, kind: "sinking" }, _sum: { amount: true } }),
     prisma.piggyEntry.aggregate({ where: { householdId: cat.householdId, kind: "piggy" }, _sum: { amount: true } }),
-    prisma.billPayment.findUnique({ where: { categoryId_periodId: { categoryId, periodId } } }),
   ]);
-  if (already) return; // already paid this period
   const round = (x: number) => Math.round(x * 100) / 100;
   const fund = Math.max(0, fundAgg._sum.amount ?? 0);
   const piggyAvail = Math.max(0, piggyAgg._sum.amount ?? 0);
-  const source = String(formData.get("source") ?? "pocket"); // where the REMAINDER comes from: piggy | pocket
 
   const fromFund = round(Math.min(fund, bill)); // fund first & fully
   let remaining = round(bill - fromFund);

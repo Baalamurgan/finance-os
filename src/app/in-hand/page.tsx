@@ -2,8 +2,9 @@ import { formatINR } from "@/lib/format";
 import { loadCommon } from "@/lib/load";
 import { getInHand, type InHand } from "@/lib/queries";
 import { NavHeader } from "@/components/NavHeader";
-import { toggleBillPaid, unpayPeriodicBill } from "@/app/actions";
+import { toggleBillPaid, unpayPeriodicBill, payPeriodicBill } from "@/app/actions";
 import { PayBillModal } from "@/components/PayBillModal";
+import { ConfirmForm } from "@/components/ConfirmForm";
 
 export default async function InHandPage({
   searchParams,
@@ -88,6 +89,8 @@ export default async function InHandPage({
                 canToggle={canToggle}
                 periodId={periodId}
                 generalPiggy={inHand.generalPiggy}
+                currentMemberId={currentMemberId}
+                open={open}
               />
             ))}
           </div>
@@ -116,6 +119,8 @@ function PersonGroup({
   canToggle,
   periodId,
   generalPiggy,
+  currentMemberId,
+  open,
 }: {
   group: InHand["byPerson"][number];
   isTreasurer: boolean;
@@ -127,8 +132,13 @@ function PersonGroup({
   canToggle: boolean;
   periodId: number;
   generalPiggy: number;
+  currentMemberId: number | null;
+  open: boolean;
 }) {
   const { name, cats, unpaidBills, paidBills, earmarked, unpaidPeriodic, paidPeriodic, miscSpent, net } = group;
+  // The bill's payer (this group) may mark their OWN bill "already paid" even without
+  // edit rights — a small button when the full pay modal (head/manager) isn't shown.
+  const selfPayer = !canToggle && open && group.memberId === currentMemberId;
   const poolAmt = isTreasurer ? pool : 0;
   const piggyAmt = isPiggyHolder ? piggy : 0;
   const total = net + poolAmt + piggyAmt;
@@ -188,6 +198,15 @@ function PersonGroup({
               <span className="tabular-nums text-slate-600">{formatINR(b.bill)}</span>
               {canToggle ? (
                 <PayBillModal categoryId={b.categoryId} periodId={periodId} name={b.name} bill={b.bill} fund={b.fund} generalPiggy={generalPiggy} />
+              ) : selfPayer ? (
+                <ConfirmForm action={payPeriodicBill} message={`Mark “${b.name}” as already paid? It was paid outside the app, so no money moves.`}>
+                  <input type="hidden" name="categoryId" value={b.categoryId} />
+                  <input type="hidden" name="periodId" value={periodId} />
+                  <input type="hidden" name="source" value="already" />
+                  <button className="rounded-full border border-teal-200 px-2 py-0.5 text-[10px] font-medium text-teal-600 hover:border-teal-400 hover:bg-teal-50" title="Mark this bill as already paid outside the app — no money moves">
+                    mark paid
+                  </button>
+                </ConfirmForm>
               ) : (
                 <span className="rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-400">to pay</span>
               )}
