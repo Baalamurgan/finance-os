@@ -8,8 +8,13 @@ export type SettleTagged = {
   memberId: number | null;
   amount: number;
   label: string;
-  category: { name: string; responsibleMemberId?: number | null };
+  category: { name: string; responsibleMemberId?: number | null; section?: string | null };
 };
+
+// Sheet section order (mirrors the Sheet tab) so the settlement "paid" breakdown reads in the
+// same order you see it on the sheet / In-Hand — easy to cross-check line by line.
+const SECTION_RANK: Record<string, number> = { Loans: 0, Chits: 1, Monthly: 2, PiggyBudget: 3, Yearly: 4, Misc: 5 };
+const sectionRank = (s?: string | null) => SECTION_RANK[s ?? "Monthly"] ?? 9;
 export type SettleRecord = {
   id: number;
   fromMemberId: number;
@@ -43,17 +48,23 @@ export function computeSettlement(opts: {
       if ((sp.category.responsibleMemberId ?? null) === m.id) continue;
       spendByCat.set(sp.category.name, (spendByCat.get(sp.category.name) ?? 0) + sp.amount);
     }
-    const paidItems = [
-      ...expenses
-        .filter((e) => e.memberId === m.id)
-        .map((e) => ({ label: e.label, amount: e.amount, category: e.category.name, kind: "sheet" as const })),
-      ...[...spendByCat.entries()].map(([category, amount]) => ({
+    // This month's sheet expenses first, in SHEET order (by section, then their input/id order);
+    // last month's carried spends sorted to the BOTTOM (amount desc) so it's clear what's this
+    // month vs carried, and the top matches the Sheet / In-Hand for cross-checking.
+    const sheetItems = expenses
+      .filter((e) => e.memberId === m.id)
+      .slice()
+      .sort((a, b) => sectionRank(a.category.section) - sectionRank(b.category.section))
+      .map((e) => ({ label: e.label, amount: e.amount, category: e.category.name, kind: "sheet" as const }));
+    const spendItems = [...spendByCat.entries()]
+      .map(([category, amount]) => ({
         label: prevLabel ? `${category} (${prevLabel})` : category,
         amount,
         category,
         kind: "spend" as const,
-      })),
-    ].sort((a, b) => b.amount - a.amount);
+      }))
+      .sort((a, b) => b.amount - a.amount);
+    const paidItems = [...sheetItems, ...spendItems];
     const paid = paidItems.reduce((s, it) => s + it.amount, 0);
     return { id: m.id, name: m.name, contributed, paid, net: contributed - paid, paidItems };
   });

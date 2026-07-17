@@ -357,7 +357,7 @@ export async function getSettlement(
   const [members, incomes, allExpenses, spends, records] = await Promise.all([
     prisma.member.findMany({ where: { householdId }, orderBy: { id: "asc" } }),
     prisma.incomeEntry.findMany({ where: { periodId } }),
-    prisma.expenseEntry.findMany({ where: { periodId }, include: { category: true } }),
+    prisma.expenseEntry.findMany({ where: { periodId }, include: { category: true }, orderBy: { id: "asc" } }),
     prisma.spend.findMany({ where: { periodId: prevPeriod?.id ?? -1 }, include: { category: true } }),
     prisma.settlementRecord.findMany({ where: { periodId } }),
   ]);
