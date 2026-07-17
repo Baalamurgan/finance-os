@@ -243,6 +243,7 @@ export function NavHeader({
 const TAB_ICON: Record<string, string> = {
   sheet: "📋",
   expenses: "🧾",
+  "in-hand": "💰",
   settlement: "🤝",
   analysis: "📊",
 };
