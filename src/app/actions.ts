@@ -618,12 +618,13 @@ const CATEGORY_SECTIONS = ["Loans", "Chits", "Monthly", "Yearly", "Misc"] as con
 type BillingFields = {
   monthlyBudget: number | null; sinking: boolean; cycleMonths: number | null; fixed: boolean; tracked: boolean;
   billEveryMonths: number | null; billMonth: number | null; billDay: number | null; billAmount: number | null;
-  fundingStyle: string | null; saveEveryMonths: number | null;
+  fundingStyle: string | null; saveEveryMonths: number | null; onUnpaid: string;
 };
 type Getter = (k: string) => string | null;
 function parseBilling(get: Getter): { ok: true; fields: BillingFields } | { ok: false; error: string } {
-  const blank: BillingFields = { monthlyBudget: null, sinking: false, cycleMonths: null, fixed: false, tracked: false, billEveryMonths: null, billMonth: null, billDay: null, billAmount: null, fundingStyle: null, saveEveryMonths: null };
+  const blank: BillingFields = { monthlyBudget: null, sinking: false, cycleMonths: null, fixed: false, tracked: false, billEveryMonths: null, billMonth: null, billDay: null, billAmount: null, fundingStyle: null, saveEveryMonths: null, onUnpaid: "carry" };
   const round = (x: number) => Math.round(x * 100) / 100;
+  const onUnpaidOf = () => (get("onUnpaid") === "skip" ? "skip" : "carry");
   const cycle = Math.max(1, Math.round(Number(get("billEveryMonths")) || 1));
   const billDayOf = () => { const d = Number(get("billDay")); return d >= 1 && d <= 31 ? d : null; };
   const monthOf = () => Math.min(12, Math.max(1, Number(get("billMonth")) || 1));
@@ -635,7 +636,7 @@ function parseBilling(get: Getter): { ok: true; fields: BillingFields } | { ok: 
     if (String(get("fundingStyle") ?? "") === "auto") {
       const amt = parseAmount(get("billAmount"));
       if (!amt || amt <= 0) return { ok: false, error: "A monthly bill needs an amount." };
-      return { ok: true, fields: { ...blank, tracked: false, billEveryMonths: 1, billMonth: monthOf(), billDay: billDayOf(), billAmount: round(amt), fundingStyle: "auto", saveEveryMonths: 1 } };
+      return { ok: true, fields: { ...blank, tracked: false, billEveryMonths: 1, billMonth: monthOf(), billDay: billDayOf(), billAmount: round(amt), fundingStyle: "auto", saveEveryMonths: 1, onUnpaid: onUnpaidOf() } };
     }
     const fixed = get("fixed") === "on";
     const raw = String(get("monthlyBudget") ?? "").trim();
@@ -656,7 +657,7 @@ function parseBilling(get: Getter): { ok: true; fields: BillingFields } | { ok: 
     if (cycle % s !== 0) return { ok: false, error: "Save cadence must divide the billing cycle." };
     saveEveryMonths = s;
   }
-  return { ok: true, fields: { ...blank, tracked: false, billEveryMonths: cycle, billMonth: monthOf(), billDay: billDayOf(), billAmount: round(amt), fundingStyle, saveEveryMonths } };
+  return { ok: true, fields: { ...blank, tracked: false, billEveryMonths: cycle, billMonth: monthOf(), billDay: billDayOf(), billAmount: round(amt), fundingStyle, saveEveryMonths, onUnpaid: fundingStyle === "auto" ? onUnpaidOf() : "carry" } };
 }
 function parseBillingFields(formData: FormData) {
   return parseBilling((k) => { const v = formData.get(k); return v == null ? null : String(v); });

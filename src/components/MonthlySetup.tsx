@@ -22,6 +22,7 @@ type Row = {
   billAmount: number | null;
   fundingStyle: string | null;
   saveEveryMonths: number | null;
+  onUnpaid: string;
   needsReview: boolean;
 };
 
@@ -51,7 +52,7 @@ const round2 = (x: number) => Math.round(x * 100) / 100;
 type MonthlyKind = "track" | "fixed" | "bill";
 type Draft = {
   name: string; section: string; cycle: string; amount: string; monthlyKind: MonthlyKind;
-  fundingStyle: string; saveEvery: string; billMonth: string; billDay: string; resp: string; payer: string;
+  fundingStyle: string; saveEvery: string; billMonth: string; billDay: string; resp: string; payer: string; onUnpaid: string;
 };
 const toDraft = (r: Row): Draft => ({
   name: r.name,
@@ -65,6 +66,7 @@ const toDraft = (r: Row): Draft => ({
   billDay: r.billDay != null ? String(r.billDay) : "",
   resp: r.responsibleMemberId != null ? String(r.responsibleMemberId) : "",
   payer: r.payerMemberId != null ? String(r.payerMemberId) : "",
+  onUnpaid: r.onUnpaid === "skip" ? "skip" : "carry",
 });
 const isPeriodic = (d: Draft) => Number(d.cycle) > 1;
 const isMonthlyBill = (d: Draft) => !isPeriodic(d) && d.monthlyKind === "bill";
@@ -87,6 +89,8 @@ const draftPayload = (id: number, d: Draft) => {
     // monthly bill is always "save the share" (auto), saved every month
     fundingStyle: periodic ? d.fundingStyle : monthlyBill ? "auto" : "",
     saveEveryMonths: periodic ? (d.fundingStyle === "auto" ? d.saveEvery : "") : monthlyBill ? "1" : "",
+    // overdue behaviour only applies to a "save the share" (auto) bill-with-a-fund
+    onUnpaid: bill && (periodic ? d.fundingStyle === "auto" : true) ? d.onUnpaid : "carry",
   };
 };
 
@@ -120,34 +124,24 @@ export function MonthlySetup({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state.n]);
 
+  // Group by BEHAVIOUR, not cadence: fixed monthly expenses (tracked budgets / flat bills) vs
+  // bills-with-a-fund (billEveryMonths set — monthly or periodic, paid via In-Hand, skippable).
+  // Grouping on the SAVED row (not the live draft) keeps rows from jumping mid-edit.
+  const fixedRows = rows.filter((r) => r.billEveryMonths == null);
+  const billRows = rows.filter((r) => r.billEveryMonths != null);
+
   return (
     <div className="space-y-5">
-      <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white">
-        <table className="w-full min-w-[720px] text-sm">
-          <thead>
-            <tr className="border-b border-slate-200 bg-slate-50 text-left text-slate-500">
-              <th className="px-4 py-2">Category</th>
-              <th className="px-4 py-2">Billing</th>
-              <th className="px-4 py-2">Schedule</th>
-              <th className="px-4 py-2">Amount (₹)</th>
-              <th className="px-4 py-2">Responsible</th>
-              <th className="sticky right-0 bg-slate-50 px-4 py-2 shadow-[-8px_0_8px_-8px_rgba(0,0,0,0.12)]">On / off</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((r) => (
-              <SetupRow
-                key={r.id}
-                r={r}
-                draft={drafts[r.id] ?? toDraft(r)}
-                patch={(p) => patch(r.id, p)}
-                members={members}
-                readOnly={readOnly}
-              />
-            ))}
-          </tbody>
-        </table>
-      </div>
+      <SetupTable
+        title="Fixed monthly & budgets"
+        hint="regular monthly expenses — a tracked budget (leftover → Piggy) or a flat fixed bill"
+        rows={fixedRows} drafts={drafts} patch={patch} members={members} readOnly={readOnly}
+      />
+      <SetupTable
+        title="Bills & funds"
+        hint="set aside a share and pay via In-Hand — monthly or periodic; can be skipped a month"
+        rows={billRows} drafts={drafts} patch={patch} members={members} readOnly={readOnly}
+      />
       <p className="text-xs text-slate-400">
         Pick a <b>billing cycle</b>. <b>Monthly</b> is a normal monthly expense — tick <b>Track &amp; save
         leftover → Piggy</b> for variable ones, off for a flat fixed bill. Any longer cycle is a <b>periodic
@@ -178,6 +172,57 @@ export function MonthlySetup({
         </div>
       )}
     </div>
+  );
+}
+
+// One titled table block for a behaviour group (fixed expenses, or bills & funds).
+function SetupTable({ title, hint, rows, drafts, patch, members, readOnly }: {
+  title: string; hint: string; rows: Row[]; drafts: Record<number, Draft>;
+  patch: (id: number, p: Partial<Draft>) => void; members: MemberLite[]; readOnly: boolean;
+}) {
+  if (rows.length === 0) return null;
+  return (
+    <div>
+      <div className="mb-1.5 flex flex-wrap items-baseline gap-x-2">
+        <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-600">{title}</h3>
+        <span className="text-[11px] text-slate-400">{hint}</span>
+      </div>
+      <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white">
+        <table className="w-full min-w-[720px] text-sm">
+          <thead>
+            <tr className="border-b border-slate-200 bg-slate-50 text-left text-slate-500">
+              <th className="px-4 py-2">Category</th>
+              <th className="px-4 py-2">Billing</th>
+              <th className="px-4 py-2">Schedule</th>
+              <th className="px-4 py-2">Amount (₹)</th>
+              <th className="px-4 py-2">Responsible</th>
+              <th className="sticky right-0 bg-slate-50 px-4 py-2 shadow-[-8px_0_8px_-8px_rgba(0,0,0,0.12)]">On / off</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => (
+              <SetupRow key={r.id} r={r} draft={drafts[r.id] ?? toDraft(r)} patch={(p) => patch(r.id, p)} members={members} readOnly={readOnly} />
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+// What happens to a "save the share" bill's held share if a due month goes unpaid at wind-down.
+function OnUnpaidSelect({ draft, patch, readOnly }: { draft: Draft; patch: (p: Partial<Draft>) => void; readOnly: boolean }) {
+  return (
+    <select
+      value={draft.onUnpaid}
+      onChange={(e) => patch({ onUnpaid: e.target.value })}
+      disabled={readOnly}
+      className="input w-52 py-1 text-xs disabled:bg-slate-100"
+      title="If a due month is never paid, what happens to the share you set aside?"
+    >
+      <option value="carry">if unpaid: keep in the fund</option>
+      <option value="skip">if unpaid: skip → back to Piggy</option>
+    </select>
   );
 }
 
@@ -240,11 +285,14 @@ function SetupRow({ r, draft, patch, members, readOnly }: { r: Row; draft: Draft
               <option value="bill">Save the share · pay in In-Hand</option>
             </select>
             {monthlyBill && (
-              <div className="flex flex-wrap items-center gap-1">
-                due day
-                <input type="number" min="1" max="31" value={draft.billDay} onChange={(e) => patch({ billDay: e.target.value })} placeholder="day" disabled={readOnly} className="input w-12 py-1 text-xs disabled:bg-slate-100" />
-                <span className="text-[10px] text-slate-400">set aside &amp; paid each month via In-Hand</span>
-              </div>
+              <>
+                <div className="flex flex-wrap items-center gap-1">
+                  due day
+                  <input type="number" min="1" max="31" value={draft.billDay} onChange={(e) => patch({ billDay: e.target.value })} placeholder="day" disabled={readOnly} className="input w-12 py-1 text-xs disabled:bg-slate-100" />
+                  <span className="text-[10px] text-slate-400">set aside &amp; paid each month via In-Hand</span>
+                </div>
+                <OnUnpaidSelect draft={draft} patch={patch} readOnly={readOnly} />
+              </>
             )}
           </div>
         ) : (
@@ -268,6 +316,7 @@ function SetupRow({ r, draft, patch, members, readOnly }: { r: Row; draft: Draft
               )}
             </div>
             {shareHint != null && <div className="text-[10px] text-slate-400">≈ {formatINR(shareHint)} set aside each time</div>}
+            {draft.fundingStyle === "auto" && <OnUnpaidSelect draft={draft} patch={patch} readOnly={readOnly} />}
           </div>
         )}
         {invalid && dirty && <div className="mt-0.5 text-[11px] font-medium text-red-600">check amount / schedule</div>}
