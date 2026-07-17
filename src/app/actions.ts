@@ -767,7 +767,13 @@ export async function payPeriodicBill(formData: FormData) {
   const categoryId = Number(formData.get("categoryId"));
   const periodId = Number(formData.get("periodId"));
   if (!categoryId || !periodId) return;
-  if (!(await periodOpen(periodId))) return; // only pay in an open month
+  // Where the money actually moves. Normally the same open month. For a CARRIED (late) payment
+  // of a prior CLOSED month's bill, the obligation stays `periodId` (closed, so its record marks
+  // that month resolved) but the fund/Piggy draw + any out-of-pocket land in the current OPEN
+  // month (`spendPeriodId`) so a settled month isn't disturbed.
+  const spendPeriodId = Number(formData.get("spendPeriodId")) || periodId;
+  const carried = spendPeriodId !== periodId;
+  if (!(await periodOpen(spendPeriodId))) return; // money only moves in an open month
   const cat = await prisma.category.findUnique({ where: { id: categoryId } });
   if (!cat || cat.fundingStyle !== "auto" || cat.billAmount == null || cat.billAmount <= 0) return;
   const bill = cat.billAmount;
@@ -785,8 +791,8 @@ export async function payPeriodicBill(formData: FormData) {
 
   // "Already paid" — pure record, no money moves (fund/Piggy untouched, no misc spend).
   if (source === "already") {
-    await prisma.billPayment.create({ data: { householdId: cat.householdId, categoryId, periodId, memberId: payer, fromFund: 0, fromPiggy: 0, outOfPocket: 0 } });
-    await logActivity("expense", "created", `Marked ${cat.name} bill already paid (outside)`, periodId);
+    await prisma.billPayment.create({ data: { householdId: cat.householdId, categoryId, periodId, spendPeriodId, memberId: payer, fromFund: 0, fromPiggy: 0, outOfPocket: 0 } });
+    await logActivity("expense", "created", `Marked ${cat.name} bill already paid (outside)`, spendPeriodId);
     revalidatePath("/", "layout");
     return;
   }
@@ -799,7 +805,9 @@ export async function payPeriodicBill(formData: FormData) {
   ]);
   const round = (x: number) => Math.round(x * 100) / 100;
   const accrued = Math.max(0, round(fundAgg._sum.amount ?? 0)); // real, already-in-the-fund money
-  const setAside = Math.max(0, round(setAsideAgg._sum.amount ?? 0)); // this month's own share (not yet accrued)
+  // this month's own share (not yet accrued). A carried pay's closed month already accrued its
+  // share into the fund at wind-down, so it's part of `accrued` — don't count it again here.
+  const setAside = carried ? 0 : Math.max(0, round(setAsideAgg._sum.amount ?? 0));
   const piggyAvail = Math.max(0, piggyAgg._sum.amount ?? 0);
 
   // The actual amount to pay (varies per bill); defaults to the configured bill. Anything the
@@ -825,12 +833,12 @@ export async function payPeriodicBill(formData: FormData) {
 
   const miscCat = outOfPocket > 0 ? await prisma.category.findFirst({ where: { householdId: cat.householdId, section: "Misc", tracked: true } }) : null;
   await prisma.$transaction(async (tx) => {
-    if (fromFund > 0) await tx.piggyEntry.create({ data: { householdId: cat.householdId, periodId, categoryId, kind: "sinking", amount: -fromFund, note: `${cat.name} bill paid` } });
-    if (fromPiggy > 0) await tx.piggyEntry.create({ data: { householdId: cat.householdId, periodId, kind: "piggy", amount: -fromPiggy, note: `${cat.name} bill paid` } });
-    if (outOfPocket > 0 && miscCat) await tx.spend.create({ data: { periodId, categoryId: miscCat.id, memberId: payer, label: `${cat.name} bill (out-of-pocket)`, amount: outOfPocket, subCategory: null } });
-    await tx.billPayment.create({ data: { householdId: cat.householdId, categoryId, periodId, memberId: payer, fromFund, fromSetAside, fromPiggy, outOfPocket } });
+    if (fromFund > 0) await tx.piggyEntry.create({ data: { householdId: cat.householdId, periodId: spendPeriodId, categoryId, kind: "sinking", amount: -fromFund, note: `${cat.name} bill paid${carried ? " (carried)" : ""}` } });
+    if (fromPiggy > 0) await tx.piggyEntry.create({ data: { householdId: cat.householdId, periodId: spendPeriodId, kind: "piggy", amount: -fromPiggy, note: `${cat.name} bill paid${carried ? " (carried)" : ""}` } });
+    if (outOfPocket > 0 && miscCat) await tx.spend.create({ data: { periodId: spendPeriodId, categoryId: miscCat.id, memberId: payer, label: `${cat.name} bill (out-of-pocket)`, amount: outOfPocket, subCategory: null } });
+    await tx.billPayment.create({ data: { householdId: cat.householdId, categoryId, periodId, spendPeriodId, memberId: payer, fromFund, fromSetAside, fromPiggy, outOfPocket } });
   });
-  await logActivity("expense", "created", `Paid ${cat.name} bill ${formatINR(actual)}`, periodId);
+  await logActivity("expense", "created", `Paid ${cat.name} bill ${formatINR(actual)}${carried ? " (carried)" : ""}`, spendPeriodId);
   revalidatePath("/", "layout");
 }
 
@@ -841,14 +849,15 @@ export async function unpayPeriodicBill(formData: FormData) {
   const categoryId = Number(formData.get("categoryId"));
   const periodId = Number(formData.get("periodId"));
   if (!categoryId || !periodId) return;
-  if (!(await periodOpen(periodId))) return;
   const bp = await prisma.billPayment.findUnique({ where: { categoryId_periodId: { categoryId, periodId } } });
   if (!bp) return;
+  const sp = bp.spendPeriodId ?? bp.periodId; // where the money moved (the OPEN month for a carried pay)
+  if (!(await periodOpen(sp))) return;
   const cat = await prisma.category.findUnique({ where: { id: categoryId }, select: { name: true } });
   await prisma.$transaction(async (tx) => {
-    if (bp.fromFund > 0) await tx.piggyEntry.create({ data: { householdId: bp.householdId, periodId, categoryId, kind: "sinking", amount: bp.fromFund, note: `${cat?.name ?? "bill"} payment undone` } });
-    if (bp.fromPiggy > 0) await tx.piggyEntry.create({ data: { householdId: bp.householdId, periodId, kind: "piggy", amount: bp.fromPiggy, note: `${cat?.name ?? "bill"} payment undone` } });
-    if (bp.outOfPocket > 0) await tx.spend.deleteMany({ where: { periodId, memberId: bp.memberId, amount: bp.outOfPocket, label: { endsWith: "(out-of-pocket)" } } });
+    if (bp.fromFund > 0) await tx.piggyEntry.create({ data: { householdId: bp.householdId, periodId: sp, categoryId, kind: "sinking", amount: bp.fromFund, note: `${cat?.name ?? "bill"} payment undone` } });
+    if (bp.fromPiggy > 0) await tx.piggyEntry.create({ data: { householdId: bp.householdId, periodId: sp, kind: "piggy", amount: bp.fromPiggy, note: `${cat?.name ?? "bill"} payment undone` } });
+    if (bp.outOfPocket > 0) await tx.spend.deleteMany({ where: { periodId: sp, memberId: bp.memberId, amount: bp.outOfPocket, label: { endsWith: "(out-of-pocket)" } } });
     await tx.billPayment.delete({ where: { id: bp.id } });
   });
   revalidatePath("/", "layout");

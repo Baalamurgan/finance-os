@@ -135,7 +135,7 @@ function PersonGroup({
   currentMemberId: number | null;
   open: boolean;
 }) {
-  const { name, cats, unpaidBills, paidBills, earmarked, unpaidPeriodic, paidPeriodic, carried, miscSpent, net } = group;
+  const { name, cats, unpaidBills, paidBills, earmarked, unpaidPeriodic, paidPeriodic, carried, carriedDue, miscSpent, net } = group;
   // The bill's payer (this group) may mark their OWN bill "already paid" even without
   // edit rights — a small button when the full pay modal (head/manager) isn't shown.
   const selfPayer = !canToggle && open && group.memberId === currentMemberId;
@@ -157,13 +157,15 @@ function PersonGroup({
         </span>
       </div>
       <ul className="mt-2 space-y-1">
-        {/* Pinned to the TOP: bills from an earlier month that were never marked paid. A pure
-            nag — already settled in their own month, so greyed and NOT part of this month's total. */}
-        {carried.length > 0 && (
+        {/* Pinned to the TOP: things owed from an earlier month that were never paid. A pure
+            nag — already settled in their own month, so greyed and NOT part of this month's total.
+            Regular bills just toggle ✓ paid; a periodic fund-bill can be paid now (drawn from its
+            fund, in this open month) via the pay modal. */}
+        {(carried.length > 0 || carriedDue.length > 0) && (
           <>
             <li>
               <div className="flex items-center justify-between gap-2">
-                <span className="text-[10px] font-semibold uppercase tracking-wide text-rose-600">⏰ Overdue — not marked paid</span>
+                <span className="text-[10px] font-semibold uppercase tracking-wide text-rose-600">⏰ Overdue — not paid</span>
                 <span className="text-[9px] text-slate-400">reminder only · not in your total</span>
               </div>
             </li>
@@ -175,6 +177,22 @@ function PersonGroup({
                 <span className="flex shrink-0 items-center gap-1.5">
                   <span className="tabular-nums text-slate-400">{formatINR(c.amount)}</span>
                   {canToggle && <PaidToggle id={c.id} title="Mark this carried-over bill paid" label="✓ paid" />}
+                </span>
+              </li>
+            ))}
+            {carriedDue.map((b) => (
+              <li key={`cd${b.categoryId}-${b.periodId}`} className="flex items-center justify-between gap-2 text-xs">
+                <span className="truncate text-slate-400">
+                  {b.name} <span className="text-[10px] text-rose-400">bill overdue from {b.fromMonth}</span>
+                  <span className="text-[10px] text-slate-400"> · fund {formatINR(b.fund)}</span>
+                </span>
+                <span className="flex shrink-0 items-center gap-1.5">
+                  <span className="tabular-nums text-slate-400">{formatINR(b.bill)}</span>
+                  {canToggle ? (
+                    <PayBillModal categoryId={b.categoryId} periodId={b.periodId} spendPeriodId={periodId} carriedFrom={b.fromMonth} name={b.name} bill={b.bill} fund={b.fund} generalPiggy={generalPiggy} />
+                  ) : (
+                    <span className="rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-400">to pay</span>
+                  )}
                 </span>
               </li>
             ))}
