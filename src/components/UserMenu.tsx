@@ -13,6 +13,9 @@ export function UserMenu({
   email,
   image,
   role,
+  canEdit = false,
+  navQuery = "",
+  activeAdmin,
   pinEnabled = false,
   hasBiometric = false,
   actualIsHead = false,
@@ -22,11 +25,22 @@ export function UserMenu({
   email: string;
   image: string | null;
   role: string;
+  canEdit?: boolean;
+  navQuery?: string;
+  activeAdmin?: string;
   pinEnabled?: boolean;
   hasBiometric?: boolean;
   actualIsHead?: boolean;
   viewingAsMember?: boolean;
 }) {
+  const isHead = role === "head";
+  // Admin-ish destinations moved out of the nav bar: Wind Down (everyone), Setup
+  // (head + manager), Settings = members + app lock (head only).
+  const adminLinks = [
+    { key: "wind-down", label: "Wind Down", href: "/wind-down", icon: "🌙", show: true },
+    { key: "setup", label: "Setup · budgets & bills", href: "/setup", icon: "⚙️", show: canEdit },
+    { key: "users", label: "Settings · members & lock", href: "/users", icon: "🔧", show: isHead },
+  ].filter((l) => l.show);
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const [bioBusy, setBioBusy] = useState(false);
@@ -115,6 +129,23 @@ export function UserMenu({
             <span className="text-base leading-none">🔒</span>
             Switch to Personal →
           </Link>
+          {adminLinks.length > 0 && (
+            <div className="border-b border-slate-100 py-1">
+              {adminLinks.map((l) => (
+                <Link
+                  key={l.key}
+                  href={`${l.href}${navQuery}`}
+                  onClick={() => setOpen(false)}
+                  className={`flex w-full items-center gap-2 px-4 py-2.5 text-left text-sm ${
+                    activeAdmin === l.key ? "bg-indigo-50 font-medium text-indigo-700" : "text-slate-700 hover:bg-slate-50"
+                  }`}
+                >
+                  <span className="text-base leading-none">{l.icon}</span>
+                  {l.label}
+                </Link>
+              ))}
+            </div>
+          )}
           <div className="border-b border-slate-100">
             <ThemeMenuRow />
           </div>

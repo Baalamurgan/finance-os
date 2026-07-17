@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { AddSpendModal } from "@/components/AddSpendModal";
+import { AutoLock } from "@/components/AutoLock";
 import { UserMenu } from "@/components/UserMenu";
 import { WindDownBanner } from "@/components/WindDownBanner";
 import { setViewAs } from "@/app/actions";
@@ -77,6 +78,8 @@ export function NavHeader({
     .sort((a, b) => Number(a.sinking ?? false) - Number(b.sinking ?? false))
     .map((c) => ({ id: c.id, name: c.name, misc: c.section === "Misc" }));
 
+  // Day-to-day tabs live in the nav; the admin-ish ones (Wind Down, Setup, Settings)
+  // moved under the avatar menu to declutter the bar.
   const tabs = [
     { key: "sheet", label: "Sheet", href: "/" },
     { key: "expenses", label: "Expenses", href: "/expenses" },
@@ -86,16 +89,6 @@ export function NavHeader({
     { key: "analysis", label: "Analysis", href: "/analysis" },
     { key: "piggy", label: "Piggy", href: "/piggy" },
     { key: "loans", label: "Loans & Chits", href: "/loans" },
-    { key: "wind-down", label: "Wind Down", href: "/wind-down" },
-    // Setup is head-editable / manager view-only; Settings (users + app lock) is head-only.
-    ...(isHead
-      ? [
-          { key: "setup", label: "Setup", href: "/setup" },
-          { key: "users", label: "Settings", href: "/users" },
-        ]
-      : canEdit
-        ? [{ key: "setup", label: "Setup", href: "/setup" }]
-        : []),
   ];
 
   const primaryTabs = tabs.slice(0, 3); // Sheet · Expenses · In Hand
@@ -113,6 +106,7 @@ export function NavHeader({
 
   return (
     <>
+    <AutoLock enabled={!!pinEnabled} />
     <header className="sticky top-0 z-40 border-b border-slate-200 bg-white/90 backdrop-blur">
       <div className="mx-auto flex max-w-7xl flex-wrap items-center gap-x-3 gap-y-2 px-4 py-3 sm:px-6">
         <div className="mr-2">
@@ -196,6 +190,9 @@ export function NavHeader({
               email={account.email}
               image={account.image}
               role={isHead ? "head" : "member"}
+              canEdit={!!canEdit}
+              navQuery={q}
+              activeAdmin={active}
               pinEnabled={pinEnabled}
               hasBiometric={hasBiometric}
               actualIsHead={actualIsHead}
