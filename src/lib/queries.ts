@@ -541,12 +541,29 @@ export async function getInHand(householdId: number, periodId: number) {
   const bills = isDraft ? billLines.filter((e) => e.category.section !== "Misc") : billLines;
 
   const plannedByCat = new Map(budgets.map((b) => [b.categoryId, b.planned]));
-  const spentByCat = new Map<number, number>();
-  for (const s of spends) spentByCat.set(s.categoryId, (spentByCat.get(s.categoryId) ?? 0) + s.amount);
-
   const budgetedIds = new Set(categories.filter((c) => (plannedByCat.get(c.id) ?? 0) > 0).map((c) => c.id));
+  const catHolder = new Map(categories.map((c) => [c.id, c.responsibleMemberId ?? null]));
 
-  // budgeted category rows (by responsible member)
+  // Split each budgeted-category spend by WHO actually spent it:
+  //  • the category's holder (or an UNTAGGED spend) → counts against the holder's held budget,
+  //    reducing that category's remaining, as before;
+  //  • anyone else → the cash came out of THEIR pocket, so it drops off the holder's line and
+  //    instead subtracts from the spender's in-hand (folded into their misc line below). This is
+  //    the same spender-vs-holder rule the settlement uses, so In-Hand and Settlement agree.
+  const heldSpentByCat = new Map<number, number>();
+  const outOfPocketByMember = new Map<number | null, number>();
+  for (const s of spends) {
+    if (!budgetedIds.has(s.categoryId)) continue;
+    const holder = catHolder.get(s.categoryId) ?? null;
+    const spender = s.memberId ?? null;
+    if (spender != null && spender !== holder) {
+      outOfPocketByMember.set(spender, (outOfPocketByMember.get(spender) ?? 0) + s.amount);
+    } else {
+      heldSpentByCat.set(s.categoryId, (heldSpentByCat.get(s.categoryId) ?? 0) + s.amount);
+    }
+  }
+
+  // budgeted category rows (by responsible member) — `spent` is the holder's own + untagged only
   const rows = categories
     .filter((c) => budgetedIds.has(c.id))
     .map((cat) => ({
@@ -554,8 +571,8 @@ export async function getInHand(householdId: number, periodId: number) {
       name: cat.name,
       responsibleMemberId: cat.responsibleMemberId,
       allocation: plannedByCat.get(cat.id) ?? 0,
-      spent: spentByCat.get(cat.id) ?? 0,
-      remaining: (plannedByCat.get(cat.id) ?? 0) - (spentByCat.get(cat.id) ?? 0),
+      spent: heldSpentByCat.get(cat.id) ?? 0,
+      remaining: (plannedByCat.get(cat.id) ?? 0) - (heldSpentByCat.get(cat.id) ?? 0),
     }));
 
   // misc / unbudgeted spend (by whoever logged it) — already spent, subtracts from in-hand.
@@ -575,6 +592,9 @@ export async function getInHand(householdId: number, periodId: number) {
       miscByMember.set(k, (miscByMember.get(k) ?? 0) + e.amount);
     }
   }
+  // Spends on someone else's budgeted category came out of the spender's pocket — lump them into
+  // the same misc subtraction (they're already off the holder's remaining, above).
+  for (const [k, v] of outOfPocketByMember) miscByMember.set(k, (miscByMember.get(k) ?? 0) + v);
 
   // Set-asides = held/earmarked cash for the SAVER (from the Sheet "(saving)"/"(monthly share)"
   // lines — the latter appear in older sinking-fund months still frozen in their open month).

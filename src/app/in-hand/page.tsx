@@ -231,7 +231,7 @@ function PersonGroup({
         ))}
         {miscSpent > 0 && (
           <li className="flex items-center justify-between gap-2 text-xs">
-            <span className="truncate text-amber-600">Miscellaneous (unbudgeted)</span>
+            <span className="truncate text-amber-600">Miscellaneous &amp; out-of-pocket</span>
             <span className="shrink-0 tabular-nums text-red-600">− {formatINR(miscSpent)}</span>
           </li>
         )}
