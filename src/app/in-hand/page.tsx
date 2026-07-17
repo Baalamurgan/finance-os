@@ -2,9 +2,8 @@ import { formatINR } from "@/lib/format";
 import { loadCommon } from "@/lib/load";
 import { getInHand, type InHand } from "@/lib/queries";
 import { NavHeader } from "@/components/NavHeader";
-import { toggleBillPaid, unpayPeriodicBill, payPeriodicBill } from "@/app/actions";
+import { toggleBillPaid, unpayPeriodicBill } from "@/app/actions";
 import { PayBillModal } from "@/components/PayBillModal";
-import { ConfirmForm } from "@/components/ConfirmForm";
 
 export default async function InHandPage({
   searchParams,
@@ -136,9 +135,10 @@ function PersonGroup({
   open: boolean;
 }) {
   const { name, cats, unpaidBills, paidBills, earmarked, unpaidPeriodic, paidPeriodic, carried, carriedDue, miscSpent, net } = group;
-  // The bill's payer (this group) may mark their OWN bill "already paid" even without
-  // edit rights — a small button when the full pay modal (head/manager) isn't shown.
+  // The bill's payer (their own group) gets the SAME pay / modal / undo controls as head/manager
+  // for an open month — not a reduced view. `canToggle` already covers head/manager on any group.
   const selfPayer = !canToggle && open && group.memberId === currentMemberId;
+  const canPay = canToggle || selfPayer;
   const poolAmt = isTreasurer ? pool : 0;
   const piggyAmt = isPiggyHolder ? piggy : 0;
   const total = net + poolAmt + piggyAmt;
@@ -176,7 +176,7 @@ function PersonGroup({
                 </span>
                 <span className="flex shrink-0 items-center gap-1.5">
                   <span className="tabular-nums text-slate-400">{formatINR(c.amount)}</span>
-                  {canToggle && <PaidToggle id={c.id} title="Mark this carried-over bill paid" label="✓ paid" />}
+                  {canPay && <PaidToggle id={c.id} title="Mark this carried-over bill paid" label="✓ paid" />}
                 </span>
               </li>
             ))}
@@ -188,7 +188,7 @@ function PersonGroup({
                 </span>
                 <span className="flex shrink-0 items-center gap-1.5">
                   <span className="tabular-nums text-slate-400">{formatINR(b.bill)}</span>
-                  {canToggle ? (
+                  {canPay ? (
                     <PayBillModal categoryId={b.categoryId} periodId={b.periodId} spendPeriodId={periodId} carriedFrom={b.fromMonth} name={b.name} bill={b.bill} fund={b.fund} generalPiggy={generalPiggy} />
                   ) : (
                     <span className="rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-400">to pay</span>
@@ -216,7 +216,7 @@ function PersonGroup({
             <span className="flex shrink-0 items-center gap-1.5">
               <span className="tabular-nums text-slate-600">{formatINR(b.amount)}</span>
               <span className="rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-400">to pay</span>
-              {canToggle && <PaidToggle id={b.id} title="Mark this bill paid" label="✓ paid" />}
+              {canPay && <PaidToggle id={b.id} title="Mark this bill paid" label="✓ paid" />}
             </span>
           </li>
         ))}
@@ -277,17 +277,8 @@ function PersonGroup({
                 </span>
                 <span className="flex shrink-0 items-center gap-1.5">
                   <span className="tabular-nums text-slate-500">{formatINR(b.bill)}</span>
-                  {canToggle ? (
+                  {canPay ? (
                     <PayBillModal categoryId={b.categoryId} periodId={periodId} name={b.name} bill={b.bill} fund={b.fund} generalPiggy={generalPiggy} />
-                  ) : selfPayer ? (
-                    <ConfirmForm action={payPeriodicBill} message={`Mark “${b.name}” as already paid? It was paid outside the app, so no money moves.`}>
-                      <input type="hidden" name="categoryId" value={b.categoryId} />
-                      <input type="hidden" name="periodId" value={periodId} />
-                      <input type="hidden" name="source" value="already" />
-                      <button className="rounded-full border border-teal-200 px-2 py-0.5 text-[10px] font-medium text-teal-600 hover:border-teal-400 hover:bg-teal-50" title="Mark this bill as already paid outside the app — no money moves">
-                        mark paid
-                      </button>
-                    </ConfirmForm>
                   ) : (
                     <span className="rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-400">to pay</span>
                   )}
@@ -308,7 +299,7 @@ function PersonGroup({
                 <span className="truncate line-through">{b.name}</span>
                 <span className="flex shrink-0 items-center gap-1.5">
                   <span className="tabular-nums">{formatINR(b.amount)}</span>
-                  {canToggle && <PaidToggle id={b.id} title="Mark unpaid" label="undo" />}
+                  {canPay && <PaidToggle id={b.id} title="Mark unpaid" label="undo" />}
                 </span>
               </li>
             ))}
@@ -317,7 +308,7 @@ function PersonGroup({
                 <span className="truncate line-through">{b.name}</span>
                 <span className="flex shrink-0 items-center gap-1.5">
                   <span className="tabular-nums">{formatINR(b.bill)}</span>
-                  {canToggle && (
+                  {canPay && (
                     <form action={unpayPeriodicBill}>
                       <input type="hidden" name="categoryId" value={b.categoryId} />
                       <input type="hidden" name="periodId" value={periodId} />

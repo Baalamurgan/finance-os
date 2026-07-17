@@ -749,10 +749,15 @@ export async function setTreasurer(formData: FormData) {
 // Mark / unmark a bill as paid — head/manager, on an open month. A paid bill drops out
 // of "budget left in hand" (that cash went out) and into the "Paid this month" list.
 export async function toggleBillPaid(formData: FormData) {
-  if (!(await canEdit())) return; // head + manager
+  const session = await auth();
   const id = Number(formData.get("id"));
   const e = await prisma.expenseEntry.findUnique({ where: { id } });
-  if (!e || !(await canEditNow(e.periodId))) return;
+  if (!e) return;
+  // head/manager may toggle any bill (subject to the settlement lock); the bill's own payer may
+  // toggle their own in an open month. It's just a reminder flag — no money/settlement change.
+  const isPayer = session?.user?.memberId != null && session.user.memberId === e.memberId;
+  const allowed = (await canEdit()) ? await canEditNow(e.periodId) : isPayer && (await periodOpen(e.periodId));
+  if (!allowed) return;
   await prisma.expenseEntry.update({ where: { id }, data: { paid: !e.paid } });
   revalidatePath("/", "layout");
 }
@@ -781,10 +786,10 @@ export async function payPeriodicBill(formData: FormData) {
   // where the payment comes from: fund | piggy | pocket, or "already" = paid outside the app.
   const source = String(formData.get("source") ?? "pocket");
 
-  // Head + manager may pay any way; the bill's own payer may also mark it "already paid".
+  // Head + manager may pay any bill; the bill's own payer may pay (or undo) their own bill too.
   const isEditor = await canEdit();
   const isPayer = session?.user?.memberId != null && session.user.memberId === payer;
-  if (!isEditor && !(isPayer && source === "already")) return;
+  if (!isEditor && !isPayer) return;
 
   const already = await prisma.billPayment.findUnique({ where: { categoryId_periodId: { categoryId, periodId } } });
   if (already) return; // already paid this period
@@ -845,12 +850,15 @@ export async function payPeriodicBill(formData: FormData) {
 // Undo a periodic-bill payment (head/manager, open month): reverse the fund/Piggy draws and the
 // out-of-pocket Misc spend, and drop the BillPayment record.
 export async function unpayPeriodicBill(formData: FormData) {
-  if (!(await canEdit())) return; // head + manager
+  const session = await auth();
   const categoryId = Number(formData.get("categoryId"));
   const periodId = Number(formData.get("periodId"));
   if (!categoryId || !periodId) return;
   const bp = await prisma.billPayment.findUnique({ where: { categoryId_periodId: { categoryId, periodId } } });
   if (!bp) return;
+  // head + manager may undo any payment; the bill's own payer may undo their own.
+  const isPayer = session?.user?.memberId != null && session.user.memberId === bp.memberId;
+  if (!(await canEdit()) && !isPayer) return;
   const sp = bp.spendPeriodId ?? bp.periodId; // where the money moved (the OPEN month for a carried pay)
   if (!(await periodOpen(sp))) return;
   const cat = await prisma.category.findUnique({ where: { id: categoryId }, select: { name: true } });
