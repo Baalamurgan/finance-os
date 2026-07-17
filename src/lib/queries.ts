@@ -493,9 +493,9 @@ export type InHand = Awaited<ReturnType<typeof getInHand>>;
  * default to the head and always appear even with no personal in-hand.
  */
 export async function getInHand(householdId: number, periodId: number) {
-  const [household, period, categories, budgets, spends, billLines, miscLines, fundLines, fundCats, sinkBal, billPayments, members, piggy, incomeAgg, expenseAgg] = await Promise.all([
+  const [household, period, categories, budgets, spends, billLines, miscLines, fundLines, fundCats, sinkBal, billPayments, members, piggy, incomeAgg, expenseAgg, carriedRaw] = await Promise.all([
     prisma.household.findUnique({ where: { id: householdId }, select: { treasurerMemberId: true, piggyHolderMemberId: true } }),
-    prisma.period.findUnique({ where: { id: periodId }, select: { treasurerMemberId: true, status: true, month: true } }),
+    prisma.period.findUnique({ where: { id: periodId }, select: { treasurerMemberId: true, status: true, month: true, year: true } }),
     prisma.category.findMany({ where: { householdId, tracked: true, onHold: false } }),
     prisma.budget.findMany({ where: { periodId } }),
     prisma.spend.findMany({ where: { periodId } }),
@@ -522,6 +522,14 @@ export async function getInHand(householdId: number, periodId: number) {
     getPiggyOverview(householdId),
     prisma.incomeEntry.aggregate({ where: { periodId }, _sum: { amount: true } }),
     prisma.expenseEntry.aggregate({ where: { periodId }, _sum: { amount: true } }),
+    // Carried-over unpaid bills: regular (non-fund) bill lines from earlier CLOSED months that
+    // were never marked paid. They're already accounted in that month's settlement, so they ride
+    // in the current In-Hand purely as a "you still haven't paid the vendor" nag — net-neutral,
+    // never added to the total, cleared by ticking ✓ paid (which flips that old entry).
+    prisma.expenseEntry.findMany({
+      where: { note: null, paid: false, category: { tracked: false, fundingStyle: null }, period: { householdId, status: "closed" } },
+      select: { id: true, label: true, amount: true, memberId: true, period: { select: { year: true, month: true, label: true } } },
+    }),
   ]);
   const isDraft = period?.status === "draft";
   // In a draft, Misc lines are a lump estimate (below), so keep them OUT of the bill list.
@@ -596,6 +604,15 @@ export async function getInHand(householdId: number, periodId: number) {
     projectionLabel = priorOpen.length === 1 ? priorOpen[0].label : "wind-down";
   }
 
+  // Carried unpaid bills only make sense in the live (open/draft) month, and only for months
+  // strictly BEFORE it — so a closed month you're browsing doesn't show later months' nags.
+  const curY = period?.year ?? 0;
+  const curM = period?.month ?? 0;
+  const carriedBills =
+    period?.status === "closed"
+      ? []
+      : carriedRaw.filter((e) => e.period.year < curY || (e.period.year === curY && e.period.month < curM));
+
   const paidCats = new Map(billPayments.map((p) => [p.categoryId, p]));
   // How much of each category's set-aside a due-month bill already consumed this period.
   const consumedByCat = new Map<number, number>();
@@ -627,13 +644,19 @@ export async function getInHand(householdId: number, periodId: number) {
     const unpaidPeriodic = memberDue.filter((b) => !b.paid).map((b) => ({ categoryId: b.categoryId, name: b.name, bill: b.bill, fund: b.fund, afterWindDown: b.afterWindDown }));
     const paidPeriodic = memberDue.filter((b) => b.paid).map((b) => ({ categoryId: b.categoryId, name: b.name, bill: b.bill, fund: b.fund, afterWindDown: b.afterWindDown }));
 
+    // bills carried over from an earlier closed month, still not marked paid (net-neutral nag)
+    const carried = carriedBills
+      .filter((e) => (e.memberId ?? null) === key)
+      .map((e) => ({ id: e.id, name: e.label, amount: e.amount, from: e.period.label }));
+
     const budgetRemaining = cats.reduce((s, r) => s + r.remaining, 0);
     const unpaidTotal = unpaidBills.reduce((s, b) => s + b.amount, 0);
     const earmarkedTotal = earmarked.reduce((s, e) => s + e.amount, 0);
     const miscSpent = miscByMember.get(key) ?? 0;
     return {
-      memberId: key, name, cats, unpaidBills, paidBills, earmarked, unpaidPeriodic, paidPeriodic,
+      memberId: key, name, cats, unpaidBills, paidBills, earmarked, unpaidPeriodic, paidPeriodic, carried,
       budgetRemaining, unpaidTotal, earmarkedTotal, miscSpent,
+      // carried bills are NOT in `net` — they were already settled in their own month.
       net: budgetRemaining + unpaidTotal + earmarkedTotal - miscSpent,
     };
   };
@@ -646,7 +669,7 @@ export async function getInHand(householdId: number, periodId: number) {
   // pool/piggy row always shows, even with no personal in-hand).
   const byPerson = members
     .map((m) => build(m.id, m.name))
-    .filter((g) => g.cats.length > 0 || g.miscSpent > 0 || g.unpaidBills.length > 0 || g.paidBills.length > 0 || g.earmarked.length > 0 || g.unpaidPeriodic.length > 0 || g.paidPeriodic.length > 0 || g.memberId === treasurerId || g.memberId === piggyHolderId);
+    .filter((g) => g.cats.length > 0 || g.miscSpent > 0 || g.unpaidBills.length > 0 || g.paidBills.length > 0 || g.earmarked.length > 0 || g.unpaidPeriodic.length > 0 || g.paidPeriodic.length > 0 || g.carried.length > 0 || g.memberId === treasurerId || g.memberId === piggyHolderId);
   const shared = build(null, "Shared / pool");
   const piggyTotal = piggy.generalTotal + piggy.sinking.reduce((s, x) => s + x.hold, 0);
   const monthBalance = (incomeAgg._sum.amount ?? 0) - (expenseAgg._sum.amount ?? 0);

@@ -135,7 +135,7 @@ function PersonGroup({
   currentMemberId: number | null;
   open: boolean;
 }) {
-  const { name, cats, unpaidBills, paidBills, earmarked, unpaidPeriodic, paidPeriodic, miscSpent, net } = group;
+  const { name, cats, unpaidBills, paidBills, earmarked, unpaidPeriodic, paidPeriodic, carried, miscSpent, net } = group;
   // The bill's payer (this group) may mark their OWN bill "already paid" even without
   // edit rights — a small button when the full pay modal (head/manager) isn't shown.
   const selfPayer = !canToggle && open && group.memberId === currentMemberId;
@@ -157,6 +157,30 @@ function PersonGroup({
         </span>
       </div>
       <ul className="mt-2 space-y-1">
+        {/* Pinned to the TOP: bills from an earlier month that were never marked paid. A pure
+            nag — already settled in their own month, so greyed and NOT part of this month's total. */}
+        {carried.length > 0 && (
+          <>
+            <li>
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-[10px] font-semibold uppercase tracking-wide text-rose-600">⏰ Overdue — not marked paid</span>
+                <span className="text-[9px] text-slate-400">reminder only · not in your total</span>
+              </div>
+            </li>
+            {carried.map((c) => (
+              <li key={`cb${c.id}`} className="flex items-center justify-between gap-2 text-xs">
+                <span className="truncate text-slate-400">
+                  {c.name} <span className="text-[10px] text-rose-400">carried from {c.from}</span>
+                </span>
+                <span className="flex shrink-0 items-center gap-1.5">
+                  <span className="tabular-nums text-slate-400">{formatINR(c.amount)}</span>
+                  {canToggle && <PaidToggle id={c.id} title="Mark this carried-over bill paid" label="✓ paid" />}
+                </span>
+              </li>
+            ))}
+            <li className="pb-0.5"><div className="border-b border-dashed border-rose-100" /></li>
+          </>
+        )}
         {cats.map((cat) => (
           <li key={cat.id} className="flex items-center justify-between gap-2 text-xs">
             <span className="truncate text-slate-500">{cat.name}</span>

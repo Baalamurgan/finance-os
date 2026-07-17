@@ -9,7 +9,7 @@ import { isUnlocked } from "@/lib/applock";
 import { formatINR, parseAmount } from "@/lib/format";
 import { generateMonth } from "@/lib/periodClone";
 import { isMiscBucket, MISC_SUBCATEGORIES } from "@/lib/misc";
-import { planBillMonth, type FundingStyle } from "@/lib/schedule";
+import { planBillMonth, isLumpDue, type FundingStyle } from "@/lib/schedule";
 
 // Record a money-affecting change for the head-only activity log (who + what + when).
 async function logActivity(
@@ -1582,6 +1582,7 @@ export async function windDownMonth(formData: FormData) {
   const fundBalance = (catId: number) => sinkFunds.find((f) => f.categoryId === catId)?._sum.amount ?? 0;
   const skippedSetAside = new Set(setAsideSkips.map((s) => s.categoryId));
   const fromSetAsideByCat = new Map(billPays.map((b) => [b.categoryId, b.fromSetAside]));
+  const paidThisPeriod = new Set(billPays.map((b) => b.categoryId));
   // What each bill-with-fund category actually set aside this month (the real Sheet lines held) —
   // the fund accrues exactly this, minus any part a due-month bill already consumed from it.
   const setAsideLineByCat = new Map<number, number>();
@@ -1683,7 +1684,19 @@ export async function windDownMonth(formData: FormData) {
         delta = plan.kind === "bill" ? -plan.fromFund : 0;
       } else {
         const line = skippedSetAside.has(cat.id) ? 0 : setAsideLineByCat.get(cat.id) ?? 0;
-        delta = Math.round((line - consumed) * 100) / 100;
+        // Subscription-style ("skip"): if the bill was DUE this month and never paid, the held
+        // share doesn't carry into the fund — release it to general Piggy so a monthly bill's
+        // fund can't silently pile up month after month. Otherwise it accrues to the fund as
+        // usual (a "carry" bill's unpaid share simply stays in the fund toward the next due).
+        const dueUnpaid = isLumpDue(cat.billMonth, cat.billEveryMonths, { month: period.month }) && !paidThisPeriod.has(cat.id);
+        if (cat.onUnpaid === "skip" && dueUnpaid && line > 0) {
+          await tx.piggyEntry.create({
+            data: { householdId, periodId, kind: "piggy", amount: Math.round(line * 100) / 100, note: `${period.label} · ${cat.name} skipped → Piggy` },
+          });
+          delta = 0;
+        } else {
+          delta = Math.round((line - consumed) * 100) / 100;
+        }
       }
       if (delta !== 0) {
         await tx.piggyEntry.create({
