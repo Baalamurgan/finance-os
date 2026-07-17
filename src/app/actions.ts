@@ -790,10 +790,8 @@ export async function payPeriodicBill(formData: FormData) {
     prisma.expenseEntry.aggregate({ where: { periodId, categoryId, OR: [{ label: { endsWith: "(saving)" } }, { label: { endsWith: "(monthly share)" } }] }, _sum: { amount: true } }),
   ]);
   const round = (x: number) => Math.round(x * 100) / 100;
-  // Available fund = accrued sinking balance + this month's set-aside (the due month's own share
-  // may go toward the bill). Drawing beyond the accrued balance dips negative until wind-down
-  // accrues the set-aside, which nets it back — correct at the household level.
-  const fund = round(Math.max(0, fundAgg._sum.amount ?? 0) + Math.max(0, setAsideAgg._sum.amount ?? 0));
+  const accrued = Math.max(0, round(fundAgg._sum.amount ?? 0)); // real, already-in-the-fund money
+  const setAside = Math.max(0, round(setAsideAgg._sum.amount ?? 0)); // this month's own share (not yet accrued)
   const piggyAvail = Math.max(0, piggyAgg._sum.amount ?? 0);
 
   // The actual amount to pay (varies per bill); defaults to the configured bill. Anything the
@@ -801,8 +799,15 @@ export async function payPeriodicBill(formData: FormData) {
   const actualRaw = parseAmount(formData.get("amount"));
   const actual = actualRaw && actualRaw > 0 ? round(actualRaw) : bill;
 
-  const fromFund = round(Math.min(fund, actual)); // fund first & fully (only up to what's paid)
+  // Offset model — the fund never goes negative:
+  //  1. draw from the ACCRUED fund only (a real ledger draw, ≤ accrued),
+  //  2. then cover from THIS month's set-aside (fromSetAside) — no ledger draw; it simply
+  //     cancels that set-aside's wind-down accrual (the money goes straight to the bill),
+  //  3. then the general Piggy, 4. then out-of-pocket (the payer's misc spend).
+  const fromFund = round(Math.min(accrued, actual));
   let remaining = round(actual - fromFund);
+  const fromSetAside = round(Math.min(setAside, remaining));
+  remaining = round(remaining - fromSetAside);
   let fromPiggy = 0;
   if (remaining > 0 && source === "piggy") {
     fromPiggy = round(Math.min(piggyAvail, remaining));
@@ -815,7 +820,7 @@ export async function payPeriodicBill(formData: FormData) {
     if (fromFund > 0) await tx.piggyEntry.create({ data: { householdId: cat.householdId, periodId, categoryId, kind: "sinking", amount: -fromFund, note: `${cat.name} bill paid` } });
     if (fromPiggy > 0) await tx.piggyEntry.create({ data: { householdId: cat.householdId, periodId, kind: "piggy", amount: -fromPiggy, note: `${cat.name} bill paid` } });
     if (outOfPocket > 0 && miscCat) await tx.spend.create({ data: { periodId, categoryId: miscCat.id, memberId: payer, label: `${cat.name} bill (out-of-pocket)`, amount: outOfPocket, subCategory: null } });
-    await tx.billPayment.create({ data: { householdId: cat.householdId, categoryId, periodId, memberId: payer, fromFund, fromPiggy, outOfPocket } });
+    await tx.billPayment.create({ data: { householdId: cat.householdId, categoryId, periodId, memberId: payer, fromFund, fromSetAside, fromPiggy, outOfPocket } });
   });
   await logActivity("expense", "created", `Paid ${cat.name} bill ${formatINR(actual)}`, periodId);
   revalidatePath("/", "layout");
@@ -1556,7 +1561,7 @@ export async function windDownMonth(formData: FormData) {
   if (!period || period.status !== "open") return;
   const householdId = period.householdId;
 
-  const [incomes, expenses, budgets, spends, trackedCats, billFundCats, sinkFunds, setAsideSkips] = await Promise.all([
+  const [incomes, expenses, budgets, spends, trackedCats, billFundCats, sinkFunds, setAsideSkips, billPays] = await Promise.all([
     prisma.incomeEntry.findMany({ where: { periodId } }),
     prisma.expenseEntry.findMany({ where: { periodId } }),
     prisma.budget.findMany({ where: { periodId } }),
@@ -1565,9 +1570,19 @@ export async function windDownMonth(formData: FormData) {
     prisma.category.findMany({ where: { householdId, onHold: false, NOT: { fundingStyle: null } } }),
     prisma.piggyEntry.groupBy({ by: ["categoryId"], where: { householdId, kind: "sinking" }, _sum: { amount: true } }),
     prisma.setAsideSkip.findMany({ where: { periodId }, select: { categoryId: true } }),
+    prisma.billPayment.findMany({ where: { periodId }, select: { categoryId: true, fromSetAside: true } }),
   ]);
   const fundBalance = (catId: number) => sinkFunds.find((f) => f.categoryId === catId)?._sum.amount ?? 0;
   const skippedSetAside = new Set(setAsideSkips.map((s) => s.categoryId));
+  const fromSetAsideByCat = new Map(billPays.map((b) => [b.categoryId, b.fromSetAside]));
+  // What each bill-with-fund category actually set aside this month (the real Sheet lines held) —
+  // the fund accrues exactly this, minus any part a due-month bill already consumed from it.
+  const setAsideLineByCat = new Map<number, number>();
+  for (const e of expenses) {
+    if (e.categoryId != null && (e.label.endsWith("(saving)") || e.label.endsWith("(monthly share)"))) {
+      setAsideLineByCat.set(e.categoryId, (setAsideLineByCat.get(e.categoryId) ?? 0) + e.amount);
+    }
+  }
 
   const income = incomes.reduce((s, i) => s + i.amount, 0);
   const expense = expenses.reduce((s, e) => s + e.amount, 0);
@@ -1644,22 +1659,25 @@ export async function windDownMonth(formData: FormData) {
     }
 
     // Goal-based "bill with a fund": the set-aside accrues into the fund; at the due month
-    // the bill draws from it. Recomputed from the same inputs generateMonth used, so the
-    // fund tracks exactly what the sheet showed.
+    // the bill is paid from it. AUTO/fixed → accrue the actual Sheet set-aside line held this
+    // month, minus any part a due-month bill already consumed from it (fromSetAside) — so a
+    // consumed set-aside doesn't also pile back into the fund (the offset model; fund never
+    // goes negative). PAY-IN-FULL ("none") → the due-month bill draws the fund as before.
     for (const cat of billFundCats) {
       if (cat.billAmount == null || cat.billAmount <= 0 || cat.billMonth == null || cat.billEveryMonths == null) continue;
-      const plan = planBillMonth({
-        billAmount: cat.billAmount,
-        billMonth: cat.billMonth,
-        everyMonths: cat.billEveryMonths,
-        fund: fundBalance(cat.id),
-        fundingStyle: cat.fundingStyle as FundingStyle,
-        fixedShare: cat.monthlyBudget,
-        saveEveryMonths: cat.saveEveryMonths,
-        month: period.month,
-      });
-      const skipped = skippedSetAside.has(cat.id);
-      const delta = plan.kind === "save" ? (skipped ? 0 : plan.contribution) : plan.kind === "bill" ? -plan.fromFund : 0;
+      const consumed = fromSetAsideByCat.get(cat.id) ?? 0;
+      let delta = 0;
+      if (cat.fundingStyle === "none") {
+        const plan = planBillMonth({
+          billAmount: cat.billAmount, billMonth: cat.billMonth, everyMonths: cat.billEveryMonths,
+          fund: fundBalance(cat.id), fundingStyle: "none", fixedShare: cat.monthlyBudget,
+          saveEveryMonths: cat.saveEveryMonths, month: period.month,
+        });
+        delta = plan.kind === "bill" ? -plan.fromFund : 0;
+      } else {
+        const line = skippedSetAside.has(cat.id) ? 0 : setAsideLineByCat.get(cat.id) ?? 0;
+        delta = Math.round((line - consumed) * 100) / 100;
+      }
       if (delta !== 0) {
         await tx.piggyEntry.create({
           data: { householdId, periodId, categoryId: cat.id, kind: "sinking", amount: delta, note: `${period.label} · ${cat.name}` },

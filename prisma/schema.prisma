@@ -385,7 +385,8 @@ model BillPayment {
   categoryId  Int
   periodId    Int
   memberId    Int? // the payer
-  fromFund    Float    @default(0) // drawn from the bill's own sinking fund
+  fromFund    Float    @default(0) // drawn from the bill's own ACCRUED sinking fund
+  fromSetAside Float   @default(0) // covered by THIS month's own set-aside (cancels its wind-down accrual; no ledger draw)
   fromPiggy   Float    @default(0) // drawn from the general Piggy
   outOfPocket Float    @default(0) // paid out-of-pocket (also logged as a Misc Spend on the payer)
   paidAt      DateTime @default(now())

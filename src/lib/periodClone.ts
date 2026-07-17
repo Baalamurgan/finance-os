@@ -23,7 +23,7 @@ export async function generateMonth(
   targetId: number,
   householdId: number,
 ) {
-  const [period, items, cats, funds, pending, _skips] = await Promise.all([
+  const [period, items, cats, funds, pending, _skips, openPeriods] = await Promise.all([
     tx.period.findUnique({ where: { id: targetId }, select: { year: true, month: true } }),
     tx.recurringItem.findMany({ where: { householdId, active: true }, orderBy: { sortOrder: "asc" } }),
     tx.category.findMany({ where: { householdId }, select: { id: true, name: true, tracked: true, sinking: true, onHold: true, necessary: true, monthlyBudget: true, responsibleMemberId: true, payerMemberId: true, billEveryMonths: true, billMonth: true, billAmount: true, fundingStyle: true, saveEveryMonths: true } }),
@@ -32,13 +32,24 @@ export async function generateMonth(
     // wind-down) — count them so a draft's shares reflect what the fund WILL hold, not what it holds now.
     tx.expenseEntry.findMany({ where: { periodId: { not: targetId }, period: { householdId, status: "open" }, category: { fundingStyle: { not: null } }, OR: [{ label: { endsWith: "(saving)" } }, { label: { endsWith: "(monthly share)" } }] }, select: { categoryId: true, amount: true } }),
     tx.setAsideSkip.findMany({ where: { periodId: targetId }, select: { categoryId: true } }),
+    // open month(s) whose set-asides are still pending (≠ the target draft) — used to scope the
+    // bill-payment lookup below (BillPayment has no period relation, just a scalar periodId).
+    tx.period.findMany({ where: { householdId, status: "open", id: { not: targetId } }, select: { id: true } }),
   ]);
+  // bill payments in those open month(s): the part they took from THIS month's set-aside won't
+  // accrue (the offset model), so subtract it from the pending count below.
+  const openIds = openPeriods.map((p) => p.id);
+  const pendingBillPays = openIds.length
+    ? await tx.billPayment.findMany({ where: { periodId: { in: openIds } }, select: { categoryId: true, fromSetAside: true } })
+    : [];
   const skippedSetAside = new Set(_skips.map((s) => s.categoryId)); // bills whose set-aside is skipped this month
   const catById = new Map(cats.map((c) => [c.id, c]));
-  // fund a goal-based bill can count on = accrued piggyEntry + this month's not-yet-accrued set-aside
+  // fund a goal-based bill can count on = accrued piggyEntry + this month's not-yet-accrued
+  // set-aside, minus any part a paid due-month bill already consumed from that set-aside.
   const fundByCat = new Map<number, number>();
   for (const f of funds) if (f.categoryId != null) fundByCat.set(f.categoryId, f._sum.amount ?? 0);
   for (const e of pending) if (e.categoryId != null) fundByCat.set(e.categoryId, (fundByCat.get(e.categoryId) ?? 0) + e.amount);
+  for (const p of pendingBillPays) fundByCat.set(p.categoryId, (fundByCat.get(p.categoryId) ?? 0) - p.fromSetAside);
   const isBillWithFund = (categoryId: number | null): boolean => {
     if (categoryId == null) return false;
     const c = catById.get(categoryId);

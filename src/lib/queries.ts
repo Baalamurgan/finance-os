@@ -151,7 +151,7 @@ export async function getPiggyOverview(householdId: number) {
  * Returns the getPiggyOverview shape plus a projected per-category `sinkingBalances`.
  */
 export async function getProjectedPiggy(householdId: number, sourcePeriodId: number) {
-  const [base, baseBalances, budgets, spends, trackedCats, billSetAsides] = await Promise.all([
+  const [base, baseBalances, budgets, spends, trackedCats, billSetAsides, billPays] = await Promise.all([
     getPiggyOverview(householdId),
     getSinkingBalances(householdId),
     prisma.budget.findMany({ where: { periodId: sourcePeriodId } }),
@@ -159,6 +159,9 @@ export async function getProjectedPiggy(householdId: number, sourcePeriodId: num
     prisma.category.findMany({ where: { householdId, tracked: true, onHold: false } }),
     // bill-with-a-fund set-asides in the source month accrue to their fund at wind-down
     prisma.expenseEntry.findMany({ where: { periodId: sourcePeriodId, category: { fundingStyle: { not: null } }, OR: [{ label: { endsWith: "(saving)" } }, { label: { endsWith: "(monthly share)" } }] }, select: { categoryId: true, amount: true, category: { select: { name: true } } } }),
+    // any due-month bill paid in the source month: the part it took from that month's set-aside
+    // won't accrue (offset model), so subtract it from the projected accrual below.
+    prisma.billPayment.findMany({ where: { periodId: sourcePeriodId }, select: { categoryId: true, fromSetAside: true } }),
   ]);
   const budgetOf = (c: number) => budgets.find((b) => b.categoryId === c)?.planned ?? 0;
   const spentOf = (c: number) => spends.filter((s) => s.categoryId === c).reduce((a, s) => a + s.amount, 0);
@@ -181,6 +184,10 @@ export async function getProjectedPiggy(householdId: number, sourcePeriodId: num
     if (e.categoryId == null) continue;
     accrualByCat.set(e.categoryId, (accrualByCat.get(e.categoryId) ?? 0) + e.amount);
     nameById.set(e.categoryId, e.category.name);
+  }
+  // …minus any part a due-month bill already consumed from that set-aside (offset model)
+  for (const p of billPays) {
+    if (p.fromSetAside > 0) accrualByCat.set(p.categoryId, (accrualByCat.get(p.categoryId) ?? 0) - p.fromSetAside);
   }
 
   // projected per-fund balances (by categoryId) for the sinking-fund list
