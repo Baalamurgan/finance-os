@@ -26,7 +26,7 @@ export async function getSkippedSetAsides(householdId: number, periodId: number)
       // After skipping this month's set-aside, the remaining save-months carry the same
       // target — each rises by savesLeft/(savesLeft−1). savesLeft ≤ 1 → last save → shortfall
       // lands out-of-pocket at the due month (no re-spread). Mirrors the Sheet remove dialog.
-      const savesLeft = monthsUntilNextDue(c.billMonth!, c.billEveryMonths!, curMonth) / Math.max(1, c.saveEveryMonths ?? 1);
+      const savesLeft = monthsUntilNextDue(c.billMonth!, c.billEveryMonths!, curMonth) / Math.max(1, c.saveEveryMonths ?? 1) + 1; // +1 = the due month's own share
       const newShare = savesLeft > 1 ? Math.round(((amount * savesLeft) / (savesLeft - 1)) * 100) / 100 : null;
       // Is the bill itself due this month or next? (current sheet is a preview of the month)
       const cyc = Math.max(1, Math.round(c.billEveryMonths!));
@@ -565,10 +565,16 @@ export async function getInHand(householdId: number, periodId: number) {
   // Due-month periodic bills to pay — synthesized from config (auto bills no longer put the bill
   // on the Sheet). Tagged to the PAYER; net-neutral in-hand (paid from the fund/Piggy in the pay
   // modal, any out-of-pocket becomes a Misc Spend then). "Pay in full" bills stay a Sheet expense.
+  // Fund available to pay a due-month bill = the ACCRUED sinking balance PLUS this month's own
+  // set-aside (not yet accrued until wind-down). The due month's share is allowed to go toward
+  // the bill, so it counts as available now (paying draws it; wind-down accrual reconciles).
+  const pendingByCat = new Map<number, number>();
+  for (const e of savingLines) pendingByCat.set(e.categoryId, (pendingByCat.get(e.categoryId) ?? 0) + e.amount);
+
   const paidCats = new Map(billPayments.map((p) => [p.categoryId, p]));
   const dueBills = fundCats
     .filter((c) => c.fundingStyle === "auto" && c.billAmount != null && c.billAmount > 0 && c.billMonth != null && c.billEveryMonths != null && isLumpDue(c.billMonth, c.billEveryMonths, { month: period?.month ?? 0 }))
-    .map((c) => ({ categoryId: c.id, name: c.name, bill: c.billAmount!, payer: c.payerMemberId ?? c.responsibleMemberId ?? null, fund: Math.round((sinkBal[c.id] ?? 0) * 100) / 100, paid: paidCats.has(c.id) }));
+    .map((c) => ({ categoryId: c.id, name: c.name, bill: c.billAmount!, payer: c.payerMemberId ?? c.responsibleMemberId ?? null, fund: Math.round(((sinkBal[c.id] ?? 0) + (pendingByCat.get(c.id) ?? 0)) * 100) / 100, paid: paidCats.has(c.id) }));
 
   const build = (key: number | null, name: string) => {
     const cats = rows.filter((r) => (r.responsibleMemberId ?? null) === key);

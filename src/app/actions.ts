@@ -778,16 +778,26 @@ export async function payPeriodicBill(formData: FormData) {
     return;
   }
 
-  const [fundAgg, piggyAgg] = await Promise.all([
+  const [fundAgg, piggyAgg, setAsideAgg] = await Promise.all([
     prisma.piggyEntry.aggregate({ where: { householdId: cat.householdId, categoryId, kind: "sinking" }, _sum: { amount: true } }),
     prisma.piggyEntry.aggregate({ where: { householdId: cat.householdId, kind: "piggy" }, _sum: { amount: true } }),
+    // this month's own set-aside — allowed toward the bill (not yet accrued; wind-down reconciles)
+    prisma.expenseEntry.aggregate({ where: { periodId, categoryId, OR: [{ label: { endsWith: "(saving)" } }, { label: { endsWith: "(monthly share)" } }] }, _sum: { amount: true } }),
   ]);
   const round = (x: number) => Math.round(x * 100) / 100;
-  const fund = Math.max(0, fundAgg._sum.amount ?? 0);
+  // Available fund = accrued sinking balance + this month's set-aside (the due month's own share
+  // may go toward the bill). Drawing beyond the accrued balance dips negative until wind-down
+  // accrues the set-aside, which nets it back — correct at the household level.
+  const fund = round(Math.max(0, fundAgg._sum.amount ?? 0) + Math.max(0, setAsideAgg._sum.amount ?? 0));
   const piggyAvail = Math.max(0, piggyAgg._sum.amount ?? 0);
 
-  const fromFund = round(Math.min(fund, bill)); // fund first & fully
-  let remaining = round(bill - fromFund);
+  // The actual amount to pay (varies per bill); defaults to the configured bill. Anything the
+  // fund doesn't need is simply left in the fund (we only draw what's paid).
+  const actualRaw = parseAmount(formData.get("amount"));
+  const actual = actualRaw && actualRaw > 0 ? round(actualRaw) : bill;
+
+  const fromFund = round(Math.min(fund, actual)); // fund first & fully (only up to what's paid)
+  let remaining = round(actual - fromFund);
   let fromPiggy = 0;
   if (remaining > 0 && source === "piggy") {
     fromPiggy = round(Math.min(piggyAvail, remaining));
@@ -802,7 +812,7 @@ export async function payPeriodicBill(formData: FormData) {
     if (outOfPocket > 0 && miscCat) await tx.spend.create({ data: { periodId, categoryId: miscCat.id, memberId: payer, label: `${cat.name} bill (out-of-pocket)`, amount: outOfPocket, subCategory: null } });
     await tx.billPayment.create({ data: { householdId: cat.householdId, categoryId, periodId, memberId: payer, fromFund, fromPiggy, outOfPocket } });
   });
-  await logActivity("expense", "created", `Paid ${cat.name} bill ${formatINR(bill)}`, periodId);
+  await logActivity("expense", "created", `Paid ${cat.name} bill ${formatINR(actual)}`, periodId);
   revalidatePath("/", "layout");
 }
 

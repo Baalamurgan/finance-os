@@ -91,7 +91,7 @@ function ExpenseRow({
   // shortfall lands out-of-pocket at the due month.
   const savesLeft =
     isSetAside && e.category.billMonth != null && e.category.billEveryMonths != null
-      ? monthsUntilNextDue(e.category.billMonth, e.category.billEveryMonths, periodMonth) / Math.max(1, e.category.saveEveryMonths ?? 1)
+      ? monthsUntilNextDue(e.category.billMonth, e.category.billEveryMonths, periodMonth) / Math.max(1, e.category.saveEveryMonths ?? 1) + 1 // +1 = the due month's own share
       : 0;
   const newShare = savesLeft > 1 ? Math.round(((e.amount * savesLeft) / (savesLeft - 1)) * 100) / 100 : null;
   const removeMsg =

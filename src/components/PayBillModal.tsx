@@ -22,15 +22,21 @@ export function PayBillModal({
   generalPiggy: number;
 }) {
   const [open, setOpen] = useState(false);
+  // The ACTUAL amount to pay — bills like EB/WiFi vary month to month; defaults to the
+  // configured amount. Whatever the fund doesn't need is simply left in the fund.
+  const [amountStr, setAmountStr] = useState(String(bill));
   useEffect(() => {
     if (!open) return;
+    setAmountStr(String(bill));
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [open]);
+  }, [open, bill]);
 
-  const fromFund = Math.min(fund, bill);
-  const remaining = Math.round((bill - fromFund) * 100) / 100;
+  const actual = Math.max(0, Math.round((Number(amountStr) || 0) * 100) / 100);
+  const fromFund = Math.min(fund, actual);
+  const remaining = Math.round((actual - fromFund) * 100) / 100;
+  const leftover = Math.round((fund - fromFund) * 100) / 100; // stays in the fund
   const fundCovers = remaining <= 0;
 
   const hidden = (source: string) => (
@@ -38,6 +44,7 @@ export function PayBillModal({
       <input type="hidden" name="categoryId" value={categoryId} />
       <input type="hidden" name="periodId" value={periodId} />
       <input type="hidden" name="source" value={source} />
+      <input type="hidden" name="amount" value={actual} />
     </>
   );
 
@@ -60,12 +67,32 @@ export function PayBillModal({
               <button type="button" onClick={() => setOpen(false)} aria-label="Close" className="rounded-md px-2 text-2xl leading-none text-slate-400 hover:bg-slate-100">✕</button>
             </div>
             <div className="space-y-4 px-5 py-5">
-              <div className="rounded-xl bg-slate-50 p-3 text-sm">
-                <div className="flex justify-between"><span className="text-slate-500">Bill</span><span className="font-semibold tabular-nums">{formatINR(bill)}</span></div>
-                <div className="flex justify-between"><span className="text-slate-500">From its fund</span><span className="tabular-nums text-teal-700">− {formatINR(fromFund)}</span></div>
-                {!fundCovers && (
-                  <div className="mt-1 flex justify-between border-t border-slate-200 pt-1 font-medium"><span className="text-slate-600">Remaining</span><span className="tabular-nums text-red-600">{formatINR(remaining)}</span></div>
-                )}
+              <div className="space-y-2">
+                <label className="block text-xs font-medium text-slate-500">
+                  Actual amount to pay
+                  <input
+                    type="number"
+                    inputMode="decimal"
+                    min={0}
+                    step="0.01"
+                    value={amountStr}
+                    onChange={(e) => setAmountStr(e.target.value)}
+                    className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-base font-semibold tabular-nums text-slate-800 focus:border-teal-400 focus:outline-none"
+                  />
+                  <span className="mt-0.5 block text-[10px] font-normal text-slate-400">
+                    Configured bill {formatINR(bill)} — edit to the real amount this month.
+                  </span>
+                </label>
+                <div className="rounded-xl bg-slate-50 p-3 text-sm">
+                  <div className="flex justify-between"><span className="text-slate-500">Fund available</span><span className="tabular-nums text-slate-600">{formatINR(fund)}</span></div>
+                  <div className="flex justify-between"><span className="text-slate-500">From its fund</span><span className="tabular-nums text-teal-700">− {formatINR(fromFund)}</span></div>
+                  {fundCovers && leftover > 0 && (
+                    <div className="flex justify-between"><span className="text-slate-500">Stays in the fund</span><span className="tabular-nums text-slate-500">{formatINR(leftover)}</span></div>
+                  )}
+                  {!fundCovers && (
+                    <div className="mt-1 flex justify-between border-t border-slate-200 pt-1 font-medium"><span className="text-slate-600">Remaining</span><span className="tabular-nums text-red-600">{formatINR(remaining)}</span></div>
+                  )}
+                </div>
               </div>
 
               {fundCovers ? (
@@ -75,7 +102,7 @@ export function PayBillModal({
                     <p className="text-xs text-slate-500">The fund fully covers this bill.</p>
                     <div className="flex items-center gap-3">
                       <button type="button" onClick={() => setOpen(false)} className="min-h-11 flex-1 rounded-xl border-2 border-slate-200 px-4 py-2.5 text-sm font-medium text-slate-600">Cancel</button>
-                      <button type="submit" className="min-h-11 flex-1 rounded-xl bg-teal-600 px-4 py-2.5 text-sm font-semibold text-white">Pay from fund</button>
+                      <button type="submit" disabled={actual <= 0} className="min-h-11 flex-1 rounded-xl bg-teal-600 px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-40">Pay {formatINR(actual)} from fund</button>
                     </div>
                   </form>
                   <AlreadyPaidButton hidden={hidden} onDone={() => setOpen(false)} />

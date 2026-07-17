@@ -109,7 +109,10 @@ export function planBillMonth(input: {
   const left = monthsUntilNextDue(billMonth, everyMonths, month); // 1..everyMonths-1 in saving months
   if (left % S !== 0) return { kind: "none" }; // not a save-cadence month
   const remaining = Math.max(0, billAmount - fund);
-  const savesLeft = left / S; // cadence saves from now (inclusive) through the month before due
+  // Cadence saves from now (inclusive) through the DUE month inclusive — the +1 is the due
+  // month's own share, which also goes toward paying the bill (the fund fills ON the due
+  // month, not before it). Keeps shares small & flat instead of front-loading near the due date.
+  const savesLeft = left / S + 1;
   return { kind: "save", contribution: Math.round((remaining / savesLeft) * 100) / 100 };
 }
 
