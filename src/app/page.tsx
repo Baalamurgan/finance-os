@@ -11,6 +11,7 @@ import { IncomeModal } from "@/components/IncomeModal";
 import { IncomeRowActions } from "@/components/IncomeRowActions";
 import { MoneyFlowDonut } from "@/components/Charts";
 import { ConfirmForm } from "@/components/ConfirmForm";
+import { SheetLockNotice } from "@/components/SheetLockNotice";
 import { monthsUntilNextDue } from "@/lib/schedule";
 import { createPeriod, deleteIncome, createNextMonthDraft, rebuildDraft, discardDraft, skipSetAside, restoreSetAside } from "./actions";
 
@@ -18,24 +19,41 @@ const SECTION_COLOR: Record<string, string> = {
   Loans: "#ef4444",
   Chits: "#f59e0b",
   Monthly: "#6366f1",
+  PiggyBudget: "#0ea5e9",
   Yearly: "#14b8a6",
   Misc: "#a855f7",
 };
 
-const SECTION_ORDER = ["Loans", "Chits", "Monthly", "Yearly", "Misc"] as const;
+const SECTION_ORDER = ["Loans", "Chits", "Monthly", "PiggyBudget", "Yearly", "Misc"] as const;
 const SECTION_LABEL: Record<string, string> = {
   Loans: "Loans",
   Chits: "Chits",
   Monthly: "Monthly Expense",
+  PiggyBudget: "Budgeted · leftover → Piggy",
   Yearly: "Yearly / Periodic bills",
   Misc: "Miscellaneous",
 };
 
+// A tracked monthly budget whose unspent leftover rolls into the general Piggy — a
+// "sinking-fund-like" envelope. These are grouped apart from flat fixed bills so you can
+// see at a glance what's budgeted (and would accrue to Piggy if unused).
+function isPiggyBudget(cat: ExpRow["category"]): boolean {
+  return (
+    cat.section === "Monthly" &&
+    cat.tracked &&
+    !cat.sinking &&
+    cat.fundingStyle == null &&
+    (cat.billEveryMonths == null || cat.billEveryMonths <= 1)
+  );
+}
+
 // Which Sheet section an expense line DISPLAYS under (independent of its category's tab):
 // every line of a periodic bill — its set-aside/share, the due-month bill, the fund credit —
-// sits together under Yearly / periodic bills; everything else follows its category's section.
+// sits together under Yearly / periodic bills; tracked leftover→Piggy budgets get their own
+// section; everything else follows its category's section.
 function sheetSection(e: ExpRow): string {
   if (e.category.billEveryMonths != null && e.category.billEveryMonths > 1) return "Yearly";
+  if (isPiggyBudget(e.category)) return "PiggyBudget";
   return e.category.section;
 }
 
@@ -64,7 +82,9 @@ function ExpenseRow({
   periodId: number;
   periodMonth: number;
 }) {
-  const isSetAside = e.category.fundingStyle != null && e.label.endsWith("(saving)");
+  const isSetAside =
+    e.category.fundingStyle != null &&
+    (e.label.endsWith("(saving)") || e.label.endsWith("(monthly share)"));
   // Removing this set-aside frees e.amount now; the remaining cadence saves rise to keep the
   // fund on track. saves-left this month = months-until-due ÷ cadence; after removing one,
   // each remaining share ≈ current × savesLeft/(savesLeft−1). savesLeft 1 → last save → the
@@ -237,7 +257,10 @@ export default async function SheetPage({
 
   // Head + Manager edit open months and the next-month draft; the head can also
   // edit a closed (locked) month. Plain members are view-only everywhere.
-  const canEditHere = c.canEdit && (open || c.isHead || isDraft);
+  // Settlement lock: once a transfer is marked paid, the sheet freezes for non-heads
+  // (the head can still edit; daily spends still flow on the Expenses tab).
+  const sheetLocked = c.locked && !c.isHead;
+  const canEditHere = c.canEdit && (open || c.isHead || isDraft) && !sheetLocked;
   const editingClosed = canEditHere && !open && !isDraft; // head editing a locked month
 
   // group expenses by their DISPLAY section (sheetSection: shares → Monthly, periodic
@@ -249,7 +272,7 @@ export default async function SheetPage({
 
   // split the Expense column into blocks: fixed monthly (Loans+Chits+Monthly), the
   // always-shown Yearly/periodic-bills block, and miscellaneous/extra (Misc).
-  const FIXED_SECTIONS = ["Loans", "Chits", "Monthly"];
+  const FIXED_SECTIONS = ["Loans", "Chits", "Monthly", "PiggyBudget"];
   const fixedGroups = grouped.filter((g) => FIXED_SECTIONS.includes(g.section));
   const yearlyRows = rollup.expenses.filter((e) => sheetSection(e) === "Yearly");
   const yearlySubtotal = yearlyRows.reduce((s, e) => s + e.amount, 0);
@@ -362,6 +385,10 @@ export default async function SheetPage({
           <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-2.5 text-sm font-medium text-amber-800">
             🔒 {c.selected.label} is closed — you&apos;re editing a locked month as head. Changes save immediately.
           </div>
+        )}
+
+        {c.locked && !isDraft && (
+          <SheetLockNotice isHead={c.isHead} y={c.selYear} m={c.selMonth} />
         )}
 
         <div className="flex flex-wrap items-center justify-between gap-2">
@@ -600,34 +627,59 @@ export default async function SheetPage({
           </details>
         </div>
 
-        {/* skipped set-asides — freed this month; re-spread over the coming months */}
-        {skipped.length > 0 && (
-          <div className="rounded-xl border border-amber-200 bg-amber-50 p-4">
-            <h2 className="text-sm font-semibold text-amber-800">⏭️ Skipped this month</h2>
-            <p className="mt-0.5 text-xs text-amber-700/80">
-              These set-asides were skipped, so the money stayed available this month. Each one re-spreads over the coming months until its bill.
-            </p>
-            <ul className="mt-3 divide-y divide-amber-100">
-              {skipped.map((s) => (
-                <li key={s.categoryId} className="flex items-center justify-between gap-2 py-2 text-sm">
-                  <div className="min-w-0">
-                    <div className="truncate font-medium text-amber-900">{s.name}</div>
-                    <div className="text-[11px] text-amber-700/70">would have set aside {formatINR(s.amount)} · now spread across the coming months</div>
-                  </div>
-                  {canEditHere && (
-                    <form action={restoreSetAside}>
-                      <input type="hidden" name="categoryId" value={s.categoryId} />
-                      <input type="hidden" name="periodId" value={c.selected!.id} />
-                      <button className="shrink-0 rounded-md border border-amber-300 bg-white px-2.5 py-1 text-xs font-medium text-amber-700 hover:bg-amber-100">
-                        Add back to expenses
-                      </button>
-                    </form>
-                  )}
-                </li>
-              ))}
-            </ul>
-          </div>
-        )}
+        {/* skipped set-asides — freed this month; re-spread over the coming months.
+            Collapsed by default; header carries the total freed this month. */}
+        {skipped.length > 0 && (() => {
+          const skippedTotal = skipped.reduce((s, x) => s + x.amount, 0);
+          return (
+            <details className="group/skip rounded-xl border border-amber-200 bg-amber-50 p-4">
+              <summary className="flex cursor-pointer list-none items-center justify-between gap-2 [&::-webkit-details-marker]:hidden">
+                <span className="flex items-center gap-1.5">
+                  <svg width="14" height="14" viewBox="0 0 20 20" className="text-amber-500 transition-transform group-open/skip:rotate-90">
+                    <path fill="currentColor" d="M7 5l6 5-6 5z" />
+                  </svg>
+                  <h2 className="text-sm font-semibold text-amber-800">⏭️ Skipped this month</h2>
+                  <span className="text-[10px] text-amber-600">({skipped.length})</span>
+                </span>
+                <span className="text-sm font-bold tabular-nums text-amber-800">{formatINR(skippedTotal)} freed</span>
+              </summary>
+              <p className="mt-2 text-xs text-amber-700/80">
+                These set-asides were skipped, so the money stayed available this month. Each one re-spreads over the coming months until its bill.
+              </p>
+              <ul className="mt-3 divide-y divide-amber-100">
+                {skipped.map((s) => (
+                  <li key={s.categoryId} className="flex items-center justify-between gap-2 py-2 text-sm">
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-1.5">
+                        <span className="truncate font-medium text-amber-900">{s.name}</span>
+                        {s.dueTag && (
+                          <span className="shrink-0 rounded-full bg-amber-200 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-amber-800">
+                            bill due {s.dueTag === "this" ? "this month" : "next month"}
+                          </span>
+                        )}
+                      </div>
+                      <div className="text-[11px] text-amber-700/70">
+                        would have set aside {formatINR(s.amount)} ·{" "}
+                        {s.newShare != null
+                          ? `remaining months now ~${formatINR(s.newShare)} each`
+                          : "shortfall paid out-of-pocket on the due month"}
+                      </div>
+                    </div>
+                    {canEditHere && (
+                      <form action={restoreSetAside}>
+                        <input type="hidden" name="categoryId" value={s.categoryId} />
+                        <input type="hidden" name="periodId" value={c.selected!.id} />
+                        <button className="shrink-0 rounded-md border border-amber-300 bg-white px-2.5 py-1 text-xs font-medium text-amber-700 hover:bg-amber-100">
+                          Add back to expenses
+                        </button>
+                      </form>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            </details>
+          );
+        })()}
 
         {/* balance + piggy */}
         <div className="grid grid-cols-2 gap-4 rounded-xl border border-slate-200 bg-white p-5">

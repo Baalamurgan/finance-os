@@ -164,7 +164,7 @@ export async function generateMonth(
       await mkLine(cat, cat.name, plan.bill, payer);
       if (plan.fromFund > 0) await mkLine(cat, `${cat.name} — from fund`, -plan.fromFund, payer);
     } else if (plan.kind === "save" && plan.contribution > 0 && !skippedSetAside.has(cat.id)) {
-      await mkLine(cat, `${cat.name} (saving)`, plan.contribution, saver);
+      await mkLine(cat, `${cat.name} (monthly share)`, plan.contribution, saver);
     }
   }
 }

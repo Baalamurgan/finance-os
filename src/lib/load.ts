@@ -73,6 +73,13 @@ export async function loadCommon(params?: { y?: string; m?: string }) {
   const selMonth = m ?? selected?.month ?? now.getMonth() + 1;
   const noData = !selected;
 
+  // Settlement lock: once ANY transfer for this month is marked paid, money has started
+  // moving to the treasurer against the shown numbers — so the sheet's planned expense/income
+  // is frozen for non-heads (daily spends still flow; the head can still edit). See the Sheet.
+  const locked =
+    selected != null &&
+    (await prisma.settlementRecord.count({ where: { periodId: selected.id } })) > 0;
+
   // App-lock state for the header menu (enable biometric / lock now).
   const pinEnabled = !!household.pinHash;
   const hasBiometric =
@@ -107,6 +114,7 @@ export async function loadCommon(params?: { y?: string; m?: string }) {
     selYear,
     selMonth,
     noData,
+    locked,
     members,
     categories,
     piggyBalance,

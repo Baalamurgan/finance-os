@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import {
   Bar,
   BarChart,
@@ -94,6 +95,70 @@ export function CategoryBars({
         <Bar dataKey="actual" name="Spent" fill="#6366f1" radius={[0, 4, 4, 0]} />
       </BarChart>
     </ResponsiveContainer>
+  );
+}
+
+// Per-category "budgeted vs spent" across a range, with a category picker. The gap
+// between budget and spent is what stayed unspent (→ saved / Piggy) that month.
+export function CategoryRangeChart({
+  months,
+  categories,
+}: {
+  months: string[];
+  categories: {
+    id: number;
+    name: string;
+    planned: number[];
+    spent: number[];
+    totalPlanned: number;
+    totalSpent: number;
+  }[];
+}) {
+  const [sel, setSel] = useState<number>(categories[0]?.id ?? 0);
+  if (categories.length === 0) {
+    return <p className="text-sm text-slate-400">No budgeted categories in this range.</p>;
+  }
+  const cat = categories.find((c) => c.id === sel) ?? categories[0];
+  const data = months.map((label, i) => ({
+    label,
+    planned: cat.planned[i] ?? 0,
+    spent: cat.spent[i] ?? 0,
+  }));
+  const saved = cat.totalPlanned - cat.totalSpent;
+
+  return (
+    <div>
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <select
+          value={cat.id}
+          onChange={(e) => setSel(Number(e.target.value))}
+          className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700"
+        >
+          {categories.map((c) => (
+            <option key={c.id} value={c.id}>
+              {c.name}
+            </option>
+          ))}
+        </select>
+        <p className="text-xs text-slate-500">
+          Budgeted <b className="text-slate-700">{inr(cat.totalPlanned)}</b> · spent{" "}
+          <b className="text-slate-700">{inr(cat.totalSpent)}</b> ·{" "}
+          <span className={saved >= 0 ? "font-semibold text-green-600" : "font-semibold text-red-600"}>
+            {saved >= 0 ? `${inr(saved)} unspent → Piggy` : `${inr(-saved)} over`}
+          </span>
+        </p>
+      </div>
+      <ResponsiveContainer width="100%" height={280}>
+        <BarChart data={data} margin={{ top: 8, right: 12, left: 0, bottom: 0 }}>
+          <XAxis dataKey="label" tick={{ fontSize: 10 }} interval="preserveStartEnd" />
+          <YAxis tickFormatter={(v) => `₹${Math.round(Number(v) / 1000)}k`} tick={{ fontSize: 10 }} width={44} />
+          <Tooltip formatter={(value) => inr(Number(value))} />
+          <Legend iconSize={9} />
+          <Bar dataKey="planned" name="Budgeted" fill="#cbd5e1" radius={[3, 3, 0, 0]} />
+          <Bar dataKey="spent" name="Spent" fill="#6366f1" radius={[3, 3, 0, 0]} />
+        </BarChart>
+      </ResponsiveContainer>
+    </div>
   );
 }
 

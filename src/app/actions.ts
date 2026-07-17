@@ -98,11 +98,20 @@ async function periodOpen(periodId: number) {
   return p?.status === "open";
 }
 
-// May this caller edit entries in this period right now?
-// Head can edit any month (incl. closed); Manager only while the month is open.
+// Settlement lock: once ANY transfer for the month is marked paid, money has moved to
+// the treasurer against the shown numbers — so non-heads can't change the sheet's
+// planned expense/income any more (daily spends still flow; the head can still edit).
+async function periodSettlementLocked(periodId: number) {
+  return (await prisma.settlementRecord.count({ where: { periodId } })) > 0;
+}
+
+// May this caller edit sheet entries in this period right now?
+// Head can edit any month (incl. closed / settled); Manager only while the month is
+// open AND not settlement-locked.
 async function canEditNow(periodId: number) {
   if (await isHead()) return true;
-  return await periodOpen(periodId);
+  if (!(await periodOpen(periodId))) return false;
+  return !(await periodSettlementLocked(periodId));
 }
 
 // Success signal for useActionState-driven modals (close + reset only on real success).
@@ -560,7 +569,7 @@ export async function skipSetAside(formData: FormData) {
       create: { householdId: period.householdId, categoryId, periodId },
       update: {},
     });
-    await tx.expenseEntry.deleteMany({ where: { periodId, categoryId, label: { endsWith: "(saving)" } } });
+    await tx.expenseEntry.deleteMany({ where: { periodId, categoryId, OR: [{ label: { endsWith: "(saving)" } }, { label: { endsWith: "(monthly share)" } }] } });
   });
   await logActivity("expense", "updated", `Skipped this month's set-aside for “${cat.name}”`, periodId);
   revalidatePath("/", "layout");
@@ -584,9 +593,9 @@ export async function restoreSetAside(formData: FormData) {
   });
   await prisma.$transaction(async (tx) => {
     await tx.setAsideSkip.deleteMany({ where: { categoryId, periodId } });
-    await tx.expenseEntry.deleteMany({ where: { periodId, categoryId, label: { endsWith: "(saving)" } } });
+    await tx.expenseEntry.deleteMany({ where: { periodId, categoryId, OR: [{ label: { endsWith: "(saving)" } }, { label: { endsWith: "(monthly share)" } }] } });
     if (plan.kind === "save" && plan.contribution > 0) {
-      await tx.expenseEntry.create({ data: { periodId, label: `${cat.name} (saving)`, amount: plan.contribution, categoryId, memberId: cat.responsibleMemberId, necessary: cat.necessary ?? true, oneOff: false } });
+      await tx.expenseEntry.create({ data: { periodId, label: `${cat.name} (monthly share)`, amount: plan.contribution, categoryId, memberId: cat.responsibleMemberId, necessary: cat.necessary ?? true, oneOff: false } });
     }
   });
   await logActivity("expense", "updated", `Restored the set-aside for “${cat.name}”`, periodId);

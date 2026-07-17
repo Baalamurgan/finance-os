@@ -56,7 +56,8 @@ export default async function InHandPage({
   const visibleGroups = c.isHead
     ? inHand.byPerson
     : inHand.byPerson.filter((g) => g.memberId === currentMemberId);
-  const canToggle = c.canEdit && open;
+  // Settlement lock: once the month is settled, non-heads can't change bill/paid state.
+  const canToggle = c.canEdit && open && !(c.locked && !c.isHead);
   const showInHand = visibleGroups.length > 0;
 
   return (
@@ -162,6 +163,7 @@ function PersonGroup({
             </span>
             <span className="flex shrink-0 items-center gap-1.5">
               <span className="tabular-nums text-slate-600">{formatINR(b.amount)}</span>
+              <span className="rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-400">to pay</span>
               {canToggle && <PaidToggle id={b.id} title="Mark this bill paid" label="✓ paid" />}
             </span>
           </li>
@@ -170,7 +172,7 @@ function PersonGroup({
         {earmarked.map((e) => (
           <li key={`sv${e.id}`} className="flex items-center justify-between gap-2 text-xs">
             <span className="truncate text-teal-600">
-              Saving · {e.name} <span className="text-[10px] text-slate-400">held for the bill</span>
+              Set aside · {e.name} <span className="text-[10px] text-slate-400">held for the bill</span>
             </span>
             <span className="shrink-0 tabular-nums text-teal-700">{formatINR(e.amount)}</span>
           </li>

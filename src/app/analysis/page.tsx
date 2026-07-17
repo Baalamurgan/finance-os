@@ -1,8 +1,8 @@
 import { formatINR } from "@/lib/format";
 import { loadCommon } from "@/lib/load";
-import { getRollup, getRollupRange, getTrends } from "@/lib/queries";
+import { getRollup, getRollupRange, getTrends, getCategoryTrendRange } from "@/lib/queries";
 import { NavHeader } from "@/components/NavHeader";
-import { CategoryBars, SplitPie, TrendChart } from "@/components/Charts";
+import { CategoryBars, CategoryRangeChart, SplitPie, TrendChart } from "@/components/Charts";
 import { AnalysisRangePicker } from "@/components/AnalysisRangePicker";
 
 const MON = ["", "JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"];
@@ -89,6 +89,9 @@ export default async function AnalysisPage({
     ? await getRollupRange(c.household.id, Number(sp.fy), Number(sp.fm), Number(sp.ty), Number(sp.tm))
     : await getRollup(c.selected!.id);
   const allTrends = await getTrends(c.household.id);
+  const catTrend = isRange
+    ? await getCategoryTrendRange(c.household.id, Number(sp.fy), Number(sp.fm), Number(sp.ty), Number(sp.tm))
+    : null;
   const trends = isRange
     ? allTrends.filter((t) => {
         const lo = Number(sp.fy) * 12 + (Number(sp.fm) - 1);
@@ -130,6 +133,18 @@ export default async function AnalysisPage({
             <h2 className="text-sm font-semibold text-slate-700">Trends — income, expense &amp; balance</h2>
             <p className="mb-2 text-xs text-slate-400">Month over month across all recorded periods.</p>
             <TrendChart data={trends} />
+          </section>
+        )}
+
+        {/* Range view: per-category budgeted-vs-spent over the range (the month-trend chart
+            above can be uninformative for a range). Pick a category; the gap = unspent → Piggy. */}
+        {isRange && catTrend && catTrend.categories.length > 0 && (
+          <section className="rounded-xl border border-slate-200 bg-white p-4">
+            <h2 className="text-sm font-semibold text-slate-700">Category over the range — budgeted vs spent</h2>
+            <p className="mb-2 text-xs text-slate-400">
+              Month by month for one category. The gap between budgeted and spent is what stayed unspent (→ Piggy).
+            </p>
+            <CategoryRangeChart months={catTrend.months} categories={catTrend.categories} />
           </section>
         )}
 

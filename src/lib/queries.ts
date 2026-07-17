@@ -1,6 +1,6 @@
 import { prisma } from "@/lib/prisma";
 import { computeSettlement } from "@/lib/settlement-core";
-import { planBillMonth, isLumpDue, type FundingStyle } from "@/lib/schedule";
+import { planBillMonth, isLumpDue, monthsUntilNextDue, type FundingStyle } from "@/lib/schedule";
 
 // Bills whose set-aside was skipped for this month — shown in the sheet's "Skipped" section
 // with the amount that would have been set aside (so it can be added back).
@@ -14,14 +14,25 @@ export async function getSkippedSetAsides(householdId: number, periodId: number)
     prisma.piggyEntry.groupBy({ by: ["categoryId"], where: { householdId, kind: "sinking", categoryId: { in: ids } }, _sum: { amount: true } }),
   ]);
   const fundOf = (id: number) => funds.find((f) => f.categoryId === id)?._sum.amount ?? 0;
+  const curMonth = period!.month;
   return cats
     .filter((c) => c.fundingStyle != null && c.billAmount != null && c.billMonth != null && c.billEveryMonths != null)
     .map((c) => {
       const plan = planBillMonth({
         billAmount: c.billAmount!, billMonth: c.billMonth!, everyMonths: c.billEveryMonths!,
-        fund: fundOf(c.id), fundingStyle: c.fundingStyle as FundingStyle, fixedShare: c.monthlyBudget, saveEveryMonths: c.saveEveryMonths, month: period!.month,
+        fund: fundOf(c.id), fundingStyle: c.fundingStyle as FundingStyle, fixedShare: c.monthlyBudget, saveEveryMonths: c.saveEveryMonths, month: curMonth,
       });
-      return { categoryId: c.id, name: c.name, section: c.section, amount: plan.kind === "save" ? plan.contribution : 0 };
+      const amount = plan.kind === "save" ? plan.contribution : 0;
+      // After skipping this month's set-aside, the remaining save-months carry the same
+      // target — each rises by savesLeft/(savesLeft−1). savesLeft ≤ 1 → last save → shortfall
+      // lands out-of-pocket at the due month (no re-spread). Mirrors the Sheet remove dialog.
+      const savesLeft = monthsUntilNextDue(c.billMonth!, c.billEveryMonths!, curMonth) / Math.max(1, c.saveEveryMonths ?? 1);
+      const newShare = savesLeft > 1 ? Math.round(((amount * savesLeft) / (savesLeft - 1)) * 100) / 100 : null;
+      // Is the bill itself due this month or next? (current sheet is a preview of the month)
+      const cyc = Math.max(1, Math.round(c.billEveryMonths!));
+      const k = ((((c.billMonth! - curMonth) % cyc) + cyc) % cyc); // 0 = due this month, 1 = next
+      const dueTag = k === 0 ? "this" : k === 1 ? "next" : null;
+      return { categoryId: c.id, name: c.name, section: c.section, amount, newShare, dueTag };
     });
 }
 
@@ -756,6 +767,77 @@ export async function getRollupRange(
   };
 }
 
+// Per-category month-by-month "budgeted vs spent" across a range — powers the Analysis
+// range view's per-category chart (shown when the month-trend chart can't be). Same
+// actual rule as getRollup (tracked → daily Spend total, else sheet ExpenseEntry).
+export async function getCategoryTrendRange(
+  householdId: number,
+  fromY: number,
+  fromM: number,
+  toY: number,
+  toM: number,
+) {
+  const lo = fromY * 12 + (fromM - 1);
+  const hi = toY * 12 + (toM - 1);
+  const [a, b] = lo <= hi ? [lo, hi] : [hi, lo];
+
+  const allPeriods = await prisma.period.findMany({ where: { householdId } });
+  const periods = allPeriods
+    .filter((p) => {
+      const k = p.year * 12 + (p.month - 1);
+      return k >= a && k <= b;
+    })
+    .sort((x, y) => x.year * 12 + x.month - (y.year * 12 + y.month));
+  if (periods.length === 0) return { months: [], categories: [] };
+
+  const ids = periods.map((p) => p.id);
+  const [cats, budgets, spends, expenses] = await Promise.all([
+    prisma.category.findMany({ where: { householdId } }),
+    prisma.budget.findMany({ where: { periodId: { in: ids } } }),
+    prisma.spend.findMany({ where: { periodId: { in: ids } } }),
+    prisma.expenseEntry.findMany({ where: { periodId: { in: ids } } }),
+  ]);
+  const monthIndex = new Map(periods.map((p, i) => [p.id, i]));
+  const months = periods.map((p) => p.label);
+  const catById = new Map(cats.map((c) => [c.id, c]));
+
+  const acc = new Map<number, { planned: number[]; spent: number[] }>();
+  const ensure = (cid: number) => {
+    let v = acc.get(cid);
+    if (!v) {
+      v = { planned: Array(periods.length).fill(0), spent: Array(periods.length).fill(0) };
+      acc.set(cid, v);
+    }
+    return v;
+  };
+  for (const bd of budgets) {
+    const i = monthIndex.get(bd.periodId);
+    if (i != null) ensure(bd.categoryId).planned[i] += bd.planned;
+  }
+  for (const s of spends) {
+    const i = monthIndex.get(s.periodId);
+    if (i != null && catById.get(s.categoryId)?.tracked) ensure(s.categoryId).spent[i] += s.amount;
+  }
+  for (const e of expenses) {
+    const i = monthIndex.get(e.periodId);
+    if (i != null && !catById.get(e.categoryId)?.tracked) ensure(e.categoryId).spent[i] += e.amount;
+  }
+
+  const categories = [...acc.entries()]
+    .map(([id, v]) => ({
+      id,
+      name: catById.get(id)?.name ?? "?",
+      planned: v.planned,
+      spent: v.spent,
+      totalPlanned: v.planned.reduce((s, x) => s + x, 0),
+      totalSpent: v.spent.reduce((s, x) => s + x, 0),
+    }))
+    .filter((c) => c.totalPlanned > 0) // "budgeted" categories only
+    .sort((a, b) => b.totalSpent - a.totalSpent);
+
+  return { months, categories };
+}
+
 // ── Activity log (head-only) ─────────────────────────────────────────────────
 export async function getActivityLog(householdId: number, limit = 150) {
   return prisma.activityLog.findMany({
@@ -768,25 +850,41 @@ export async function getActivityLog(householdId: number, limit = 150) {
 // ── "What changed since last month" (everyone) ──────────────────────────────
 // Diffs the selected month's income + expense lines against the previous month,
 // aggregating by name so it reads as simple Added / Removed / Amount-changed lists.
+// Match key that ignores a trailing installment counter (" 2/6", " 3/6") so a recurring
+// EMI/chit is recognised as the SAME line across months instead of an add + a remove.
+// Also folds the two set-aside label variants together for the same reason.
+function diffKey(label: string): string {
+  return label
+    .replace(/\s*\d+\s*\/\s*\d+\s*$/, "") // installment counter "N/M"
+    .replace(/\((?:saving|monthly share)\)$/, "(share)") // set-aside variants
+    .trim();
+}
+
 function diffByKey(
-  cur: { key: string; amount: number }[],
-  prev: { key: string; amount: number }[],
+  cur: { label: string; amount: number }[],
+  prev: { label: string; amount: number }[],
 ) {
-  const sum = (rows: { key: string; amount: number }[]) => {
-    const m = new Map<string, number>();
-    for (const r of rows) m.set(r.key, (m.get(r.key) ?? 0) + r.amount);
+  const roll = (rows: { label: string; amount: number }[]) => {
+    // key → { amount, label } — label keeps the latest human-readable text for that key.
+    const m = new Map<string, { amount: number; label: string }>();
+    for (const r of rows) {
+      const k = diffKey(r.label);
+      const prev = m.get(k);
+      m.set(k, { amount: (prev?.amount ?? 0) + r.amount, label: r.label });
+    }
     return m;
   };
-  const c = sum(cur);
-  const p = sum(prev);
+  const c = roll(cur);
+  const p = roll(prev);
   const added: { label: string; amount: number }[] = [];
   const removed: { label: string; amount: number }[] = [];
   const changed: { label: string; from: number; to: number }[] = [];
-  for (const [key, amt] of c) {
-    if (!p.has(key)) added.push({ label: key, amount: amt });
-    else if (Math.abs((p.get(key) ?? 0) - amt) >= 0.5) changed.push({ label: key, from: p.get(key) ?? 0, to: amt });
+  for (const [key, v] of c) {
+    if (!p.has(key)) added.push({ label: v.label, amount: v.amount });
+    else if (Math.abs((p.get(key)!.amount) - v.amount) >= 0.5)
+      changed.push({ label: v.label, from: p.get(key)!.amount, to: v.amount });
   }
-  for (const [key, amt] of p) if (!c.has(key)) removed.push({ label: key, amount: amt });
+  for (const [key, v] of p) if (!c.has(key)) removed.push({ label: v.label, amount: v.amount });
   return { added, removed, changed };
 }
 
@@ -810,18 +908,18 @@ export async function getMonthChanges(householdId: number, periodId: number) {
   const isMisc = (e: { category: { section: string } | null }) => e.category?.section === "Misc";
 
   const income = diffByKey(
-    curInc.map((i) => ({ key: i.source, amount: i.amount })),
-    prevInc.map((i) => ({ key: i.source, amount: i.amount })),
+    curInc.map((i) => ({ label: i.source, amount: i.amount })),
+    prevInc.map((i) => ({ label: i.source, amount: i.amount })),
   );
   // Misc is one-off and churns every month, so it gets its own block rather than
   // flooding the main expense diff.
   const expense = diffByKey(
-    curExp.filter((e) => !isMisc(e)).map((e) => ({ key: e.label, amount: e.amount })),
-    prevExp.filter((e) => !isMisc(e)).map((e) => ({ key: e.label, amount: e.amount })),
+    curExp.filter((e) => !isMisc(e)).map((e) => ({ label: e.label, amount: e.amount })),
+    prevExp.filter((e) => !isMisc(e)).map((e) => ({ label: e.label, amount: e.amount })),
   );
   const misc = diffByKey(
-    curExp.filter(isMisc).map((e) => ({ key: e.label, amount: e.amount })),
-    prevExp.filter(isMisc).map((e) => ({ key: e.label, amount: e.amount })),
+    curExp.filter(isMisc).map((e) => ({ label: e.label, amount: e.amount })),
+    prevExp.filter(isMisc).map((e) => ({ label: e.label, amount: e.amount })),
   );
   return { prevLabel: prev.label, income, expense, misc };
 }
