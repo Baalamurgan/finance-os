@@ -628,8 +628,15 @@ function parseBilling(get: Getter): { ok: true; fields: BillingFields } | { ok: 
   const billDayOf = () => { const d = Number(get("billDay")); return d >= 1 && d <= 31 ? d : null; };
   const monthOf = () => Math.min(12, Math.max(1, Number(get("billMonth")) || 1));
 
-  // Monthly (cycle 1): variable budget (tracked, leftover → Piggy) or flat fixed bill.
+  // Monthly (cycle 1): a "save the share" bill paid via In-Hand every month (billEveryMonths=1),
+  // OR a variable budget (tracked, leftover → Piggy), OR a flat fixed bill.
   if (cycle <= 1) {
+    // Monthly bill-with-a-fund: signalled by a non-empty fundingStyle on a monthly row.
+    if (String(get("fundingStyle") ?? "") === "auto") {
+      const amt = parseAmount(get("billAmount"));
+      if (!amt || amt <= 0) return { ok: false, error: "A monthly bill needs an amount." };
+      return { ok: true, fields: { ...blank, tracked: false, billEveryMonths: 1, billMonth: monthOf(), billDay: billDayOf(), billAmount: round(amt), fundingStyle: "auto", saveEveryMonths: 1 } };
+    }
     const fixed = get("fixed") === "on";
     const raw = String(get("monthlyBudget") ?? "").trim();
     const amt = raw === "" ? null : parseAmount(raw);

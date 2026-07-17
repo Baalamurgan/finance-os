@@ -45,9 +45,12 @@ const CADENCES: { v: number; label: string }[] = [
 const cadencesFor = (cycle: number) => CADENCES.filter((c) => c.v <= cycle && cycle % c.v === 0);
 const round2 = (x: number) => Math.round(x * 100) / 100;
 
-// The editable per-row state (mirrors the Setup form fields).
+// The editable per-row state (mirrors the Setup form fields). For a MONTHLY cycle,
+// `monthlyKind` picks between a tracked budget, a flat fixed bill, or a "save the share"
+// bill-with-a-fund that's paid every month via the In-Hand pay button (billEveryMonths=1).
+type MonthlyKind = "track" | "fixed" | "bill";
 type Draft = {
-  name: string; section: string; cycle: string; amount: string; fixed: boolean;
+  name: string; section: string; cycle: string; amount: string; monthlyKind: MonthlyKind;
   fundingStyle: string; saveEvery: string; billMonth: string; billDay: string; resp: string; payer: string;
 };
 const toDraft = (r: Row): Draft => ({
@@ -55,7 +58,7 @@ const toDraft = (r: Row): Draft => ({
   section: r.section,
   cycle: r.billEveryMonths != null ? String(r.billEveryMonths) : "1",
   amount: ((r.billEveryMonths != null ? r.billAmount : r.monthlyBudget) ?? "").toString(),
-  fixed: r.fixed,
+  monthlyKind: r.billEveryMonths === 1 && r.fundingStyle != null ? "bill" : r.fixed ? "fixed" : "track",
   fundingStyle: r.fundingStyle === "none" ? "none" : "auto",
   saveEvery: r.saveEveryMonths != null ? String(r.saveEveryMonths) : "1",
   billMonth: String(r.billMonth ?? new Date().getMonth() + 1),
@@ -64,18 +67,26 @@ const toDraft = (r: Row): Draft => ({
   payer: r.payerMemberId != null ? String(r.payerMemberId) : "",
 });
 const isPeriodic = (d: Draft) => Number(d.cycle) > 1;
+const isMonthlyBill = (d: Draft) => !isPeriodic(d) && d.monthlyKind === "bill";
+const isBill = (d: Draft) => isPeriodic(d) || isMonthlyBill(d); // bill-with-a-fund (has a pay button)
 const draftInvalid = (d: Draft) =>
   !d.name.trim() ||
-  (isPeriodic(d) && (!d.amount || Number(d.amount) <= 0)) ||
-  (!isPeriodic(d) && d.fixed && (!d.amount || Number(d.amount) <= 0));
+  (isBill(d) && (!d.amount || Number(d.amount) <= 0)) ||
+  (!isPeriodic(d) && d.monthlyKind === "fixed" && (!d.amount || Number(d.amount) <= 0));
 const draftDirty = (r: Row, d: Draft) => JSON.stringify(d) !== JSON.stringify(toDraft(r));
 const draftPayload = (id: number, d: Draft) => {
-  const p = isPeriodic(d);
+  const periodic = isPeriodic(d);
+  const monthlyBill = isMonthlyBill(d);
+  const bill = periodic || monthlyBill;
   return {
-    id: String(id), name: d.name, section: d.section, responsibleMemberId: d.resp, payerMemberId: p ? d.payer : "",
-    billEveryMonths: p ? d.cycle : "", monthlyBudget: p ? "" : d.amount, fixed: !p && d.fixed ? "on" : "",
-    billAmount: p ? d.amount : "", billMonth: p ? d.billMonth : "", billDay: p ? d.billDay : "",
-    fundingStyle: p ? d.fundingStyle : "", saveEveryMonths: p && d.fundingStyle === "auto" ? d.saveEvery : "",
+    id: String(id), name: d.name, section: d.section, responsibleMemberId: d.resp, payerMemberId: bill ? d.payer : "",
+    billEveryMonths: periodic ? d.cycle : monthlyBill ? "1" : "",
+    monthlyBudget: bill ? "" : d.amount,
+    fixed: !periodic && d.monthlyKind === "fixed" ? "on" : "",
+    billAmount: bill ? d.amount : "", billMonth: bill ? d.billMonth : "", billDay: bill ? d.billDay : "",
+    // monthly bill is always "save the share" (auto), saved every month
+    fundingStyle: periodic ? d.fundingStyle : monthlyBill ? "auto" : "",
+    saveEveryMonths: periodic ? (d.fundingStyle === "auto" ? d.saveEvery : "") : monthlyBill ? "1" : "",
   };
 };
 
@@ -185,6 +196,8 @@ function SetupRow({ r, draft, patch, members, readOnly }: { r: Row; draft: Draft
     patch(p);
   };
 
+  const monthlyBill = isMonthlyBill(draft);
+  const bill = periodic || monthlyBill;
   const shareHint = periodic && draft.fundingStyle === "auto" && draft.amount && Number(draft.amount) > 0
     ? round2((Number(draft.amount) * Number(draft.saveEvery)) / Number(draft.cycle))
     : null;
@@ -220,10 +233,20 @@ function SetupRow({ r, draft, patch, members, readOnly }: { r: Row; draft: Draft
       {/* Schedule */}
       <td className="px-4 py-2">
         {!periodic ? (
-          <label className="flex items-center gap-1.5 text-[11px] text-slate-600" title="On = track spending & roll the leftover into Piggy. Off = a flat fixed bill paid every month.">
-            <input type="checkbox" checked={!draft.fixed} onChange={(e) => patch({ fixed: !e.target.checked })} disabled={readOnly} className="h-3.5 w-3.5 accent-indigo-600" />
-            Track &amp; save leftover → Piggy
-          </label>
+          <div className="flex flex-col gap-1 text-xs text-slate-600">
+            <select value={draft.monthlyKind} onChange={(e) => patch({ monthlyKind: e.target.value as MonthlyKind })} disabled={readOnly} className="input w-52 py-1 text-xs disabled:bg-slate-100" title="How this monthly item is handled">
+              <option value="track">Track &amp; save leftover → Piggy</option>
+              <option value="fixed">Flat fixed bill</option>
+              <option value="bill">Save the share · pay in In-Hand</option>
+            </select>
+            {monthlyBill && (
+              <div className="flex flex-wrap items-center gap-1">
+                due day
+                <input type="number" min="1" max="31" value={draft.billDay} onChange={(e) => patch({ billDay: e.target.value })} placeholder="day" disabled={readOnly} className="input w-12 py-1 text-xs disabled:bg-slate-100" />
+                <span className="text-[10px] text-slate-400">set aside &amp; paid each month via In-Hand</span>
+              </div>
+            )}
+          </div>
         ) : (
           <div className="flex flex-col gap-1 text-xs text-slate-600">
             <div className="flex flex-wrap items-center gap-1">
@@ -253,9 +276,10 @@ function SetupRow({ r, draft, patch, members, readOnly }: { r: Row; draft: Draft
       <td className="px-4 py-2">
         <div className="flex items-center gap-1">
           <span className="text-slate-400">₹</span>
-          <input type="number" step="0.01" value={draft.amount} onChange={(e) => patch({ amount: e.target.value })} placeholder={periodic ? "full bill" : "none"} disabled={readOnly} className="input w-24 disabled:bg-slate-100 disabled:text-slate-400" />
+          <input type="number" step="0.01" value={draft.amount} onChange={(e) => patch({ amount: e.target.value })} placeholder={bill ? "full bill" : "none"} disabled={readOnly} className="input w-24 disabled:bg-slate-100 disabled:text-slate-400" />
         </div>
         {periodic && <div className="mt-0.5 text-[10px] text-slate-400">full bill / {CYCLES.find((c) => c.v === draft.cycle)?.label.toLowerCase()}</div>}
+        {monthlyBill && <div className="mt-0.5 text-[10px] text-slate-400">bill / month</div>}
       </td>
       {/* Responsible (saver) + Payer for periodic bills */}
       <td className="px-4 py-2">
@@ -264,10 +288,10 @@ function SetupRow({ r, draft, patch, members, readOnly }: { r: Row; draft: Draft
           {members.map((mm) => <option key={mm.id} value={String(mm.id)}>{mm.name}</option>)}
           {respMissing && <option value={draft.resp}>Member #{draft.resp}</option>}
         </select>
-        {periodic && (
+        {bill && (
           <>
             <div className="mt-0.5 text-[10px] font-medium text-slate-500">saved &amp; held by</div>
-            <select value={draft.payer} onChange={(e) => patch({ payer: e.target.value })} disabled={readOnly} className="input mt-1 w-28 py-1 text-xs disabled:bg-slate-100 disabled:text-slate-400" title="who physically pays the bill on its due month">
+            <select value={draft.payer} onChange={(e) => patch({ payer: e.target.value })} disabled={readOnly} className="input mt-1 w-28 py-1 text-xs disabled:bg-slate-100 disabled:text-slate-400" title="who physically pays the bill">
               <option value="">paid by: same</option>
               {members.map((mm) => <option key={mm.id} value={String(mm.id)}>paid by {mm.name}</option>)}
             </select>
