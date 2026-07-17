@@ -33,21 +33,26 @@ export function computeSettlement(opts: {
     const contributed = incomes
       .filter((i) => i.ownerId === m.id)
       .reduce((s, i) => s + i.amount, 0);
+    // Last month's daily spends credit the spender ONLY for categories that aren't THEIRS
+    // (spending your own held budget is already credited via its monthly-share line, so
+    // counting the spend too would double-credit). Club them into ONE line per category —
+    // the month's sheet already itemises each spend, so the settlement just needs the total.
+    const spendByCat = new Map<string, number>();
+    for (const sp of spends) {
+      if (sp.memberId !== m.id) continue;
+      if ((sp.category.responsibleMemberId ?? null) === m.id) continue;
+      spendByCat.set(sp.category.name, (spendByCat.get(sp.category.name) ?? 0) + sp.amount);
+    }
     const paidItems = [
       ...expenses
         .filter((e) => e.memberId === m.id)
         .map((e) => ({ label: e.label, amount: e.amount, category: e.category.name, kind: "sheet" as const })),
-      ...spends
-        // A spend only credits the spender when the category isn't THEIRS — spending
-        // your own held budget is already credited via its monthly-share expense line,
-        // so counting the spend too would double-credit. Others'/shared/misc → credit.
-        .filter((sp) => sp.memberId === m.id && (sp.category.responsibleMemberId ?? null) !== m.id)
-        .map((sp) => ({
-          label: prevLabel ? `${sp.label} (${prevLabel})` : sp.label,
-          amount: sp.amount,
-          category: sp.category.name,
-          kind: "spend" as const,
-        })),
+      ...[...spendByCat.entries()].map(([category, amount]) => ({
+        label: prevLabel ? `${category} (${prevLabel})` : category,
+        amount,
+        category,
+        kind: "spend" as const,
+      })),
     ].sort((a, b) => b.amount - a.amount);
     const paid = paidItems.reduce((s, it) => s + it.amount, 0);
     return { id: m.id, name: m.name, contributed, paid, net: contributed - paid, paidItems };
