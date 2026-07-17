@@ -187,32 +187,6 @@ function PersonGroup({
             <span className="shrink-0 tabular-nums text-teal-700">{formatINR(e.amount)}</span>
           </li>
         ))}
-        {/* Periodic bills this person pays this month — paid from the fund (+Piggy/pocket) */}
-        {unpaidPeriodic.map((b) => (
-          <li key={`pb${b.categoryId}`} className="flex items-center justify-between gap-2 text-xs">
-            <span className="truncate text-slate-500">
-              {b.name} <span className="text-[10px] text-teal-500">bill due</span>
-              <span className="text-[10px] text-slate-400"> · fund {formatINR(b.fund)}</span>
-            </span>
-            <span className="flex shrink-0 items-center gap-1.5">
-              <span className="tabular-nums text-slate-600">{formatINR(b.bill)}</span>
-              {canToggle ? (
-                <PayBillModal categoryId={b.categoryId} periodId={periodId} name={b.name} bill={b.bill} fund={b.fund} generalPiggy={generalPiggy} />
-              ) : selfPayer ? (
-                <ConfirmForm action={payPeriodicBill} message={`Mark “${b.name}” as already paid? It was paid outside the app, so no money moves.`}>
-                  <input type="hidden" name="categoryId" value={b.categoryId} />
-                  <input type="hidden" name="periodId" value={periodId} />
-                  <input type="hidden" name="source" value="already" />
-                  <button className="rounded-full border border-teal-200 px-2 py-0.5 text-[10px] font-medium text-teal-600 hover:border-teal-400 hover:bg-teal-50" title="Mark this bill as already paid outside the app — no money moves">
-                    mark paid
-                  </button>
-                </ConfirmForm>
-              ) : (
-                <span className="rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-400">to pay</span>
-              )}
-            </span>
-          </li>
-        ))}
         {miscSpent > 0 && (
           <li className="flex items-center justify-between gap-2 text-xs">
             <span className="truncate text-amber-600">Miscellaneous (unbudgeted)</span>
@@ -235,6 +209,47 @@ function PersonGroup({
             <span className="truncate text-pink-600">🐷 Piggy bank held</span>
             <span className="shrink-0 tabular-nums font-medium text-pink-700">{formatINR(piggy)}</span>
           </li>
+        )}
+
+        {/* Bills due THIS month — separated below the ruler because they DON'T change the
+            in-hand total (paid from the fund/Piggy). Just a reminder of what to pay. */}
+        {unpaidPeriodic.length > 0 && (
+          <>
+            <li className="pt-2">
+              <div className="border-t border-slate-200" />
+              <div className="mt-1.5 flex items-center justify-between gap-2">
+                <span className="text-[10px] font-semibold uppercase tracking-wide text-teal-600">
+                  Bills to pay this month
+                </span>
+                <span className="text-[9px] text-slate-400">reminder · paid from the fund, not your in-hand</span>
+              </div>
+            </li>
+            {unpaidPeriodic.map((b) => (
+              <li key={`pb${b.categoryId}`} className="flex items-center justify-between gap-2 text-xs">
+                <span className="truncate text-slate-500">
+                  {b.name} <span className="text-[10px] text-teal-500">bill due</span>
+                  <span className="text-[10px] text-slate-400"> · fund {formatINR(b.fund)}</span>
+                </span>
+                <span className="flex shrink-0 items-center gap-1.5">
+                  <span className="tabular-nums text-slate-500">{formatINR(b.bill)}</span>
+                  {canToggle ? (
+                    <PayBillModal categoryId={b.categoryId} periodId={periodId} name={b.name} bill={b.bill} fund={b.fund} generalPiggy={generalPiggy} />
+                  ) : selfPayer ? (
+                    <ConfirmForm action={payPeriodicBill} message={`Mark “${b.name}” as already paid? It was paid outside the app, so no money moves.`}>
+                      <input type="hidden" name="categoryId" value={b.categoryId} />
+                      <input type="hidden" name="periodId" value={periodId} />
+                      <input type="hidden" name="source" value="already" />
+                      <button className="rounded-full border border-teal-200 px-2 py-0.5 text-[10px] font-medium text-teal-600 hover:border-teal-400 hover:bg-teal-50" title="Mark this bill as already paid outside the app — no money moves">
+                        mark paid
+                      </button>
+                    </ConfirmForm>
+                  ) : (
+                    <span className="rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-400">to pay</span>
+                  )}
+                </span>
+              </li>
+            ))}
+          </>
         )}
       </ul>
       {paidCount > 0 && (
