@@ -517,7 +517,7 @@ export async function getInHand(householdId: number, periodId: number) {
     // due-month "to pay" bill (auto bills don't put the bill on the Sheet anymore).
     prisma.category.findMany({ where: { householdId, fundingStyle: { not: null }, onHold: false }, select: { id: true, name: true, fundingStyle: true, billAmount: true, billMonth: true, billEveryMonths: true, responsibleMemberId: true, payerMemberId: true } }),
     getSinkingBalances(householdId),
-    prisma.billPayment.findMany({ where: { periodId }, select: { categoryId: true, memberId: true } }),
+    prisma.billPayment.findMany({ where: { periodId }, select: { categoryId: true, memberId: true, fromSetAside: true } }),
     prisma.member.findMany({ where: { householdId }, orderBy: { id: "asc" } }),
     getPiggyOverview(householdId),
     prisma.incomeEntry.aggregate({ where: { periodId }, _sum: { amount: true } }),
@@ -597,6 +597,9 @@ export async function getInHand(householdId: number, periodId: number) {
   }
 
   const paidCats = new Map(billPayments.map((p) => [p.categoryId, p]));
+  // How much of each category's set-aside a due-month bill already consumed this period.
+  const consumedByCat = new Map<number, number>();
+  for (const p of billPayments) if (p.fromSetAside > 0) consumedByCat.set(p.categoryId, (consumedByCat.get(p.categoryId) ?? 0) + p.fromSetAside);
   const dueBills = fundCats
     .filter((c) => c.fundingStyle === "auto" && c.billAmount != null && c.billAmount > 0 && c.billMonth != null && c.billEveryMonths != null && isLumpDue(c.billMonth, c.billEveryMonths, { month: period?.month ?? 0 }))
     .map((c) => {
@@ -612,10 +615,13 @@ export async function getInHand(householdId: number, periodId: number) {
       .map((e) => ({ id: e.id, name: e.label, amount: e.amount, paid: e.paid }));
     const unpaidBills = memberBills.filter((b) => !b.paid);
     const paidBills = memberBills.filter((b) => b.paid);
-    // set-asides this member is holding toward a bill (saver)
+    // set-asides this member is holding toward a bill (saver) — but once a due-month bill was
+    // PAID from this month's share (BillPayment.fromSetAside), that cash has left their hand and
+    // gone to the bill, so drop it from "held" (else it double-counts in the in-hand total).
     const earmarked = savingLines
       .filter((e) => (e.memberId ?? null) === key)
-      .map((e) => ({ id: e.id, name: e.category.name, amount: e.amount }));
+      .map((e) => ({ id: e.id, name: e.category.name, amount: Math.round((e.amount - (consumedByCat.get(e.categoryId) ?? 0)) * 100) / 100 }))
+      .filter((e) => e.amount > 0.005);
     // due-month periodic bills this member pays (net-neutral; paid from fund/Piggy in the modal)
     const memberDue = dueBills.filter((b) => b.payer === key);
     const unpaidPeriodic = memberDue.filter((b) => !b.paid).map((b) => ({ categoryId: b.categoryId, name: b.name, bill: b.bill, fund: b.fund, afterWindDown: b.afterWindDown }));

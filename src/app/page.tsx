@@ -94,21 +94,28 @@ function ExpenseRow({
       ? monthsUntilNextDue(e.category.billMonth, e.category.billEveryMonths, periodMonth) / Math.max(1, e.category.saveEveryMonths ?? 1) + 1 // +1 = the due month's own share
       : 0;
   const newShare = savesLeft > 1 ? Math.round(((e.amount * savesLeft) / (savesLeft - 1)) * 100) / 100 : null;
-  const removeMsg =
-    `Remove this month's set-aside for “${e.category.name}”?\n\n` +
-    `Frees ${formatINR(e.amount)} now. ` +
-    (newShare != null
-      ? `The remaining months' share rises to about ${formatINR(newShare)} to keep the fund on track for the due month.`
-      : `This was the last set-aside before the bill — the shortfall will be paid out-of-pocket on the due month.`) +
-    `\n\nIt won't come back on a rebuild; Setup stays the template.`;
+  // A flat monthly bill (billEveryMonths === 1, e.g. a subscription) is independent each month:
+  // skipping just means "don't pay this one month"; next month is a fresh, unchanged share — no
+  // re-spread. Only a multi-month sinking bill needs the "remaining shares rise" warning.
+  const isFlatMonthly = e.category.billEveryMonths === 1;
+  const removeMsg = isFlatMonthly
+    ? `Skip this month's payment for “${e.category.name}”?\n\n` +
+      `You just won't pay it this month — next month is a fresh ${formatINR(e.amount)}, nothing re-spreads.` +
+      `\n\nIt won't come back on a rebuild; Setup stays the template.`
+    : `Remove this month's set-aside for “${e.category.name}”?\n\n` +
+      `Frees ${formatINR(e.amount)} now. ` +
+      (newShare != null
+        ? `The remaining months' share rises to about ${formatINR(newShare)} to keep the fund on track for the due month.`
+        : `This was the last set-aside before the bill — the shortfall will be paid out-of-pocket on the due month.`) +
+      `\n\nIt won't come back on a rebuild; Setup stays the template.`;
   return (
     <Row label={e.label} sub={e.category.name} tag={e.member?.name} amount={e.amount}>
       {canEditHere && isSetAside && (
         <ConfirmForm action={skipSetAside} message={removeMsg}>
           <input type="hidden" name="categoryId" value={e.categoryId} />
           <input type="hidden" name="periodId" value={periodId} />
-          <button className="rounded-md px-2 py-1 text-[11px] font-medium text-amber-600 hover:bg-amber-50" title="Remove this month's set-aside — frees the money now; the remaining months' share rises">
-            remove
+          <button className="rounded-md px-2 py-1 text-[11px] font-medium text-amber-600 hover:bg-amber-50" title={isFlatMonthly ? "Skip this month's payment — next month is unchanged" : "Remove this month's set-aside — frees the money now; the remaining months' share rises"}>
+            {isFlatMonthly ? "skip this month" : "remove"}
           </button>
         </ConfirmForm>
       )}
