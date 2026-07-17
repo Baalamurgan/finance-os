@@ -578,10 +578,32 @@ export async function getInHand(householdId: number, periodId: number) {
   const pendingByCat = new Map<number, number>();
   for (const e of savingLines) pendingByCat.set(e.categoryId, (pendingByCat.get(e.categoryId) ?? 0) + e.amount);
 
+  // For a NEXT-month DRAFT, the fund a due bill can count on also includes the current open
+  // month's set-aside — it accrues into the fund when that month winds down. A draft isn't
+  // payable yet, so we surface this as a projected fund ("₹X after <month> winds down"). In a
+  // real open month there's no prior open period, so this term is 0 and nothing changes.
+  const priorOpen = await prisma.period.findMany({ where: { householdId, status: "open", id: { not: periodId } }, select: { id: true, label: true } });
+  const projectedByCat = new Map<number, number>();
+  let projectionLabel: string | null = null;
+  if (priorOpen.length > 0) {
+    const priorIds = priorOpen.map((p) => p.id);
+    const [priorSaves, priorPays] = await Promise.all([
+      prisma.expenseEntry.findMany({ where: { periodId: { in: priorIds }, category: { fundingStyle: { not: null } }, OR: [{ label: { endsWith: "(saving)" } }, { label: { endsWith: "(monthly share)" } }] }, select: { categoryId: true, amount: true } }),
+      prisma.billPayment.findMany({ where: { periodId: { in: priorIds } }, select: { categoryId: true, fromSetAside: true } }),
+    ]);
+    for (const e of priorSaves) if (e.categoryId != null) projectedByCat.set(e.categoryId, (projectedByCat.get(e.categoryId) ?? 0) + e.amount);
+    for (const p of priorPays) projectedByCat.set(p.categoryId, (projectedByCat.get(p.categoryId) ?? 0) - p.fromSetAside);
+    projectionLabel = priorOpen.length === 1 ? priorOpen[0].label : "wind-down";
+  }
+
   const paidCats = new Map(billPayments.map((p) => [p.categoryId, p]));
   const dueBills = fundCats
     .filter((c) => c.fundingStyle === "auto" && c.billAmount != null && c.billAmount > 0 && c.billMonth != null && c.billEveryMonths != null && isLumpDue(c.billMonth, c.billEveryMonths, { month: period?.month ?? 0 }))
-    .map((c) => ({ categoryId: c.id, name: c.name, bill: c.billAmount!, payer: c.payerMemberId ?? c.responsibleMemberId ?? null, fund: Math.round(((sinkBal[c.id] ?? 0) + (pendingByCat.get(c.id) ?? 0)) * 100) / 100, paid: paidCats.has(c.id) }));
+    .map((c) => {
+      const projected = Math.max(0, Math.round((projectedByCat.get(c.id) ?? 0) * 100) / 100);
+      const fund = Math.round(((sinkBal[c.id] ?? 0) + (pendingByCat.get(c.id) ?? 0) + projected) * 100) / 100;
+      return { categoryId: c.id, name: c.name, bill: c.billAmount!, payer: c.payerMemberId ?? c.responsibleMemberId ?? null, fund, afterWindDown: projected > 0 ? projectionLabel : null, paid: paidCats.has(c.id) };
+    });
 
   const build = (key: number | null, name: string) => {
     const cats = rows.filter((r) => (r.responsibleMemberId ?? null) === key);
@@ -596,8 +618,8 @@ export async function getInHand(householdId: number, periodId: number) {
       .map((e) => ({ id: e.id, name: e.category.name, amount: e.amount }));
     // due-month periodic bills this member pays (net-neutral; paid from fund/Piggy in the modal)
     const memberDue = dueBills.filter((b) => b.payer === key);
-    const unpaidPeriodic = memberDue.filter((b) => !b.paid).map((b) => ({ categoryId: b.categoryId, name: b.name, bill: b.bill, fund: b.fund }));
-    const paidPeriodic = memberDue.filter((b) => b.paid).map((b) => ({ categoryId: b.categoryId, name: b.name, bill: b.bill, fund: b.fund }));
+    const unpaidPeriodic = memberDue.filter((b) => !b.paid).map((b) => ({ categoryId: b.categoryId, name: b.name, bill: b.bill, fund: b.fund, afterWindDown: b.afterWindDown }));
+    const paidPeriodic = memberDue.filter((b) => b.paid).map((b) => ({ categoryId: b.categoryId, name: b.name, bill: b.bill, fund: b.fund, afterWindDown: b.afterWindDown }));
 
     const budgetRemaining = cats.reduce((s, r) => s + r.remaining, 0);
     const unpaidTotal = unpaidBills.reduce((s, b) => s + b.amount, 0);

@@ -228,7 +228,10 @@ function PersonGroup({
               <li key={`pb${b.categoryId}`} className="flex items-center justify-between gap-2 text-xs">
                 <span className="truncate text-slate-500">
                   {b.name} <span className="text-[10px] text-teal-500">bill due</span>
-                  <span className="text-[10px] text-slate-400"> · fund {formatINR(b.fund)}</span>
+                  <span className="text-[10px] text-slate-400">
+                    {" "}· fund {formatINR(b.fund)}
+                    {b.afterWindDown && <span className="text-violet-400"> (after {b.afterWindDown} winds down)</span>}
+                  </span>
                 </span>
                 <span className="flex shrink-0 items-center gap-1.5">
                   <span className="tabular-nums text-slate-500">{formatINR(b.bill)}</span>
