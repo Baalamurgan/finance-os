@@ -491,14 +491,15 @@ export async function withdrawPiggy(formData: FormData) {
   revalidatePath("/", "layout");
 }
 
-// Head adds money into the general Piggy (e.g. a manual top-up). Positive entry.
+// Head adjusts the general Piggy or a sinking fund (e.g. a manual top-up). Head-only, so a
+// NEGATIVE amount is allowed too — a manual deduction/correction (records as a withdrawal entry).
 export async function depositPiggy(formData: FormData) {
   if (!(await isHead())) return;
   const amount = parseAmount(formData.get("amount"));
-  const note = String(formData.get("note") ?? "").trim() || "Manual top-up";
+  const note = String(formData.get("note") ?? "").trim() || "Manual adjustment";
   // target = "general" (general Piggy) or a sinking-fund categoryId
   const target = String(formData.get("target") ?? "general");
-  if (!amount || amount <= 0) return;
+  if (!amount || Number.isNaN(amount) || amount === 0) return; // any non-zero amount (± for head)
   const household = await prisma.household.findFirst();
   if (!household) return;
   const sinkingCatId = target !== "general" ? Number(target) : null;
@@ -507,11 +508,15 @@ export async function depositPiggy(formData: FormData) {
       householdId: household.id,
       categoryId: sinkingCatId,
       kind: sinkingCatId ? "sinking" : "piggy",
-      amount: Math.abs(amount),
-      note: `Deposit: ${note}`,
+      amount, // signed — negative = a manual deduction/correction
+      note: `${amount < 0 ? "Adjustment" : "Deposit"}: ${note}`,
     },
   });
-  await logActivity("piggy", "created", `Added ${formatINR(amount)} to Piggy — ${note}`);
+  await logActivity(
+    "piggy",
+    "created",
+    `${amount < 0 ? "Removed" : "Added"} ${formatINR(Math.abs(amount))} ${amount < 0 ? "from" : "to"} Piggy — ${note}`,
+  );
   revalidatePath("/", "layout");
 }
 

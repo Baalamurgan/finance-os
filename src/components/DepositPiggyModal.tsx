@@ -49,7 +49,9 @@ export function DepositPiggyModal({ sinkingFunds }: { sinkingFunds: Fund[] }) {
               action={depositPiggy}
               onSubmit={(e) => {
                 if (!e.currentTarget.checkValidity()) return;
-                if (!confirm(`Add ${formatINR(amountNum)} to ${targetName}?`)) {
+                const verb = amountNum < 0 ? "Remove" : "Add";
+                const prep = amountNum < 0 ? "from" : "to";
+                if (!confirm(`${verb} ${formatINR(Math.abs(amountNum))} ${prep} ${targetName}?`)) {
                   e.preventDefault();
                   return;
                 }
@@ -64,7 +66,6 @@ export function DepositPiggyModal({ sinkingFunds }: { sinkingFunds: Fund[] }) {
                   name="amount"
                   type="number"
                   step="1"
-                  min="1"
                   inputMode="numeric"
                   autoFocus
                   required
@@ -73,6 +74,9 @@ export function DepositPiggyModal({ sinkingFunds }: { sinkingFunds: Fund[] }) {
                   placeholder="0"
                   className="mt-1.5 w-full rounded-xl border-2 border-slate-300 px-4 py-3 text-3xl font-bold tabular-nums outline-none focus:border-amber-400 focus:ring-2 focus:ring-amber-100"
                 />
+                <p className="mt-1 text-[11px] text-slate-400">
+                  Enter a negative amount to deduct/correct the balance.
+                </p>
               </div>
               <div>
                 <label className="text-sm font-medium text-slate-600">Add to</label>
@@ -96,8 +100,8 @@ export function DepositPiggyModal({ sinkingFunds }: { sinkingFunds: Fund[] }) {
                 <button type="button" onClick={() => setOpen(false)} className="min-h-12 flex-1 rounded-xl border-2 border-slate-200 px-4 py-3 text-base font-medium text-slate-600">
                   Cancel
                 </button>
-                <button type="submit" disabled={amountNum <= 0} className="min-h-12 flex-1 rounded-xl bg-amber-600 px-4 py-3 text-base font-semibold text-white disabled:opacity-40">
-                  Add money
+                <button type="submit" disabled={amountNum === 0 || Number.isNaN(amountNum)} className="min-h-12 flex-1 rounded-xl bg-amber-600 px-4 py-3 text-base font-semibold text-white disabled:opacity-40">
+                  {amountNum < 0 ? "Remove money" : "Add money"}
                 </button>
               </div>
             </form>
