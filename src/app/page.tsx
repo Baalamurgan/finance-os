@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
 import { formatINR } from "@/lib/format";
+import { categoryEmoji } from "@/lib/categoryEmoji";
 import { loadCommon } from "@/lib/load";
 import { getRollup, getWindDownPreview, getSkippedSetAsides } from "@/lib/queries";
 import { NavHeader } from "@/components/NavHeader";
@@ -109,7 +110,7 @@ function ExpenseRow({
         : `This was the last set-aside before the bill — the shortfall will be paid out-of-pocket on the due month.`) +
       `\n\nIt won't come back on a rebuild; Setup stays the template.`;
   return (
-    <Row label={e.label} sub={e.category.name} tag={e.member?.name} amount={e.amount}>
+    <Row label={e.label} sub={e.category.name} emoji={categoryEmoji(e.category.name)} tag={e.member?.name} amount={e.amount}>
       {canEditHere && isSetAside && (
         <ConfirmForm action={skipSetAside} message={removeMsg}>
           <input type="hidden" name="categoryId" value={e.categoryId} />
@@ -738,12 +739,14 @@ function Row({
   sub,
   tag,
   amount,
+  emoji,
   children,
 }: {
   label: string;
   sub?: string;
   tag?: string | null;
   amount: number;
+  emoji?: string | null;
   children?: React.ReactNode;
 }) {
   // pull a trailing installment marker ("Chimney EMI 2/6") out into a tag
@@ -754,6 +757,7 @@ function Row({
     <div className="flex items-center justify-between py-2.5 text-[15px]">
       <div className="min-w-0">
         <div className="flex items-center gap-1.5">
+          {emoji && <span className="shrink-0" aria-hidden>{emoji}</span>}
           <span className="truncate font-medium text-slate-800">{baseLabel}</span>
           {installment && (
             <span className="shrink-0 rounded-full bg-indigo-50 px-1.5 py-0.5 text-[10px] font-semibold text-indigo-500" title="installment (this payment / total)">
