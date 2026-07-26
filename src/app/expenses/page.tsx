@@ -1,8 +1,9 @@
 import { formatINR } from "@/lib/format";
 import { loadCommon } from "@/lib/load";
-import { getTrackedExpenses } from "@/lib/queries";
+import { getTrackedExpenses, getMiscReview } from "@/lib/queries";
 import { NavHeader } from "@/components/NavHeader";
 import { AddSpendModal } from "@/components/AddSpendModal";
+import { MiscReview } from "@/components/MiscReview";
 import { SpendDeleteButton } from "@/components/SpendDeleteButton";
 import { SpendSubCategoryPicker } from "@/components/SpendSubCategoryPicker";
 import { EditSpendModal } from "@/components/EditSpendModal";
@@ -56,6 +57,8 @@ export default async function ExpensesPage({
   const budgetedCards = cards.filter((card) => card.allocation > 0);
   const miscCards = cards.filter((card) => card.allocation === 0);
   const open = c.selected.status === "open";
+  // Head-only tidy-up: misc spends that look like a tracked category (open month only).
+  const miscReview = c.isHead && open ? await getMiscReview(c.household.id, c.selected.id) : [];
 
   return (
     <>
@@ -116,6 +119,7 @@ export default async function ExpensesPage({
                 <span className="text-xs text-slate-400">(not in allocation)</span>
               </span>
             </div>
+            <MiscReview items={miscReview} />
             <div className="grid grid-cols-1 gap-5 md:grid-cols-2">
               {miscCards.map((card) => (
                 <SpendCard

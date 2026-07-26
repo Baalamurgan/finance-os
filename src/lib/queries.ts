@@ -1,6 +1,39 @@
 import { prisma } from "@/lib/prisma";
 import { computeSettlement } from "@/lib/settlement-core";
 import { planBillMonth, isLumpDue, monthsUntilNextDue, type FundingStyle } from "@/lib/schedule";
+import { suggestCategoryName } from "@/lib/spendCategorize";
+
+// Misc spends in this period whose item looks like it belongs in a tracked category —
+// the head-only "Review Misc" safety net. Uses the same seed+learned matcher as the
+// entry-time nudge, then resolves the suggestion to a real tracked (non-misc) category.
+export async function getMiscReview(householdId: number, periodId: number) {
+  const [miscSpends, learnedRows, trackedCats] = await Promise.all([
+    prisma.spend.findMany({
+      where: { periodId, category: { section: "Misc", tracked: true } },
+      select: { id: true, label: true, amount: true, subCategory: true, member: { select: { name: true } } },
+      orderBy: { id: "desc" },
+    }),
+    // Resilient to a not-yet-migrated DB: if SpendKeyword doesn't exist yet, fall back to
+    // the code seed only (empty learned set) instead of 500-ing the whole Expenses page.
+    prisma.spendKeyword
+      .findMany({ where: { householdId }, select: { keyword: true, hits: true, category: { select: { name: true } } } })
+      .catch(() => [] as { keyword: string; hits: number; category: { name: string } }[]),
+    prisma.category.findMany({ where: { householdId, tracked: true, section: { not: "Misc" } }, select: { id: true, name: true } }),
+  ]);
+  const learned = learnedRows.map((r) => ({ keyword: r.keyword, category: r.category.name, hits: r.hits }));
+  const byName = new Map(trackedCats.map((c) => [c.name, c.id]));
+
+  const items: { id: number; label: string; amount: number; who: string | null; toId: number; toName: string }[] = [];
+  for (const s of miscSpends) {
+    // A deliberate "for someone else" tag means the person meant Misc — leave it alone.
+    if (s.subCategory === "For someone else") continue;
+    const name = suggestCategoryName(s.label, learned);
+    const toId = name ? byName.get(name) : undefined;
+    if (!name || toId == null) continue;
+    items.push({ id: s.id, label: s.label, amount: s.amount, who: s.member?.name ?? null, toId, toName: name });
+  }
+  return items;
+}
 
 // Bills whose set-aside was skipped for this month — shown in the sheet's "Skipped" section
 // with the amount that would have been set aside (so it can be added back).

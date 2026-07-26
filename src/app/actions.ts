@@ -9,6 +9,7 @@ import { isUnlocked } from "@/lib/applock";
 import { formatINR, parseAmount } from "@/lib/format";
 import { generateMonth } from "@/lib/periodClone";
 import { isMiscBucket, MISC_SUBCATEGORIES } from "@/lib/misc";
+import { isLearnable } from "@/lib/spendCategorize";
 import { planBillMonth, isLumpDue, type FundingStyle } from "@/lib/schedule";
 
 // Record a money-affecting change for the head-only activity log (who + what + when).
@@ -322,7 +323,7 @@ async function doAddSpend(formData: FormData): Promise<boolean> {
   // Misc (Personal/Misc) spends must carry a reporting sub-category (Food, Travel…);
   // other categories already are a category, so it stays null there.
   const subCategoryRaw = String(formData.get("subCategory") ?? "").trim();
-  const cat = await prisma.category.findUnique({ where: { id: categoryId }, select: { section: true, tracked: true } });
+  const cat = await prisma.category.findUnique({ where: { id: categoryId }, select: { section: true, tracked: true, householdId: true } });
   const misc = cat ? isMiscBucket(cat) : false;
   if (misc && !subCategoryRaw) return false; // mandatory for misc
   const subCategory = misc && subCategoryRaw ? subCategoryRaw : null;
@@ -335,9 +336,73 @@ async function doAddSpend(formData: FormData): Promise<boolean> {
   await prisma.spend.create({
     data: { periodId, categoryId, memberId, label, amount, subCategory, imagePath },
   });
+  // Learn the item→category so future entries of the same thing get suggested. Only
+  // deliberate tracked (non-misc) categorisations teach the app — misc is ambiguous
+  // (the same item can be "for someone else"), so we never learn from it.
+  if (cat && cat.tracked && !misc) await learnSpendItem(cat.householdId, label, categoryId);
   await logActivity("spend", "created", `Logged spend “${label}” ${formatINR(amount)}`, periodId);
   revalidatePath("/", "layout");
   return true;
+}
+
+// Reinforce (or create) the item→category memory for this household. Best-effort:
+// a learning failure must never block saving the spend.
+async function learnSpendItem(householdId: number, label: string, categoryId: number) {
+  const keyword = isLearnable(label);
+  if (!keyword) return;
+  try {
+    await prisma.spendKeyword.upsert({
+      where: { householdId_keyword: { householdId, keyword } },
+      create: { householdId, keyword, categoryId, hits: 1 },
+      update: { hits: { increment: 1 }, categoryId }, // latest categorisation wins the tie
+    });
+  } catch {
+    /* learning is advisory — ignore races/errors */
+  }
+}
+
+// Learned item→category rows for this household (merged with the code seed on the
+// client) — powers the Add-Spend "did you mean {Category}?" nudge.
+export async function getSpendKeywords(): Promise<{ keyword: string; category: string; hits: number }[]> {
+  const session = await auth();
+  if (!session?.user) return [];
+  const household = await prisma.household.findFirst({ select: { id: true } });
+  if (!household) return [];
+  const rows = await prisma.spendKeyword.findMany({
+    where: { householdId: household.id },
+    select: { keyword: true, hits: true, category: { select: { name: true } } },
+  });
+  return rows.map((r) => ({ keyword: r.keyword, category: r.category.name, hits: r.hits }));
+}
+
+// Recategorise a spend from Misc into a tracked category (the "Review Misc" fix and the
+// nudge's one-tap accept both use this). Head or the spend's owner, open month only.
+// Moving out of Misc clears the misc-only reporting sub-category, and — since this is a
+// deliberate correction — teaches the item→category memory too.
+export async function moveSpendCategory(formData: FormData) {
+  const session = await auth();
+  if (!session?.user) return;
+  if (!(await unlocked())) return; // app-lock
+  const id = Number(formData.get("id"));
+  const categoryId = Number(formData.get("categoryId"));
+  if (!id || !categoryId) return;
+  const spend = await prisma.spend.findUnique({ where: { id } });
+  if (!spend) return;
+  if (!(await periodOpen(spend.periodId))) return;
+  const isOwner = spend.memberId === session.user.memberId;
+  if (session.user.role !== "head" && !isOwner) return;
+
+  const target = await prisma.category.findUnique({ where: { id: categoryId }, select: { tracked: true, section: true, householdId: true, name: true } });
+  if (!target || !target.tracked) return; // only ever move INTO a real tracked category
+  const nowMisc = isMiscBucket(target);
+
+  await prisma.spend.update({
+    where: { id },
+    data: { categoryId, subCategory: nowMisc ? spend.subCategory : null },
+  });
+  if (!nowMisc) await learnSpendItem(target.householdId, spend.label, categoryId);
+  await logActivity("spend", "updated", `Moved “${spend.label}” → ${target.name}`, spend.periodId);
+  revalidatePath("/", "layout");
 }
 
 // Plain form-action caller (card mode on the Expenses page): fire-and-forget.

@@ -26,9 +26,13 @@ export const CATEGORY_KINDS: { name: string; icon: string; bucket: string }[] = 
  * the personal-view categories, so the Analysis breakdown can show where misc money
  * actually goes. Reporting-only; never affects settlement or budgets.
  */
-export const MISC_SUBCATEGORIES: { name: string; icon: string }[] = CATEGORY_KINDS.map(
-  ({ name, icon }) => ({ name, icon }),
-);
+export const MISC_SUBCATEGORIES: { name: string; icon: string }[] = [
+  // The main *legitimate* reason a household item lands in Misc: it was bought for
+  // someone outside our budget (e.g. petrol for a relative). Listed first so it's the
+  // obvious pick, and so the Add-Spend nudge knows this Misc entry was deliberate.
+  { name: "For someone else", icon: "👥" },
+  ...CATEGORY_KINDS.map(({ name, icon }) => ({ name, icon })),
+];
 
 /** Is this the family misc bucket? (the tracked category in the "Misc" section) */
 export function isMiscBucket(cat: { section: string; tracked: boolean }): boolean {

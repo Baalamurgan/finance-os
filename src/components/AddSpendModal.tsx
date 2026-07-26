@@ -2,7 +2,8 @@
 
 import { useActionState, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { addSpendAction, type AddSpendState } from "@/app/actions";
+import { addSpendAction, getSpendKeywords, type AddSpendState } from "@/app/actions";
+import { QUICK_ITEMS, suggestCategoryName, type LearnedKeyword } from "@/lib/spendCategorize";
 
 type Cat = { id: number; name: string; misc?: boolean }; // misc = the Personal/Misc bucket
 
@@ -33,11 +34,28 @@ export function AddSpendModal({
   const [justSaved, setJustSaved] = useState(false);
   const [keepAdding, setKeepAdding] = useState(false);
   const [subCategory, setSubCategory] = useState("");
+  const [labelText, setLabelText] = useState(""); // controlled so chips/nudge can drive it
+  const [learned, setLearned] = useState<LearnedKeyword[]>([]); // household's taught items
+  const [dismissedFor, setDismissedFor] = useState<string | null>(null); // hide nudge for this text
 
   // Misc (Personal/Misc) spends must carry a reporting sub-category (Food, Travel…).
   const selectedCat = fixedCategory ?? categories?.find((c) => c.id === categoryId);
   const isMiscSelected = !!selectedCat?.misc && !!subCategories?.length;
   const needSub = isMiscSelected && !subCategory;
+
+  // ── Smart category help (picker mode only) ───────────────────────────────────
+  // Quick-pick chips fill the item + set the right category in one tap; the nudge
+  // gently suggests a tracked category when the typed item looks miscategorised.
+  const nameToId = new Map((categories ?? []).map((c) => [c.name, c.id]));
+  const quickChips = fixedCategory
+    ? []
+    : QUICK_ITEMS.filter((q) => nameToId.has(q.category)).map((q) => ({ ...q, id: nameToId.get(q.category)! }));
+  const suggestName = fixedCategory ? null : suggestCategoryName(labelText, learned);
+  const suggestId = suggestName ? nameToId.get(suggestName) ?? null : null;
+  const suggestCat = suggestId != null ? categories?.find((c) => c.id === suggestId) : undefined;
+  // Deliberate "for someone else" Misc entries are legitimate — never nag those.
+  const forSomeoneElse = isMiscSelected && subCategory === "For someone else";
+  const showSuggest = !!suggestCat && suggestId !== categoryId && dismissedFor !== labelText && !forSomeoneElse;
 
   const [state, formAction, pending] = useActionState<AddSpendState, FormData>(
     addSpendAction,
@@ -47,8 +65,18 @@ export function AddSpendModal({
   const formRef = useRef<HTMLFormElement>(null);
   const amountRef = useRef<HTMLInputElement>(null);
   const prevN = useRef(0);
+  const fetchedKw = useRef(false);
 
   useEffect(() => setMounted(true), []);
+
+  // Load the household's learned item→category words the first time the modal opens
+  // (the code seed already covers the common items, so the nudge works before this).
+  useEffect(() => {
+    if (open && !fetchedKw.current && !fixedCategory) {
+      fetchedKw.current = true;
+      getSpendKeywords().then(setLearned).catch(() => {});
+    }
+  }, [open, fixedCategory]);
 
   useEffect(() => {
     if (!open) return;
@@ -63,8 +91,10 @@ export function AddSpendModal({
     if (state.n > prevN.current) {
       prevN.current = state.n;
       if (keepAdding) {
-        formRef.current?.reset(); // clears uncontrolled amount/what; category stays (controlled)
+        formRef.current?.reset(); // clears uncontrolled amount; category stays (controlled)
         setSubCategory(""); // controlled — reset for the next item
+        setLabelText(""); // controlled — reset the item text + nudge
+        setDismissedFor(null);
         setJustSaved(true);
         amountRef.current?.focus();
         const t = setTimeout(() => setJustSaved(false), 2500);
@@ -145,6 +175,34 @@ export function AddSpendModal({
                     />
                   </div>
 
+                  {/* quick-pick common items — one tap fills the item AND the right
+                      category, so the frequent staples never land in Misc by mistake */}
+                  {quickChips.length > 0 && (
+                    <div>
+                      <label className="text-sm font-medium text-slate-600">Quick add</label>
+                      <div className="mt-1.5 flex flex-wrap gap-2">
+                        {quickChips.map((q) => (
+                          <button
+                            key={q.label}
+                            type="button"
+                            onClick={() => {
+                              setLabelText(q.fill);
+                              setCategoryId(q.id);
+                              setDismissedFor(null);
+                            }}
+                            className={`flex items-center gap-1.5 rounded-full border-2 px-3 py-2 text-sm font-medium transition ${
+                              categoryId === q.id && labelText === q.fill
+                                ? "border-indigo-500 bg-indigo-50 text-indigo-700"
+                                : "border-slate-200 text-slate-600 active:border-slate-400"
+                            }`}
+                          >
+                            <span className="text-base leading-none">{q.icon}</span> {q.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
                   {/* category chips (picker mode only) — big tap targets */}
                   {!fixedCategory && categories && (
                     <div>
@@ -165,6 +223,32 @@ export function AddSpendModal({
                           </button>
                         ))}
                       </div>
+                    </div>
+                  )}
+
+                  {/* soft, overridable nudge: the item looks like a tracked category but
+                      a different one (usually Misc) is chosen. One tap to move; easy to
+                      ignore (petrol for someone else stays in Misc). */}
+                  {showSuggest && suggestCat && (
+                    <div className="flex items-center gap-2 rounded-xl border-2 border-amber-200 bg-amber-50 px-3 py-2.5">
+                      <span className="text-lg leading-none">💡</span>
+                      <span className="flex-1 text-sm text-amber-900">
+                        Looks like <b>{suggestCat.name}</b>. Move it there?
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setCategoryId(suggestId)}
+                        className="rounded-lg bg-amber-500 px-3 py-1.5 text-sm font-semibold text-white active:bg-amber-600"
+                      >
+                        Yes
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setDismissedFor(labelText)}
+                        className="rounded-lg px-2 py-1.5 text-sm font-medium text-amber-700/70 hover:text-amber-800"
+                      >
+                        No
+                      </button>
                     </div>
                   )}
 
@@ -194,6 +278,8 @@ export function AddSpendModal({
                     <input
                       name="label"
                       required
+                      value={labelText}
+                      onChange={(e) => setLabelText(e.target.value)}
                       placeholder="e.g. Tomatoes, Chicken, Petrol"
                       className="mt-1.5 w-full rounded-xl border-2 border-slate-300 px-4 py-3 text-lg outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
                     />

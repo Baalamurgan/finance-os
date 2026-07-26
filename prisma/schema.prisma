@@ -29,6 +29,7 @@ model Household {
   piggyEntries PiggyEntry[]
   settlements  SettlementRecord[]
   loans        Loan[]
+  spendKeywords SpendKeyword[]
   createdAt    DateTime     @default(now())
 }
 
@@ -432,6 +433,7 @@ model Category {
   budgets      Budget[]
   spends       Spend[]
   piggyEntries PiggyEntry[]
+  spendKeywords SpendKeyword[]
 
   @@unique([householdId, name])
 }
@@ -481,6 +483,25 @@ model Spend {
   subCategory String? // reporting-only tag for Personal/Misc spends (Food, Travel…); null = uncategorized
   imagePath  String? // /uploads/<file> for petrol receipts etc.
   createdAt  DateTime @default(now())
+}
+
+// Learned item→category memory that reinforces the Add-Spend nudge. Seed knowledge
+// lives in code (src/lib/spendCategorize.ts); this table only holds what the household
+// TEACHES the app — each save to a tracked (non-misc) category upserts the item here
+// (+1 hits). A high enough hit-count lets a learned word win over a seed. Never affects
+// settlement or budgets; it's purely a suggestion source.
+model SpendKeyword {
+  id          Int      @id @default(autoincrement())
+  household   Household @relation(fields: [householdId], references: [id])
+  householdId Int
+  keyword     String    // normalized (lowercase, punctuation-stripped) item label
+  category    Category  @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  categoryId  Int
+  hits        Int       @default(1)
+  createdAt   DateTime  @default(now())
+
+  @@unique([householdId, keyword])
+  @@index([householdId])
 }
 
 // A recorded settlement payment: one transfer (from → to) marked paid for a month.
