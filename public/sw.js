@@ -6,7 +6,7 @@
 //   (`?_rsc=…`) that must NEVER be served cache-first.
 // - Static assets (content-hashed chunks, icons): cache-first (immutable → fast).
 // Bump CACHE on each deploy to evict any previously poisoned entries.
-const CACHE = "finance-os-v2";
+const CACHE = "finance-os-v3";
 const SHELL = ["/", "/manifest.webmanifest", "/icon-192.png", "/icon-512.png"];
 
 self.addEventListener("install", (event) => {
@@ -46,8 +46,13 @@ self.addEventListener("fetch", (event) => {
     event.respondWith(
       fetch(req)
         .then((res) => {
-          const copy = res.clone();
-          caches.open(CACHE).then((c) => c.put(req, copy)).catch(() => {});
+          // Only cache a clean 200. Never cache a REDIRECTED response (an auth/lock
+          // bounce) under the original URL — replaying it offline would strand the
+          // user on the wrong page (e.g. a lock screen served for /personal/expenses).
+          if (res.ok && !res.redirected) {
+            const copy = res.clone();
+            caches.open(CACHE).then((c) => c.put(req, copy)).catch(() => {});
+          }
           return res;
         })
         .catch(() => caches.match(req).then((r) => r || caches.match("/")))

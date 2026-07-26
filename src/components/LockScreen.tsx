@@ -3,7 +3,7 @@
 import { useActionState, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { startAuthentication } from "@simplewebauthn/browser";
-import { verifyPin, type UnlockState } from "@/app/lock/actions";
+import { verifyPin, switchToPersonal, type UnlockState } from "@/app/lock/actions";
 
 const INITIAL: UnlockState = { ok: false };
 
@@ -25,10 +25,8 @@ export function LockScreen({
   const formRef = useRef<HTMLFormElement>(null);
   const autoTried = useRef(false);
 
-  // success → into the app
-  useEffect(() => {
-    if (state.ok) router.replace("/");
-  }, [state.ok, router]);
+  // A correct PIN redirects from the server action itself (atomic cookie + nav),
+  // so there's no client-side success navigation to race here.
 
   // wrong / locked → clear the entered digits
   useEffect(() => {
@@ -160,7 +158,14 @@ export function LockScreen({
 
       {bioError && <p className="mt-3 text-[13px] text-[#b4685a]">{bioError}</p>}
 
-      <p className="mt-8 text-[12.5px] text-[#a9a69d]">
+      {/* switch modes without unlocking — mirrors Personal's "Use Family instead" */}
+      <form action={switchToPersonal} className="mt-6">
+        <button type="submit" className="text-[13px] font-medium text-[#3f6152]/80 hover:text-[#3f6152]">
+          Use Personal instead →
+        </button>
+      </form>
+
+      <p className="mt-6 text-[12.5px] text-[#a9a69d]">
         Forgot the PIN? Ask the head of your household to reset it in Setup.
       </p>
     </div>

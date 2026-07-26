@@ -25,9 +25,8 @@ export function PersonalLockScreen({
   const formRef = useRef<HTMLFormElement>(null);
   const autoTried = useRef(false);
 
-  useEffect(() => {
-    if (state.ok) router.replace("/personal/expenses");
-  }, [state.ok, router]);
+  // A correct PIN redirects from the server action itself (atomic cookie + nav),
+  // so there's no client-side success navigation to race here.
 
   useEffect(() => {
     if (!state.ok && (state.error || state.lockedMs)) setPin("");

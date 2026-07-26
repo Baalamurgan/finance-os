@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
+import { cookies } from "next/headers";
 import { prisma } from "@/lib/prisma";
 import { auth, signOut } from "@/auth";
 import {
@@ -19,6 +20,18 @@ import {
 export async function lockNow(): Promise<void> {
   await clearUnlockCookie();
   redirect("/lock");
+}
+
+// Jump to the Personal app from the family lock screen (mirror of exitToFamily).
+// Remembers Personal as the view so the next launch lands there; the personal PIN
+// still gates entry (loadPersonal bounces to /personal/lock if it isn't unlocked).
+export async function switchToPersonal(): Promise<void> {
+  (await cookies()).set("last-view", "personal", {
+    path: "/",
+    sameSite: "lax",
+    maxAge: 60 * 60 * 24 * 365,
+  });
+  redirect("/personal/expenses");
 }
 
 async function isHead() {
@@ -45,7 +58,7 @@ export async function verifyPin(_prev: UnlockState, formData: FormData): Promise
   // no PIN configured → nothing to unlock, let them through
   if (!household.pinHash || !household.pinSalt) {
     await setUnlockCookie(household.id);
-    return { ok: true };
+    redirect("/");
   }
 
   const now = Date.now();
@@ -65,7 +78,11 @@ export async function verifyPin(_prev: UnlockState, formData: FormData): Promise
       data: { pinFailedAttempts: 0, pinLockedUntil: null },
     });
     await setUnlockCookie(household.id);
-    return { ok: true };
+    // Navigate from the server so the unlock cookie and the redirect ship in ONE
+    // response — the follow-up request always carries the cookie. (Returning
+    // {ok:true} and navigating from a client effect raced the re-render and, with
+    // the digits still filled, re-fired the submit → the "enter PIN twice" bug.)
+    redirect("/");
   }
 
   // wrong PIN → advance the brute-force ladder
