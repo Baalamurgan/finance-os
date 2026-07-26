@@ -2,9 +2,11 @@ import { redirect } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { loadCommon } from "@/lib/load";
 import { setWindDownDay, createNextMonthDraft } from "@/app/actions";
+import { getSpendShortcuts } from "@/lib/queries";
 import { NavHeader } from "@/components/NavHeader";
 import { MonthlySetup } from "@/components/MonthlySetup";
 import { RecurringSetup, type RItem, type CatOpt } from "@/components/RecurringSetup";
+import { QuickChipsSetup } from "@/components/QuickChipsSetup";
 
 export default async function SetupPage({
   searchParams,
@@ -55,6 +57,10 @@ export default async function SetupPage({
     dueDay: it.dueDay,
   }));
   const categoryOpts: CatOpt[] = c.categories.map((cat) => ({ id: cat.id, name: cat.name, section: cat.section }));
+
+  // Quick-add chips for the Add-Spend modal + the tracked categories they can target.
+  const spendShortcuts = await getSpendShortcuts(c.household.id);
+  const chipCategoryOpts = c.categories.filter((cat) => cat.tracked).map((cat) => ({ id: cat.id, name: cat.name }));
 
   // category budgets & sinking-fund template (amounts / cycles / full bills) — edited here
   const rows = c.categories
@@ -134,6 +140,9 @@ export default async function SetupPage({
             </div>
           </section>
         )}
+
+        {/* quick-add chips for the Add-Spend modal */}
+        <QuickChipsSetup shortcuts={spendShortcuts} categories={chipCategoryOpts} readOnly={readOnly} />
 
         {/* category budgets & sinking-fund template */}
         <details className="rounded-xl border border-slate-200 bg-white">

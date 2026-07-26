@@ -1,5 +1,5 @@
 import { formatINR } from "@/lib/format";
-import { moveSpendCategory } from "@/app/actions";
+import { moveSpendCategory, ignoreMiscReview } from "@/app/actions";
 
 type Item = { id: number; label: string; amount: number; who: string | null; toId: number; toName: string };
 
@@ -30,6 +30,15 @@ export function MiscReview({ items }: { items: Item[] }) {
                 {formatINR(it.amount)}{it.who ? ` · ${it.who}` : ""}
               </div>
             </div>
+            <form action={ignoreMiscReview}>
+              <input type="hidden" name="id" value={it.id} />
+              <button
+                className="whitespace-nowrap rounded-lg px-2.5 py-1.5 text-sm font-medium text-slate-500 hover:bg-slate-100 active:bg-slate-200"
+                title="It really is miscellaneous — stop suggesting a move"
+              >
+                Ignore
+              </button>
+            </form>
             <form action={moveSpendCategory}>
               <input type="hidden" name="id" value={it.id} />
               <input type="hidden" name="categoryId" value={it.toId} />

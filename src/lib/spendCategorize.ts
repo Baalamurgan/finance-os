@@ -4,20 +4,9 @@
 // is SOFT — the UI always lets the user keep their choice, because the same item can
 // legitimately be Misc (e.g. petrol bought for someone else). Categories are referenced
 // by NAME here and resolved to ids at the edge (ids differ per DB / reseed).
-
-/** Quick-pick chips at the top of the Add-Spend modal — one tap fills the item AND
- *  selects the right category. Bilingual labels so elders can scan the Tamil word.
- *  `category` must match a real Category.name; unresolved chips are simply hidden. */
-export const QUICK_ITEMS: { label: string; icon: string; category: string; fill: string }[] = [
-  { label: "Paal / Milk", icon: "🥛", category: "Veg & Fruits", fill: "Milk" },
-  { label: "Maavu / Flour", icon: "🌾", category: "Veg & Fruits", fill: "Maavu" },
-  { label: "Vegetables", icon: "🥦", category: "Veg & Fruits", fill: "Vegetables" },
-  { label: "Thengai / Coconut", icon: "🥥", category: "Veg & Fruits", fill: "Coconut" },
-  { label: "Fruits", icon: "🍎", category: "Veg & Fruits", fill: "Fruits" },
-  { label: "Ration", icon: "🛒", category: "Provision", fill: "Ration" },
-  { label: "Non-Veg", icon: "🍗", category: "Non-Veg", fill: "Chicken" },
-  { label: "Petrol", icon: "⛽", category: "Petrol", fill: "Petrol" },
-];
+//
+// The Add-Spend quick chips are now head-curated (SpendShortcut) rather than hardcoded;
+// this module keeps only the seed keyword knowledge that powers the on-save suggestion.
 
 /** Seed word → category map that powers the "did you mean {Category}?" nudge. Per the
  *  household's own rules: milk & maavu (flour) live with veg/fruits; rice/dal/oil/etc are

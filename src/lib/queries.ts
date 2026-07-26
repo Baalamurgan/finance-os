@@ -1,38 +1,106 @@
 import { prisma } from "@/lib/prisma";
 import { computeSettlement } from "@/lib/settlement-core";
 import { planBillMonth, isLumpDue, monthsUntilNextDue, type FundingStyle } from "@/lib/schedule";
-import { suggestCategoryName } from "@/lib/spendCategorize";
+import { suggestCategoryName, normalizeItem } from "@/lib/spendCategorize";
+
+// Keywords that drive the on-save category suggestion: the household's LEARNED words
+// (SpendKeyword) plus its head-curated shortcuts (SpendShortcut, weighted high since
+// they're a deliberate signal). The code seed is added client-side inside the matcher.
+// Resilient to a not-yet-migrated DB (returns [] rather than throwing).
+export async function getMatcherKeywords(householdId: number): Promise<{ keyword: string; category: string; hits: number }[]> {
+  try {
+    const [learned, shortcuts] = await Promise.all([
+      prisma.spendKeyword.findMany({ where: { householdId }, select: { keyword: true, hits: true, category: { select: { name: true } } } }),
+      prisma.spendShortcut.findMany({ where: { householdId, active: true }, select: { label: true, category: { select: { name: true } } } }),
+    ]);
+    return [
+      ...learned.map((r) => ({ keyword: r.keyword, category: r.category.name, hits: r.hits })),
+      ...shortcuts.map((s) => ({ keyword: normalizeItem(s.label), category: s.category.name, hits: 500 })),
+    ];
+  } catch {
+    return [];
+  }
+}
+
+// The head-curated quick chips, in display order. Resilient to a not-yet-migrated DB.
+export async function getSpendShortcuts(householdId: number) {
+  try {
+    const rows = await prisma.spendShortcut.findMany({
+      where: { householdId, active: true },
+      orderBy: [{ sortOrder: "asc" }, { id: "asc" }],
+      select: { id: true, icon: true, label: true, categoryId: true, category: { select: { name: true } } },
+    });
+    return rows.map((r) => ({ id: r.id, icon: r.icon, label: r.label, categoryId: r.categoryId, categoryName: r.category.name }));
+  } catch {
+    return [];
+  }
+}
+
+// Fallback chips when the head hasn't curated any: the most-frequent distinct items from
+// TRACKED (non-misc) history, so a tapped chip always files into the right place (never
+// re-suggests Misc). Deduped by label, most-used first.
+export async function getFrequentSpendItems(householdId: number, limit = 10) {
+  try {
+    const grouped = await prisma.spend.groupBy({
+      by: ["label", "categoryId"],
+      where: { category: { householdId, tracked: true, section: { not: "Misc" } } },
+      _count: { _all: true },
+      orderBy: { _count: { label: "desc" } },
+      take: 40,
+    });
+    const catIds = [...new Set(grouped.map((g) => g.categoryId))];
+    const cats = await prisma.category.findMany({ where: { id: { in: catIds } }, select: { id: true, name: true } });
+    const nameById = new Map(cats.map((c) => [c.id, c.name]));
+    const seen = new Set<string>();
+    const items: { icon: string | null; label: string; categoryId: number; categoryName: string }[] = [];
+    for (const g of grouped) {
+      const key = g.label.toLowerCase().trim();
+      if (!key || seen.has(key)) continue;
+      const categoryName = nameById.get(g.categoryId);
+      if (!categoryName) continue;
+      seen.add(key);
+      items.push({ icon: null, label: g.label, categoryId: g.categoryId, categoryName });
+      if (items.length >= limit) break;
+    }
+    return items;
+  } catch {
+    return [];
+  }
+}
 
 // Misc spends in this period whose item looks like it belongs in a tracked category —
 // the head-only "Review Misc" safety net. Uses the same seed+learned matcher as the
 // entry-time nudge, then resolves the suggestion to a real tracked (non-misc) category.
 export async function getMiscReview(householdId: number, periodId: number) {
-  const [miscSpends, learnedRows, trackedCats] = await Promise.all([
-    prisma.spend.findMany({
-      where: { periodId, category: { section: "Misc", tracked: true } },
-      select: { id: true, label: true, amount: true, subCategory: true, member: { select: { name: true } } },
-      orderBy: { id: "desc" },
-    }),
-    // Resilient to a not-yet-migrated DB: if SpendKeyword doesn't exist yet, fall back to
-    // the code seed only (empty learned set) instead of 500-ing the whole Expenses page.
-    prisma.spendKeyword
-      .findMany({ where: { householdId }, select: { keyword: true, hits: true, category: { select: { name: true } } } })
-      .catch(() => [] as { keyword: string; hits: number; category: { name: string } }[]),
-    prisma.category.findMany({ where: { householdId, tracked: true, section: { not: "Misc" } }, select: { id: true, name: true } }),
-  ]);
-  const learned = learnedRows.map((r) => ({ keyword: r.keyword, category: r.category.name, hits: r.hits }));
-  const byName = new Map(trackedCats.map((c) => [c.name, c.id]));
+  type Item = { id: number; label: string; amount: number; who: string | null; toId: number; toName: string };
+  try {
+    const [miscSpends, learned, trackedCats] = await Promise.all([
+      prisma.spend.findMany({
+        // reviewIgnored = the head/owner said "leave it in Misc" — don't suggest it again.
+        where: { periodId, reviewIgnored: false, category: { section: "Misc", tracked: true } },
+        select: { id: true, label: true, amount: true, subCategory: true, member: { select: { name: true } } },
+        orderBy: { id: "desc" },
+      }),
+      getMatcherKeywords(householdId),
+      prisma.category.findMany({ where: { householdId, tracked: true, section: { not: "Misc" } }, select: { id: true, name: true } }),
+    ]);
+    const byName = new Map(trackedCats.map((c) => [c.name, c.id]));
 
-  const items: { id: number; label: string; amount: number; who: string | null; toId: number; toName: string }[] = [];
-  for (const s of miscSpends) {
-    // A deliberate "for someone else" tag means the person meant Misc — leave it alone.
-    if (s.subCategory === "For someone else") continue;
-    const name = suggestCategoryName(s.label, learned);
-    const toId = name ? byName.get(name) : undefined;
-    if (!name || toId == null) continue;
-    items.push({ id: s.id, label: s.label, amount: s.amount, who: s.member?.name ?? null, toId, toName: name });
+    const items: Item[] = [];
+    for (const s of miscSpends) {
+      // A deliberate "for someone else" tag means the person meant Misc — leave it alone.
+      if (s.subCategory === "For someone else") continue;
+      const name = suggestCategoryName(s.label, learned);
+      const toId = name ? byName.get(name) : undefined;
+      if (!name || toId == null) continue;
+      items.push({ id: s.id, label: s.label, amount: s.amount, who: s.member?.name ?? null, toId, toName: name });
+    }
+    return items;
+  } catch {
+    // Not-yet-migrated DB (missing SpendKeyword table or reviewIgnored column): degrade to
+    // no review rather than 500-ing the Expenses page. Recovers once migrations are applied.
+    return [] as Item[];
   }
-  return items;
 }
 
 // Bills whose set-aside was skipped for this month — shown in the sheet's "Skipped" section

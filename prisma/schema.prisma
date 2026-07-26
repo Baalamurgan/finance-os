@@ -30,6 +30,7 @@ model Household {
   settlements  SettlementRecord[]
   loans        Loan[]
   spendKeywords SpendKeyword[]
+  spendShortcuts SpendShortcut[]
   createdAt    DateTime     @default(now())
 }
 
@@ -434,6 +435,7 @@ model Category {
   spends       Spend[]
   piggyEntries PiggyEntry[]
   spendKeywords SpendKeyword[]
+  spendShortcuts SpendShortcut[]
 
   @@unique([householdId, name])
 }
@@ -482,6 +484,7 @@ model Spend {
   amount     Float
   subCategory String? // reporting-only tag for Personal/Misc spends (Food, Travel…); null = uncategorized
   imagePath  String? // /uploads/<file> for petrol receipts etc.
+  reviewIgnored Boolean @default(false) // "Review Misc" dismissed: a genuine misc spend, don't keep suggesting a move
   createdAt  DateTime @default(now())
 }
 
@@ -501,6 +504,24 @@ model SpendKeyword {
   createdAt   DateTime  @default(now())
 
   @@unique([householdId, keyword])
+  @@index([householdId])
+}
+
+// Head-curated "quick add" chip in the Add-Spend modal: one tap fills the item label
+// AND selects the category, so frequent staples never land in Misc by mistake. Also
+// feeds the on-save category suggestion (a shortcut is a high-confidence keyword).
+model SpendShortcut {
+  id          Int      @id @default(autoincrement())
+  household   Household @relation(fields: [householdId], references: [id])
+  householdId Int
+  icon        String?   // emoji shown on the chip
+  label       String    // the word: shown on the chip AND prefilled into "what was bought"
+  category    Category  @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  categoryId  Int
+  sortOrder   Int       @default(0)
+  active      Boolean   @default(true)
+  createdAt   DateTime  @default(now())
+
   @@index([householdId])
 }
 

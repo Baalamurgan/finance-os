@@ -2,12 +2,14 @@
 
 import { useActionState, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { addSpendAction, getSpendKeywords, type AddSpendState } from "@/app/actions";
-import { QUICK_ITEMS, suggestCategoryName, type LearnedKeyword } from "@/lib/spendCategorize";
+import { addSpendAction, getSpendAssist, type AddSpendState } from "@/app/actions";
+import { suggestCategoryName, type LearnedKeyword } from "@/lib/spendCategorize";
 
 type Cat = { id: number; name: string; misc?: boolean }; // misc = the Personal/Misc bucket
 
 type Mem = { id: number; name: string };
+
+type Chip = { icon: string | null; label: string; categoryId: number };
 
 export function AddSpendModal({
   periodId,
@@ -34,9 +36,11 @@ export function AddSpendModal({
   const [justSaved, setJustSaved] = useState(false);
   const [keepAdding, setKeepAdding] = useState(false);
   const [subCategory, setSubCategory] = useState("");
-  const [labelText, setLabelText] = useState(""); // controlled so chips/nudge can drive it
+  const [labelText, setLabelText] = useState(""); // controlled so chips can drive it
+  const [chips, setChips] = useState<Chip[]>([]); // head shortcuts, or frequent items
   const [learned, setLearned] = useState<LearnedKeyword[]>([]); // household's taught items
-  const [dismissedFor, setDismissedFor] = useState<string | null>(null); // hide nudge for this text
+  const [confirmOpen, setConfirmOpen] = useState(false); // on-save "did you mean" popup
+  const [submitTick, setSubmitTick] = useState(0); // bump to submit after a state update
 
   // Misc (Personal/Misc) spends must carry a reporting sub-category (Food, Travel…).
   const selectedCat = fixedCategory ?? categories?.find((c) => c.id === categoryId);
@@ -44,18 +48,14 @@ export function AddSpendModal({
   const needSub = isMiscSelected && !subCategory;
 
   // ── Smart category help (picker mode only) ───────────────────────────────────
-  // Quick-pick chips fill the item + set the right category in one tap; the nudge
-  // gently suggests a tracked category when the typed item looks miscategorised.
+  // The typed item's best-guess category; if it differs from what's chosen, Save asks
+  // to confirm (unless it's a deliberate "for someone else" Misc entry).
   const nameToId = new Map((categories ?? []).map((c) => [c.name, c.id]));
-  const quickChips = fixedCategory
-    ? []
-    : QUICK_ITEMS.filter((q) => nameToId.has(q.category)).map((q) => ({ ...q, id: nameToId.get(q.category)! }));
   const suggestName = fixedCategory ? null : suggestCategoryName(labelText, learned);
   const suggestId = suggestName ? nameToId.get(suggestName) ?? null : null;
   const suggestCat = suggestId != null ? categories?.find((c) => c.id === suggestId) : undefined;
-  // Deliberate "for someone else" Misc entries are legitimate — never nag those.
   const forSomeoneElse = isMiscSelected && subCategory === "For someone else";
-  const showSuggest = !!suggestCat && suggestId !== categoryId && dismissedFor !== labelText && !forSomeoneElse;
+  const mismatch = !!suggestCat && suggestId !== categoryId && !forSomeoneElse;
 
   const [state, formAction, pending] = useActionState<AddSpendState, FormData>(
     addSpendAction,
@@ -69,14 +69,24 @@ export function AddSpendModal({
 
   useEffect(() => setMounted(true), []);
 
-  // Load the household's learned item→category words the first time the modal opens
-  // (the code seed already covers the common items, so the nudge works before this).
+  // Fetch the quick chips + learned words the first time the modal opens (picker mode).
   useEffect(() => {
     if (open && !fetchedKw.current && !fixedCategory) {
       fetchedKw.current = true;
-      getSpendKeywords().then(setLearned).catch(() => {});
+      getSpendAssist()
+        .then((a) => {
+          setChips(a.chips);
+          setLearned(a.keywords);
+        })
+        .catch(() => {});
     }
   }, [open, fixedCategory]);
+
+  // Submit the form after a state update settles (used by the confirm popup so the
+  // chosen category is in the DOM before we submit). Skips the initial render.
+  useEffect(() => {
+    if (submitTick > 0) formRef.current?.requestSubmit();
+  }, [submitTick]);
 
   useEffect(() => {
     if (!open) return;
@@ -93,8 +103,7 @@ export function AddSpendModal({
       if (keepAdding) {
         formRef.current?.reset(); // clears uncontrolled amount; category stays (controlled)
         setSubCategory(""); // controlled — reset for the next item
-        setLabelText(""); // controlled — reset the item text + nudge
-        setDismissedFor(null);
+        setLabelText(""); // controlled — reset the item text
         setJustSaved(true);
         amountRef.current?.focus();
         const t = setTimeout(() => setJustSaved(false), 2500);
@@ -107,6 +116,28 @@ export function AddSpendModal({
   const openModal = () => {
     setJustSaved(false);
     setOpen(true);
+  };
+
+  const doSubmit = () => setSubmitTick((t) => t + 1);
+  // Save intercept: run native validation, then confirm if the item looks miscategorised
+  // (only on a real mismatch — matching entries save straight through).
+  const onSave = () => {
+    if (pending || !categoryId || needSub) return;
+    if (!formRef.current?.reportValidity()) return; // amount / item required
+    if (mismatch) {
+      setConfirmOpen(true);
+      return;
+    }
+    doSubmit();
+  };
+  const confirmMove = () => {
+    if (suggestId != null) setCategoryId(suggestId);
+    setConfirmOpen(false);
+    doSubmit();
+  };
+  const confirmKeep = () => {
+    setConfirmOpen(false);
+    doSubmit();
   };
 
   return (
@@ -134,7 +165,7 @@ export function AddSpendModal({
             onClick={() => setOpen(false)}
           >
             <div
-              className="flex max-h-[92vh] w-full max-w-md flex-col rounded-t-3xl bg-white shadow-xl sm:my-auto sm:rounded-2xl"
+              className="relative flex max-h-[92vh] w-full max-w-md flex-col rounded-t-3xl bg-white shadow-xl sm:my-auto sm:rounded-2xl"
               onClick={(e) => e.stopPropagation()}
               style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
             >
@@ -175,28 +206,29 @@ export function AddSpendModal({
                     />
                   </div>
 
-                  {/* quick-pick common items — one tap fills the item AND the right
-                      category, so the frequent staples never land in Misc by mistake */}
-                  {quickChips.length > 0 && (
+                  {/* quick-add chips (head-curated, or the family's frequent items) — one
+                      tap fills the item AND the right category. Horizontal scroll so any
+                      number stays compact on a phone. */}
+                  {!fixedCategory && chips.length > 0 && (
                     <div>
                       <label className="text-sm font-medium text-slate-600">Quick add</label>
-                      <div className="mt-1.5 flex flex-wrap gap-2">
-                        {quickChips.map((q) => (
+                      <div className="-mx-1 mt-1.5 flex gap-2 overflow-x-auto px-1 pb-1">
+                        {chips.map((ch, i) => (
                           <button
-                            key={q.label}
+                            key={`${ch.label}-${i}`}
                             type="button"
                             onClick={() => {
-                              setLabelText(q.fill);
-                              setCategoryId(q.id);
-                              setDismissedFor(null);
+                              setLabelText(ch.label);
+                              setCategoryId(ch.categoryId);
                             }}
-                            className={`flex items-center gap-1.5 rounded-full border-2 px-3 py-2 text-sm font-medium transition ${
-                              categoryId === q.id && labelText === q.fill
+                            className={`flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full border-2 px-3 py-2 text-sm font-medium transition ${
+                              categoryId === ch.categoryId && labelText === ch.label
                                 ? "border-indigo-500 bg-indigo-50 text-indigo-700"
                                 : "border-slate-200 text-slate-600 active:border-slate-400"
                             }`}
                           >
-                            <span className="text-base leading-none">{q.icon}</span> {q.label}
+                            {ch.icon && <span className="text-base leading-none">{ch.icon}</span>}
+                            {ch.label}
                           </button>
                         ))}
                       </div>
@@ -223,32 +255,6 @@ export function AddSpendModal({
                           </button>
                         ))}
                       </div>
-                    </div>
-                  )}
-
-                  {/* soft, overridable nudge: the item looks like a tracked category but
-                      a different one (usually Misc) is chosen. One tap to move; easy to
-                      ignore (petrol for someone else stays in Misc). */}
-                  {showSuggest && suggestCat && (
-                    <div className="flex items-center gap-2 rounded-xl border-2 border-amber-200 bg-amber-50 px-3 py-2.5">
-                      <span className="text-lg leading-none">💡</span>
-                      <span className="flex-1 text-sm text-amber-900">
-                        Looks like <b>{suggestCat.name}</b>. Move it there?
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() => setCategoryId(suggestId)}
-                        className="rounded-lg bg-amber-500 px-3 py-1.5 text-sm font-semibold text-white active:bg-amber-600"
-                      >
-                        Yes
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setDismissedFor(labelText)}
-                        className="rounded-lg px-2 py-1.5 text-sm font-medium text-amber-700/70 hover:text-amber-800"
-                      >
-                        No
-                      </button>
                     </div>
                   )}
 
@@ -328,7 +334,8 @@ export function AddSpendModal({
                     Cancel
                   </button>
                   <button
-                    type="submit"
+                    type="button"
+                    onClick={onSave}
                     disabled={!categoryId || needSub || pending}
                     className="min-h-12 flex-1 rounded-xl bg-indigo-600 px-4 py-3 text-base font-semibold text-white shadow-sm active:bg-indigo-800 disabled:opacity-40"
                   >
@@ -336,6 +343,53 @@ export function AddSpendModal({
                   </button>
                 </div>
               </form>
+
+              {/* on-save confirmation — only when the item looks miscategorised. Buttons
+                  say the OUTCOME (not Yes/No) so it's clear for everyone; both save. */}
+              {confirmOpen && suggestCat && (
+                <div
+                  className="absolute inset-0 z-10 flex items-center justify-center rounded-t-3xl bg-black/30 p-4 sm:rounded-2xl"
+                  onClick={() => setConfirmOpen(false)}
+                >
+                  <div
+                    className="w-full max-w-sm rounded-2xl bg-white p-5 shadow-xl"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <div className="text-center">
+                      <div className="text-3xl">💡</div>
+                      <h3 className="mt-2 text-lg font-bold text-slate-900">
+                        This looks like {suggestCat.name}
+                      </h3>
+                      <p className="mt-1 text-sm text-slate-500">
+                        You picked {selectedCat?.name ?? "Misc"}. Where should &ldquo;{labelText}&rdquo; go?
+                      </p>
+                    </div>
+                    <div className="mt-4 space-y-2">
+                      <button
+                        type="button"
+                        onClick={confirmMove}
+                        className="min-h-12 w-full rounded-xl bg-indigo-600 px-4 py-3 text-base font-semibold text-white active:bg-indigo-800"
+                      >
+                        Move to {suggestCat.name}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={confirmKeep}
+                        className="min-h-12 w-full rounded-xl border-2 border-slate-200 px-4 py-3 text-base font-medium text-slate-600 active:bg-slate-100"
+                      >
+                        Keep in {selectedCat?.name ?? "Misc"}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setConfirmOpen(false)}
+                        className="w-full py-2 text-sm font-medium text-slate-400"
+                      >
+                        ← back to edit
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
           </div>,
           document.body,

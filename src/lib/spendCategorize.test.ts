@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { suggestCategoryName, isLearnable, normalizeItem, QUICK_ITEMS } from "./spendCategorize";
+import { suggestCategoryName, isLearnable, normalizeItem } from "./spendCategorize";
 
 describe("suggestCategoryName", () => {
   it("maps the household's staples to the right category", () => {
@@ -53,13 +53,5 @@ describe("isLearnable", () => {
 describe("normalizeItem", () => {
   it("lowercases and strips punctuation", () => {
     expect(normalizeItem("  Veg & Fruits! ")).toBe("veg fruits");
-  });
-});
-
-describe("QUICK_ITEMS", () => {
-  it("every chip points at a category the matcher agrees with", () => {
-    for (const q of QUICK_ITEMS) {
-      expect(suggestCategoryName(q.fill)).toBe(q.category);
-    }
   });
 });

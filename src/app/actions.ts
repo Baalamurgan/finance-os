@@ -10,6 +10,7 @@ import { formatINR, parseAmount } from "@/lib/format";
 import { generateMonth } from "@/lib/periodClone";
 import { isMiscBucket, MISC_SUBCATEGORIES } from "@/lib/misc";
 import { isLearnable } from "@/lib/spendCategorize";
+import { getSpendShortcuts, getMatcherKeywords, getFrequentSpendItems } from "@/lib/queries";
 import { planBillMonth, isLumpDue, type FundingStyle } from "@/lib/schedule";
 
 // Record a money-affecting change for the head-only activity log (who + what + when).
@@ -361,18 +362,97 @@ async function learnSpendItem(householdId: number, label: string, categoryId: nu
   }
 }
 
-// Learned item→category rows for this household (merged with the code seed on the
-// client) — powers the Add-Spend "did you mean {Category}?" nudge.
-export async function getSpendKeywords(): Promise<{ keyword: string; category: string; hits: number }[]> {
+// Everything the Add-Spend modal needs, fetched lazily on open (so no page has to thread
+// it through): the quick chips (head-curated shortcuts, or the most-frequent items when
+// none are set up) + the keyword rows that drive the on-save suggestion.
+export type SpendAssist = {
+  chips: { icon: string | null; label: string; categoryId: number }[];
+  keywords: { keyword: string; category: string; hits: number }[];
+};
+export async function getSpendAssist(): Promise<SpendAssist> {
   const session = await auth();
-  if (!session?.user) return [];
+  if (!session?.user) return { chips: [], keywords: [] };
   const household = await prisma.household.findFirst({ select: { id: true } });
-  if (!household) return [];
-  const rows = await prisma.spendKeyword.findMany({
-    where: { householdId: household.id },
-    select: { keyword: true, hits: true, category: { select: { name: true } } },
+  if (!household) return { chips: [], keywords: [] };
+  const [shortcuts, keywords] = await Promise.all([
+    getSpendShortcuts(household.id),
+    getMatcherKeywords(household.id),
+  ]);
+  const chips = shortcuts.length
+    ? shortcuts.map((s) => ({ icon: s.icon, label: s.label, categoryId: s.categoryId }))
+    : (await getFrequentSpendItems(household.id)).map((f) => ({ icon: f.icon, label: f.label, categoryId: f.categoryId }));
+  return { chips, keywords };
+}
+
+// ── Quick-add chip management (head + managers) ──────────────────────────────
+async function shortcutHousehold() {
+  if (!(await canEdit())) return null; // head or manager only
+  return prisma.household.findFirst({ select: { id: true } });
+}
+// The target category must be a real TRACKED category in this household (a chip that
+// filed into a non-tracked or foreign category would be meaningless / unsafe).
+async function validShortcutCategory(householdId: number, categoryId: number) {
+  const cat = await prisma.category.findUnique({ where: { id: categoryId }, select: { householdId: true, tracked: true } });
+  return !!cat && cat.householdId === householdId && cat.tracked;
+}
+
+export async function createSpendShortcut(formData: FormData) {
+  const household = await shortcutHousehold();
+  if (!household) return;
+  const label = String(formData.get("label") ?? "").trim();
+  const icon = String(formData.get("icon") ?? "").trim() || null;
+  const categoryId = Number(formData.get("categoryId"));
+  if (!label || !categoryId || !(await validShortcutCategory(household.id, categoryId))) return;
+  const max = await prisma.spendShortcut.aggregate({ where: { householdId: household.id }, _max: { sortOrder: true } });
+  await prisma.spendShortcut.create({
+    data: { householdId: household.id, label, icon, categoryId, sortOrder: (max._max.sortOrder ?? 0) + 1 },
   });
-  return rows.map((r) => ({ keyword: r.keyword, category: r.category.name, hits: r.hits }));
+  revalidatePath("/", "layout");
+}
+
+export async function updateSpendShortcut(formData: FormData) {
+  const household = await shortcutHousehold();
+  if (!household) return;
+  const id = Number(formData.get("id"));
+  const sc = await prisma.spendShortcut.findUnique({ where: { id } });
+  if (!sc || sc.householdId !== household.id) return;
+  const label = String(formData.get("label") ?? "").trim();
+  const icon = String(formData.get("icon") ?? "").trim() || null;
+  const categoryId = Number(formData.get("categoryId")) || sc.categoryId;
+  if (!label || !(await validShortcutCategory(household.id, categoryId))) return;
+  await prisma.spendShortcut.update({ where: { id }, data: { label, icon, categoryId } });
+  revalidatePath("/", "layout");
+}
+
+export async function deleteSpendShortcut(formData: FormData) {
+  const household = await shortcutHousehold();
+  if (!household) return;
+  const id = Number(formData.get("id"));
+  const sc = await prisma.spendShortcut.findUnique({ where: { id } });
+  if (!sc || sc.householdId !== household.id) return;
+  await prisma.spendShortcut.delete({ where: { id } });
+  revalidatePath("/", "layout");
+}
+
+export async function moveSpendShortcut(formData: FormData) {
+  const household = await shortcutHousehold();
+  if (!household) return;
+  const id = Number(formData.get("id"));
+  const dir = String(formData.get("dir") ?? ""); // "up" | "down"
+  const list = await prisma.spendShortcut.findMany({
+    where: { householdId: household.id },
+    orderBy: [{ sortOrder: "asc" }, { id: "asc" }],
+  });
+  const idx = list.findIndex((s) => s.id === id);
+  if (idx < 0) return;
+  const swap = dir === "up" ? idx - 1 : idx + 1;
+  if (swap < 0 || swap >= list.length) return;
+  const a = list[idx], b = list[swap];
+  await prisma.$transaction([
+    prisma.spendShortcut.update({ where: { id: a.id }, data: { sortOrder: b.sortOrder } }),
+    prisma.spendShortcut.update({ where: { id: b.id }, data: { sortOrder: a.sortOrder } }),
+  ]);
+  revalidatePath("/", "layout");
 }
 
 // Recategorise a spend from Misc into a tracked category (the "Review Misc" fix and the
@@ -402,6 +482,24 @@ export async function moveSpendCategory(formData: FormData) {
   });
   if (!nowMisc) await learnSpendItem(target.householdId, spend.label, categoryId);
   await logActivity("spend", "updated", `Moved “${spend.label}” → ${target.name}`, spend.periodId);
+  revalidatePath("/", "layout");
+}
+
+// Dismiss a "Review Misc" suggestion: this misc spend is genuinely miscellaneous, so
+// stop proposing a move for it. Head or owner, open month only. Reversible only by
+// editing the spend (a fresh categorisation), which is fine — it's a one-way "leave it".
+export async function ignoreMiscReview(formData: FormData) {
+  const session = await auth();
+  if (!session?.user) return;
+  if (!(await unlocked())) return; // app-lock
+  const id = Number(formData.get("id"));
+  if (!id) return;
+  const spend = await prisma.spend.findUnique({ where: { id } });
+  if (!spend) return;
+  if (!(await periodOpen(spend.periodId))) return;
+  const isOwner = spend.memberId === session.user.memberId;
+  if (session.user.role !== "head" && !isOwner) return;
+  await prisma.spend.update({ where: { id }, data: { reviewIgnored: true } });
   revalidatePath("/", "layout");
 }
 
