@@ -82,6 +82,26 @@ export function suggestCategoryName(label: string, learned: LearnedKeyword[] = [
   return best?.category ?? null;
 }
 
+/**
+ * Resolve a suggested category NAME (from the seed / a learned word) to a real category id.
+ * Categories are renamable, so an exact-string match is fragile — e.g. a household renamed
+ * "Veg & Fruits" to "Veg & Fruits & Milk & Maavu". So after an exact (normalized) match we
+ * fall back to a category whose name CONTAINS every token of the suggested name. Returns null
+ * if nothing plausibly matches (the suggestion is then dropped rather than mis-filed).
+ */
+export function resolveCategoryId(name: string | null, categories: { id: number; name: string }[]): number | null {
+  if (!name) return null;
+  const target = normalizeItem(name);
+  if (!target) return null;
+  for (const c of categories) if (normalizeItem(c.name) === target) return c.id; // exact
+  const tokens = target.split(" ").filter(Boolean);
+  for (const c of categories) {
+    const cset = new Set(normalizeItem(c.name).split(" "));
+    if (tokens.length > 0 && tokens.every((t) => cset.has(t))) return c.id; // renamed/expanded
+  }
+  return null;
+}
+
 /** Should this saved label be learned? Keep it to short, item-like labels to avoid
  *  learning noisy free-text ("2kg tomato for the function"). 1–3 words, not too long. */
 export function isLearnable(label: string): string | null {

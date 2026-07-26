@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { suggestCategoryName, isLearnable, normalizeItem } from "./spendCategorize";
+import { suggestCategoryName, isLearnable, normalizeItem, resolveCategoryId } from "./spendCategorize";
 
 describe("suggestCategoryName", () => {
   it("maps the household's staples to the right category", () => {
@@ -47,6 +47,26 @@ describe("isLearnable", () => {
   it("rejects long free-text", () => {
     expect(isLearnable("2kg tomato and onion for the function")).toBeNull();
     expect(isLearnable("   ")).toBeNull();
+  });
+});
+
+describe("resolveCategoryId", () => {
+  const cats = [
+    { id: 1, name: "Provision" },
+    { id: 2, name: "Veg & Fruits & Milk & Maavu" }, // renamed (expanded) category
+    { id: 3, name: "Non-Veg" },
+  ];
+  it("matches exactly", () => {
+    expect(resolveCategoryId("Provision", cats)).toBe(1);
+    expect(resolveCategoryId("Non-Veg", cats)).toBe(3);
+  });
+  it("matches a renamed/expanded category by token containment (the real bug)", () => {
+    // seed suggests "Veg & Fruits"; the household renamed the category
+    expect(resolveCategoryId("Veg & Fruits", cats)).toBe(2);
+  });
+  it("returns null when nothing plausibly matches", () => {
+    expect(resolveCategoryId("Petrol", cats)).toBeNull();
+    expect(resolveCategoryId(null, cats)).toBeNull();
   });
 });
 

@@ -1,7 +1,7 @@
 import { prisma } from "@/lib/prisma";
 import { computeSettlement } from "@/lib/settlement-core";
 import { planBillMonth, isLumpDue, monthsUntilNextDue, type FundingStyle } from "@/lib/schedule";
-import { suggestCategoryName, normalizeItem } from "@/lib/spendCategorize";
+import { suggestCategoryName, normalizeItem, resolveCategoryId } from "@/lib/spendCategorize";
 
 // Keywords that drive the on-save category suggestion: the household's LEARNED words
 // (SpendKeyword) plus its head-curated shortcuts (SpendShortcut, weighted high since
@@ -84,16 +84,16 @@ export async function getMiscReview(householdId: number, periodId: number) {
       getMatcherKeywords(householdId),
       prisma.category.findMany({ where: { householdId, tracked: true, section: { not: "Misc" } }, select: { id: true, name: true } }),
     ]);
-    const byName = new Map(trackedCats.map((c) => [c.name, c.id]));
+    const nameById = new Map(trackedCats.map((c) => [c.id, c.name]));
 
     const items: Item[] = [];
     for (const s of miscSpends) {
       // A deliberate "for someone else" tag means the person meant Misc — leave it alone.
       if (s.subCategory === "For someone else") continue;
       const name = suggestCategoryName(s.label, learned);
-      const toId = name ? byName.get(name) : undefined;
-      if (!name || toId == null) continue;
-      items.push({ id: s.id, label: s.label, amount: s.amount, who: s.member?.name ?? null, toId, toName: name });
+      const toId = resolveCategoryId(name, trackedCats); // tolerant of renamed categories
+      if (toId == null) continue;
+      items.push({ id: s.id, label: s.label, amount: s.amount, who: s.member?.name ?? null, toId, toName: nameById.get(toId) ?? name! });
     }
     return items;
   } catch {

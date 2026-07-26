@@ -3,7 +3,7 @@
 import { useActionState, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { addSpendAction, getSpendAssist, type AddSpendState } from "@/app/actions";
-import { suggestCategoryName, type LearnedKeyword } from "@/lib/spendCategorize";
+import { suggestCategoryName, resolveCategoryId, type LearnedKeyword } from "@/lib/spendCategorize";
 
 type Cat = { id: number; name: string; misc?: boolean }; // misc = the Personal/Misc bucket
 
@@ -50,9 +50,8 @@ export function AddSpendModal({
   // ── Smart category help (picker mode only) ───────────────────────────────────
   // The typed item's best-guess category; if it differs from what's chosen, Save asks
   // to confirm (unless it's a deliberate "for someone else" Misc entry).
-  const nameToId = new Map((categories ?? []).map((c) => [c.name, c.id]));
   const suggestName = fixedCategory ? null : suggestCategoryName(labelText, learned);
-  const suggestId = suggestName ? nameToId.get(suggestName) ?? null : null;
+  const suggestId = suggestName ? resolveCategoryId(suggestName, categories ?? []) : null;
   const suggestCat = suggestId != null ? categories?.find((c) => c.id === suggestId) : undefined;
   const forSomeoneElse = isMiscSelected && subCategory === "For someone else";
   const mismatch = !!suggestCat && suggestId !== categoryId && !forSomeoneElse;
