@@ -27,6 +27,15 @@ function rev() {
   revalidatePath("/personal", "layout");
 }
 
+// Resolve an optional "cardAccountId" from a form to a credit card the member owns (else
+// null = paid from cash). Guards against a bad/foreign id, and lets editing un-tag (→ null).
+async function ccCardId(memberId: number, formData: FormData): Promise<number | null> {
+  const raw = Number(formData.get("cardAccountId"));
+  if (!raw) return null;
+  const acc = await prisma.financeAccount.findUnique({ where: { id: raw }, select: { memberId: true, type: true } });
+  return acc && acc.memberId === memberId && acc.type === "credit_card" ? raw : null;
+}
+
 export type PersonalSaveState = { ok: boolean; error?: string; n: number };
 
 // ── Onboarding ───────────────────────────────────────────────────────────────
@@ -119,8 +128,9 @@ export async function addPersonalExpense(
   if (!periodId || !label || !categoryId || !amount || amount <= 0)
     return { ok: false, error: "Enter a name, category and amount.", n };
   if (!(await ownsPeriod(member.id, periodId))) return { ok: false, error: "Not your month.", n };
+  const cardAccountId = await ccCardId(member.id, formData);
   await prisma.personalExpense.create({
-    data: { memberId: member.id, periodId, label, categoryId, amount, recurring },
+    data: { memberId: member.id, periodId, label, categoryId, amount, recurring, cardAccountId },
   });
   rev();
   return { ok: true, n };
@@ -142,7 +152,8 @@ export async function updatePersonalExpense(
   if (!e || e.memberId !== member.id) return { ok: false, error: "Not found.", n };
   if (!label || !categoryId || !amount || amount <= 0)
     return { ok: false, error: "Enter a name, category and amount.", n };
-  await prisma.personalExpense.update({ where: { id }, data: { label, categoryId, amount, recurring } });
+  const cardAccountId = await ccCardId(member.id, formData);
+  await prisma.personalExpense.update({ where: { id }, data: { label, categoryId, amount, recurring, cardAccountId } });
   rev();
   return { ok: true, n };
 }
@@ -174,7 +185,8 @@ export async function addPersonalSpend(
   if (!(await ownsPeriod(member.id, periodId))) return { ok: false, error: "Not your month.", n };
   const cat = await prisma.personalCategory.findUnique({ where: { id: categoryId } });
   if (!cat || cat.memberId !== member.id) return { ok: false, error: "Unknown category.", n };
-  await prisma.personalSpend.create({ data: { memberId: member.id, periodId, categoryId, amount, note } });
+  const cardAccountId = await ccCardId(member.id, formData);
+  await prisma.personalSpend.create({ data: { memberId: member.id, periodId, categoryId, amount, note, cardAccountId } });
   rev();
   return { ok: true, n };
 }
@@ -194,7 +206,8 @@ export async function updatePersonalSpend(
   if (!s || s.memberId !== member.id) return { ok: false, error: "Not found.", n };
   if (!amount || amount <= 0 || !categoryId || !note)
     return { ok: false, error: "Enter a name, category and amount.", n };
-  await prisma.personalSpend.update({ where: { id }, data: { categoryId, amount, note } });
+  const cardAccountId = await ccCardId(member.id, formData);
+  await prisma.personalSpend.update({ where: { id }, data: { categoryId, amount, note, cardAccountId } });
   rev();
   return { ok: true, n };
 }
@@ -206,6 +219,38 @@ export async function deletePersonalSpend(formData: FormData) {
   const s = await prisma.personalSpend.findUnique({ where: { id } });
   if (!s || s.memberId !== member.id) return;
   await prisma.personalSpend.delete({ where: { id } });
+  rev();
+}
+
+// ── Credit-card bills (settle a card's cycle → real cash outflow this month) ──
+export async function markCardBillPaid(formData: FormData) {
+  const member = await me();
+  if (!member) return;
+  const cardAccountId = Number(formData.get("cardAccountId"));
+  const cycleEndISO = String(formData.get("cycleEnd") ?? "");
+  const amount = parseAmount(formData.get("amount"));
+  if (!cardAccountId || !cycleEndISO || !amount || amount <= 0) return;
+  const card = await prisma.financeAccount.findUnique({ where: { id: cardAccountId }, select: { memberId: true, type: true } });
+  if (!card || card.memberId !== member.id || card.type !== "credit_card") return;
+  const cycleEnd = new Date(cycleEndISO);
+  if (isNaN(cycleEnd.getTime())) return;
+  // The payment leaves cash in the CURRENT open personal month.
+  const period = await ensurePersonalMonth(member.id);
+  await prisma.personalCardBill.upsert({
+    where: { cardAccountId_cycleEnd: { cardAccountId, cycleEnd } },
+    create: { memberId: member.id, cardAccountId, cycleEnd, paidPeriodId: period.id, amount },
+    update: { amount, paidPeriodId: period.id, paidAt: new Date() },
+  });
+  rev();
+}
+
+export async function unmarkCardBillPaid(formData: FormData) {
+  const member = await me();
+  if (!member) return;
+  const id = Number(formData.get("id"));
+  const bill = await prisma.personalCardBill.findUnique({ where: { id } });
+  if (!bill || bill.memberId !== member.id) return;
+  await prisma.personalCardBill.delete({ where: { id } });
   rev();
 }
 

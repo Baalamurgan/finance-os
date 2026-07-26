@@ -5,13 +5,15 @@ import { addPersonalExpense, updatePersonalExpense, type PersonalSaveState } fro
 import { useToast } from "@/components/Toast";
 
 type Cat = { id: number; name: string; icon: string | null };
-type Initial = { id: number; label: string; categoryId: number | null; amount: number; recurring: boolean };
+type Card = { id: number; name: string; color: string };
+type Initial = { id: number; label: string; categoryId: number | null; amount: number; recurring: boolean; cardAccountId?: number | null };
 const INIT: PersonalSaveState = { ok: false, n: 0 };
 
 // A monthly expense on the Sheet: name + category + amount + repeats-toggle.
 export function PersonalFixedModal({
   periodId,
   categories,
+  cards = [],
   initial,
   hideTrigger = false,
   controlledOpen,
@@ -21,6 +23,7 @@ export function PersonalFixedModal({
 }: {
   periodId: number;
   categories: Cat[];
+  cards?: Card[];
   initial?: Initial;
   hideTrigger?: boolean;
   controlledOpen?: boolean;
@@ -93,6 +96,18 @@ export function PersonalFixedModal({
                   <label className="text-xs font-medium text-slate-500">Amount (₹)</label>
                   <input name="amount" type="number" step="0.01" inputMode="decimal" required defaultValue={isEdit ? initial!.amount : ""} placeholder="0" className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-3 text-2xl font-bold tabular-nums outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100" />
                 </div>
+                {cards.length > 0 && (
+                  <div>
+                    <label className="text-xs font-medium text-slate-500">💳 Paid with</label>
+                    <select name="cardAccountId" defaultValue={isEdit ? String(initial!.cardAccountId ?? "") : ""} className="input mt-1 w-full">
+                      <option value="">Cash / UPI (from this month)</option>
+                      {cards.map((c) => (
+                        <option key={c.id} value={c.id}>{c.name} — pay at card bill</option>
+                      ))}
+                    </select>
+                    <p className="mt-1 text-[11px] text-slate-400">On a credit card, it&apos;s deferred — it leaves your cash when you mark that card&apos;s bill paid.</p>
+                  </div>
+                )}
                 <label className="flex items-center gap-2 rounded-lg bg-slate-50 px-3 py-2 text-sm text-slate-700">
                   <input type="checkbox" name="recurring" defaultChecked={isEdit ? initial!.recurring : defaultRecurring} className="h-4 w-4 accent-emerald-600" />
                   Repeats every month

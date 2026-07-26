@@ -5,19 +5,23 @@ import { formatINR } from "@/lib/format";
 import { PersonalSpendRowActions } from "@/components/personal/PersonalSpendRowActions";
 
 type Cat = { id: number; name: string; icon: string | null };
-type Spend = { id: number; categoryId: number; amount: number; note: string | null; date: string };
+type Card = { id: number; name: string; color: string };
+type Spend = { id: number; categoryId: number; amount: number; note: string | null; date: string; cardAccountId: number | null };
 
 export function PersonalSpendsView({
   spends,
   categories,
+  cards = [],
   periodId,
 }: {
   spends: Spend[];
   categories: Cat[];
+  cards?: Card[];
   periodId: number;
 }) {
   const [mode, setMode] = useState<"category" | "date" | "amount">("category");
   const catMap = new Map(categories.map((c) => [c.id, c]));
+  const cardMap = new Map(cards.map((c) => [c.id, c]));
   const dateStr = (d: string) => new Date(d).toLocaleDateString("en-GB", { day: "2-digit", month: "short" });
 
   if (spends.length === 0) {
@@ -30,18 +34,26 @@ export function PersonalSpendsView({
 
   const Row = ({ s, showCat }: { s: Spend; showCat?: boolean }) => {
     const cat = catMap.get(s.categoryId);
+    const card = s.cardAccountId != null ? cardMap.get(s.cardAccountId) : undefined;
     return (
       <div className="flex items-center justify-between py-2.5 text-sm">
         <div className="min-w-0">
-          <div className="truncate text-slate-700">{s.note || cat?.name}</div>
+          <div className="flex items-center gap-1.5">
+            <span className="truncate text-slate-700">{s.note || cat?.name}</span>
+            {card && (
+              <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-500" title={`On ${card.name} — deferred until you pay the bill`}>
+                <span className="h-1.5 w-1.5 rounded-full" style={{ background: card.color }} />💳 {card.name}
+              </span>
+            )}
+          </div>
           <div className="text-xs text-slate-400">
             {showCat && cat ? `${cat.icon ?? ""} ${cat.name} · ` : ""}
             {dateStr(s.date)}
           </div>
         </div>
         <div className="flex items-center gap-2 pl-2">
-          <span className="tabular-nums text-slate-700">{formatINR(s.amount)}</span>
-          <PersonalSpendRowActions periodId={periodId} categories={categories} initial={{ id: s.id, categoryId: s.categoryId, amount: s.amount, note: s.note }} />
+          <span className={`tabular-nums ${card ? "text-slate-400" : "text-slate-700"}`}>{formatINR(s.amount)}</span>
+          <PersonalSpendRowActions periodId={periodId} categories={categories} cards={cards} initial={{ id: s.id, categoryId: s.categoryId, amount: s.amount, note: s.note, cardAccountId: s.cardAccountId }} />
         </div>
       </div>
     );

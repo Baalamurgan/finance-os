@@ -6,13 +6,15 @@ import { useToast } from "@/components/Toast";
 import { formatINR } from "@/lib/format";
 
 type Cat = { id: number; name: string; icon: string | null };
-type Initial = { id: number; categoryId: number; amount: number; note: string | null };
+type Card = { id: number; name: string; color: string };
+type Initial = { id: number; categoryId: number; amount: number; note: string | null; cardAccountId?: number | null };
 const INIT: PersonalSaveState = { ok: false, n: 0 };
 
 // Daily spend (category + amount + note), drawn against the remaining balance.
 export function PersonalSpendModal({
   periodId,
   categories,
+  cards = [],
   remaining,
   initial,
   hideTrigger = false,
@@ -21,6 +23,7 @@ export function PersonalSpendModal({
 }: {
   periodId: number;
   categories: Cat[];
+  cards?: Card[];
   remaining?: number;
   initial?: Initial;
   hideTrigger?: boolean;
@@ -95,6 +98,18 @@ export function PersonalSpendModal({
                   <label className="text-xs font-medium text-slate-500">Name</label>
                   <input name="note" required defaultValue={isEdit ? (initial!.note ?? "") : ""} placeholder="e.g. Swiggy dinner" className="input mt-1 w-full" />
                 </div>
+                {cards.length > 0 && (
+                  <div>
+                    <label className="text-xs font-medium text-slate-500">💳 Paid with</label>
+                    <select name="cardAccountId" defaultValue={isEdit ? String(initial!.cardAccountId ?? "") : ""} className="input mt-1 w-full">
+                      <option value="">Cash / UPI (from this month)</option>
+                      {cards.map((c) => (
+                        <option key={c.id} value={c.id}>{c.name} — pay at card bill</option>
+                      ))}
+                    </select>
+                    <p className="mt-1 text-[11px] text-slate-400">On a credit card, it&apos;s deferred — it leaves your cash when you mark that card&apos;s bill paid.</p>
+                  </div>
+                )}
               </div>
               <div className="flex justify-end gap-2 border-t border-slate-100 px-5 py-3">
                 <button type="button" onClick={() => setOpen(false)} className="rounded-md px-3 py-2 text-sm text-slate-500 hover:bg-slate-100">Cancel</button>

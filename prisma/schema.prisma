@@ -145,6 +145,7 @@ model Member {
   financeAccounts    FinanceAccount[]
   accountTxns        AccountTransaction[]
   netWorthItems      NetWorthItem[]
+  personalCardBills  PersonalCardBill[]
 
   @@unique([householdId, code])
 }
@@ -209,6 +210,7 @@ model PersonalPeriod {
   expenses  PersonalExpense[]
   spends    PersonalSpend[]
   incomes   PersonalIncome[]
+  cardBills PersonalCardBill[]
   createdAt DateTime @default(now())
 
   @@unique([memberId, year, month])
@@ -229,6 +231,10 @@ model PersonalExpense {
   note       String?
   date       DateTime @default(now())
   recurring  Boolean  @default(false)
+  // Fixed bill paid by a credit card → deferred from cash like a CC spend (settles at
+  // the card's bill). null = paid from cash. Carries when the line clones next month.
+  cardAccount   FinanceAccount? @relation("PersonalExpenseCard", fields: [cardAccountId], references: [id], onDelete: SetNull)
+  cardAccountId Int?
   createdAt  DateTime @default(now())
 }
 
@@ -245,6 +251,10 @@ model PersonalSpend {
   amount     Float
   note       String?
   date       DateTime @default(now())
+  // Paid by a credit card → deferred from this month's cash (not counted in "Remaining");
+  // it settles when that card's bill is marked paid (PersonalCardBill). null = cash/UPI.
+  cardAccount   FinanceAccount? @relation("PersonalSpendCard", fields: [cardAccountId], references: [id], onDelete: SetNull)
+  cardAccountId Int?
   createdAt  DateTime @default(now())
 }
 
@@ -298,9 +308,33 @@ model FinanceAccount {
   sortOrder   Int      @default(0)
   credit      CreditCardDetail?
   txns        AccountTransaction[]
+  taggedSpends   PersonalSpend[]   @relation("PersonalSpendCard")
+  taggedExpenses PersonalExpense[] @relation("PersonalExpenseCard")
+  cardBills      PersonalCardBill[]
   createdAt   DateTime @default(now())
 
   @@index([memberId])
+}
+
+// One settled credit-card bill cycle: its existence flips that card's cycle from "unpaid"
+// to "paid" and posts the real cash outflow into `paidPeriod`. cycleEnd = the cycle's
+// statement date (derived from statementDay), so a cycle is identified without a Statement
+// entity. Undo = delete the row. See src/lib/personal/cash.ts.
+model PersonalCardBill {
+  id            Int      @id @default(autoincrement())
+  member        Member   @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  memberId      Int
+  cardAccount   FinanceAccount @relation(fields: [cardAccountId], references: [id], onDelete: Cascade)
+  cardAccountId Int
+  cycleEnd      DateTime // the cycle's statement date — identifies which bill this settles
+  paidPeriod    PersonalPeriod @relation(fields: [paidPeriodId], references: [id], onDelete: Cascade)
+  paidPeriodId  Int      // the personal month whose cash this bill payment leaves
+  amount        Float
+  paidAt        DateTime @default(now())
+
+  @@unique([cardAccountId, cycleEnd])
+  @@index([memberId])
+  @@index([paidPeriodId])
 }
 
 // Credit-card specifics. Cycles are DERIVED from statementDay + dueOffsetDays (no

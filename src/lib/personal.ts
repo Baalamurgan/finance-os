@@ -1,5 +1,6 @@
 import { prisma } from "@/lib/prisma";
 import { CATEGORY_KINDS } from "@/lib/misc";
+import { getPersonalCash } from "@/lib/personal/cash";
 
 const MONTHS = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"];
 
@@ -66,18 +67,12 @@ export async function ensurePersonalMonth(memberId: number, now = new Date()) {
     orderBy: [{ year: "desc" }, { month: "desc" }],
   });
 
-  // wind-down: the previous month's remaining (salary + carry − expenses − spends)
-  // carries into the new month as "Previous month remaining".
+  // wind-down: the previous month's cash Remaining carries into the new month. Uses the
+  // shared helper so CC-tagged spends are deferred (not counted) and card bills paid that
+  // month ARE deducted — exactly matching what the Sheet/Expenses show.
   let carryForward = 0;
   if (latest) {
-    const [exp, spd, extra] = await Promise.all([
-      prisma.personalExpense.aggregate({ where: { periodId: latest.id }, _sum: { amount: true } }),
-      prisma.personalSpend.aggregate({ where: { periodId: latest.id }, _sum: { amount: true } }),
-      prisma.personalIncome.aggregate({ where: { periodId: latest.id }, _sum: { amount: true } }),
-    ]);
-    carryForward =
-      latest.income + latest.carryForward + (extra._sum.amount ?? 0) -
-      (exp._sum.amount ?? 0) - (spd._sum.amount ?? 0);
+    carryForward = (await getPersonalCash(latest)).remaining;
   }
 
   return prisma.$transaction(async (tx) => {
@@ -105,6 +100,7 @@ export async function ensurePersonalMonth(memberId: number, now = new Date()) {
             amount: e.amount,
             note: e.note,
             recurring: true,
+            cardAccountId: e.cardAccountId, // a subscription on a card stays on the card
           },
         });
       }

@@ -59,6 +59,15 @@ export async function loadPersonal(params?: { y?: string; m?: string }) {
   const hasBiometric =
     (await prisma.webAuthnCredential.count({ where: { memberId: member.id, purpose: "personal" } })) > 0;
 
+  // Active credit cards for the "Paid by card" picker (spend + fixed-line modals).
+  const creditCards = (
+    await prisma.financeAccount.findMany({
+      where: { memberId: member.id, type: "credit_card", active: true },
+      orderBy: [{ sortOrder: "asc" }, { id: "asc" }],
+      select: { id: true, name: true, color: true },
+    })
+  ).map((a) => ({ id: a.id, name: a.name, color: a.color }));
+
   return {
     member,
     account,
@@ -67,6 +76,7 @@ export async function loadPersonal(params?: { y?: string; m?: string }) {
     selYear: y ?? selected?.year ?? anchor.year,
     selMonth: m ?? selected?.month ?? anchor.month,
     categories,
+    creditCards,
     hasBiometric,
   };
 }

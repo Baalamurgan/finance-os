@@ -6,6 +6,8 @@ import { PersonalNav } from "@/components/personal/PersonalNav";
 import { PersonalSpendFab } from "@/components/personal/PersonalSpendFab";
 import { PersonalSpendsView } from "@/components/personal/PersonalSpendsView";
 import { PersonalEmpty } from "@/components/personal/PersonalEmpty";
+import { CardDuesStrip } from "@/components/personal/CardDuesStrip";
+import { getPersonalCash, getCardDues } from "@/lib/personal/cash";
 import { MoneyFlowDonut } from "@/components/Charts";
 import { addPersonalCategory, archivePersonalCategory } from "@/app/personal/actions";
 
@@ -33,18 +35,17 @@ export default async function PersonalExpenses({
   const cats = new Map(c.categories.map((cat) => [cat.id, cat]));
   const catList = c.categories.map((cat) => ({ id: cat.id, name: cat.name, icon: cat.icon }));
 
-  const [fixedAgg, extraAgg, spends] = await Promise.all([
-    prisma.personalExpense.aggregate({ where: { periodId: period.id }, _sum: { amount: true } }),
-    prisma.personalIncome.aggregate({ where: { periodId: period.id }, _sum: { amount: true } }),
+  const [cash, cardDues, spends] = await Promise.all([
+    getPersonalCash(period),
+    getCardDues(c.member.id),
     prisma.personalSpend.findMany({ where: { periodId: period.id }, orderBy: [{ date: "desc" }, { id: "desc" }] }),
   ]);
-  const totalIn = period.income + period.carryForward + (extraAgg._sum.amount ?? 0);
-  const personalExpense = totalIn - (fixedAgg._sum.amount ?? 0);
-  const spentTotal = spends.reduce((s, e) => s + e.amount, 0);
-  const remaining = personalExpense - spentTotal;
+  const { personalExpense, spentFromCash, remaining } = cash;
 
+  // The category donut reflects CASH spends only (CC spends are deferred and shown in the
+  // "on card, unpaid" strip instead), so it reconciles with "Spent" above.
   const byCat = new Map<number, number>();
-  for (const s of spends) byCat.set(s.categoryId, (byCat.get(s.categoryId) ?? 0) + s.amount);
+  for (const s of spends) if (s.cardAccountId == null) byCat.set(s.categoryId, (byCat.get(s.categoryId) ?? 0) + s.amount);
   const groups = [...byCat.entries()].map(([id, total]) => ({ cat: cats.get(id), total })).filter((g) => g.cat).sort((a, b) => b.total - a.total);
   const segments = [
     ...groups.map((g, i) => ({ name: `${g.cat!.icon ?? ""} ${g.cat!.name}`.trim(), value: g.total, color: COLORS[i % COLORS.length] })),
@@ -57,6 +58,7 @@ export default async function PersonalExpenses({
     amount: s.amount,
     note: s.note,
     date: s.date.toISOString(),
+    cardAccountId: s.cardAccountId,
   }));
 
   return (
@@ -73,7 +75,8 @@ export default async function PersonalExpenses({
           </div>
           <div className="rounded-xl border border-slate-200 bg-white p-4">
             <div className="text-[11px] font-medium uppercase tracking-wide text-slate-400">Spent</div>
-            <div className="mt-1 text-xl font-bold text-slate-800">{formatINR(spentTotal)}</div>
+            <div className="mt-1 text-xl font-bold text-slate-800">{formatINR(spentFromCash)}</div>
+            <div className="text-[10px] text-slate-400">from cash (card spends deferred)</div>
           </div>
           <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4">
             <div className="text-[11px] font-medium uppercase tracking-wide text-emerald-700">Remaining</div>
@@ -81,14 +84,17 @@ export default async function PersonalExpenses({
           </div>
         </div>
 
-        {spends.length > 0 && (
+        {/* credit-card dues — deferred spends waiting for the bill */}
+        <CardDuesStrip dues={cardDues} />
+
+        {spends.length > 0 && segments.length > 0 && (
           <div className="rounded-xl border border-slate-200 bg-white p-5">
             <h2 className="mb-3 text-sm font-semibold text-slate-800">By category</h2>
-            <MoneyFlowDonut segments={segments} centerLabel="Spent" centerValue={formatINR(spentTotal)} />
+            <MoneyFlowDonut segments={segments} centerLabel="Cash spent" centerValue={formatINR(cash.cashSpends)} />
           </div>
         )}
 
-        <PersonalSpendsView spends={spendsForClient} categories={catList} periodId={period.id} />
+        <PersonalSpendsView spends={spendsForClient} categories={catList} cards={c.creditCards} periodId={period.id} />
 
         {/* manage spend categories */}
         <section className="rounded-xl border border-slate-200 bg-white p-4">
@@ -111,7 +117,7 @@ export default async function PersonalExpenses({
         </section>
       </main>
 
-      <PersonalSpendFab periodId={period.id} categories={catList} remaining={remaining} />
+      <PersonalSpendFab periodId={period.id} categories={catList} cards={c.creditCards} remaining={remaining} />
     </>
   );
 }

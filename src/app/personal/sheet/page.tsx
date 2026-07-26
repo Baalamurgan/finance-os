@@ -2,6 +2,7 @@ import { formatINR } from "@/lib/format";
 import { prisma } from "@/lib/prisma";
 import { loadPersonal } from "@/lib/loadPersonal";
 import { personalMonthLabel, personalCycleRange } from "@/lib/personal";
+import { getPersonalCash } from "@/lib/personal/cash";
 import { PersonalNav } from "@/components/personal/PersonalNav";
 import { PersonalFixedModal } from "@/components/personal/PersonalFixedModal";
 import { PersonalFixedRowActions } from "@/components/personal/PersonalFixedRowActions";
@@ -33,19 +34,17 @@ export default async function PersonalSheet({
   const period = c.selected;
   const cats = new Map(c.categories.map((cat) => [cat.id, cat]));
   const catList = c.categories.map((cat) => ({ id: cat.id, name: cat.name, icon: cat.icon }));
+  const cardMap = new Map(c.creditCards.map((cc) => [cc.id, cc]));
 
-  const [expenses, spendAgg, extraIncomes] = await Promise.all([
+  const [expenses, extraIncomes, cash] = await Promise.all([
     prisma.personalExpense.findMany({ where: { periodId: period.id }, orderBy: { amount: "desc" } }),
-    prisma.personalSpend.aggregate({ where: { periodId: period.id }, _sum: { amount: true } }),
     prisma.personalIncome.findMany({ where: { periodId: period.id }, orderBy: { id: "desc" } }),
+    getPersonalCash(period),
   ]);
-  const monthlyExpenses = expenses.reduce((s, e) => s + e.amount, 0);
-  const spentTotal = spendAgg._sum.amount ?? 0;
-  const extraTotal = extraIncomes.reduce((s, i) => s + i.amount, 0);
-  const totalIn = period.income + period.carryForward + extraTotal;
-  // Personal expense = what you can spend this month (planned, excludes daily spends)
-  const personalExpense = totalIn - monthlyExpenses;
-  const remaining = personalExpense - spentTotal;
+  const monthlyExpenses = expenses.reduce((s, e) => s + e.amount, 0); // all fixed lines (display subtotal)
+  // Cash math from the shared helper: CC-tagged lines/spends are deferred, card bills paid
+  // this month ARE counted. "Spent" here means spent-from-cash.
+  const { totalIn, personalExpense, spentFromCash: spentTotal, remaining } = cash;
   const spentPct = personalExpense > 0 ? Math.min(100, (spentTotal / personalExpense) * 100) : 0;
 
   // group monthly expenses by category (collapsible)
@@ -165,24 +164,32 @@ export default async function PersonalSheet({
                     <span className="text-sm font-bold tabular-nums text-slate-700">{formatINR(g.total)}</span>
                   </summary>
                   <div className="divide-y divide-slate-100 px-2 pb-1">
-                    {g.items.map((e) => (
+                    {g.items.map((e) => {
+                      const card = e.cardAccountId != null ? cardMap.get(e.cardAccountId) : undefined;
+                      return (
                       <div key={e.id} className="flex items-center justify-between py-2 text-sm">
-                        <span className="text-slate-700">
+                        <span className="flex items-center gap-1.5 text-slate-700">
                           {e.label}
-                          {!e.recurring && <span className="ml-2 text-[10px] text-slate-400">(one-off)</span>}
+                          {!e.recurring && <span className="text-[10px] text-slate-400">(one-off)</span>}
+                          {card && (
+                            <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-500" title={`On ${card.name} — deferred until you pay the bill`}>
+                              <span className="h-1.5 w-1.5 rounded-full" style={{ background: card.color }} />💳
+                            </span>
+                          )}
                         </span>
                         <span className="flex items-center gap-2">
-                          <span className="tabular-nums text-slate-700">{formatINR(e.amount)}</span>
-                          <PersonalFixedRowActions periodId={period.id} categories={catList} initial={{ id: e.id, label: e.label, categoryId: e.categoryId, amount: e.amount, recurring: e.recurring }} />
+                          <span className={`tabular-nums ${card ? "text-slate-400" : "text-slate-700"}`}>{formatINR(e.amount)}</span>
+                          <PersonalFixedRowActions periodId={period.id} categories={catList} cards={c.creditCards} initial={{ id: e.id, label: e.label, categoryId: e.categoryId, amount: e.amount, recurring: e.recurring, cardAccountId: e.cardAccountId }} />
                         </span>
                       </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 </details>
               ))
             )}
             <div className="px-2 py-2">
-              <PersonalFixedModal periodId={period.id} categories={catList} defaultRecurring={false} />
+              <PersonalFixedModal periodId={period.id} categories={catList} cards={c.creditCards} defaultRecurring={false} />
             </div>
           </div>
         </details>
@@ -190,7 +197,7 @@ export default async function PersonalSheet({
         <p className="text-center text-xs text-slate-400">Daily spends live in the <b>Expenses</b> tab and draw down your personal expense.</p>
       </main>
 
-      <PersonalSpendFab periodId={period.id} categories={catList} remaining={remaining} />
+      <PersonalSpendFab periodId={period.id} categories={catList} cards={c.creditCards} remaining={remaining} />
     </>
   );
 }

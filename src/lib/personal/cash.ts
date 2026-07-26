@@ -1,0 +1,130 @@
+import { prisma } from "@/lib/prisma";
+import { currentCycle } from "@/lib/finance/cycle";
+
+// Cash math for a personal month, with credit-card spends DEFERRED. This is the SINGLE
+// source of truth for "Remaining" — used by the Sheet, the Expenses tab, AND the
+// carry-forward on month rollover (ensurePersonalMonth) — so the number can never drift.
+//
+// Model: a CC-tagged spend / fixed line does NOT reduce this month's cash. It sits as a
+// card liability until you "Mark bill paid", which posts one PersonalCardBill whose amount
+// leaves cash in the month it's paid. Over two months it nets out exactly.
+
+export type PersonalCash = {
+  totalIn: number; // income + carry-in + ad-hoc income
+  fixedCash: number; // fixed Sheet lines paid from cash (CC-tagged ones deferred)
+  fixedCard: number; // fixed Sheet lines on a card (deferred)
+  cashSpends: number; // daily spends paid from cash
+  cardSpends: number; // daily spends on a card (deferred)
+  cardBillsPaid: number; // card bills marked paid THIS period → real cash out
+  personalExpense: number; // totalIn − fixedCash  (the "can spend" number)
+  spentFromCash: number; // cashSpends + cardBillsPaid
+  remaining: number; // personalExpense − spentFromCash
+};
+
+export async function getPersonalCash(period: {
+  id: number;
+  income: number;
+  carryForward: number;
+}): Promise<PersonalCash> {
+  const [fixedCashAgg, fixedCardAgg, cashSpendAgg, cardSpendAgg, extraAgg, billsAgg] = await Promise.all([
+    prisma.personalExpense.aggregate({ where: { periodId: period.id, cardAccountId: null }, _sum: { amount: true } }),
+    prisma.personalExpense.aggregate({ where: { periodId: period.id, cardAccountId: { not: null } }, _sum: { amount: true } }),
+    prisma.personalSpend.aggregate({ where: { periodId: period.id, cardAccountId: null }, _sum: { amount: true } }),
+    prisma.personalSpend.aggregate({ where: { periodId: period.id, cardAccountId: { not: null } }, _sum: { amount: true } }),
+    prisma.personalIncome.aggregate({ where: { periodId: period.id }, _sum: { amount: true } }),
+    prisma.personalCardBill.aggregate({ where: { paidPeriodId: period.id }, _sum: { amount: true } }),
+  ]);
+  const fixedCash = fixedCashAgg._sum.amount ?? 0;
+  const fixedCard = fixedCardAgg._sum.amount ?? 0;
+  const cashSpends = cashSpendAgg._sum.amount ?? 0;
+  const cardSpends = cardSpendAgg._sum.amount ?? 0;
+  const cardBillsPaid = billsAgg._sum.amount ?? 0;
+  const totalIn = period.income + period.carryForward + (extraAgg._sum.amount ?? 0);
+  const personalExpense = totalIn - fixedCash;
+  const spentFromCash = cashSpends + cardBillsPaid;
+  return {
+    totalIn,
+    fixedCash,
+    fixedCard,
+    cashSpends,
+    cardSpends,
+    cardBillsPaid,
+    personalExpense,
+    spentFromCash,
+    remaining: personalExpense - spentFromCash,
+  };
+}
+
+// ── "On card, unpaid" — per credit card, the CC-tagged items grouped into billing cycles ──
+export type CardDue = {
+  cardId: number;
+  cardName: string;
+  color: string;
+  needsStatementDay: boolean; // true → can't derive cycles; prompt to set one
+  unpaidTotal: number; // Σ across all unpaid cycles
+  cycles: { cycleEndISO: string; dueISO: string | null; total: number }[]; // unpaid, oldest first
+  paid: { billId: number; cycleEndISO: string; amount: number }[]; // for undo
+};
+
+const midnight = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate());
+
+export async function getCardDues(memberId: number): Promise<CardDue[]> {
+  const cards = await prisma.financeAccount.findMany({
+    where: { memberId, type: "credit_card" },
+    include: { credit: true },
+    orderBy: [{ sortOrder: "asc" }, { id: "asc" }],
+  });
+  if (cards.length === 0) return [];
+
+  const [spends, fixed, bills] = await Promise.all([
+    prisma.personalSpend.findMany({ where: { memberId, cardAccountId: { not: null } }, select: { cardAccountId: true, amount: true, date: true } }),
+    prisma.personalExpense.findMany({ where: { memberId, cardAccountId: { not: null } }, select: { cardAccountId: true, amount: true, date: true } }),
+    prisma.personalCardBill.findMany({ where: { memberId }, select: { id: true, cardAccountId: true, cycleEnd: true, amount: true } }),
+  ]);
+
+  const items = [...spends, ...fixed] as { cardAccountId: number | null; amount: number; date: Date }[];
+  const out: CardDue[] = [];
+
+  for (const card of cards) {
+    const statementDay = card.credit?.statementDay ?? null;
+    const dueOffset = card.credit?.dueOffsetDays ?? null;
+    const mine = items.filter((it) => it.cardAccountId === card.id);
+    const myBills = bills.filter((b) => b.cardAccountId === card.id);
+    const unpaidTotalAll = mine.reduce((s, it) => s + it.amount, 0);
+    if (mine.length === 0 && myBills.length === 0) continue; // nothing tagged, ever
+
+    if (statementDay == null) {
+      // Can't derive cycles without a statement day — show the total and prompt to configure.
+      out.push({ cardId: card.id, cardName: card.name, color: card.color, needsStatementDay: true, unpaidTotal: unpaidTotalAll, cycles: [], paid: [] });
+      continue;
+    }
+
+    // Group tagged items into billing cycles by their date; a cycle with a matching
+    // PersonalCardBill is settled (its cash already left) and drops off the unpaid list.
+    const paidKeys = new Set(myBills.map((b) => midnight(b.cycleEnd).getTime()));
+    const byCycle = new Map<number, { end: Date; due: Date | null; total: number }>();
+    for (const it of mine) {
+      const cyc = currentCycle(statementDay, it.date, dueOffset);
+      const key = midnight(cyc.end).getTime();
+      const g = byCycle.get(key) ?? { end: midnight(cyc.end), due: cyc.dueDate, total: 0 };
+      g.total += it.amount;
+      byCycle.set(key, g);
+    }
+    const cycles = [...byCycle.entries()]
+      .filter(([key]) => !paidKeys.has(key))
+      .sort((a, b) => a[0] - b[0])
+      .map(([, g]) => ({ cycleEndISO: g.end.toISOString(), dueISO: g.due ? g.due.toISOString() : null, total: g.total }));
+    const unpaidTotal = cycles.reduce((s, c) => s + c.total, 0);
+
+    out.push({
+      cardId: card.id,
+      cardName: card.name,
+      color: card.color,
+      needsStatementDay: false,
+      unpaidTotal,
+      cycles,
+      paid: myBills.map((b) => ({ billId: b.id, cycleEndISO: midnight(b.cycleEnd).toISOString(), amount: b.amount })),
+    });
+  }
+  return out;
+}

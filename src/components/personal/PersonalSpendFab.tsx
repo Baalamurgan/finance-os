@@ -4,16 +4,19 @@ import { useEffect, useRef, useState } from "react";
 import { PersonalSpendModal } from "@/components/personal/PersonalSpendModal";
 
 type Cat = { id: number; name: string; icon: string | null };
+type Card = { id: number; name: string; color: string };
 
 // Draggable Add-Spend FAB (like the family one): drag left/right, snaps to the
 // nearest edge and remembers the side; a plain tap opens the spend modal.
 export function PersonalSpendFab({
   periodId,
   categories,
+  cards = [],
   remaining,
 }: {
   periodId: number;
   categories: Cat[];
+  cards?: Card[];
   remaining: number;
 }) {
   const [side, setSide] = useState<"left" | "right">("right");
@@ -74,6 +77,7 @@ export function PersonalSpendFab({
       <PersonalSpendModal
         periodId={periodId}
         categories={categories}
+        cards={cards}
         remaining={remaining}
         hideTrigger
         controlledOpen={open}
