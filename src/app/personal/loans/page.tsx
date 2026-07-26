@@ -16,7 +16,7 @@ export default async function PersonalLoans({
 }) {
   const sp = await searchParams;
   const c = await loadPersonal(sp);
-  const nav = <PersonalNav active="loans" name={c.account.name} selYear={c.selYear} selMonth={c.selMonth} />;
+  const nav = <PersonalNav active="loans" name={c.account.name} selYear={c.selYear} selMonth={c.selMonth} financeDue={c.cardReminders.length > 0} />;
 
   const loans = await prisma.personalLoan.findMany({
     where: { memberId: c.member.id },

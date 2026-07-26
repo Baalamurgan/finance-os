@@ -20,11 +20,13 @@ export function PersonalNav({
   name,
   selYear,
   selMonth,
+  financeDue = false,
 }: {
   active: "sheet" | "expenses" | "analysis" | "finance" | "setup" | "loans";
   name: string;
   selYear: number;
   selMonth: number;
+  financeDue?: boolean; // a card bill is due soon/overdue → red dot on the Finance tab
 }) {
   const router = useRouter();
   const now = new Date();
@@ -52,11 +54,14 @@ export function PersonalNav({
               key={t.key}
               href={`${t.href}${q}`}
               replace
-              className={`rounded-md px-3 py-1.5 text-sm font-medium transition ${
+              className={`relative rounded-md px-3 py-1.5 text-sm font-medium transition ${
                 active === t.key ? "bg-emerald-600 text-white" : "text-emerald-800 hover:bg-emerald-100"
               }`}
             >
               {t.label}
+              {t.key === "finance" && financeDue && (
+                <span className="absolute right-1 top-1 h-1.5 w-1.5 rounded-full bg-red-500" />
+              )}
             </Link>
           ))}
         </nav>
@@ -108,11 +113,14 @@ export function PersonalNav({
             key={t.key}
             href={`${t.href}${q}`}
             replace
-            className={`whitespace-nowrap rounded-md px-3 py-1.5 text-center text-sm font-medium ${
+            className={`relative whitespace-nowrap rounded-md px-3 py-1.5 text-center text-sm font-medium ${
               active === t.key ? "bg-emerald-600 text-white" : "text-emerald-800"
             }`}
           >
             {t.label}
+            {t.key === "finance" && financeDue && (
+              <span className="absolute right-0.5 top-0.5 h-1.5 w-1.5 rounded-full bg-red-500" />
+            )}
           </Link>
         ))}
       </nav>

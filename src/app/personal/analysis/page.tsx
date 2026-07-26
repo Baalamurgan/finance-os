@@ -20,7 +20,7 @@ export default async function PersonalAnalysis({
 }) {
   const sp = await searchParams;
   const c = await loadPersonal(sp);
-  const nav = <PersonalNav active="analysis" name={c.account.name} selYear={c.selYear} selMonth={c.selMonth} />;
+  const nav = <PersonalNav active="analysis" name={c.account.name} selYear={c.selYear} selMonth={c.selMonth} financeDue={c.cardReminders.length > 0} />;
 
   if (!c.selected) {
     return (

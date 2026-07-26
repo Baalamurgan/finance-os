@@ -30,7 +30,7 @@ export default async function FinancePage({
 
   return (
     <>
-      <PersonalNav active="finance" name={c.account.name} selYear={c.selYear} selMonth={c.selMonth} />
+      <PersonalNav active="finance" name={c.account.name} selYear={c.selYear} selMonth={c.selMonth} financeDue={c.cardReminders.length > 0} />
       <main className="mx-auto max-w-3xl space-y-5 p-4 pb-24 sm:p-6">
         <div>
           <h1 className="text-xl font-bold text-slate-900">Net worth</h1>

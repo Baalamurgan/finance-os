@@ -1,5 +1,6 @@
 import { prisma } from "@/lib/prisma";
 import { currentCycle } from "@/lib/finance/cycle";
+import { computeCreditDashboard } from "@/lib/finance/creditDashboard";
 
 // Cash math for a personal month, with credit-card spends DEFERRED. This is the SINGLE
 // source of truth for "Remaining" — used by the Sheet, the Expenses tab, AND the
@@ -127,4 +128,64 @@ export async function getCardDues(memberId: number): Promise<CardDue[]> {
     });
   }
   return out;
+}
+
+// ── Due-bill reminders (P3): a card's soonest unpaid cycle that's due within the window
+// (or overdue), with BOTH the in-app tagged total and the card-ledger outstanding. ──────
+export const CARD_REMINDER_WINDOW_DAYS = 5;
+
+export type CardReminder = {
+  cardId: number;
+  cardName: string;
+  color: string;
+  dueISO: string;
+  daysUntilDue: number; // negative = overdue
+  overdue: boolean;
+  taggedTotal: number; // in-app CC-tagged spends for that cycle
+  ledgerOutstanding: number; // from the card's own AccountTransaction ledger (0 if unmaintained)
+};
+
+export async function getCardBillReminders(memberId: number, now = new Date()): Promise<CardReminder[]> {
+  const dues = await getCardDues(memberId);
+  const soon = dues.filter((d) => !d.needsStatementDay && d.cycles.some((c) => c.dueISO));
+  if (soon.length === 0) return [];
+
+  const cards = await prisma.financeAccount.findMany({
+    where: { memberId, type: "credit_card" },
+    include: { credit: true, txns: true },
+  });
+  const today = midnight(now);
+  const out: CardReminder[] = [];
+
+  for (const due of soon) {
+    // the earliest-due unpaid cycle
+    const withDue = due.cycles.filter((c) => c.dueISO) as { cycleEndISO: string; dueISO: string; total: number }[];
+    const next = withDue.reduce((a, b) => (a.dueISO < b.dueISO ? a : b));
+    const dueDate = midnight(new Date(next.dueISO));
+    const daysUntilDue = Math.round((dueDate.getTime() - today.getTime()) / 86400000);
+    if (daysUntilDue > CARD_REMINDER_WINDOW_DAYS) continue; // not near enough yet
+
+    const card = cards.find((c) => c.id === due.cardId);
+    const ledgerOutstanding = card
+      ? Math.max(0, computeCreditDashboard({
+          creditLimit: card.credit?.creditLimit,
+          statementDay: card.credit?.statementDay,
+          dueOffsetDays: card.credit?.dueOffsetDays,
+          txns: card.txns,
+          now,
+        }).outstanding)
+      : 0;
+
+    out.push({
+      cardId: due.cardId,
+      cardName: due.cardName,
+      color: due.color,
+      dueISO: next.dueISO,
+      daysUntilDue,
+      overdue: daysUntilDue < 0,
+      taggedTotal: next.total,
+      ledgerOutstanding,
+    });
+  }
+  return out.sort((a, b) => a.daysUntilDue - b.daysUntilDue);
 }

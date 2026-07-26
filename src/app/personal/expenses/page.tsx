@@ -7,6 +7,7 @@ import { PersonalSpendFab } from "@/components/personal/PersonalSpendFab";
 import { PersonalSpendsView } from "@/components/personal/PersonalSpendsView";
 import { PersonalEmpty } from "@/components/personal/PersonalEmpty";
 import { CardDuesStrip } from "@/components/personal/CardDuesStrip";
+import { CardBillReminderBanner } from "@/components/personal/CardBillReminderBanner";
 import { getPersonalCash, getCardDues } from "@/lib/personal/cash";
 import { MoneyFlowDonut } from "@/components/Charts";
 import { addPersonalCategory, archivePersonalCategory } from "@/app/personal/actions";
@@ -20,7 +21,7 @@ export default async function PersonalExpenses({
 }) {
   const sp = await searchParams;
   const c = await loadPersonal(sp);
-  const nav = <PersonalNav active="expenses" name={c.account.name} selYear={c.selYear} selMonth={c.selMonth} />;
+  const nav = <PersonalNav active="expenses" name={c.account.name} selYear={c.selYear} selMonth={c.selMonth} financeDue={c.cardReminders.length > 0} />;
 
   if (!c.selected) {
     return (
@@ -66,6 +67,9 @@ export default async function PersonalExpenses({
       {nav}
       <main className="mx-auto max-w-3xl space-y-4 p-4 pb-28 sm:p-6">
         <h1 className="text-xl font-bold text-slate-900">{period.label} — spends</h1>
+
+        {/* due-bill reminders (soon / overdue) */}
+        <CardBillReminderBanner reminders={c.cardReminders} />
 
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
           <div className="rounded-xl border border-slate-200 bg-white p-4">

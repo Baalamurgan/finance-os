@@ -3,6 +3,7 @@ import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
 import { isPersonalUnlocked } from "@/lib/personal-lock";
 import { ensurePersonalMonth, personalAnchor } from "@/lib/personal";
+import { getCardBillReminders } from "@/lib/personal/cash";
 
 export type PersonalCommon = NonNullable<Awaited<ReturnType<typeof loadPersonal>>>;
 
@@ -68,6 +69,9 @@ export async function loadPersonal(params?: { y?: string; m?: string }) {
     })
   ).map((a) => ({ id: a.id, name: a.name, color: a.color }));
 
+  // Due-bill reminders (soon/overdue) — drives the landing banner + the Finance-tab badge.
+  const cardReminders = creditCards.length > 0 ? await getCardBillReminders(member.id) : [];
+
   return {
     member,
     account,
@@ -77,6 +81,7 @@ export async function loadPersonal(params?: { y?: string; m?: string }) {
     selMonth: m ?? selected?.month ?? anchor.month,
     categories,
     creditCards,
+    cardReminders,
     hasBiometric,
   };
 }

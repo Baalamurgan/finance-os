@@ -8,6 +8,7 @@ import { PersonalFixedModal } from "@/components/personal/PersonalFixedModal";
 import { PersonalFixedRowActions } from "@/components/personal/PersonalFixedRowActions";
 import { PersonalSpendFab } from "@/components/personal/PersonalSpendFab";
 import { PersonalEmpty } from "@/components/personal/PersonalEmpty";
+import { CardBillReminderBanner } from "@/components/personal/CardBillReminderBanner";
 import { MoneyFlowDonut } from "@/components/Charts";
 import { setPersonalIncome, addPersonalIncome, deletePersonalIncome } from "@/app/personal/actions";
 
@@ -20,7 +21,7 @@ export default async function PersonalSheet({
 }) {
   const sp = await searchParams;
   const c = await loadPersonal(sp);
-  const nav = <PersonalNav active="sheet" name={c.account.name} selYear={c.selYear} selMonth={c.selMonth} />;
+  const nav = <PersonalNav active="sheet" name={c.account.name} selYear={c.selYear} selMonth={c.selMonth} financeDue={c.cardReminders.length > 0} />;
 
   if (!c.selected) {
     return (
@@ -67,6 +68,7 @@ export default async function PersonalSheet({
     <>
       {nav}
       <main className="mx-auto max-w-3xl space-y-4 p-4 pb-28 sm:p-6">
+        <CardBillReminderBanner reminders={c.cardReminders} />
         <div>
           <h1 className="text-xl font-bold text-slate-900">{period.label}</h1>
           {personalCycleRange(period.year, period.month, c.member.personalWindDownDay) && (
