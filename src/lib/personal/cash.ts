@@ -57,13 +57,16 @@ export async function getPersonalCash(period: {
 }
 
 // ── "On card, unpaid" — per credit card, the CC-tagged items grouped into billing cycles ──
+export type CardDueItem = { label: string; amount: number; dateISO: string };
+export type CardDueCycle = { cycleEndISO: string; dueISO: string | null; total: number; items: CardDueItem[] };
 export type CardDue = {
   cardId: number;
   cardName: string;
   color: string;
   needsStatementDay: boolean; // true → can't derive cycles; prompt to set one
   unpaidTotal: number; // Σ across all unpaid cycles
-  cycles: { cycleEndISO: string; dueISO: string | null; total: number }[]; // unpaid, oldest first
+  cycles: CardDueCycle[]; // unpaid, oldest first — each carries its line items
+  ungrouped: CardDueItem[]; // items shown when no statement day (can't derive cycles)
   paid: { billId: number; cycleEndISO: string; amount: number }[]; // for undo
 };
 
@@ -77,13 +80,19 @@ export async function getCardDues(memberId: number): Promise<CardDue[]> {
   });
   if (cards.length === 0) return [];
 
-  const [spends, fixed, bills] = await Promise.all([
-    prisma.personalSpend.findMany({ where: { memberId, cardAccountId: { not: null } }, select: { cardAccountId: true, amount: true, date: true } }),
-    prisma.personalExpense.findMany({ where: { memberId, cardAccountId: { not: null } }, select: { cardAccountId: true, amount: true, date: true } }),
+  const [spends, fixed, bills, categories] = await Promise.all([
+    prisma.personalSpend.findMany({ where: { memberId, cardAccountId: { not: null } }, select: { cardAccountId: true, amount: true, date: true, note: true, categoryId: true } }),
+    prisma.personalExpense.findMany({ where: { memberId, cardAccountId: { not: null } }, select: { cardAccountId: true, amount: true, date: true, label: true } }),
     prisma.personalCardBill.findMany({ where: { memberId }, select: { id: true, cardAccountId: true, cycleEnd: true, amount: true } }),
+    prisma.personalCategory.findMany({ where: { memberId }, select: { id: true, name: true } }),
   ]);
+  const catName = new Map(categories.map((c) => [c.id, c.name]));
 
-  const items = [...spends, ...fixed] as { cardAccountId: number | null; amount: number; date: Date }[];
+  // Normalise both spends and fixed lines to a common tagged-item shape with a display label.
+  const items: { cardAccountId: number | null; amount: number; date: Date; label: string }[] = [
+    ...spends.map((s) => ({ cardAccountId: s.cardAccountId, amount: s.amount, date: s.date, label: s.note?.trim() || catName.get(s.categoryId) || "Spend" })),
+    ...fixed.map((e) => ({ cardAccountId: e.cardAccountId, amount: e.amount, date: e.date, label: e.label?.trim() || "Fixed bill" })),
+  ];
   const out: CardDue[] = [];
 
   for (const card of cards) {
@@ -94,27 +103,31 @@ export async function getCardDues(memberId: number): Promise<CardDue[]> {
     const unpaidTotalAll = mine.reduce((s, it) => s + it.amount, 0);
     if (mine.length === 0 && myBills.length === 0) continue; // nothing tagged, ever
 
+    const toItem = (it: (typeof mine)[number]): CardDueItem => ({ label: it.label, amount: it.amount, dateISO: it.date.toISOString() });
+    const byDateDesc = (a: CardDueItem, b: CardDueItem) => b.dateISO.localeCompare(a.dateISO);
+
     if (statementDay == null) {
-      // Can't derive cycles without a statement day — show the total and prompt to configure.
-      out.push({ cardId: card.id, cardName: card.name, color: card.color, needsStatementDay: true, unpaidTotal: unpaidTotalAll, cycles: [], paid: [] });
+      // Can't derive cycles without a statement day — show the total, the items, and prompt to configure.
+      out.push({ cardId: card.id, cardName: card.name, color: card.color, needsStatementDay: true, unpaidTotal: unpaidTotalAll, cycles: [], ungrouped: mine.map(toItem).sort(byDateDesc), paid: [] });
       continue;
     }
 
     // Group tagged items into billing cycles by their date; a cycle with a matching
     // PersonalCardBill is settled (its cash already left) and drops off the unpaid list.
     const paidKeys = new Set(myBills.map((b) => midnight(b.cycleEnd).getTime()));
-    const byCycle = new Map<number, { end: Date; due: Date | null; total: number }>();
+    const byCycle = new Map<number, { end: Date; due: Date | null; total: number; items: CardDueItem[] }>();
     for (const it of mine) {
       const cyc = currentCycle(statementDay, it.date, dueOffset);
       const key = midnight(cyc.end).getTime();
-      const g = byCycle.get(key) ?? { end: midnight(cyc.end), due: cyc.dueDate, total: 0 };
+      const g = byCycle.get(key) ?? { end: midnight(cyc.end), due: cyc.dueDate, total: 0, items: [] };
       g.total += it.amount;
+      g.items.push(toItem(it));
       byCycle.set(key, g);
     }
     const cycles = [...byCycle.entries()]
       .filter(([key]) => !paidKeys.has(key))
       .sort((a, b) => a[0] - b[0])
-      .map(([, g]) => ({ cycleEndISO: g.end.toISOString(), dueISO: g.due ? g.due.toISOString() : null, total: g.total }));
+      .map(([, g]) => ({ cycleEndISO: g.end.toISOString(), dueISO: g.due ? g.due.toISOString() : null, total: g.total, items: g.items.sort(byDateDesc) }));
     const unpaidTotal = cycles.reduce((s, c) => s + c.total, 0);
 
     out.push({
@@ -124,6 +137,7 @@ export async function getCardDues(memberId: number): Promise<CardDue[]> {
       needsStatementDay: false,
       unpaidTotal,
       cycles,
+      ungrouped: [],
       paid: myBills.map((b) => ({ billId: b.id, cycleEndISO: midnight(b.cycleEnd).toISOString(), amount: b.amount })),
     });
   }

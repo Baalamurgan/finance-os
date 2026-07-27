@@ -3,6 +3,8 @@ import { prisma } from "@/lib/prisma";
 import { loadPersonal } from "@/lib/loadPersonal";
 import { personalMonthLabel, personalCycleRange } from "@/lib/personal";
 import { getPersonalCash } from "@/lib/personal/cash";
+import { getPersonalSavings } from "@/lib/personal/savings";
+import { PersonalSavingsCard } from "@/components/personal/PersonalSavingsCard";
 import { PersonalNav } from "@/components/personal/PersonalNav";
 import { PersonalFixedModal } from "@/components/personal/PersonalFixedModal";
 import { PersonalFixedRowActions } from "@/components/personal/PersonalFixedRowActions";
@@ -37,10 +39,11 @@ export default async function PersonalSheet({
   const catList = c.categories.map((cat) => ({ id: cat.id, name: cat.name, icon: cat.icon }));
   const cardMap = new Map(c.creditCards.map((cc) => [cc.id, cc]));
 
-  const [expenses, extraIncomes, cash] = await Promise.all([
+  const [expenses, extraIncomes, cash, savings] = await Promise.all([
     prisma.personalExpense.findMany({ where: { periodId: period.id }, orderBy: { amount: "desc" } }),
     prisma.personalIncome.findMany({ where: { periodId: period.id }, orderBy: { id: "desc" } }),
     getPersonalCash(period),
+    getPersonalSavings(c.member.id),
   ]);
   const monthlyExpenses = expenses.reduce((s, e) => s + e.amount, 0); // all fixed lines (display subtotal)
   // Cash math from the shared helper: CC-tagged lines/spends are deferred, card bills paid
@@ -115,6 +118,9 @@ export default async function PersonalSheet({
             </form>
           </details>
         </div>
+
+        {/* savings pot — set money aside, pull it into this month as income */}
+        <PersonalSavingsCard balance={savings.balance} periodId={period.id} periodLabel={period.label} history={savings.history} />
 
         {/* stats (stack on mobile) */}
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">

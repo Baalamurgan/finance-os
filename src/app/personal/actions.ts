@@ -254,6 +254,40 @@ export async function unmarkCardBillPaid(formData: FormData) {
   rev();
 }
 
+// ── Savings pot (personal-mode Piggy) ────────────────────────────────────────
+// Set money aside into the pot. Signed: a negative amount is a manual correction/
+// deduction that doesn't feed any month (use "Use in a month" for real withdrawals).
+export async function depositPersonalSavings(formData: FormData) {
+  const member = await me();
+  if (!member) return;
+  const amount = parseAmount(formData.get("amount"));
+  const note = String(formData.get("note") ?? "").trim() || null;
+  if (!amount || Number.isNaN(amount) || amount === 0) return;
+  await prisma.personalSavings.create({ data: { memberId: member.id, amount, note } });
+  rev();
+}
+
+// Pull money out of the pot into a specific month — reduces the pot AND posts a one-off
+// PersonalIncome to that month (so it raises that month's spendable, like Piggy → income).
+// Guarded so you can never withdraw more than the pot holds.
+export async function withdrawPersonalSavings(formData: FormData) {
+  const member = await me();
+  if (!member) return;
+  const periodId = Number(formData.get("periodId"));
+  const amount = parseAmount(formData.get("amount"));
+  const note = String(formData.get("note") ?? "").trim() || "Savings";
+  if (!periodId || !amount || amount <= 0) return;
+  const period = await ownsPeriod(member.id, periodId);
+  if (!period) return;
+  const bal = (await prisma.personalSavings.aggregate({ where: { memberId: member.id }, _sum: { amount: true } }))._sum.amount ?? 0;
+  if (amount > bal) return; // overdraw blocked (UI also guards)
+  await prisma.$transaction([
+    prisma.personalSavings.create({ data: { memberId: member.id, periodId, amount: -amount, note: `Used in ${period.label}: ${note}` } }),
+    prisma.personalIncome.create({ data: { memberId: member.id, periodId, source: `From Savings: ${note}`, amount } }),
+  ]);
+  rev();
+}
+
 // ── Categories (spend categories — managed in the Expenses tab) ──────────────
 export async function addPersonalCategory(formData: FormData) {
   const member = await me();

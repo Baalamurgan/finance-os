@@ -3,7 +3,9 @@ import { redirect } from "next/navigation";
 import { formatINR } from "@/lib/format";
 import { loadPersonal } from "@/lib/loadPersonal";
 import { getAccountDetail } from "@/lib/finance/queries";
+import { getCardDues } from "@/lib/personal/cash";
 import { PersonalNav } from "@/components/personal/PersonalNav";
+import { CardDuesStrip } from "@/components/personal/CardDuesStrip";
 import { ConfirmForm } from "@/components/ConfirmForm";
 import { setCreditConfig, deleteTransaction, addManualTransaction } from "@/app/personal/finance/actions";
 import { TXN_TYPES } from "@/lib/finance/types";
@@ -26,6 +28,9 @@ export default async function CreditCardDetail({
 
   const { account, txns, dashboard: d } = detail;
   const cfg = account.credit;
+  // The in-app spends/fixed lines tagged to THIS card that are still deferred from cash
+  // (grouped into bill cycles), so you can view exactly what's riding on this card.
+  const dues = (await getCardDues(c.member.id)).filter((due) => due.cardId === account.id);
 
   return (
     <>
@@ -70,6 +75,14 @@ export default async function CreditCardDetail({
         ) : (
           <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
             Set a <b>statement day</b> below to track billing cycles, statement &amp; due dates.
+          </div>
+        )}
+
+        {/* in-app spends tagged to this card, deferred from cash (view + pay the bill) */}
+        {dues.length > 0 && (
+          <div>
+            <h2 className="mb-2 text-sm font-semibold text-slate-800">On this card, unpaid</h2>
+            <CardDuesStrip dues={dues} />
           </div>
         )}
 

@@ -146,6 +146,7 @@ model Member {
   accountTxns        AccountTransaction[]
   netWorthItems      NetWorthItem[]
   personalCardBills  PersonalCardBill[]
+  personalSavings    PersonalSavings[]
 
   @@unique([householdId, code])
 }
@@ -211,6 +212,7 @@ model PersonalPeriod {
   spends    PersonalSpend[]
   incomes   PersonalIncome[]
   cardBills PersonalCardBill[]
+  savings   PersonalSavings[]
   createdAt DateTime @default(now())
 
   @@unique([memberId, year, month])
@@ -335,6 +337,25 @@ model PersonalCardBill {
   @@unique([cardAccountId, cycleEnd])
   @@index([memberId])
   @@index([paidPeriodId])
+}
+
+// A private personal savings pot (the personal-mode analogue of the family Piggy).
+// A flat ledger: positive = money set aside into the pot; negative = money pulled
+// back OUT into a month (which also posts a one-off PersonalIncome to that month, so
+// it raises that month's spendable). Balance = Σ amount. periodId is the month the
+// entry relates to (the target month for a withdrawal); nullable so a deposit can be
+// month-agnostic and so a deleted month leaves the pot balance intact (SetNull).
+model PersonalSavings {
+  id        Int      @id @default(autoincrement())
+  member    Member   @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  memberId  Int
+  period    PersonalPeriod? @relation(fields: [periodId], references: [id], onDelete: SetNull)
+  periodId  Int?
+  amount    Float    // + into the pot, − out of the pot (brought into a month)
+  note      String?
+  createdAt DateTime @default(now())
+
+  @@index([memberId])
 }
 
 // Credit-card specifics. Cycles are DERIVED from statementDay + dueOffsetDays (no

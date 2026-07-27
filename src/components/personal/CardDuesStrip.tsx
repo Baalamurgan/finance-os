@@ -1,13 +1,35 @@
 import { formatINR } from "@/lib/format";
-import { markCardBillPaid, unmarkCardBillPaid } from "@/app/personal/actions";
-import type { CardDue } from "@/lib/personal/cash";
+import { unmarkCardBillPaid } from "@/app/personal/actions";
+import { MarkBillPaidButton } from "@/components/personal/MarkBillPaidButton";
+import type { CardDue, CardDueItem } from "@/lib/personal/cash";
 
 const fmtDate = (iso: string | null) =>
   iso ? new Date(iso).toLocaleDateString("en-IN", { day: "numeric", month: "short" }) : "—";
 
+// The line items behind a cycle total — "view the spends done on this specific card".
+function ItemList({ items }: { items: CardDueItem[] }) {
+  if (items.length === 0) return null;
+  return (
+    <details className="mt-1.5">
+      <summary className="cursor-pointer text-[11px] font-medium text-emerald-700">View {items.length} spend{items.length === 1 ? "" : "s"}</summary>
+      <ul className="mt-1 divide-y divide-slate-100 rounded-lg bg-white px-2">
+        {items.map((it, i) => (
+          <li key={i} className="flex items-center justify-between gap-2 py-1.5 text-xs">
+            <span className="min-w-0 truncate text-slate-600">
+              {it.label} <span className="text-slate-400">· {fmtDate(it.dateISO)}</span>
+            </span>
+            <span className="tabular-nums text-slate-700">{formatINR(it.amount)}</span>
+          </li>
+        ))}
+      </ul>
+    </details>
+  );
+}
+
 // Per credit card: the CC-tagged spends that haven't left your cash yet, grouped into
-// billing cycles. "Mark bill paid" posts the one real cash deduction (this month) and
-// settles that cycle; undo reverses it.
+// billing cycles. "Mark bill paid" posts the one real cash deduction (this month, with the
+// exact amount you paid) and settles that cycle; undo reverses it. Each cycle expands to
+// show its individual spends.
 export function CardDuesStrip({ dues }: { dues: CardDue[] }) {
   const active = dues.filter((d) => d.unpaidTotal > 0 || d.paid.length > 0);
   if (active.length === 0) return null;
@@ -24,26 +46,27 @@ export function CardDuesStrip({ dues }: { dues: CardDue[] }) {
           </div>
 
           {d.needsStatementDay ? (
-            <p className="mt-2 text-xs text-amber-600">
-              Set a <b>statement day</b> on this card (Finance → open the card) to track its bill cycle &amp; due date.
-            </p>
+            <>
+              <p className="mt-2 text-xs text-amber-600">
+                Set a <b>statement day</b> on this card (Finance → open the card) to track its bill cycle &amp; due date.
+              </p>
+              <div className="mt-2 rounded-lg bg-slate-50 px-3 py-2">
+                <ItemList items={d.ungrouped} />
+              </div>
+            </>
           ) : (
             <ul className="mt-2 space-y-1.5">
               {d.cycles.map((c) => (
-                <li key={c.cycleEndISO} className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-slate-50 px-3 py-2 text-sm">
-                  <span className="text-slate-600">
-                    Bill {fmtDate(c.cycleEndISO)}
-                    {c.dueISO ? <> · due {fmtDate(c.dueISO)}</> : null} ·{" "}
-                    <b className="tabular-nums text-slate-800">{formatINR(c.total)}</b>
-                  </span>
-                  <form action={markCardBillPaid}>
-                    <input type="hidden" name="cardAccountId" value={d.cardId} />
-                    <input type="hidden" name="cycleEnd" value={c.cycleEndISO} />
-                    <input type="hidden" name="amount" value={c.total} />
-                    <button className="whitespace-nowrap rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white active:bg-emerald-700">
-                      Mark bill paid
-                    </button>
-                  </form>
+                <li key={c.cycleEndISO} className="rounded-lg bg-slate-50 px-3 py-2 text-sm">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <span className="text-slate-600">
+                      Bill {fmtDate(c.cycleEndISO)}
+                      {c.dueISO ? <> · due {fmtDate(c.dueISO)}</> : null} ·{" "}
+                      <b className="tabular-nums text-slate-800">{formatINR(c.total)}</b>
+                    </span>
+                    <MarkBillPaidButton cardId={d.cardId} cardName={d.cardName} cycleEndISO={c.cycleEndISO} cycleTotal={c.total} />
+                  </div>
+                  <ItemList items={c.items} />
                 </li>
               ))}
               {d.cycles.length === 0 && (
