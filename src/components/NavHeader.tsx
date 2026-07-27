@@ -7,6 +7,7 @@ import { AddSpendModal } from "@/components/AddSpendModal";
 import { AutoLock } from "@/components/AutoLock";
 import { UserMenu } from "@/components/UserMenu";
 import { WindDownBanner } from "@/components/WindDownBanner";
+import { WindDownPopup } from "@/components/WindDownPopup";
 import { setViewAs } from "@/app/actions";
 import { formatINR } from "@/lib/format";
 import { MISC_SUBCATEGORIES } from "@/lib/misc";
@@ -107,7 +108,10 @@ export function NavHeader({
   return (
     <>
     <AutoLock enabled={!!pinEnabled} />
-    <header className="sticky top-0 z-40 border-b border-slate-200 bg-white/90 backdrop-blur">
+    {/* header + state banners stick together at the top, so the wind-down reminder
+        stays visible while scrolling (it's easy to miss otherwise). */}
+    <div className="sticky top-0 z-40">
+    <header className="border-b border-slate-200 bg-white/90 backdrop-blur">
       <div className="mx-auto flex max-w-7xl flex-wrap items-center gap-x-3 gap-y-2 px-4 py-3 sm:px-6">
         <div className="mr-2">
           <div className="text-base font-bold text-slate-900">{householdName}</div>
@@ -218,6 +222,11 @@ export function NavHeader({
       </div>
     )}
     {windDownReminder && <WindDownBanner daysUntil={windDownReminder.daysUntil} />}
+    </div>
+
+    {/* once-a-day nudge popup during the wind-down window — shows right after the app
+        opens (post-unlock), on top of the sticky banner, so it's impossible to miss. */}
+    {windDownReminder && <WindDownPopup daysUntil={windDownReminder.daysUntil} q={q} />}
 
     {/* big thumb-reachable "Add Spend" button on mobile (the easy daily action) */}
     {periodOpen && periodId && (

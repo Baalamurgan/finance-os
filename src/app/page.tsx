@@ -13,8 +13,9 @@ import { IncomeRowActions } from "@/components/IncomeRowActions";
 import { MoneyFlowDonut } from "@/components/Charts";
 import { ConfirmForm } from "@/components/ConfirmForm";
 import { SheetLockNotice } from "@/components/SheetLockNotice";
+import { RebuildDraftButton } from "@/components/RebuildDraftButton";
 import { monthsUntilNextDue } from "@/lib/schedule";
-import { createPeriod, deleteIncome, createNextMonthDraft, rebuildDraft, discardDraft, skipSetAside, restoreSetAside } from "./actions";
+import { createPeriod, deleteIncome, createNextMonthDraft, discardDraft, skipSetAside, restoreSetAside } from "./actions";
 
 const SECTION_COLOR: Record<string, string> = {
   Loans: "#ef4444",
@@ -284,7 +285,10 @@ export default async function SheetPage({
   const fixedGroups = grouped.filter((g) => FIXED_SECTIONS.includes(g.section));
   const yearlyRows = rollup.expenses.filter((e) => sheetSection(e) === "Yearly");
   const yearlySubtotal = yearlyRows.reduce((s, e) => s + e.amount, 0);
-  const miscRows = rollup.expenses.filter((e) => sheetSection(e) === "Misc");
+  // Misc / extra shown newest-first (carried lines + ad-hoc adds) — most recent on top.
+  const miscRows = rollup.expenses
+    .filter((e) => sheetSection(e) === "Misc")
+    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime() || b.id - a.id);
   const fixedSubtotal = fixedGroups.reduce((s, g) => s + g.subtotal, 0);
   const miscSubtotal = miscRows.reduce((s, e) => s + e.amount, 0);
   const fixedCats = c.categories.filter((cat) => FIXED_SECTIONS.includes(cat.section));
@@ -330,12 +334,7 @@ export default async function SheetPage({
                 </a>
                 {canEditHere && (
                   <>
-                    <form action={rebuildDraft}>
-                      <input type="hidden" name="periodId" value={c.selected.id} />
-                      <button className="rounded-md border border-violet-300 px-3 py-1.5 text-xs font-medium text-violet-700 hover:bg-violet-100">
-                        ↻ Rebuild
-                      </button>
-                    </form>
+                    <RebuildDraftButton periodId={c.selected.id} />
                     <ConfirmForm action={discardDraft} message="Discard this next-month draft? You can preview again anytime.">
                       <input type="hidden" name="periodId" value={c.selected.id} />
                       <button className="rounded-md px-3 py-1.5 text-xs font-medium text-red-600 hover:bg-red-50">Discard</button>

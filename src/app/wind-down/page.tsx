@@ -74,6 +74,9 @@ export default async function WindDownPage({
   ];
   const carriedTotal = carriedRows.reduce((s, r) => s + r.amount, 0);
   const carryOut = c.selected.carryForward + rollup.totalIncome - rollup.totalExpense;
+  const nm = c.selected.month === 12 ? 1 : c.selected.month + 1;
+  const ny = c.selected.month === 12 ? c.selected.year + 1 : c.selected.year;
+  const nextLabel = `${new Date(ny, nm - 1, 1).toLocaleString("en-US", { month: "short" }).toUpperCase()} ${ny}`;
 
   return (
     <>
@@ -146,7 +149,7 @@ export default async function WindDownPage({
                 </span>
               </div>
 
-              <WindDownButton periodId={c.selected.id} label={c.selected.label} />
+              <WindDownButton periodId={c.selected.id} label={c.selected.label} leftovers={piggyAdd} nextLabel={nextLabel} />
             </section>
           ) : (
             <p className="rounded-xl border border-slate-200 bg-white p-5 text-center text-sm text-slate-500">

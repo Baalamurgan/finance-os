@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useTransition } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { formatINR } from "@/lib/format";
 import { markSettled, unsettle, setTreasurer } from "@/app/actions";
@@ -163,7 +164,7 @@ export function SettlementBoard({
                     </td>
                     <td className="px-4 py-2 text-right tabular-nums text-slate-600">{formatINR(r.contributed)}</td>
                     <td className="px-4 py-2 text-right">
-                      <PaidBreakdown name={r.name} paid={r.paid} items={r.paidItems} />
+                      <PaidBreakdown name={r.name} paid={r.paid} items={r.paidItems} y={y} m={m} memberId={r.id} />
                     </td>
                     <td className={`px-4 py-2 text-right tabular-nums font-medium ${r.net > 0 ? "text-green-600" : r.net < 0 ? "text-red-600" : "text-slate-400"}`}>
                       {formatINR(r.net)}
@@ -192,7 +193,7 @@ function Skeleton({ rows }: { rows: number }) {
   );
 }
 
-function PaidBreakdown({ name, paid, items }: { name: string; paid: number; items: PaidItem[] }) {
+function PaidBreakdown({ name, paid, items, y, m, memberId }: { name: string; paid: number; items: PaidItem[]; y: number; m: number; memberId: number }) {
   const [open, setOpen] = useState(false);
   if (items.length === 0) return <span className="tabular-nums text-slate-400">{formatINR(paid)}</span>;
   return (
@@ -229,6 +230,12 @@ function PaidBreakdown({ name, paid, items }: { name: string; paid: number; item
             <span>Total</span>
             <span className="tabular-nums">{formatINR(paid)}</span>
           </div>
+          <Link
+            href={`/expenses?y=${y}&m=${m}&member=${memberId}`}
+            className="mt-2 block rounded-md bg-indigo-50 px-2 py-1.5 text-center text-[11px] font-medium text-indigo-700 hover:bg-indigo-100"
+          >
+            See {name}&apos;s daily spends (Misc) →
+          </Link>
         </div>
       )}
     </span>

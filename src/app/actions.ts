@@ -1375,6 +1375,7 @@ export async function createPeriod(formData: FormData) {
 // found/replaced (estimate on a draft → final at wind-down). oneOff so it never
 // re-copies into the month after.
 const SURPLUS_NOTE = "__surplus__";
+const LEFTOVER_NOTE = "__leftover_income__"; // this month's under-budget leftovers routed to next month's income (opt-in at wind-down)
 
 // Add an ESTIMATED "last month surplus" income line to a draft, from the source
 // (current open) month's live carry-out. Replaces any prior estimate.
@@ -1432,6 +1433,13 @@ async function addEstimatedCarry(
       if (rem >= 0) continue; // under budget → Piggy, not carried
       await tx.expenseEntry.create({
         data: { periodId: targetId, categoryId: c.id, label: `${c.name} over-budget (from ${source.label})`, amount: -rem, necessary: true, oneOff: true, note: CARRY_NOTE },
+      });
+      // trim the draft's spend envelope by the overspend (idempotent set; generateMonth
+      // ran first, so the Budget exists at monthlyBudget)
+      const base = c.monthlyBudget ?? b;
+      await tx.budget.updateMany({
+        where: { periodId: targetId, categoryId: c.id },
+        data: { planned: Math.max(0, Math.round((base + rem) * 100) / 100) },
       });
     } else {
       // misc (no budget) → carry EACH spend as its own line, tagged to whoever spent
@@ -1521,6 +1529,25 @@ export async function rebuildDraft(formData: FormData) {
   });
   revalidatePath("/", "layout");
   redirect(`/?y=${draft.year}&m=${draft.month}`);
+}
+
+// Same as rebuildDraft but returns a result instead of redirecting, so the client can
+// show a toast. Stays on the (already-open) draft page; revalidatePath refreshes it.
+export async function rebuildDraftToast(formData: FormData): Promise<{ ok: boolean; message: string }> {
+  if (!(await canEdit())) return { ok: false, message: "Only the head or a manager can rebuild." };
+  const periodId = Number(formData.get("periodId"));
+  const draft = await prisma.period.findUnique({ where: { id: periodId } });
+  if (!draft || draft.status !== "draft") return { ok: false, message: "No draft to rebuild." };
+  const current = await latestOpenPeriod(draft.householdId);
+  if (!current) return { ok: false, message: "No open month to rebuild from." };
+  await prisma.$transaction(async (tx) => {
+    await clearGeneratedRows(tx, periodId); // keep hand-added preview lines
+    await generateMonth(tx, periodId, draft.householdId);
+    await addEstimatedCarry(tx, current, periodId);
+    await addEstimatedSurplus(tx, current, periodId);
+  });
+  revalidatePath("/", "layout");
+  return { ok: true, message: "Preview rebuilt from your latest setup." };
 }
 
 // Toggle whether an income / expense line repeats into next month (the oneOff flag).
@@ -1744,6 +1771,9 @@ export async function windDownMonth(formData: FormData) {
   if (!(await canEdit())) return; // head or manager
   const periodId = Number(formData.get("periodId"));
   if (!periodId) return;
+  // Opt-in at wind-down: route THIS month's under-budget leftovers (the general-Piggy
+  // contribution) into NEXT month's income instead of parking them in the Piggy bank.
+  const leftoversToIncome = formData.get("leftoversToIncome") === "1";
 
   const period = await prisma.period.findUnique({ where: { id: periodId } });
   if (!period || period.status !== "open") return;
@@ -1783,8 +1813,11 @@ export async function windDownMonth(formData: FormData) {
     spends.filter((s) => s.categoryId === catId).reduce((sum, s) => sum + s.amount, 0);
 
   let movedToPiggy = 0;
+  let leftoverIncome = 0; // under-budget leftovers routed to next month's income (opt-in)
   // over-budget excess + misc spends are carried into NEXT month as one-off expenses
   const carryToNext: { categoryId: number; amount: number; label: string; memberId?: number | null }[] = [];
+  // over-budget amount per category → trims NEXT month's spend envelope (Budget.planned)
+  const overspendByCat = new Map<number, number>();
 
   const nextMonth = period.month === 12 ? 1 : period.month + 1;
   const nextYear = period.month === 12 ? period.year + 1 : period.year;
@@ -1813,25 +1846,33 @@ export async function windDownMonth(formData: FormData) {
       } else if (budget > 0) {
         const remainder = budget - spent;
         if (remainder >= 0) {
-          // under budget → save the leftover to the general Piggy
-          await tx.piggyEntry.create({
-            data: {
-              householdId,
-              periodId,
-              categoryId: cat.id,
-              kind: "piggy",
-              amount: remainder,
-              note: `${period.label} · ${cat.name}`,
-            },
-          });
-          movedToPiggy += remainder;
+          if (leftoversToIncome) {
+            // head chose to bring this month's leftovers into next month's spendable
+            // income instead of parking them in Piggy (no piggy entry is written).
+            leftoverIncome += remainder;
+          } else {
+            // under budget → save the leftover to the general Piggy
+            await tx.piggyEntry.create({
+              data: {
+                householdId,
+                periodId,
+                categoryId: cat.id,
+                kind: "piggy",
+                amount: remainder,
+                note: `${period.label} · ${cat.name}`,
+              },
+            });
+            movedToPiggy += remainder;
+          }
         } else {
-          // over budget → carry the excess into next month as a one-off expense
+          // over budget → carry the excess into next month as a one-off expense (keeps
+          // the running balance honest) AND trim next month's spend envelope by the same.
           carryToNext.push({
             categoryId: cat.id,
             amount: -remainder,
             label: `${cat.name} over-budget (from ${period.label})`,
           });
+          overspendByCat.set(cat.id, -remainder);
         }
       } else if (spent > 0) {
         // tracked, no budget = Misc → carry EACH spend as its own line ("JUL · <spend>")
@@ -1922,6 +1963,16 @@ export async function windDownMonth(formData: FormData) {
       });
     }
 
+    // Trim next month's spend envelope by the overspend: set planned = monthlyBudget −
+    // overspend (idempotent — safe even if next month was a promoted draft already trimmed).
+    for (const [catId, overspend] of overspendByCat) {
+      const base = trackedCats.find((c) => c.id === catId)?.monthlyBudget ?? budgetOf(catId);
+      await tx.budget.updateMany({
+        where: { periodId: next.id, categoryId: catId },
+        data: { planned: Math.max(0, Math.round((base - overspend) * 100) / 100) },
+      });
+    }
+
     // Surplus → next month's INCOME (replaces the "carried in" opening balance).
     // Replace any estimate a draft may already carry. A deficit stays a negative
     // carryForward (a carried-in shortfall), not a negative income line.
@@ -1937,6 +1988,20 @@ export async function windDownMonth(formData: FormData) {
         },
       });
       await tx.period.update({ where: { id: next.id }, data: { carryForward: 0 } });
+    }
+
+    // Under-budget leftovers the head chose to bring forward as income (instead of Piggy).
+    await tx.incomeEntry.deleteMany({ where: { periodId: next.id, note: LEFTOVER_NOTE } });
+    if (leftoverIncome > 0) {
+      await tx.incomeEntry.create({
+        data: {
+          periodId: next.id,
+          source: `Last month's leftovers (from ${period.label})`,
+          amount: Math.round(leftoverIncome * 100) / 100,
+          oneOff: true,
+          note: LEFTOVER_NOTE,
+        },
+      });
     }
   });
 

@@ -1,4 +1,5 @@
 import { formatINR } from "@/lib/format";
+import { prisma } from "@/lib/prisma";
 import { loadCommon } from "@/lib/load";
 import { getTrackedExpenses, getMiscReview } from "@/lib/queries";
 import { NavHeader } from "@/components/NavHeader";
@@ -7,16 +8,23 @@ import { MiscReview } from "@/components/MiscReview";
 import { SpendDeleteButton } from "@/components/SpendDeleteButton";
 import { SpendSubCategoryPicker } from "@/components/SpendSubCategoryPicker";
 import { EditSpendModal } from "@/components/EditSpendModal";
+import { ExpensesSortControl } from "@/components/ExpensesSortControl";
 import { MISC_SUBCATEGORIES } from "@/lib/misc";
+
+type SortKey = "date" | "amount" | "member";
 
 export default async function ExpensesPage({
   searchParams,
 }: {
-  searchParams: Promise<{ y?: string; m?: string }>;
+  searchParams: Promise<{ y?: string; m?: string; sort?: string; member?: string }>;
 }) {
   const sp = await searchParams;
   const c = await loadCommon(sp);
   if (!c) return null;
+
+  const sort: SortKey = sp.sort === "amount" || sp.sort === "member" ? sp.sort : "date";
+  const filterMemberId = sp.member ? Number(sp.member) : null;
+  const filterMemberName = filterMemberId != null ? c.members.find((m) => m.id === filterMemberId)?.name ?? null : null;
 
   const nav = (
     <NavHeader
@@ -52,10 +60,33 @@ export default async function ExpensesPage({
     );
   }
 
-  const { cards, totalAllocation, totalSpent, totalRemaining, miscSpent } =
+  const { cards: rawCards, totalAllocation, totalSpent, totalRemaining, miscSpent } =
     await getTrackedExpenses(c.household.id, c.selected.id);
+
+  // Apply the chosen sort (and optional per-member filter, e.g. arriving from Settlement)
+  // to each card's spend list. Totals above stay on the full month — filtering is view-only.
+  const memberName = (id: number | null) => (id != null ? c.members.find((m) => m.id === id)?.name ?? "" : "Shared");
+  const orderSpends = <T extends { amount: number; createdAt: Date; memberId: number | null }>(rows: T[]): T[] => {
+    const filtered = filterMemberId != null ? rows.filter((s) => s.memberId === filterMemberId) : rows;
+    const by = [...filtered];
+    if (sort === "amount") by.sort((a, b) => b.amount - a.amount);
+    else if (sort === "member") by.sort((a, b) => memberName(a.memberId).localeCompare(memberName(b.memberId)) || b.createdAt.getTime() - a.createdAt.getTime());
+    else by.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime()); // date (newest first)
+    return by;
+  };
+  const cards = rawCards.map((card) => ({ ...card, spends: orderSpends(card.spends) }));
   const budgetedCards = cards.filter((card) => card.allocation > 0);
   const miscCards = cards.filter((card) => card.allocation === 0);
+
+  // This month's envelopes were trimmed by last month's overspend (the carry lines,
+  // note "__carry__"). Map categoryId → trimmed amount so each card can show why its
+  // budget is smaller ("− ₹X last month's overspend").
+  const carryTrims = await prisma.expenseEntry.groupBy({
+    by: ["categoryId"],
+    where: { periodId: c.selected.id, note: "__carry__", label: { contains: "over-budget" } },
+    _sum: { amount: true },
+  });
+  const trimByCat = new Map<number, number>(carryTrims.map((t) => [t.categoryId, t._sum.amount ?? 0]));
   const open = c.selected.status === "open";
   // Head-only tidy-up: misc spends that look like a tracked category (open month only).
   const miscReview = c.isHead && open ? await getMiscReview(c.household.id, c.selected.id) : [];
@@ -75,22 +106,40 @@ export default async function ExpensesPage({
               <b> + Add expense</b> on the Sheet instead.
             </p>
           </div>
-          <div className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-right">
-            <div className="text-[11px] font-medium uppercase tracking-wide text-slate-400">
-              Spent / Allocated
-            </div>
-            <div className="text-lg font-bold text-slate-800">
-              {formatINR(totalSpent)}{" "}
-              <span className="text-sm font-normal text-slate-400">
-                / {formatINR(totalAllocation)}
-              </span>
-            </div>
-            <div className={`text-xs ${totalRemaining >= 0 ? "text-green-600" : "text-red-600"}`}>
-              {totalRemaining >= 0 ? "Remaining " : "Over by "}
-              {formatINR(Math.abs(totalRemaining))}
+          <div className="flex items-center gap-3">
+            <ExpensesSortControl sort={sort} />
+            <div className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-right">
+              <div className="text-[11px] font-medium uppercase tracking-wide text-slate-400">
+                Spent / Allocated
+              </div>
+              <div className="text-lg font-bold text-slate-800">
+                {formatINR(totalSpent)}{" "}
+                <span className="text-sm font-normal text-slate-400">
+                  / {formatINR(totalAllocation)}
+                </span>
+              </div>
+              <div className={`text-xs ${totalRemaining >= 0 ? "text-green-600" : "text-red-600"}`}>
+                {totalRemaining >= 0 ? "Remaining " : "Over by "}
+                {formatINR(Math.abs(totalRemaining))}
+              </div>
             </div>
           </div>
         </div>
+
+        {/* active per-member filter (e.g. arrived from Settlement → a member's Misc) */}
+        {filterMemberName && (
+          <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-indigo-200 bg-indigo-50 px-4 py-2.5 text-sm">
+            <span className="text-indigo-800">
+              Showing only <b>{filterMemberName}</b>&apos;s spends
+            </span>
+            <a
+              href={`/expenses?y=${c.selYear}&m=${c.selMonth}&sort=${sort}`}
+              className="rounded-md border border-indigo-300 bg-white px-3 py-1 text-xs font-medium text-indigo-700 hover:bg-indigo-100"
+            >
+              ✕ Clear filter
+            </a>
+          </div>
+        )}
 
         {/* budgeted categories (count toward Spent / Allocated above) */}
         <div className="grid grid-cols-1 gap-5 md:grid-cols-2">
@@ -103,6 +152,7 @@ export default async function ExpensesPage({
               isHead={c.isHead}
               members={c.members}
               currentMemberId={c.currentMember?.id}
+              trimmed={trimByCat.get(card.id) ?? 0}
             />
           ))}
         </div>
@@ -154,6 +204,7 @@ function SpendCard({
   isHead,
   members,
   currentMemberId,
+  trimmed = 0,
 }: {
   card: SpendCardData;
   open: boolean;
@@ -161,35 +212,53 @@ function SpendCard({
   isHead: boolean;
   members: { id: number; name: string }[];
   currentMemberId?: number | null;
+  trimmed?: number; // this month's envelope was reduced by last month's overspend
 }) {
   const pct = card.allocation > 0 ? Math.min((card.spent / card.allocation) * 100, 100) : 0;
   const owner = card.responsibleMemberId != null ? members.find((m) => m.id === card.responsibleMemberId)?.name ?? null : null;
   const isMisc = card.section === "Misc"; // the Personal/Misc bucket — spends carry a sub-category
+  const cid = `card-${card.id}`;
   return (
     <section className="flex flex-col rounded-xl border border-slate-200 bg-white">
+      {/* mobile-only collapse toggle (pure CSS): body is hidden on mobile until checked,
+          always visible from sm: up. No JS → no hydration flash. */}
+      <input type="checkbox" id={cid} className="peer sr-only" />
       <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3">
-        <div className="flex items-baseline gap-2">
-          <h2 className="font-semibold text-slate-800">{card.name}</h2>
+        <label htmlFor={cid} className="flex min-w-0 flex-1 cursor-pointer items-baseline gap-2 sm:cursor-default">
+          <h2 className="truncate font-semibold text-slate-800">{card.name}</h2>
           <span
-            className={`rounded-full px-1.5 py-0.5 text-[10px] font-medium ${owner ? "bg-indigo-50 text-indigo-500" : "bg-slate-100 text-slate-400"}`}
+            className={`shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-medium ${owner ? "bg-indigo-50 text-indigo-500" : "bg-slate-100 text-slate-400"}`}
             title={owner ? `${owner} holds this budget — a spend here doesn't change their settlement` : "Shared budget — a spend here is credited to the spender at settlement"}
           >
             {owner ?? "shared"}
           </span>
+        </label>
+        <div className="flex items-center gap-2">
+          {/* compact figure so a collapsed card still shows the spend at a glance (mobile) */}
+          <span className="shrink-0 text-xs tabular-nums text-slate-500 sm:hidden">
+            {formatINR(card.spent)}
+            {card.allocation > 0 && <span className="text-slate-400"> / {formatINR(card.allocation)}</span>}
+          </span>
+          {open && (
+            <AddSpendModal
+              periodId={periodId}
+              trigger="card"
+              fixedCategory={{ id: card.id, name: card.name, misc: isMisc }}
+              isHead={isHead}
+              members={members}
+              currentMemberId={currentMemberId}
+              subCategories={isMisc ? MISC_SUBCATEGORIES : undefined}
+            />
+          )}
+          <label htmlFor={cid} className="cursor-pointer rounded-md p-1 text-slate-400 hover:bg-slate-100 sm:hidden" aria-label={`Expand ${card.name}`}>
+            <svg width="16" height="16" viewBox="0 0 20 20" className="transition-transform peer-checked:rotate-90">
+              <path fill="currentColor" d="M7 5l6 5-6 5z" />
+            </svg>
+          </label>
         </div>
-        {open && (
-          <AddSpendModal
-            periodId={periodId}
-            trigger="card"
-            fixedCategory={{ id: card.id, name: card.name, misc: isMisc }}
-            isHead={isHead}
-            members={members}
-            currentMemberId={currentMemberId}
-            subCategories={isMisc ? MISC_SUBCATEGORIES : undefined}
-          />
-        )}
       </div>
 
+      <div className="hidden peer-checked:block sm:block">
       <div className="px-4 pt-3">
         {card.sinking && card.allocation > 0 ? (
           <>
@@ -231,6 +300,12 @@ function SpendCard({
               />
               <div className="absolute inset-y-0 right-0 bg-slate-100" style={{ width: `${100 - pct}%` }} />
             </div>
+            {trimmed > 0 && (
+              <div className="mt-1.5 flex items-center justify-between rounded-md bg-amber-50 px-2 py-1 text-[11px]">
+                <span className="text-slate-500">Budget {formatINR(card.allocation + trimmed)}</span>
+                <span className="font-medium text-amber-700">− {formatINR(trimmed)} last month&apos;s overspend</span>
+              </div>
+            )}
           </>
         ) : (
           <div className="flex items-center justify-between text-sm">
@@ -289,6 +364,7 @@ function SpendCard({
             </div>
           </div>
         ))}
+      </div>
       </div>
     </section>
   );
