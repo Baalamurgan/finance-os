@@ -2,8 +2,11 @@ import Link from "next/link";
 import { formatINR } from "@/lib/format";
 import { loadPersonal } from "@/lib/loadPersonal";
 import { getNetWorth, getWalletAccounts } from "@/lib/finance/queries";
+import { getPersonalSavings } from "@/lib/personal/savings";
 import { netWorthTypeMeta } from "@/lib/finance/types";
 import { PersonalNav } from "@/components/personal/PersonalNav";
+import { FinanceHubTabs } from "@/components/personal/FinanceHubTabs";
+import { PersonalSavingsCard } from "@/components/personal/PersonalSavingsCard";
 import { NetWorthItemModal } from "@/components/personal/NetWorthItemModal";
 import { AddAccountModal } from "@/components/personal/AddAccountModal";
 import { ConfirmForm } from "@/components/ConfirmForm";
@@ -15,12 +18,15 @@ const ALLOC_COLORS = ["#10b981", "#0ea5e9", "#f59e0b", "#8b5cf6", "#ef4444", "#1
 export default async function FinancePage({
   searchParams,
 }: {
-  searchParams: Promise<{ y?: string; m?: string }>;
+  searchParams: Promise<{ y?: string; m?: string; tab?: string }>;
 }) {
   const sp = await searchParams;
   const c = await loadPersonal(sp);
+  const tab = sp.tab === "cards" || sp.tab === "savings" ? sp.tab : "networth";
+  const financeDue = c.cardReminders.length > 0;
   const nw = await getNetWorth(c.member.id);
   const wallet = await getWalletAccounts(c.member.id);
+  const savings = tab === "savings" ? await getPersonalSavings(c.member.id) : null;
 
   const donutSegments = nw.allocation.map((a, i) => ({
     name: `${a.icon} ${a.label}`,
@@ -30,13 +36,27 @@ export default async function FinancePage({
 
   return (
     <>
-      <PersonalNav active="finance" name={c.account.name} selYear={c.selYear} selMonth={c.selMonth} financeDue={c.cardReminders.length > 0} />
+      <PersonalNav active="finance" name={c.account.name} selYear={c.selYear} selMonth={c.selMonth} financeDue={financeDue} />
       <main className="mx-auto max-w-3xl space-y-5 p-4 pb-24 sm:p-6">
         <div>
-          <h1 className="text-xl font-bold text-slate-900">Net worth</h1>
-          <p className="text-sm text-slate-500">Everything you own minus everything you owe.</p>
+          <h1 className="text-xl font-bold text-slate-900">Finance</h1>
+          <p className="text-sm text-slate-500">Net worth, your cards, and your savings pot — all in one place.</p>
         </div>
 
+        <FinanceHubTabs tab={tab} financeDue={financeDue} />
+
+        {tab === "savings" && (
+          savings && c.selected ? (
+            <PersonalSavingsCard balance={savings.balance} periodId={c.selected.id} periodLabel={c.selected.label} history={savings.history} />
+          ) : (
+            <p className="rounded-xl border border-dashed border-slate-300 bg-white p-6 text-center text-sm text-slate-500">
+              Start a month first to move savings in and out of it.
+            </p>
+          )
+        )}
+
+        {tab === "networth" && (
+        <>
         {/* hero */}
         <div className="rounded-2xl border border-slate-200 bg-gradient-to-br from-emerald-50 to-white p-5">
           <div className="text-[11px] font-medium uppercase tracking-wide text-slate-500">Total net worth</div>
@@ -105,14 +125,20 @@ export default async function FinancePage({
           </ul>
         </section>
 
-        {/* manage cards */}
-        <details className="rounded-xl border border-slate-200 bg-white">
-          <summary className="flex cursor-pointer list-none items-center justify-between px-4 py-3 [&::-webkit-details-marker]:hidden">
-            <span className="text-sm font-semibold text-slate-800">💳 Cards</span>
-            <span className="text-xs text-slate-400">{wallet.length} card{wallet.length === 1 ? "" : "s"} · manage &amp; import</span>
-          </summary>
-          <div className="space-y-2 border-t border-slate-100 p-4">
-            <div className="flex justify-end"><AddAccountModal /></div>
+        <p className="text-center text-[11px] text-slate-400">
+          Values are what you enter — update them anytime. Lending/borrowing and card dues are pulled in automatically.
+        </p>
+        </>
+        )}
+
+        {/* Cards sub-tab: manage & open your cards */}
+        {tab === "cards" && (
+        <section className="rounded-xl border border-slate-200 bg-white">
+          <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3">
+            <span className="text-sm font-semibold text-slate-800">💳 Your cards</span>
+            <AddAccountModal />
+          </div>
+          <div className="space-y-2 p-4">
             {wallet.map(({ account, summary }) => {
               const inner = (
                 <div className="flex items-center justify-between rounded-lg border border-slate-200 p-3">
@@ -136,11 +162,8 @@ export default async function FinancePage({
             })}
             {wallet.length === 0 && <p className="text-center text-sm text-slate-400">No cards yet.</p>}
           </div>
-        </details>
-
-        <p className="text-center text-[11px] text-slate-400">
-          Values are what you enter — update them anytime. Lending/borrowing and card dues are pulled in automatically.
-        </p>
+        </section>
+        )}
       </main>
     </>
   );

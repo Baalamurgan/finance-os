@@ -230,12 +230,19 @@ function PaidBreakdown({ name, paid, items, y, m, memberId }: { name: string; pa
             <span>Total</span>
             <span className="tabular-nums">{formatINR(paid)}</span>
           </div>
-          <Link
-            href={`/expenses?y=${y}&m=${m}&member=${memberId}`}
-            className="mt-2 block rounded-md bg-indigo-50 px-2 py-1.5 text-center text-[11px] font-medium text-indigo-700 hover:bg-indigo-100"
-          >
-            See {name}&apos;s daily spends (Misc) →
-          </Link>
+          {(() => {
+            // Carried misc lines correspond to the PREVIOUS month's daily spends, so link there.
+            const py = m === 1 ? y - 1 : y;
+            const pm = m === 1 ? 12 : m - 1;
+            return (
+              <Link
+                href={`/expenses?y=${py}&m=${pm}&member=${memberId}`}
+                className="mt-2 block rounded-md bg-indigo-50 px-2 py-1.5 text-center text-[11px] font-medium text-indigo-700 hover:bg-indigo-100"
+              >
+                See {name}&apos;s daily spends (Misc) →
+              </Link>
+            );
+          })()}
         </div>
       )}
     </span>

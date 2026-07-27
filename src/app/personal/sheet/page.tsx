@@ -2,9 +2,7 @@ import { formatINR } from "@/lib/format";
 import { prisma } from "@/lib/prisma";
 import { loadPersonal } from "@/lib/loadPersonal";
 import { personalMonthLabel, personalCycleRange } from "@/lib/personal";
-import { getPersonalCash } from "@/lib/personal/cash";
-import { getPersonalSavings } from "@/lib/personal/savings";
-import { PersonalSavingsCard } from "@/components/personal/PersonalSavingsCard";
+import { getPersonalCash, getUnpaidCardDues } from "@/lib/personal/cash";
 import { PersonalNav } from "@/components/personal/PersonalNav";
 import { PersonalFixedModal } from "@/components/personal/PersonalFixedModal";
 import { PersonalFixedRowActions } from "@/components/personal/PersonalFixedRowActions";
@@ -12,7 +10,7 @@ import { PersonalSpendFab } from "@/components/personal/PersonalSpendFab";
 import { PersonalEmpty } from "@/components/personal/PersonalEmpty";
 import { CardBillReminderBanner } from "@/components/personal/CardBillReminderBanner";
 import { MoneyFlowDonut } from "@/components/Charts";
-import { setPersonalIncome, addPersonalIncome, deletePersonalIncome } from "@/app/personal/actions";
+import { setPersonalIncome, addPersonalIncome, deletePersonalIncome, createPersonalPreview, rebuildPersonalPreviewAction, discardPersonalPreview } from "@/app/personal/actions";
 
 const COLORS = ["#0ea5e9", "#f59e0b", "#8b5cf6", "#ef4444", "#14b8a6", "#ec4899", "#84cc16", "#6366f1", "#f97316", "#06b6d4"];
 
@@ -35,21 +33,25 @@ export default async function PersonalSheet({
   }
 
   const period = c.selected;
+  const isDraft = period.status === "draft";
   const cats = new Map(c.categories.map((cat) => [cat.id, cat]));
   const catList = c.categories.map((cat) => ({ id: cat.id, name: cat.name, icon: cat.icon }));
   const cardMap = new Map(c.creditCards.map((cc) => [cc.id, cc]));
 
-  const [expenses, extraIncomes, cash, savings] = await Promise.all([
+  const [expenses, extraIncomes, cash, unpaidCardDues] = await Promise.all([
     prisma.personalExpense.findMany({ where: { periodId: period.id }, orderBy: { amount: "desc" } }),
     prisma.personalIncome.findMany({ where: { periodId: period.id }, orderBy: { id: "desc" } }),
     getPersonalCash(period),
-    getPersonalSavings(c.member.id),
+    getUnpaidCardDues(c.member.id),
   ]);
   const monthlyExpenses = expenses.reduce((s, e) => s + e.amount, 0); // all fixed lines (display subtotal)
   // Cash math from the shared helper: CC-tagged lines/spends are deferred, card bills paid
   // this month ARE counted. "Spent" here means spent-from-cash.
-  const { totalIn, personalExpense, spentFromCash: spentTotal, remaining } = cash;
+  const { totalIn, personalExpense, spentFromCash: spentTotal, spentInclCards, remaining } = cash;
   const spentPct = personalExpense > 0 ? Math.min(100, (spentTotal / personalExpense) * 100) : 0;
+  // The "true" picture: you owe every unpaid CC bill either way, so subtract it to know
+  // what you can really spend, and show spending that includes card spends.
+  const remainingAfterCards = remaining - unpaidCardDues;
 
   // group monthly expenses by category (collapsible)
   const byCat = new Map<number, { total: number; items: typeof expenses }>();
@@ -72,10 +74,48 @@ export default async function PersonalSheet({
       {nav}
       <main className="mx-auto max-w-3xl space-y-4 p-4 pb-28 sm:p-6">
         <CardBillReminderBanner reminders={c.cardReminders} />
-        <div>
-          <h1 className="text-xl font-bold text-slate-900">{period.label}</h1>
-          {personalCycleRange(period.year, period.month, c.member.personalWindDownDay) && (
-            <p className="text-xs text-slate-400">{personalCycleRange(period.year, period.month, c.member.personalWindDownDay)} · your cycle</p>
+
+        {/* next-month preview draft */}
+        {isDraft && (
+          <div className="rounded-xl border-2 border-dashed border-violet-300 bg-violet-50 p-4">
+            <div className="flex flex-wrap items-start justify-between gap-2">
+              <div>
+                <div className="flex items-center gap-2">
+                  <span className="text-lg">🔮</span>
+                  <h2 className="font-bold text-violet-800">Next-month preview — {period.label}</h2>
+                  <span className="rounded-full bg-violet-200 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-violet-700">Draft</span>
+                </div>
+                <p className="mt-0.5 text-xs leading-relaxed text-violet-700/80">
+                  Plan ahead — edit next month&apos;s salary, add predicted spends &amp; fixed lines. Estimated remaining
+                  seeds from this month&apos;s leftover. It becomes the live month automatically when {period.label} starts.
+                </p>
+              </div>
+              <div className="flex shrink-0 items-center gap-2">
+                <a href="/personal/sheet" className="rounded-md border border-violet-300 px-3 py-1.5 text-xs font-medium text-violet-700 hover:bg-violet-100">← Back to now</a>
+                <form action={rebuildPersonalPreviewAction}>
+                  <input type="hidden" name="periodId" value={period.id} />
+                  <button className="rounded-md border border-violet-300 px-3 py-1.5 text-xs font-medium text-violet-700 hover:bg-violet-100">↻ Rebuild</button>
+                </form>
+                <form action={discardPersonalPreview}>
+                  <input type="hidden" name="periodId" value={period.id} />
+                  <button className="rounded-md px-3 py-1.5 text-xs font-medium text-red-600 hover:bg-red-50">Discard</button>
+                </form>
+              </div>
+            </div>
+          </div>
+        )}
+
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <h1 className="text-xl font-bold text-slate-900">{period.label}</h1>
+            {personalCycleRange(period.year, period.month, c.member.personalWindDownDay) && (
+              <p className="text-xs text-slate-400">{personalCycleRange(period.year, period.month, c.member.personalWindDownDay)} · your cycle</p>
+            )}
+          </div>
+          {period.status === "open" && (
+            <form action={createPersonalPreview}>
+              <button className="rounded-full border border-violet-300 bg-violet-50 px-3 py-1.5 text-xs font-medium text-violet-700 hover:bg-violet-100">🔮 Preview next month →</button>
+            </form>
           )}
         </div>
 
@@ -119,9 +159,6 @@ export default async function PersonalSheet({
           </details>
         </div>
 
-        {/* savings pot — set money aside, pull it into this month as income */}
-        <PersonalSavingsCard balance={savings.balance} periodId={period.id} periodLabel={period.label} history={savings.history} />
-
         {/* stats (stack on mobile) */}
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
           <Stat label="Total in" value={formatINR(totalIn)} />
@@ -143,6 +180,17 @@ export default async function PersonalSheet({
           <div className={`mt-1 text-xs ${remaining < 0 ? "text-red-600" : "text-slate-400"}`}>
             {remaining >= 0 ? `${formatINR(remaining)} left to spend` : `Over by ${formatINR(-remaining)}`}
           </div>
+          {unpaidCardDues > 0 && (
+            <div className="mt-2 flex flex-wrap items-center justify-between gap-x-4 gap-y-1 border-t border-slate-100 pt-2 text-xs">
+              <span className="text-slate-500">
+                Incl. cards spent <b className="tabular-nums text-slate-700">{formatINR(spentInclCards)}</b>
+                <span className="text-slate-400"> · {formatINR(unpaidCardDues)} still on cards</span>
+              </span>
+              <span className={`font-medium tabular-nums ${remainingAfterCards < 0 ? "text-red-600" : "text-emerald-700"}`}>
+                {remainingAfterCards >= 0 ? `${formatINR(remainingAfterCards)} left after cards` : `Short ${formatINR(-remainingAfterCards)} after cards`}
+              </span>
+            </div>
+          )}
         </div>
 
         {totalIn > 0 && segments.length > 0 && (

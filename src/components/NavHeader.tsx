@@ -8,6 +8,7 @@ import { AutoLock } from "@/components/AutoLock";
 import { UserMenu } from "@/components/UserMenu";
 import { WindDownBanner } from "@/components/WindDownBanner";
 import { WindDownPopup } from "@/components/WindDownPopup";
+import { CardDueHighAlert } from "@/components/personal/CardDueHighAlert";
 import { setViewAs } from "@/app/actions";
 import { formatINR } from "@/lib/format";
 import { MISC_SUBCATEGORIES } from "@/lib/misc";
@@ -224,9 +225,10 @@ export function NavHeader({
     {windDownReminder && <WindDownBanner daysUntil={windDownReminder.daysUntil} />}
     </div>
 
-    {/* once-a-day nudge popup during the wind-down window — shows right after the app
-        opens (post-unlock), on top of the sticky banner, so it's impossible to miss. */}
-    {windDownReminder && <WindDownPopup daysUntil={windDownReminder.daysUntil} q={q} />}
+    {/* high-alert popups (once/day, post-unlock): wind-down window (family) + a member's
+        own credit-card bill due within 3 days (shown in family view too, amount-free). */}
+    {windDownReminder && <WindDownPopup daysUntil={windDownReminder.daysUntil} day={windDownReminder.day} q={q} />}
+    <CardDueHighAlert context="family" />
 
     {/* big thumb-reachable "Add Spend" button on mobile (the easy daily action) */}
     {periodOpen && periodId && (

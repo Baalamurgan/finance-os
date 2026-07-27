@@ -60,55 +60,122 @@ export async function ensurePersonalMonth(memberId: number, now = new Date()) {
   const existing = await prisma.personalPeriod.findUnique({
     where: { memberId_year_month: { memberId, year, month } },
   });
-  if (existing) return existing;
+  // A real (open/closed) month already there → done. A DRAFT for this month → promote it
+  // below (the preview becomes the live month, keeping its edited salary + predicted lines).
+  if (existing && existing.status !== "draft") return existing;
 
+  // Drafts (next-month previews) are excluded from "latest" so they never drive carry/clone.
   const latest = await prisma.personalPeriod.findFirst({
-    where: { memberId },
+    where: { memberId, status: { not: "draft" } },
     orderBy: [{ year: "desc" }, { month: "desc" }],
   });
 
   // wind-down: the previous month's cash Remaining carries into the new month. Uses the
   // shared helper so CC-tagged spends are deferred (not counted) and card bills paid that
   // month ARE deducted — exactly matching what the Sheet/Expenses show.
-  let carryForward = 0;
-  if (latest) {
-    carryForward = (await getPersonalCash(latest)).remaining;
-  }
+  const carryForward = latest ? (await getPersonalCash(latest)).remaining : 0;
 
   return prisma.$transaction(async (tx) => {
-    const p = await tx.personalPeriod.create({
-      data: {
-        memberId,
-        year,
-        month,
-        label: personalMonthLabel(month, year),
-        income: latest?.income ?? 0,
-        carryForward,
-      },
-    });
-    if (latest) {
-      const recurring = await tx.personalExpense.findMany({
-        where: { periodId: latest.id, recurring: true },
+    let p;
+    if (existing) {
+      // promote the draft → open, with the real carry recomputed (its lines/salary stay)
+      p = await tx.personalPeriod.update({
+        where: { id: existing.id },
+        data: { status: "open", carryForward },
       });
-      for (const e of recurring) {
-        await tx.personalExpense.create({
-          data: {
-            memberId,
-            periodId: p.id,
-            label: e.label,
-            categoryId: e.categoryId,
-            amount: e.amount,
-            note: e.note,
-            recurring: true,
-            cardAccountId: e.cardAccountId, // a subscription on a card stays on the card
-          },
+    } else {
+      p = await tx.personalPeriod.create({
+        data: {
+          memberId,
+          year,
+          month,
+          label: personalMonthLabel(month, year),
+          income: latest?.income ?? 0,
+          carryForward,
+        },
+      });
+      if (latest) {
+        const recurring = await tx.personalExpense.findMany({
+          where: { periodId: latest.id, recurring: true },
         });
+        for (const e of recurring) {
+          await tx.personalExpense.create({
+            data: {
+              memberId,
+              periodId: p.id,
+              label: e.label,
+              categoryId: e.categoryId,
+              amount: e.amount,
+              note: e.note,
+              recurring: true,
+              cardAccountId: e.cardAccountId, // a subscription on a card stays on the card
+            },
+          });
+        }
       }
+    }
+    if (latest) {
       await tx.personalPeriod.update({
         where: { id: latest.id },
         data: { status: "closed", closedAt: new Date() },
       });
     }
     return p;
+  });
+}
+
+// The next calendar month after (year, month).
+function nextPersonalMonth(year: number, month: number) {
+  return month === 12 ? { year: year + 1, month: 1 } : { year, month: month + 1 };
+}
+
+// Create (or return) a next-month PREVIEW draft for the member: a PersonalPeriod with
+// status "draft", seeded from the latest real month — same recurring fixed lines, the same
+// salary (editable), and an ESTIMATED carry = this month's current Remaining. It's editable
+// like any month and is promoted to the live month automatically when it arrives.
+export async function ensurePersonalPreview(memberId: number) {
+  const latest = await prisma.personalPeriod.findFirst({
+    where: { memberId, status: { not: "draft" } },
+    orderBy: [{ year: "desc" }, { month: "desc" }],
+  });
+  if (!latest) return null; // nothing to base a preview on yet
+  const { year, month } = nextPersonalMonth(latest.year, latest.month);
+  const already = await prisma.personalPeriod.findUnique({ where: { memberId_year_month: { memberId, year, month } } });
+  if (already) return already;
+  const carryForward = (await getPersonalCash(latest)).remaining;
+  return prisma.$transaction(async (tx) => {
+    const p = await tx.personalPeriod.create({
+      data: { memberId, year, month, label: personalMonthLabel(month, year), status: "draft", income: latest.income, carryForward },
+    });
+    const recurring = await tx.personalExpense.findMany({ where: { periodId: latest.id, recurring: true } });
+    for (const e of recurring) {
+      await tx.personalExpense.create({
+        data: { memberId, periodId: p.id, label: e.label, categoryId: e.categoryId, amount: e.amount, note: e.note, recurring: true, cardAccountId: e.cardAccountId },
+      });
+    }
+    return p;
+  });
+}
+
+// Re-seed a draft from the latest real month (drops generated recurring lines + refreshes
+// the estimate), keeping any hand-added predicted spends/incomes. Returns the draft id.
+export async function rebuildPersonalPreview(memberId: number, draftId: number) {
+  const draft = await prisma.personalPeriod.findUnique({ where: { id: draftId } });
+  if (!draft || draft.memberId !== memberId || draft.status !== "draft") return;
+  const latest = await prisma.personalPeriod.findFirst({
+    where: { memberId, status: { not: "draft" } },
+    orderBy: [{ year: "desc" }, { month: "desc" }],
+  });
+  if (!latest) return;
+  const carryForward = (await getPersonalCash(latest)).remaining;
+  await prisma.$transaction(async (tx) => {
+    await tx.personalExpense.deleteMany({ where: { periodId: draftId, recurring: true } });
+    const recurring = await tx.personalExpense.findMany({ where: { periodId: latest.id, recurring: true } });
+    for (const e of recurring) {
+      await tx.personalExpense.create({
+        data: { memberId, periodId: draftId, label: e.label, categoryId: e.categoryId, amount: e.amount, note: e.note, recurring: true, cardAccountId: e.cardAccountId },
+      });
+    }
+    await tx.personalPeriod.update({ where: { id: draftId }, data: { income: latest.income, carryForward } });
   });
 }

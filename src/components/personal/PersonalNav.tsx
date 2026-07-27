@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { exitToFamily } from "@/app/personal/lock/actions";
+import { CardDueHighAlert } from "@/components/personal/CardDueHighAlert";
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
@@ -39,6 +40,8 @@ export function PersonalNav({
   for (let yr = curYear; yr >= 2000; yr--) years.push(yr);
 
   return (
+    <>
+    <CardDueHighAlert context="personal" />
     <header className="sticky top-0 z-40 border-b border-emerald-100 bg-emerald-50/90 backdrop-blur">
       <div className="mx-auto flex max-w-3xl flex-wrap items-center gap-x-3 gap-y-2 px-4 py-3 sm:px-6">
         <div className="mr-2">
@@ -125,5 +128,6 @@ export function PersonalNav({
         ))}
       </nav>
     </header>
+    </>
   );
 }

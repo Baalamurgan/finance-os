@@ -5,7 +5,21 @@ import { redirect } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { auth } from "@/auth";
 import { parseAmount } from "@/lib/format";
-import { ensurePersonalMonth, seedPersonalCategories } from "@/lib/personal";
+import { ensurePersonalMonth, ensurePersonalPreview, rebuildPersonalPreview, seedPersonalCategories } from "@/lib/personal";
+import { getCardBillReminders } from "@/lib/personal/cash";
+
+// The "high alert" CC dues for the signed-in member: bills due within 3 days (or overdue).
+// Used by the after-unlock popup in BOTH family and personal views (a member's own cards).
+// Deliberately amount-free — full detail lives behind the personal PIN.
+export type CardHighAlert = { cardName: string; dueISO: string; daysUntilDue: number; overdue: boolean };
+export async function getMyCardHighAlerts(): Promise<CardHighAlert[]> {
+  const member = await me();
+  if (!member) return [];
+  const reminders = await getCardBillReminders(member.id);
+  return reminders
+    .filter((r) => r.daysUntilDue <= 3)
+    .map((r) => ({ cardName: r.cardName, dueISO: r.dueISO, daysUntilDue: r.daysUntilDue, overdue: r.overdue }));
+}
 
 async function me() {
   const session = await auth();
@@ -185,8 +199,38 @@ export async function addPersonalSpend(
   if (!(await ownsPeriod(member.id, periodId))) return { ok: false, error: "Not your month.", n };
   const cat = await prisma.personalCategory.findUnique({ where: { id: categoryId } });
   if (!cat || cat.memberId !== member.id) return { ok: false, error: "Unknown category.", n };
-  const cardAccountId = await ccCardId(member.id, formData);
-  await prisma.personalSpend.create({ data: { memberId: member.id, periodId, categoryId, amount, note, cardAccountId } });
+  // Shared spend (GPay-style): the full "amount" is logged as the spend (optionally on a
+  // card, deferred as usual); each other person's share becomes its own lent receivable
+  // that posts back as income when received. "myShare" is what's left for you.
+  const shared = formData.get("shared") === "on";
+  const cardAccountId = await ccCardId(member.id, formData); // CC + shared allowed
+  let splits: { name: string; amount: number }[] = [];
+  let myShare = 0;
+  if (shared) {
+    try {
+      const raw = JSON.parse(String(formData.get("splits") ?? "[]"));
+      if (Array.isArray(raw)) {
+        splits = raw
+          .map((s) => ({ name: String(s?.name ?? "").trim(), amount: Math.round((Number(s?.amount) || 0) * 100) / 100 }))
+          .filter((s) => s.name && s.amount > 0);
+      }
+    } catch { splits = []; }
+    const othersSum = splits.reduce((t, s) => t + s.amount, 0);
+    myShare = Math.round((amount - othersSum) * 100) / 100;
+    if (splits.length === 0 || othersSum > amount + 0.01 || myShare < -0.01)
+      return { ok: false, error: "Check the split — the shares must add up to what you paid.", n };
+  }
+  await prisma.$transaction(async (tx) => {
+    await tx.personalSpend.create({ data: { memberId: member.id, periodId, categoryId, amount, note, cardAccountId } });
+    for (const s of splits) {
+      await tx.personalLoan.create({
+        data: {
+          memberId: member.id, direction: "lent", counterparty: s.name,
+          amount: s.amount, outstanding: s.amount, note, sharedPaid: amount, sharedShare: myShare,
+        },
+      });
+    }
+  });
   rev();
   return { ok: true, n };
 }
@@ -229,6 +273,7 @@ export async function markCardBillPaid(formData: FormData) {
   const cardAccountId = Number(formData.get("cardAccountId"));
   const cycleEndISO = String(formData.get("cycleEnd") ?? "");
   const amount = parseAmount(formData.get("amount"));
+  const cycleTotal = parseAmount(formData.get("cycleTotal")); // tagged total for the cycle (for cashback)
   if (!cardAccountId || !cycleEndISO || !amount || amount <= 0) return;
   const card = await prisma.financeAccount.findUnique({ where: { id: cardAccountId }, select: { memberId: true, type: true } });
   if (!card || card.memberId !== member.id || card.type !== "credit_card") return;
@@ -236,10 +281,32 @@ export async function markCardBillPaid(formData: FormData) {
   if (isNaN(cycleEnd.getTime())) return;
   // The payment leaves cash in the CURRENT open personal month.
   const period = await ensurePersonalMonth(member.id);
-  await prisma.personalCardBill.upsert({
-    where: { cardAccountId_cycleEnd: { cardAccountId, cycleEnd } },
-    create: { memberId: member.id, cardAccountId, cycleEnd, paidPeriodId: period.id, amount },
-    update: { amount, paidPeriodId: period.id, paidAt: new Date() },
+  // Paid less than the tagged total → the difference is a saving/cashback on that card.
+  // Record it as a cashback transaction (marked by category so undo can reverse it).
+  const cashbackMarker = `__billcashback__:${cycleEnd.toISOString()}`;
+  const cashback = cycleTotal && cycleTotal > amount ? Math.round((cycleTotal - amount) * 100) / 100 : 0;
+  await prisma.$transaction(async (tx) => {
+    await tx.personalCardBill.upsert({
+      where: { cardAccountId_cycleEnd: { cardAccountId, cycleEnd } },
+      create: { memberId: member.id, cardAccountId, cycleEnd, paidPeriodId: period.id, amount },
+      update: { amount, paidPeriodId: period.id, paidAt: new Date() },
+    });
+    // replace any prior cashback for this cycle (e.g. re-marking with a different amount)
+    await tx.accountTransaction.deleteMany({ where: { accountId: cardAccountId, category: cashbackMarker } });
+    if (cashback > 0) {
+      await tx.accountTransaction.create({
+        data: {
+          memberId: member.id,
+          accountId: cardAccountId,
+          date: new Date(),
+          merchant: "Bill savings / cashback",
+          amount: cashback,
+          type: "cashback",
+          category: cashbackMarker,
+          source: "manual",
+        },
+      });
+    }
   });
   rev();
 }
@@ -250,7 +317,11 @@ export async function unmarkCardBillPaid(formData: FormData) {
   const id = Number(formData.get("id"));
   const bill = await prisma.personalCardBill.findUnique({ where: { id } });
   if (!bill || bill.memberId !== member.id) return;
-  await prisma.personalCardBill.delete({ where: { id } });
+  const cashbackMarker = `__billcashback__:${bill.cycleEnd.toISOString()}`;
+  await prisma.$transaction([
+    prisma.accountTransaction.deleteMany({ where: { accountId: bill.cardAccountId, category: cashbackMarker } }),
+    prisma.personalCardBill.delete({ where: { id } }),
+  ]);
   rev();
 }
 
@@ -286,6 +357,34 @@ export async function withdrawPersonalSavings(formData: FormData) {
     prisma.personalIncome.create({ data: { memberId: member.id, periodId, source: `From Savings: ${note}`, amount } }),
   ]);
   rev();
+}
+
+// ── Next-month preview (personal draft) ──────────────────────────────────────
+export async function createPersonalPreview() {
+  const member = await me();
+  if (!member) return;
+  const draft = await ensurePersonalPreview(member.id);
+  rev();
+  if (draft) redirect(`/personal/sheet?y=${draft.year}&m=${draft.month}`);
+}
+
+export async function rebuildPersonalPreviewAction(formData: FormData) {
+  const member = await me();
+  if (!member) return;
+  const id = Number(formData.get("periodId"));
+  await rebuildPersonalPreview(member.id, id);
+  rev();
+}
+
+export async function discardPersonalPreview(formData: FormData) {
+  const member = await me();
+  if (!member) return;
+  const id = Number(formData.get("periodId"));
+  const draft = await prisma.personalPeriod.findUnique({ where: { id } });
+  if (!draft || draft.memberId !== member.id || draft.status !== "draft") return;
+  await prisma.personalPeriod.delete({ where: { id } });
+  rev();
+  redirect("/personal/sheet");
 }
 
 // ── Categories (spend categories — managed in the Expenses tab) ──────────────
@@ -346,11 +445,17 @@ export async function recordPersonalLoanPayment(formData: FormData) {
   const pay = parseAmount(formData.get("amount"));
   const loan = await prisma.personalLoan.findUnique({ where: { id } });
   if (!loan || loan.memberId !== member.id || !pay || pay <= 0) return;
+  const received = Math.min(pay, loan.outstanding);
   const outstanding = Math.max(0, loan.outstanding - pay);
   await prisma.personalLoan.update({
     where: { id },
     data: { outstanding, status: outstanding <= 0.005 ? "settled" : "open" },
   });
+  // A shared-spend receivable (sharedPaid set): the full spend already reduced this month,
+  // so the money coming back posts as income to the current month, recovering remaining.
+  if (loan.sharedPaid != null && loan.direction === "lent" && received > 0) {
+    await recoverSharedSpend(member.id, received, loan.counterparty);
+  }
   rev();
 }
 
@@ -360,8 +465,20 @@ export async function settlePersonalLoan(formData: FormData) {
   const id = Number(formData.get("id"));
   const loan = await prisma.personalLoan.findUnique({ where: { id } });
   if (!loan || loan.memberId !== member.id) return;
+  const received = loan.outstanding;
   await prisma.personalLoan.update({ where: { id }, data: { outstanding: 0, status: "settled" } });
+  if (loan.sharedPaid != null && loan.direction === "lent" && received > 0) {
+    await recoverSharedSpend(member.id, received, loan.counterparty);
+  }
   rev();
+}
+
+// Post a received shared-spend amount back as income to the member's current open month.
+async function recoverSharedSpend(memberId: number, amount: number, from: string) {
+  const period = await ensurePersonalMonth(memberId);
+  await prisma.personalIncome.create({
+    data: { memberId, periodId: period.id, source: `Shared spend repaid${from ? ` by ${from}` : ""}`, amount: Math.round(amount * 100) / 100 },
+  });
 }
 
 export async function deletePersonalLoan(formData: FormData) {

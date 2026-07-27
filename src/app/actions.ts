@@ -1434,13 +1434,6 @@ async function addEstimatedCarry(
       await tx.expenseEntry.create({
         data: { periodId: targetId, categoryId: c.id, label: `${c.name} over-budget (from ${source.label})`, amount: -rem, necessary: true, oneOff: true, note: CARRY_NOTE },
       });
-      // trim the draft's spend envelope by the overspend (idempotent set; generateMonth
-      // ran first, so the Budget exists at monthlyBudget)
-      const base = c.monthlyBudget ?? b;
-      await tx.budget.updateMany({
-        where: { periodId: targetId, categoryId: c.id },
-        data: { planned: Math.max(0, Math.round((base + rem) * 100) / 100) },
-      });
     } else {
       // misc (no budget) → carry EACH spend as its own line, tagged to whoever spent
       // it (display only; excluded from settlement — the spend already credits them)
@@ -1816,8 +1809,6 @@ export async function windDownMonth(formData: FormData) {
   let leftoverIncome = 0; // under-budget leftovers routed to next month's income (opt-in)
   // over-budget excess + misc spends are carried into NEXT month as one-off expenses
   const carryToNext: { categoryId: number; amount: number; label: string; memberId?: number | null }[] = [];
-  // over-budget amount per category → trims NEXT month's spend envelope (Budget.planned)
-  const overspendByCat = new Map<number, number>();
 
   const nextMonth = period.month === 12 ? 1 : period.month + 1;
   const nextYear = period.month === 12 ? period.year + 1 : period.year;
@@ -1865,14 +1856,13 @@ export async function windDownMonth(formData: FormData) {
             movedToPiggy += remainder;
           }
         } else {
-          // over budget → carry the excess into next month as a one-off expense (keeps
-          // the running balance honest) AND trim next month's spend envelope by the same.
+          // over budget → carry the excess into next month as a one-off expense line
+          // (keeps the running balance honest; rebuild-safe via CARRY_NOTE).
           carryToNext.push({
             categoryId: cat.id,
             amount: -remainder,
             label: `${cat.name} over-budget (from ${period.label})`,
           });
-          overspendByCat.set(cat.id, -remainder);
         }
       } else if (spent > 0) {
         // tracked, no budget = Misc → carry EACH spend as its own line ("JUL · <spend>")
@@ -1960,16 +1950,6 @@ export async function windDownMonth(formData: FormData) {
           oneOff: true,
           note: CARRY_NOTE,
         },
-      });
-    }
-
-    // Trim next month's spend envelope by the overspend: set planned = monthlyBudget −
-    // overspend (idempotent — safe even if next month was a promoted draft already trimmed).
-    for (const [catId, overspend] of overspendByCat) {
-      const base = trackedCats.find((c) => c.id === catId)?.monthlyBudget ?? budgetOf(catId);
-      await tx.budget.updateMany({
-        where: { periodId: next.id, categoryId: catId },
-        data: { planned: Math.max(0, Math.round((base - overspend) * 100) / 100) },
       });
     }
 

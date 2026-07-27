@@ -270,6 +270,11 @@ model PersonalLoan {
   outstanding  Float
   note         String?
   status       String   @default("open") // open | settled
+  // Shared-spend receivable: created when a spend is split ("I paid X, my share Y"). The
+  // full X was logged as the spend, so receiving the owed part (X−Y) posts back as income.
+  // sharedPaid != null marks such a loan (manual lends leave these null).
+  sharedPaid   Float?   // the full amount paid on the shared spend
+  sharedShare  Float?   // the member's own share of it
   createdAt    DateTime @default(now())
 }
 

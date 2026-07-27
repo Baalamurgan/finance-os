@@ -41,7 +41,9 @@ export default async function PersonalExpenses({
     getCardDues(c.member.id),
     prisma.personalSpend.findMany({ where: { periodId: period.id }, orderBy: [{ date: "desc" }, { id: "desc" }] }),
   ]);
-  const { personalExpense, spentFromCash, remaining } = cash;
+  const { personalExpense, spentFromCash, spentInclCards, remaining } = cash;
+  const unpaidCardDues = cardDues.reduce((s, d) => s + d.unpaidTotal, 0);
+  const remainingAfterCards = remaining - unpaidCardDues;
 
   // The category donut reflects CASH spends only (CC spends are deferred and shown in the
   // "on card, unpaid" strip instead), so it reconciles with "Spent" above.
@@ -80,11 +82,18 @@ export default async function PersonalExpenses({
           <div className="rounded-xl border border-slate-200 bg-white p-4">
             <div className="text-[11px] font-medium uppercase tracking-wide text-slate-400">Spent</div>
             <div className="mt-1 text-xl font-bold text-slate-800">{formatINR(spentFromCash)}</div>
-            <div className="text-[10px] text-slate-400">from cash (card spends deferred)</div>
+            <div className="text-[10px] text-slate-400">
+              from cash{unpaidCardDues > 0 ? ` · ${formatINR(spentInclCards)} incl. cards` : " (card spends deferred)"}
+            </div>
           </div>
           <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4">
             <div className="text-[11px] font-medium uppercase tracking-wide text-emerald-700">Remaining</div>
             <div className={`mt-1 text-xl font-bold ${remaining >= 0 ? "text-emerald-800" : "text-red-600"}`}>{formatINR(remaining)}</div>
+            {unpaidCardDues > 0 && (
+              <div className={`text-[10px] font-medium ${remainingAfterCards < 0 ? "text-red-600" : "text-emerald-700/80"}`}>
+                {remainingAfterCards >= 0 ? `${formatINR(remainingAfterCards)} after cards` : `short ${formatINR(-remainingAfterCards)} after cards`}
+              </div>
+            )}
           </div>
         </div>
 

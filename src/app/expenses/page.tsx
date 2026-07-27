@@ -1,5 +1,4 @@
 import { formatINR } from "@/lib/format";
-import { prisma } from "@/lib/prisma";
 import { loadCommon } from "@/lib/load";
 import { getTrackedExpenses, getMiscReview } from "@/lib/queries";
 import { NavHeader } from "@/components/NavHeader";
@@ -77,16 +76,6 @@ export default async function ExpensesPage({
   const cards = rawCards.map((card) => ({ ...card, spends: orderSpends(card.spends) }));
   const budgetedCards = cards.filter((card) => card.allocation > 0);
   const miscCards = cards.filter((card) => card.allocation === 0);
-
-  // This month's envelopes were trimmed by last month's overspend (the carry lines,
-  // note "__carry__"). Map categoryId → trimmed amount so each card can show why its
-  // budget is smaller ("− ₹X last month's overspend").
-  const carryTrims = await prisma.expenseEntry.groupBy({
-    by: ["categoryId"],
-    where: { periodId: c.selected.id, note: "__carry__", label: { contains: "over-budget" } },
-    _sum: { amount: true },
-  });
-  const trimByCat = new Map<number, number>(carryTrims.map((t) => [t.categoryId, t._sum.amount ?? 0]));
   const open = c.selected.status === "open";
   // Head-only tidy-up: misc spends that look like a tracked category (open month only).
   const miscReview = c.isHead && open ? await getMiscReview(c.household.id, c.selected.id) : [];
@@ -152,7 +141,6 @@ export default async function ExpensesPage({
               isHead={c.isHead}
               members={c.members}
               currentMemberId={c.currentMember?.id}
-              trimmed={trimByCat.get(card.id) ?? 0}
             />
           ))}
         </div>
@@ -204,7 +192,6 @@ function SpendCard({
   isHead,
   members,
   currentMemberId,
-  trimmed = 0,
 }: {
   card: SpendCardData;
   open: boolean;
@@ -212,7 +199,6 @@ function SpendCard({
   isHead: boolean;
   members: { id: number; name: string }[];
   currentMemberId?: number | null;
-  trimmed?: number; // this month's envelope was reduced by last month's overspend
 }) {
   const pct = card.allocation > 0 ? Math.min((card.spent / card.allocation) * 100, 100) : 0;
   const owner = card.responsibleMemberId != null ? members.find((m) => m.id === card.responsibleMemberId)?.name ?? null : null;
@@ -300,12 +286,6 @@ function SpendCard({
               />
               <div className="absolute inset-y-0 right-0 bg-slate-100" style={{ width: `${100 - pct}%` }} />
             </div>
-            {trimmed > 0 && (
-              <div className="mt-1.5 flex items-center justify-between rounded-md bg-amber-50 px-2 py-1 text-[11px]">
-                <span className="text-slate-500">Budget {formatINR(card.allocation + trimmed)}</span>
-                <span className="font-medium text-amber-700">− {formatINR(trimmed)} last month&apos;s overspend</span>
-              </div>
-            )}
           </>
         ) : (
           <div className="flex items-center justify-between text-sm">

@@ -74,7 +74,7 @@ function LoanList({
   accent,
 }: {
   title: string;
-  loans: { id: number; counterparty: string; amount: number; outstanding: number; note: string | null; status: string }[];
+  loans: { id: number; counterparty: string; amount: number; outstanding: number; note: string | null; status: string; sharedPaid: number | null; sharedShare: number | null }[];
   accent: "emerald" | "amber";
 }) {
   const amountColor = accent === "emerald" ? "text-emerald-700" : "text-amber-700";
@@ -94,16 +94,21 @@ function LoanList({
                 </span>
               </div>
               {l.note && <div className="text-xs text-slate-400">{l.note}</div>}
+              {l.sharedPaid != null && (
+                <div className="mt-0.5 inline-flex flex-wrap items-center gap-1.5 rounded-md bg-emerald-50 px-2 py-0.5 text-[11px] text-emerald-700">
+                  🤝 Shared spend · you paid {formatINR(l.sharedPaid)} · your share {formatINR(l.sharedShare ?? 0)}
+                </div>
+              )}
               {l.status === "open" && (
                 <div className="mt-1.5 flex items-center gap-2">
                   <form action={recordPersonalLoanPayment} className="flex items-center gap-1">
                     <input type="hidden" name="id" value={l.id} />
-                    <input name="amount" type="number" step="0.01" placeholder="₹ paid" className="input w-24 py-1 text-xs" />
+                    <input name="amount" type="number" step="0.01" placeholder="₹ recd" className="input w-24 py-1 text-xs" />
                     <button className="rounded-md bg-slate-100 px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-200">Record</button>
                   </form>
                   <form action={settlePersonalLoan}>
                     <input type="hidden" name="id" value={l.id} />
-                    <button className="text-xs font-medium text-emerald-700">Settle</button>
+                    <button className="text-xs font-medium text-emerald-700">{l.sharedPaid != null ? "Mark received" : "Settle"}</button>
                   </form>
                   <form action={deletePersonalLoan}>
                     <input type="hidden" name="id" value={l.id} />

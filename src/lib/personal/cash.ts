@@ -19,6 +19,7 @@ export type PersonalCash = {
   cardBillsPaid: number; // card bills marked paid THIS period → real cash out
   personalExpense: number; // totalIn − fixedCash  (the "can spend" number)
   spentFromCash: number; // cashSpends + cardBillsPaid
+  spentInclCards: number; // cashSpends + cardSpends — all this month's spending, cash + card
   remaining: number; // personalExpense − spentFromCash
 };
 
@@ -52,8 +53,16 @@ export async function getPersonalCash(period: {
     cardBillsPaid,
     personalExpense,
     spentFromCash,
+    spentInclCards: cashSpends + cardSpends,
     remaining: personalExpense - spentFromCash,
   };
+}
+
+// The member's total unpaid credit-card obligation across ALL cycles (what you still owe
+// on cards, regardless of month). Pairs with `remaining` to show true spendable-after-cards.
+export async function getUnpaidCardDues(memberId: number): Promise<number> {
+  const dues = await getCardDues(memberId);
+  return dues.reduce((s, d) => s + d.unpaidTotal, 0);
 }
 
 // ── "On card, unpaid" — per credit card, the CC-tagged items grouped into billing cycles ──

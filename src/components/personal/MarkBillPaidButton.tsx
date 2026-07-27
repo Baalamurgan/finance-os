@@ -52,6 +52,7 @@ export function MarkBillPaidButton({
             <form action={markCardBillPaid} onSubmit={() => setTimeout(() => setOpen(false), 0)} className="space-y-4 px-5 py-5">
               <input type="hidden" name="cardAccountId" value={cardId} />
               <input type="hidden" name="cycleEnd" value={cycleEndISO} />
+              <input type="hidden" name="cycleTotal" value={cycleTotal} />
               <div>
                 <label className="text-sm font-medium text-slate-600">Amount paid (₹)</label>
                 <input
@@ -62,6 +63,11 @@ export function MarkBillPaidButton({
                 <p className="mt-1 text-[11px] text-slate-400">
                   Tagged total for this cycle: {formatINR(cycleTotal)}. Edit to match what you actually paid — this exact amount leaves your cash this month.
                 </p>
+                {amountNum > 0 && amountNum < cycleTotal && (
+                  <p className="mt-1 text-[11px] font-medium text-emerald-700">
+                    {formatINR(cycleTotal - amountNum)} saved → recorded as cashback on this card.
+                  </p>
+                )}
               </div>
               <div className="flex items-center gap-3 pt-1">
                 <button type="button" onClick={() => setOpen(false)} className="min-h-12 flex-1 rounded-xl border-2 border-slate-200 px-4 py-3 text-base font-medium text-slate-600">Cancel</button>
