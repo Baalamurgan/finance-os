@@ -71,8 +71,10 @@ function toEvent(e: GEvent): CalendarEvent {
   };
 }
 
-/** Today's + the next few days' events from the member's primary calendar. */
-export async function listUpcomingEvents(memberId: number, daysAhead = 7): Promise<CalendarEvent[]> {
+/** The member's events from the start of today through the next `daysAhead` days.
+ *  Defaults to TODAY ONLY (daysAhead=1) so a daily recurring routine shows a single
+ *  instance, not one per day — the dashboard is about "what matters right now". */
+export async function listUpcomingEvents(memberId: number, daysAhead = 1): Promise<CalendarEvent[]> {
   const token = await getGoogleAccessToken(memberId);
   if (!token) return [];
   const now = new Date();
