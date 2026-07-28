@@ -48,3 +48,6 @@ next-env.d.ts
 
 # local DB snapshots (may contain financial data)
 backups/
+
+# personal migration data (MS To Do export etc.) — never commit
+scripts/data/
