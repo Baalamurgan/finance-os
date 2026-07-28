@@ -133,6 +133,11 @@ model Member {
   personalPinLockedUntil   DateTime?
   personalWindDownDay      Int?
   personalOnboarded        Boolean   @default(false)
+  // Personal OS assistant (per-member, bring-your-own-key). The API key itself lives
+  // encrypted in Integration (provider=anthropic|openai, kind=apikey) — never here.
+  assistantName            String?   // editable wake/display name (default "Jarvis")
+  aiProvider               String?   // "anthropic" | "openai"
+  aiModel                  String?   // chosen model id for that provider
   incomes     IncomeEntry[]
   expenses    ExpenseEntry[]
   spends      Spend[]

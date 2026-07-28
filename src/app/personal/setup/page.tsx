@@ -138,6 +138,18 @@ export default async function PersonalSetup({
           </div>
           <span className="text-slate-300">→</span>
         </a>
+
+        {/* Personal OS: bring-your-own-key AI assistant. */}
+        <a
+          href="/personal/settings/assistant"
+          className="flex items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white p-4 hover:bg-slate-50"
+        >
+          <div>
+            <h2 className="text-sm font-semibold text-slate-900">Assistant</h2>
+            <p className="mt-0.5 text-xs text-slate-500">Bring your own AI key (Anthropic or OpenAI) for your daily briefing.</p>
+          </div>
+          <span className="text-slate-300">→</span>
+        </a>
       </main>
     </>
   );
