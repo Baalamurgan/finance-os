@@ -73,7 +73,7 @@ export async function ensurePersonalMonth(memberId: number, now = new Date()) {
   // wind-down: the previous month's cash Remaining carries into the new month. Uses the
   // shared helper so CC-tagged spends are deferred (not counted) and card bills paid that
   // month ARE deducted — exactly matching what the Sheet/Expenses show.
-  const carryForward = latest ? (await getPersonalCash(latest)).remaining : 0;
+  const carryForward = latest ? (await getPersonalCash(latest)).canSpend : 0;
 
   return prisma.$transaction(async (tx) => {
     let p;
@@ -142,7 +142,7 @@ export async function ensurePersonalPreview(memberId: number) {
   const { year, month } = nextPersonalMonth(latest.year, latest.month);
   const already = await prisma.personalPeriod.findUnique({ where: { memberId_year_month: { memberId, year, month } } });
   if (already) return already;
-  const carryForward = (await getPersonalCash(latest)).remaining;
+  const carryForward = (await getPersonalCash(latest)).canSpend;
   return prisma.$transaction(async (tx) => {
     const p = await tx.personalPeriod.create({
       data: { memberId, year, month, label: personalMonthLabel(month, year), status: "draft", income: latest.income, carryForward },
@@ -167,7 +167,7 @@ export async function rebuildPersonalPreview(memberId: number, draftId: number) 
     orderBy: [{ year: "desc" }, { month: "desc" }],
   });
   if (!latest) return;
-  const carryForward = (await getPersonalCash(latest)).remaining;
+  const carryForward = (await getPersonalCash(latest)).canSpend;
   await prisma.$transaction(async (tx) => {
     await tx.personalExpense.deleteMany({ where: { periodId: draftId, recurring: true } });
     const recurring = await tx.personalExpense.findMany({ where: { periodId: latest.id, recurring: true } });

@@ -18,9 +18,10 @@ export type PersonalCash = {
   fixedCard: number; // fixed Sheet lines on a card (still a committed bill → counts)
   cashSpends: number; // daily spends paid from cash
   cardSpends: number; // daily spends on a card (counted at spend time)
-  personalExpense: number; // totalIn − all fixed bills (the "can spend" number)
-  spent: number; // cashSpends + cardSpends — all this month's spending
-  remaining: number; // personalExpense − spent  (true, after cards)
+  personalExpense: number; // totalIn − all fixed bills (the month's total to spend = "Y")
+  grossSpent: number; // cashSpends + cardSpends — total money paid out as spends
+  netSpent: number; // grossSpent − others' shares of splits — what YOU actually consumed
+  canSpend: number; // personalExpense − netSpent  (the headline "left to spend")
 };
 
 export async function getPersonalCash(period: {
@@ -28,20 +29,23 @@ export async function getPersonalCash(period: {
   income: number;
   carryForward: number;
 }): Promise<PersonalCash> {
-  const [fixedCashAgg, fixedCardAgg, cashSpendAgg, cardSpendAgg, extraAgg] = await Promise.all([
+  const [fixedCashAgg, fixedCardAgg, cashSpendAgg, cardSpendAgg, extraAgg, sharedOthersAgg] = await Promise.all([
     prisma.personalExpense.aggregate({ where: { periodId: period.id, cardAccountId: null }, _sum: { amount: true } }),
     prisma.personalExpense.aggregate({ where: { periodId: period.id, cardAccountId: { not: null } }, _sum: { amount: true } }),
     prisma.personalSpend.aggregate({ where: { periodId: period.id, cardAccountId: null }, _sum: { amount: true } }),
     prisma.personalSpend.aggregate({ where: { periodId: period.id, cardAccountId: { not: null } }, _sum: { amount: true } }),
     prisma.personalIncome.aggregate({ where: { periodId: period.id }, _sum: { amount: true } }),
+    prisma.personalSpend.aggregate({ where: { periodId: period.id }, _sum: { sharedOthers: true } }),
   ]);
   const fixedCash = fixedCashAgg._sum.amount ?? 0;
   const fixedCard = fixedCardAgg._sum.amount ?? 0;
   const cashSpends = cashSpendAgg._sum.amount ?? 0;
   const cardSpends = cardSpendAgg._sum.amount ?? 0;
+  const sharedOthers = sharedOthersAgg._sum.sharedOthers ?? 0;
   const totalIn = period.income + period.carryForward + (extraAgg._sum.amount ?? 0);
   const personalExpense = totalIn - fixedCash - fixedCard;
-  const spent = cashSpends + cardSpends;
+  const grossSpent = cashSpends + cardSpends;
+  const netSpent = grossSpent - sharedOthers;
   return {
     totalIn,
     fixedCash,
@@ -49,9 +53,20 @@ export async function getPersonalCash(period: {
     cashSpends,
     cardSpends,
     personalExpense,
-    spent,
-    remaining: personalExpense - spent,
+    grossSpent,
+    netSpent,
+    canSpend: personalExpense - netSpent,
   };
+}
+
+// Money others owe the member (open lent loans) — both manual lends and shared-spend
+// receivables. Used to derive cash-in-hand (canSpend + card dues − owed).
+export async function getPersonalLending(memberId: number): Promise<{ owed: number }> {
+  const agg = await prisma.personalLoan.aggregate({
+    where: { memberId, direction: "lent", status: "open" },
+    _sum: { outstanding: true },
+  });
+  return { owed: agg._sum.outstanding ?? 0 };
 }
 
 // The member's total unpaid credit-card obligation across ALL cycles (what you still owe

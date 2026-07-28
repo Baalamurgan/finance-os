@@ -253,10 +253,13 @@ model PersonalSpend {
   amount     Float
   note       String?
   date       DateTime @default(now())
-  // Paid by a credit card → deferred from this month's cash (not counted in "Remaining");
-  // it settles when that card's bill is marked paid (PersonalCardBill). null = cash/UPI.
+  // Paid by a credit card → the cash leaves when that card's bill is paid, but the spend
+  // still counts against this month at spend time. null = cash/UPI.
   cardAccount   FinanceAccount? @relation("PersonalSpendCard", fields: [cardAccountId], references: [id], onDelete: SetNull)
   cardAccountId Int?
+  // Shared spend: `amount` is the FULL amount paid (so card dues stay correct); sharedOthers
+  // is the portion OTHERS owe, so your NET spend = amount − sharedOthers. null = not shared.
+  sharedOthers  Float?
   createdAt  DateTime @default(now())
 }
 

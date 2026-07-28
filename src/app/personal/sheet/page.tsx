@@ -2,7 +2,7 @@ import { formatINR } from "@/lib/format";
 import { prisma } from "@/lib/prisma";
 import { loadPersonal } from "@/lib/loadPersonal";
 import { personalMonthLabel, personalCycleRange } from "@/lib/personal";
-import { getPersonalCash, getUnpaidCardDues } from "@/lib/personal/cash";
+import { getPersonalCash, getUnpaidCardDues, getPersonalLending } from "@/lib/personal/cash";
 import { PersonalNav } from "@/components/personal/PersonalNav";
 import { PersonalFixedModal } from "@/components/personal/PersonalFixedModal";
 import { PersonalFixedRowActions } from "@/components/personal/PersonalFixedRowActions";
@@ -38,19 +38,22 @@ export default async function PersonalSheet({
   const catList = c.categories.map((cat) => ({ id: cat.id, name: cat.name, icon: cat.icon }));
   const cardMap = new Map(c.creditCards.map((cc) => [cc.id, cc]));
 
-  const [expenses, extraIncomes, cash, unpaidCardDues] = await Promise.all([
+  const [expenses, extraIncomes, cash, unpaidCardDues, lending] = await Promise.all([
     prisma.personalExpense.findMany({ where: { periodId: period.id }, orderBy: { amount: "desc" } }),
     prisma.personalIncome.findMany({ where: { periodId: period.id }, orderBy: { id: "desc" } }),
     getPersonalCash(period),
     getUnpaidCardDues(c.member.id),
+    getPersonalLending(c.member.id),
   ]);
   const monthlyExpenses = expenses.reduce((s, e) => s + e.amount, 0); // all fixed lines (display subtotal)
-  // Cash math from the shared helper: every spend (cash OR card) counts at spend time, so
-  // `remaining` is the true after-cards figure. Cash-in-hand = remaining + unpaid card dues
-  // (money still in your account until those bills are paid).
-  const { totalIn, personalExpense, spent: spentTotal, remaining } = cash;
-  const spentPct = personalExpense > 0 ? Math.min(100, (spentTotal / personalExpense) * 100) : 0;
-  const cashInHand = remaining + unpaidCardDues;
+  // Every spend counts at spend time. Three figures (see the money model):
+  //  Can spend  = personalExpense − your NET spend (splits net out others' shares)
+  //  In hand    = can spend + card dues − money owed to you (physical cash you hold)
+  //  Spent      = net spend (your share only)
+  const { totalIn, personalExpense, netSpent, canSpend } = cash;
+  const owed = lending.owed;
+  const inHand = canSpend + unpaidCardDues - owed;
+  const spentPct = personalExpense > 0 ? Math.min(100, (netSpent / personalExpense) * 100) : 0;
 
   // group monthly expenses by category (collapsible)
   const byCat = new Map<number, { total: number; items: typeof expenses }>();
@@ -167,22 +170,31 @@ export default async function PersonalSheet({
 
         {/* spendable progress (already spent) */}
         <div className="rounded-xl border border-slate-200 bg-white p-4">
-          <div className="flex items-baseline justify-between text-sm">
-            <span className="font-medium text-slate-700">Spent this month</span>
-            <span className="tabular-nums text-slate-500">
-              {formatINR(spentTotal)} of {formatINR(Math.max(0, personalExpense))}
+          {/* Can spend = the headline: what's left of your month's budget (X of Y) */}
+          <div className="flex items-baseline justify-between">
+            <span className="text-sm font-medium text-slate-700">Can spend</span>
+            <span className="text-sm tabular-nums text-slate-400">
+              <b className={`text-lg ${canSpend < 0 ? "text-red-600" : "text-emerald-700"}`}>{formatINR(canSpend)}</b> of {formatINR(Math.max(0, personalExpense))}
             </span>
           </div>
           <div className="mt-2 h-2.5 overflow-hidden rounded-full bg-slate-100">
-            <div className={`h-full rounded-full ${spentTotal > personalExpense ? "bg-red-500" : "bg-emerald-500"}`} style={{ width: `${spentPct}%` }} />
+            <div className={`h-full rounded-full ${netSpent > personalExpense ? "bg-red-500" : "bg-emerald-500"}`} style={{ width: `${spentPct}%` }} />
           </div>
-          {/* after-cards remaining is the primary figure; cash-in-hand is the small aside */}
-          <div className={`mt-2 text-2xl font-bold tabular-nums ${remaining < 0 ? "text-red-600" : "text-emerald-700"}`}>
-            {remaining >= 0 ? `${formatINR(remaining)} left to spend` : `Over by ${formatINR(-remaining)}`}
+          <div className="mt-2 grid grid-cols-2 gap-3 border-t border-slate-100 pt-2 text-sm">
+            <div>
+              <div className="text-[11px] uppercase tracking-wide text-slate-400">In hand</div>
+              <div className={`font-bold tabular-nums ${inHand < 0 ? "text-red-600" : "text-slate-800"}`}>{formatINR(inHand)}</div>
+            </div>
+            <div>
+              <div className="text-[11px] uppercase tracking-wide text-slate-400">Spent (your share)</div>
+              <div className="font-bold tabular-nums text-slate-800">{formatINR(netSpent)}</div>
+            </div>
           </div>
-          {unpaidCardDues > 0 && (
-            <div className="mt-0.5 text-xs text-slate-400">
-              {formatINR(cashInHand)} in hand · {formatINR(unpaidCardDues)} still owed on cards
+          {(unpaidCardDues > 0 || owed > 0) && (
+            <div className="mt-1.5 text-[11px] text-slate-400">
+              {unpaidCardDues > 0 && <>{formatINR(unpaidCardDues)} owed on cards</>}
+              {unpaidCardDues > 0 && owed > 0 && " · "}
+              {owed > 0 && <>{formatINR(owed)} owed to you (lent)</>}
             </div>
           )}
         </div>
@@ -247,7 +259,7 @@ export default async function PersonalSheet({
         <p className="text-center text-xs text-slate-400">Daily spends live in the <b>Expenses</b> tab and draw down your personal expense.</p>
       </main>
 
-      <PersonalSpendFab periodId={period.id} categories={catList} cards={c.creditCards} remaining={remaining} />
+      <PersonalSpendFab periodId={period.id} categories={catList} cards={c.creditCards} remaining={canSpend} />
     </>
   );
 }

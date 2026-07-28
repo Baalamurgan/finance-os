@@ -220,8 +220,9 @@ export async function addPersonalSpend(
     if (splits.length === 0 || othersSum > amount + 0.01 || myShare < -0.01)
       return { ok: false, error: "Check the split — the shares must add up to what you paid.", n };
   }
+  const sharedOthers = shared ? Math.round((amount - myShare) * 100) / 100 : null; // others' total share
   await prisma.$transaction(async (tx) => {
-    await tx.personalSpend.create({ data: { memberId: member.id, periodId, categoryId, amount, note, cardAccountId } });
+    await tx.personalSpend.create({ data: { memberId: member.id, periodId, categoryId, amount, note, cardAccountId, sharedOthers } });
     for (const s of splits) {
       await tx.personalLoan.create({
         data: {
@@ -445,17 +446,13 @@ export async function recordPersonalLoanPayment(formData: FormData) {
   const pay = parseAmount(formData.get("amount"));
   const loan = await prisma.personalLoan.findUnique({ where: { id } });
   if (!loan || loan.memberId !== member.id || !pay || pay <= 0) return;
-  const received = Math.min(pay, loan.outstanding);
   const outstanding = Math.max(0, loan.outstanding - pay);
+  // Receiving a repayment (manual OR shared) just settles the loan — it restores your
+  // cash-in-hand (which excludes what's owed to you); "Can spend" already assumed it.
   await prisma.personalLoan.update({
     where: { id },
     data: { outstanding, status: outstanding <= 0.005 ? "settled" : "open" },
   });
-  // A shared-spend receivable (sharedPaid set): the full spend already reduced this month,
-  // so the money coming back posts as income to the current month, recovering remaining.
-  if (loan.sharedPaid != null && loan.direction === "lent" && received > 0) {
-    await recoverSharedSpend(member.id, received, loan.counterparty);
-  }
   rev();
 }
 
@@ -465,20 +462,8 @@ export async function settlePersonalLoan(formData: FormData) {
   const id = Number(formData.get("id"));
   const loan = await prisma.personalLoan.findUnique({ where: { id } });
   if (!loan || loan.memberId !== member.id) return;
-  const received = loan.outstanding;
   await prisma.personalLoan.update({ where: { id }, data: { outstanding: 0, status: "settled" } });
-  if (loan.sharedPaid != null && loan.direction === "lent" && received > 0) {
-    await recoverSharedSpend(member.id, received, loan.counterparty);
-  }
   rev();
-}
-
-// Post a received shared-spend amount back as income to the member's current open month.
-async function recoverSharedSpend(memberId: number, amount: number, from: string) {
-  const period = await ensurePersonalMonth(memberId);
-  await prisma.personalIncome.create({
-    data: { memberId, periodId: period.id, source: `Shared spend repaid${from ? ` by ${from}` : ""}`, amount: Math.round(amount * 100) / 100 },
-  });
 }
 
 export async function deletePersonalLoan(formData: FormData) {

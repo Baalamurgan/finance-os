@@ -8,7 +8,7 @@ import { PersonalSpendsView } from "@/components/personal/PersonalSpendsView";
 import { PersonalEmpty } from "@/components/personal/PersonalEmpty";
 import { CardDuesStrip } from "@/components/personal/CardDuesStrip";
 import { CardBillReminderBanner } from "@/components/personal/CardBillReminderBanner";
-import { getPersonalCash, getCardDues } from "@/lib/personal/cash";
+import { getPersonalCash, getCardDues, getPersonalLending } from "@/lib/personal/cash";
 import { MoneyFlowDonut } from "@/components/Charts";
 import { addPersonalCategory, archivePersonalCategory } from "@/app/personal/actions";
 
@@ -36,22 +36,24 @@ export default async function PersonalExpenses({
   const cats = new Map(c.categories.map((cat) => [cat.id, cat]));
   const catList = c.categories.map((cat) => ({ id: cat.id, name: cat.name, icon: cat.icon }));
 
-  const [cash, cardDues, spends] = await Promise.all([
+  const [cash, cardDues, spends, lending] = await Promise.all([
     getPersonalCash(period),
     getCardDues(c.member.id),
     prisma.personalSpend.findMany({ where: { periodId: period.id }, orderBy: [{ date: "desc" }, { id: "desc" }] }),
+    getPersonalLending(c.member.id),
   ]);
-  const { personalExpense, spent, remaining } = cash;
+  const { personalExpense, netSpent, canSpend } = cash;
   const unpaidCardDues = cardDues.reduce((s, d) => s + d.unpaidTotal, 0);
-  const cashInHand = remaining + unpaidCardDues; // still in your account until cards are paid
+  const owed = lending.owed;
+  const inHand = canSpend + unpaidCardDues - owed; // physical cash: what's yours minus what you're owed
 
-  // The category donut reflects ALL spends (cash + card) — card spends count at spend time.
+  // The category donut reflects your NET spend (your share of splits) — the exact spend you did.
   const byCat = new Map<number, number>();
-  for (const s of spends) byCat.set(s.categoryId, (byCat.get(s.categoryId) ?? 0) + s.amount);
-  const groups = [...byCat.entries()].map(([id, total]) => ({ cat: cats.get(id), total })).filter((g) => g.cat).sort((a, b) => b.total - a.total);
+  for (const s of spends) byCat.set(s.categoryId, (byCat.get(s.categoryId) ?? 0) + (s.amount - (s.sharedOthers ?? 0)));
+  const groups = [...byCat.entries()].map(([id, total]) => ({ cat: cats.get(id), total })).filter((g) => g.cat && g.total > 0).sort((a, b) => b.total - a.total);
   const segments = [
     ...groups.map((g, i) => ({ name: `${g.cat!.icon ?? ""} ${g.cat!.name}`.trim(), value: g.total, color: COLORS[i % COLORS.length] })),
-    ...(remaining > 0 ? [{ name: "Remaining", value: remaining, color: "#22c55e" }] : []),
+    ...(canSpend > 0 ? [{ name: "Can spend", value: canSpend, color: "#22c55e" }] : []),
   ].filter((s) => s.value > 0);
 
   const spendsForClient = spends.map((s) => ({
@@ -73,26 +75,24 @@ export default async function PersonalExpenses({
         <CardBillReminderBanner reminders={c.cardReminders} />
 
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+          <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4">
+            <div className="text-[11px] font-medium uppercase tracking-wide text-emerald-700">Can spend</div>
+            <div className={`mt-1 text-xl font-bold ${canSpend >= 0 ? "text-emerald-800" : "text-red-600"}`}>{formatINR(canSpend)}</div>
+            <div className="text-[10px] text-slate-500">of {formatINR(Math.max(0, personalExpense))} this month</div>
+          </div>
           <div className="rounded-xl border border-slate-200 bg-white p-4">
-            <div className="text-[11px] font-medium uppercase tracking-wide text-slate-400">Can spend</div>
-            <div className="mt-1 text-xl font-bold text-slate-800">{formatINR(personalExpense)}</div>
-            <div className="text-[10px] text-slate-400">personal expense this month</div>
+            <div className="text-[11px] font-medium uppercase tracking-wide text-slate-400">In hand</div>
+            <div className={`mt-1 text-xl font-bold ${inHand >= 0 ? "text-slate-800" : "text-red-600"}`}>{formatINR(inHand)}</div>
+            <div className="text-[10px] text-slate-400">
+              {unpaidCardDues > 0 || owed > 0
+                ? [unpaidCardDues > 0 ? `${formatINR(unpaidCardDues)} on cards` : null, owed > 0 ? `${formatINR(owed)} lent` : null].filter(Boolean).join(" · ")
+                : "cash you hold now"}
+            </div>
           </div>
           <div className="rounded-xl border border-slate-200 bg-white p-4">
             <div className="text-[11px] font-medium uppercase tracking-wide text-slate-400">Spent</div>
-            <div className="mt-1 text-xl font-bold text-slate-800">{formatINR(spent)}</div>
-            <div className="text-[10px] text-slate-400">cash + card, this month</div>
-          </div>
-          <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4">
-            <div className="text-[11px] font-medium uppercase tracking-wide text-emerald-700">
-              Remaining{unpaidCardDues > 0 ? " (after cards)" : ""}
-            </div>
-            <div className={`mt-1 text-xl font-bold ${remaining >= 0 ? "text-emerald-800" : "text-red-600"}`}>{formatINR(remaining)}</div>
-            {unpaidCardDues > 0 && (
-              <div className="text-[10px] font-medium text-slate-500">
-                {formatINR(cashInHand)} in hand · {formatINR(unpaidCardDues)} owed
-              </div>
-            )}
+            <div className="mt-1 text-xl font-bold text-slate-800">{formatINR(netSpent)}</div>
+            <div className="text-[10px] text-slate-400">your share this month</div>
           </div>
         </div>
 
@@ -102,7 +102,7 @@ export default async function PersonalExpenses({
         {spends.length > 0 && segments.length > 0 && (
           <div className="rounded-xl border border-slate-200 bg-white p-5">
             <h2 className="mb-3 text-sm font-semibold text-slate-800">By category</h2>
-            <MoneyFlowDonut segments={segments} centerLabel="Spent" centerValue={formatINR(spent)} />
+            <MoneyFlowDonut segments={segments} centerLabel="Spent" centerValue={formatINR(netSpent)} />
           </div>
         )}
 
@@ -129,7 +129,7 @@ export default async function PersonalExpenses({
         </section>
       </main>
 
-      <PersonalSpendFab periodId={period.id} categories={catList} cards={c.creditCards} remaining={remaining} />
+      <PersonalSpendFab periodId={period.id} categories={catList} cards={c.creditCards} remaining={canSpend} />
     </>
   );
 }
