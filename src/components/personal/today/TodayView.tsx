@@ -4,6 +4,8 @@ import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { formatINR } from "@/lib/format";
 import { buildTimeline, buildGrouped, urgencyOf, type TodayItem, type Urgency } from "@/lib/os/timeline";
+import { TodoCard } from "@/components/personal/today/TodoCard";
+import type { Task } from "@/lib/integrations/google/tasks";
 
 type Summary = { canSpend: number | null; personalExpense: number | null };
 
@@ -24,12 +26,18 @@ function greeting(now: Date): string {
 
 export function TodayView({
   items,
+  tasks,
+  tasklistId,
+  tasksConnected,
   summary,
   calendarConnected,
   name,
   generatedAtISO,
 }: {
   items: TodayItem[];
+  tasks: Task[];
+  tasklistId: string | null;
+  tasksConnected: boolean;
   summary: Summary;
   calendarConnected: boolean;
   name: string;
@@ -96,6 +104,8 @@ export function TodayView({
           <span className="text-emerald-500">→</span>
         </Link>
       )}
+
+      <TodoCard tasklistId={tasklistId} tasksConnected={tasksConnected} initial={tasks} />
 
       {/* view toggle */}
       <div className="inline-flex rounded-lg border border-slate-200 bg-white p-0.5 text-sm">

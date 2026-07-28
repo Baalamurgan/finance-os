@@ -24,6 +24,9 @@ export default async function TodayPage({
       <PersonalNav active="today" name={c.account.name} selYear={c.selYear} selMonth={c.selMonth} financeDue={c.cardReminders.length > 0} />
       <TodayView
         items={data.items}
+        tasks={data.tasks}
+        tasklistId={data.tasklistId}
+        tasksConnected={data.tasksConnected}
         summary={data.summary}
         calendarConnected={data.calendarConnected}
         name={c.account.name}
