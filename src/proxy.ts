@@ -21,7 +21,7 @@ export function proxy(request: NextRequest) {
   // was your last view. The personal PIN still gates it — its unlock is a session
   // cookie, so a fresh launch re-locks Personal and shows its lock screen.
   if (isGet && path === "/" && request.cookies.get("last-view")?.value === "personal") {
-    return NextResponse.redirect(new URL("/personal/expenses", request.url));
+    return NextResponse.redirect(new URL("/personal/today", request.url));
   }
 
   const res = NextResponse.next();

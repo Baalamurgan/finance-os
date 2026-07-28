@@ -1,7 +1,7 @@
 import { redirect } from "next/navigation";
 
-// Personal view opens on the Expenses tab by default (the daily-use screen). The
-// monthly overview lives at /personal/sheet. Forward the selected month if present.
+// Personal view opens on the Today dashboard (the command center). The daily spend
+// screen is /personal/expenses; the monthly overview is /personal/sheet.
 export default async function PersonalHome({
   searchParams,
 }: {
@@ -9,5 +9,5 @@ export default async function PersonalHome({
 }) {
   const sp = await searchParams;
   const q = sp.y && sp.m ? `?y=${sp.y}&m=${sp.m}` : "";
-  redirect(`/personal/expenses${q}`);
+  redirect(`/personal/today${q}`);
 }

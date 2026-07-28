@@ -8,6 +8,7 @@ import { CardDueHighAlert } from "@/components/personal/CardDueHighAlert";
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
 const TABS = [
+  { key: "today", label: "Today", href: "/personal/today" },
   { key: "expenses", label: "Expenses", href: "/personal/expenses" },
   { key: "sheet", label: "Sheet", href: "/personal/sheet" },
   { key: "analysis", label: "Analysis", href: "/personal/analysis" },
@@ -23,7 +24,7 @@ export function PersonalNav({
   selMonth,
   financeDue = false,
 }: {
-  active: "sheet" | "expenses" | "analysis" | "finance" | "setup" | "loans";
+  active: "today" | "sheet" | "expenses" | "analysis" | "finance" | "setup" | "loans";
   name: string;
   selYear: number;
   selMonth: number;
