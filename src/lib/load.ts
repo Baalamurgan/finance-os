@@ -55,14 +55,17 @@ export async function loadCommon(params?: { y?: string; m?: string }) {
   if (y && m) {
     selected = periods.find((p) => p.year === y && p.month === m) ?? null;
   } else {
-    // Prefer TODAY's calendar month if it's OPEN, else the latest open month
-    // (so an old closed/imported current month doesn't hide the Add buttons),
-    // else just the latest period. periods are sorted newest-first.
+    // Prefer TODAY's calendar month. Once the calendar rolls over (e.g. Aug 1) but the
+    // previous month hasn't been wound down yet, that month usually only exists as a
+    // next-month PREVIEW draft — open it by default (shown with a "Preview" badge) so the
+    // family lands on the month they're now living in. Falls back to the latest open month
+    // (so an old closed/imported current month doesn't hide the Add buttons), else latest.
     const t = new Date();
+    const cy = t.getFullYear();
+    const cm = t.getMonth() + 1;
     selected =
-      periods.find(
-        (p) => p.year === t.getFullYear() && p.month === t.getMonth() + 1 && p.status === "open",
-      ) ??
+      periods.find((p) => p.year === cy && p.month === cm && p.status === "open") ??
+      periods.find((p) => p.year === cy && p.month === cm && p.status === "draft") ??
       periods.find((p) => p.status === "open") ??
       periods[0] ??
       null;
@@ -106,9 +109,15 @@ export async function loadCommon(params?: { y?: string; m?: string }) {
     if (daysUntil <= 5) windDownReminder = { daysUntil, day: wd };
   }
 
+  // Next-month preview draft, if one exists — surfaced in the month dropdown so ANY
+  // member can jump to it (not just via the head's preview button).
+  const draft = periods.find((p) => p.status === "draft") ?? null;
+  const previewPeriod = draft ? { year: draft.year, month: draft.month, label: draft.label } : null;
+
   return {
     household,
     windDownReminder,
+    previewPeriod,
     periods,
     selected,
     selYear,

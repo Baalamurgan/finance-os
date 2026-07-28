@@ -17,6 +17,7 @@ model Household {
   treasurerMemberId Int? // hub member that everyone settles with (defaults to head)
   piggyHolderMemberId Int? // who physically holds the Piggy/pool in the in-hand view (defaults to head)
   windDownDay Int? // day of month the head aims to close/wind down; drives the reminder
+  billRemindersOn Boolean @default(true) // master switch for the 3-day-before bill-due popups
   // App-lock: one shared PIN for the whole household (set/reset by the head).
   // Everyone enters it after Google login. null = lock disabled.
   pinHash           String? // PBKDF2 hash of the 4-digit PIN
@@ -474,6 +475,7 @@ model Category {
   sinking      Boolean        @default(false) // true = accrues to its own hold until the bill is due
   cycleMonths  Int?           // payment cycle for sinking funds (WiFi=3, Mobile=12...)
   onHold       Boolean        @default(false) // paused: skipped when seeding new months & wind-down
+  remind       Boolean        @default(true) // per-bill: show the 3-day-before due popup (until paid)
   fixed        Boolean        @default(false) // fixed monthly bill (e.g. subscription): a recurring Sheet expense tagged to the payer, not a budget
   // "Full bill on due month" (the alternative to a sinking fund for a periodic bill):
   // the whole billAmount lands as an expense ONLY in its due month(s) — no monthly share,

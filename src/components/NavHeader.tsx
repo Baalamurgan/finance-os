@@ -9,6 +9,7 @@ import { UserMenu } from "@/components/UserMenu";
 import { WindDownBanner } from "@/components/WindDownBanner";
 import { WindDownPopup } from "@/components/WindDownPopup";
 import { CardDueHighAlert } from "@/components/personal/CardDueHighAlert";
+import { BillDueHighAlert } from "@/components/BillDueHighAlert";
 import { setViewAs } from "@/app/actions";
 import { formatINR } from "@/lib/format";
 import { MISC_SUBCATEGORIES } from "@/lib/misc";
@@ -32,6 +33,7 @@ export function NavHeader({
   periodOpen,
   currentMemberId,
   windDownReminder,
+  previewPeriod,
   canEdit,
   pinEnabled,
   hasBiometric,
@@ -62,6 +64,7 @@ export function NavHeader({
   periodOpen: boolean;
   currentMemberId?: number | null;
   windDownReminder?: { daysUntil: number; day: number } | null;
+  previewPeriod?: { year: number; month: number; label: string } | null;
   canEdit?: boolean;
   pinEnabled?: boolean;
   hasBiometric?: boolean;
@@ -101,6 +104,10 @@ export function NavHeader({
 
   const years: number[] = [];
   for (let yr = curYear; yr >= 2000; yr--) years.push(yr);
+  // The preview draft can be in next year (Dec → Jan); make that year selectable.
+  if (previewPeriod && previewPeriod.year > curYear && !years.includes(previewPeriod.year)) {
+    years.unshift(previewPeriod.year);
+  }
 
   // replace (not push) so the phone back button exits the app instead of
   // stepping back through months/tabs — feels native, less confusing for elders.
@@ -152,9 +159,11 @@ export function NavHeader({
             {MONTHS.map((mname, i) => {
               const mnum = i + 1;
               const future = selYear > curYear || (selYear === curYear && mnum > curMonth);
+              // Keep the next-month preview selectable even though it's a "future" month.
+              const isPreview = !!previewPeriod && selYear === previewPeriod.year && mnum === previewPeriod.month;
               return (
-                <option key={mnum} value={mnum} disabled={future}>
-                  {mname}
+                <option key={mnum} value={mnum} disabled={future && !isPreview}>
+                  {mname}{isPreview ? " · Preview" : ""}
                 </option>
               );
             })}
@@ -229,6 +238,7 @@ export function NavHeader({
         own credit-card bill due within 3 days (shown in family view too, amount-free). */}
     {windDownReminder && <WindDownPopup daysUntil={windDownReminder.daysUntil} day={windDownReminder.day} q={q} />}
     <CardDueHighAlert context="family" />
+    <BillDueHighAlert />
 
     {/* big thumb-reachable "Add Spend" button on mobile (the easy daily action) */}
     {periodOpen && periodId && (
@@ -306,7 +316,10 @@ function BottomNav({
 
       <nav
         className="fixed inset-x-0 bottom-0 z-50 flex border-t border-slate-200 bg-white/95 backdrop-blur sm:hidden"
-        style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
+        // Floor the inset: Samsung's 3-button nav bar reports safe-area-inset-bottom as 0,
+        // so without a minimum the tabs sit flush under it and get clipped. Notch/gesture
+        // devices report a larger real inset and keep it.
+        style={{ paddingBottom: "max(env(safe-area-inset-bottom), 0.75rem)" }}
       >
         {primaryTabs.map((t) => (
           <Link key={t.key} href={`${t.href}${q}`} replace className={cell(active === t.key)} onClick={() => setOpen(false)}>

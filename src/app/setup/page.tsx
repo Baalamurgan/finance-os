@@ -1,7 +1,7 @@
 import { redirect } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { loadCommon } from "@/lib/load";
-import { setWindDownDay, createNextMonthDraft } from "@/app/actions";
+import { setWindDownDay, createNextMonthDraft, setBillReminders } from "@/app/actions";
 import { getSpendShortcuts } from "@/lib/queries";
 import { NavHeader } from "@/components/NavHeader";
 import { MonthlySetup } from "@/components/MonthlySetup";
@@ -67,7 +67,7 @@ export default async function SetupPage({
     .filter((cat) => cat.tracked || cat.fixed || cat.billEveryMonths != null || cat.fundingStyle != null)
     .map((cat) => ({
       id: cat.id, name: cat.name, section: cat.section, monthlyBudget: cat.monthlyBudget,
-      sinking: cat.sinking, cycleMonths: cat.cycleMonths, onHold: cat.onHold, fixed: cat.fixed,
+      sinking: cat.sinking, cycleMonths: cat.cycleMonths, onHold: cat.onHold, fixed: cat.fixed, remind: cat.remind,
       responsibleMemberId: cat.responsibleMemberId ?? null, payerMemberId: cat.payerMemberId ?? null,
       billEveryMonths: cat.billEveryMonths, billMonth: cat.billMonth, billDay: cat.billDay, billAmount: cat.billAmount,
       fundingStyle: cat.fundingStyle, saveEveryMonths: cat.saveEveryMonths, onUnpaid: cat.onUnpaid, needsReview: cat.needsReview,
@@ -80,6 +80,7 @@ export default async function SetupPage({
         householdName={c.household.name}
         selYear={c.selYear}
         selMonth={c.selMonth}
+        previewPeriod={c.previewPeriod}
         members={c.members}
         categories={c.categories}
         account={c.account}
@@ -182,6 +183,33 @@ export default async function SetupPage({
               </button>
             )}
           </form>
+        </section>
+
+        {/* Master switch for the 3-day-before bill-due popups. Per-bill mute lives on each
+            bill row above (the 🔔 next to its On/Off toggle). */}
+        <section className="rounded-xl border border-slate-200 bg-white p-4">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <h2 className="text-sm font-semibold text-slate-900">Bill-due reminders</h2>
+              <p className="mt-0.5 text-xs text-slate-500">
+                A high-priority popup 3 days before each bill&apos;s due date, then daily until it&apos;s
+                marked paid — shown to the responsible member, the head, and managers. Mute individual
+                bills with the 🔔 on each row above.
+              </p>
+            </div>
+            <form action={setBillReminders} className="shrink-0">
+              <input type="hidden" name="on" value={c.household.billRemindersOn ? "" : "on"} />
+              <button
+                type="submit"
+                disabled={readOnly}
+                aria-pressed={c.household.billRemindersOn}
+                title={c.household.billRemindersOn ? "On — tap to turn all reminders off" : "Off — tap to turn reminders on"}
+                className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors disabled:opacity-50 ${c.household.billRemindersOn ? "bg-indigo-600" : "bg-slate-300"}`}
+              >
+                <span className={`inline-block h-5 w-5 transform rounded-full bg-white shadow transition-transform ${c.household.billRemindersOn ? "translate-x-5" : "translate-x-0.5"}`} />
+              </button>
+            </form>
+          </div>
         </section>
       </main>
     </>

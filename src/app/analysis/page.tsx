@@ -36,8 +36,8 @@ export default async function AnalysisPage({
       householdName={c.household.name}
       selYear={c.selYear}
       selMonth={c.selMonth}
-      members={c.members}
-      categories={c.categories}
+      previewPeriod={c.previewPeriod}
+      members={c.members}      categories={c.categories}
       account={c.account}
       isHead={c.isHead}
       piggyBalance={c.piggyBalance}

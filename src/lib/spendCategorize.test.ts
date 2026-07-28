@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { suggestCategoryName, isLearnable, normalizeItem, resolveCategoryId } from "./spendCategorize";
+import { suggestCategoryName, isLearnable, normalizeItem, resolveCategoryId, suggestSpendKind } from "./spendCategorize";
 
 describe("suggestCategoryName", () => {
   it("maps the household's staples to the right category", () => {
@@ -73,5 +73,21 @@ describe("resolveCategoryId", () => {
 describe("normalizeItem", () => {
   it("lowercases and strips punctuation", () => {
     expect(normalizeItem("  Veg & Fruits! ")).toBe("veg fruits");
+  });
+});
+
+describe("suggestSpendKind", () => {
+  it("maps typed items to a CATEGORY_KINDS name", () => {
+    expect(suggestSpendKind("Swiggy dinner")).toBe("Food & Dining");
+    expect(suggestSpendKind("tomato")).toBe("Groceries");
+    expect(suggestSpendKind("Petrol")).toBe("Transport & Fuel");
+    expect(suggestSpendKind("EB bill")).toBe("Bills & Utilities");
+    expect(suggestSpendKind("medicine")).toBe("Health");
+    expect(suggestSpendKind("Netflix")).toBe("Entertainment");
+  });
+  it("matches whole words / phrases and returns null otherwise", () => {
+    expect(suggestSpendKind("beverage")).toBeNull(); // 'veg' must not fire inside a word
+    expect(suggestSpendKind("")).toBeNull();
+    expect(suggestSpendKind("random gibberish xyz")).toBeNull();
   });
 });

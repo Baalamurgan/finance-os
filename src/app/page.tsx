@@ -205,8 +205,8 @@ export default async function SheetPage({
       householdName={c.household.name}
       selYear={c.selYear}
       selMonth={c.selMonth}
-      members={c.members}
-      categories={c.categories}
+      previewPeriod={c.previewPeriod}
+      members={c.members}      categories={c.categories}
       account={c.account}
       isHead={c.isHead}
       piggyBalance={c.piggyBalance}
@@ -264,6 +264,11 @@ export default async function SheetPage({
   const curM = now.getMonth() + 1;
   const currentMonthMissing = !c.periods.some((p) => p.year === curY && p.month === curM);
 
+  // A draft that IS the current calendar month (e.g. Aug's preview being viewed on/after
+  // Aug 1, before Jul is wound down): it's no longer "next month" — it's this month, still
+  // a preview until the previous month closes. Reword the banner accordingly.
+  const draftIsThisMonth = isDraft && c.selected.year === curY && c.selected.month === curM;
+
   // Head + Manager edit open months and the next-month draft; the head can also
   // edit a closed (locked) month. Plain members are view-only everywhere.
   // Settlement lock: once a transfer is marked paid, the sheet freezes for non-heads
@@ -307,13 +312,21 @@ export default async function SheetPage({
               <div className="min-w-0">
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="text-lg">🔮</span>
-                  <h2 className="font-bold text-violet-800">Next-month draft — {c.selected.label}</h2>
+                  <h2 className="font-bold text-violet-800">
+                    {draftIsThisMonth ? `Preview — ${c.selected.label}` : `Next-month draft — ${c.selected.label}`}
+                  </h2>
                   <span className="rounded-full bg-violet-200 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-violet-700">
-                    Draft
+                    {draftIsThisMonth ? "Preview" : "Draft"}
                   </span>
                 </div>
                 <p className="mt-0.5 text-xs leading-relaxed text-violet-700/80">
-                  {canEditHere ? (
+                  {draftIsThisMonth ? (
+                    <>
+                      This is <b>{c.selected.label}</b> — shown as a preview until{" "}
+                      {draftSource?.label ?? "the previous month"} is wound down, when it becomes your
+                      live month. {canEditHere ? "Edits here won't affect that wind-down." : ""}
+                    </>
+                  ) : canEditHere ? (
                     <>
                       A preview you can edit freely — add, remove, change amounts. It{" "}
                       <b>won&apos;t affect {draftSource?.label ?? "this month"}&apos;s wind-down</b>; it

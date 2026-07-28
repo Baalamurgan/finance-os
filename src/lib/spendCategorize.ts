@@ -102,6 +102,48 @@ export function resolveCategoryId(name: string | null, categories: { id: number;
   return null;
 }
 
+// ── Item → "kind of spend" (misc sub-category / personal category) ────────────────────
+// Maps a typed item to one of the shared CATEGORY_KINDS names (see @/lib/misc). Powers the
+// auto-fill of the "Kind of spend" field on the family Misc modal and the category on the
+// personal spend modal. Hardcoded seed knowledge from the household's real spending; every
+// fill is SOFT (the user can always change it). Keywords must be whole-word (single) or a
+// phrase (multi-word), and must not overlap across kinds. Names MUST match CATEGORY_KINDS.
+const SPEND_KIND_KEYWORDS: { kind: string; keywords: string[] }[] = [
+  { kind: "Food & Dining", keywords: ["restaurant", "hotel", "swiggy", "zomato", "dinner", "lunch", "breakfast", "snacks", "biryani", "biriyani", "meals", "food", "cafe", "pizza", "burger", "dosa", "idli", "parotta", "juice", "bakery", "sweets", "sweet", "tiffin", "eat", "eatery", "kfc", "dominos", "chaat", "shawarma", "samosa"] },
+  { kind: "Groceries", keywords: ["grocery", "groceries", "provision", "provisions", "ration", "rice", "arisi", "dal", "paruppu", "oil", "ennai", "sugar", "sakkarai", "salt", "uppu", "milk", "paal", "vegetables", "vegetable", "veg", "veggies", "fruits", "fruit", "atta", "flour", "maavu", "onion", "vengayam", "tomato", "thakkali", "masala", "biscuit", "egg", "muttai", "coconut", "thengai", "greens", "keerai"] },
+  { kind: "Shopping", keywords: ["dress", "shirt", "tshirt", "clothes", "saree", "shoes", "chappal", "amazon", "flipkart", "myntra", "shopping", "electronics", "gadget", "headphone", "charger", "watch", "bag"] },
+  { kind: "Bills & Utilities", keywords: ["eb", "electricity", "current bill", "water bill", "gas", "cylinder", "recharge", "wifi", "broadband", "internet", "dth", "cable", "postpaid", "prepaid"] },
+  { kind: "Rent", keywords: ["rent", "vaadagai"] },
+  { kind: "Transport & Fuel", keywords: ["petrol", "diesel", "fuel", "bunk", "bus", "train", "auto", "cab", "uber", "ola", "metro", "parking", "toll", "fare", "rapido", "share auto"] },
+  { kind: "Entertainment", keywords: ["movie", "cinema", "netflix", "spotify", "hotstar", "prime", "game", "ott"] },
+  { kind: "Travel", keywords: ["flight", "trip", "tour", "holiday", "resort", "stay", "booking", "irctc", "vacation"] },
+  { kind: "Health", keywords: ["medical", "medicine", "tablet", "tablets", "hospital", "doctor", "pharmacy", "clinic", "health", "scan", "lab", "apollo", "mediplus"] },
+  { kind: "Education", keywords: ["school", "college", "fees", "fee", "tuition", "book", "books", "course", "exam", "class", "stationery"] },
+  { kind: "Personal Care", keywords: ["salon", "haircut", "parlour", "parlor", "cosmetics", "cosmetic", "grooming", "spa", "beauty"] },
+  { kind: "Gifts & Donations", keywords: ["gift", "donation", "temple", "offering", "hundial", "kovil", "charity"] },
+  { kind: "Transfers / Sent", keywords: ["sent", "transfer", "gpay", "phonepe", "upi"] },
+  { kind: "EMI & Loans", keywords: ["emi", "loan", "interest", "kist"] },
+  { kind: "Investments", keywords: ["sip", "mutual fund", "stock", "gold", "investment", "chit", "chitfund", "fd", "rd"] },
+];
+
+const kindRows = SPEND_KIND_KEYWORDS.flatMap((m) => m.keywords.map((k) => ({ kind: m.kind, keyword: normalizeItem(k) })));
+
+/** Best-guess "kind of spend" NAME (a CATEGORY_KINDS name) for a typed item, or null.
+ *  Whole-word for single keywords, phrase-match for multi-word; longer keyword wins ties. */
+export function suggestSpendKind(label: string): string | null {
+  const norm = normalizeItem(label);
+  if (!norm) return null;
+  const tokens = new Set(norm.split(" "));
+  let best: { kind: string; len: number } | null = null;
+  for (const r of kindRows) {
+    if (!r.keyword) continue;
+    const matched = r.keyword.includes(" ") ? norm.includes(r.keyword) : tokens.has(r.keyword);
+    if (!matched) continue;
+    if (!best || r.keyword.length > best.len) best = { kind: r.kind, len: r.keyword.length };
+  }
+  return best?.kind ?? null;
+}
+
 /** Should this saved label be learned? Keep it to short, item-like labels to avoid
  *  learning noisy free-text ("2kg tomato for the function"). 1–3 words, not too long. */
 export function isLearnable(label: string): string | null {

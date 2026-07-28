@@ -12,6 +12,7 @@ import { isMiscBucket, MISC_SUBCATEGORIES } from "@/lib/misc";
 import { isLearnable } from "@/lib/spendCategorize";
 import { getSpendShortcuts, getMatcherKeywords, getFrequentSpendItems } from "@/lib/queries";
 import { planBillMonth, isLumpDue, type FundingStyle } from "@/lib/schedule";
+import { getBillReminders } from "@/lib/billReminders";
 
 // Record a money-affecting change for the head-only activity log (who + what + when).
 async function logActivity(
@@ -882,6 +883,47 @@ export async function toggleHold(formData: FormData) {
   if (!cat) return;
   await prisma.category.update({ where: { id }, data: { onHold: !cat.onHold } });
   revalidatePath("/", "layout");
+}
+
+// Per-bill reminder toggle: mute/unmute the 3-day-before due popup for one bill (head-only).
+export async function toggleRemind(formData: FormData) {
+  if (!(await isHead())) return;
+  const id = Number(formData.get("categoryId"));
+  if (!id) return;
+  const cat = await prisma.category.findUnique({ where: { id }, select: { remind: true } });
+  if (!cat) return;
+  await prisma.category.update({ where: { id }, data: { remind: !cat.remind } });
+  revalidatePath("/", "layout");
+}
+
+// Master switch for bill-due reminders (head-only) — Settings.
+export async function setBillReminders(formData: FormData) {
+  if (!(await isHead())) return;
+  const on = String(formData.get("on")) === "on";
+  const household = await prisma.household.findFirst({ select: { id: true } });
+  if (!household) return;
+  await prisma.household.update({ where: { id: household.id }, data: { billRemindersOn: on } });
+  revalidatePath("/", "layout");
+}
+
+// The bill-due reminders relevant to the signed-in member (they're the responsible/paying
+// member, or the head/a manager). Powers the once-a-day high-alert popup. Amounts included —
+// the household already sees bill figures in the sheet.
+export type MyBillReminder = { categoryId: number; name: string; dueISO: string; daysUntilDue: number; overdue: boolean; amount: number | null };
+export async function getMyBillReminders(): Promise<MyBillReminder[]> {
+  const session = await auth();
+  if (!session?.user) return [];
+  const household = await prisma.household.findFirst({ select: { id: true } });
+  if (!household) return [];
+  const email = session.user.email?.toLowerCase();
+  const member =
+    (session.user.memberId ? await prisma.member.findUnique({ where: { id: session.user.memberId }, select: { id: true } }) : null) ??
+    (email ? await prisma.member.findFirst({ where: { householdId: household.id, email }, select: { id: true } }) : null);
+  if (!member) return [];
+  const reminders = await getBillReminders(household.id);
+  return reminders
+    .filter((r) => r.recipientIds.includes(member.id))
+    .map((r) => ({ categoryId: r.categoryId, name: r.name, dueISO: r.dueISO, daysUntilDue: r.daysUntilDue, overdue: r.overdue, amount: r.amount }));
 }
 
 // Choose the treasurer/hub that everyone settles with (head-only).

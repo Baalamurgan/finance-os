@@ -3,7 +3,8 @@
 import { useActionState, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { addSpendAction, getSpendAssist, type AddSpendState } from "@/app/actions";
-import { suggestCategoryName, resolveCategoryId, type LearnedKeyword } from "@/lib/spendCategorize";
+import { suggestCategoryName, resolveCategoryId, suggestSpendKind, type LearnedKeyword } from "@/lib/spendCategorize";
+import { useToast } from "@/components/Toast";
 
 type Cat = { id: number; name: string; misc?: boolean }; // misc = the Personal/Misc bucket
 
@@ -30,12 +31,14 @@ export function AddSpendModal({
   currentMemberId?: number | null;
   subCategories?: { name: string; icon: string }[]; // shown & required for misc spends
 }) {
+  const toast = useToast();
   const [open, setOpen] = useState(false);
   const [mounted, setMounted] = useState(false);
   const [categoryId, setCategoryId] = useState<number | null>(fixedCategory?.id ?? null);
   const [justSaved, setJustSaved] = useState(false);
   const [keepAdding, setKeepAdding] = useState(false);
   const [subCategory, setSubCategory] = useState("");
+  const [kindTouched, setKindTouched] = useState(false); // user picked the kind by hand → stop auto-filling
   const [labelText, setLabelText] = useState(""); // controlled so chips can drive it
   const [chips, setChips] = useState<Chip[]>([]); // head shortcuts, or frequent items
   const [learned, setLearned] = useState<LearnedKeyword[]>([]); // household's taught items
@@ -68,6 +71,15 @@ export function AddSpendModal({
 
   useEffect(() => setMounted(true), []);
 
+  // Auto-fill the misc "Kind of spend" from the typed item (soft — until the user picks
+  // one by hand). "For someone else" is a deliberate choice, so never overwrite it.
+  useEffect(() => {
+    if (!isMiscSelected || kindTouched || subCategory === "For someone else") return;
+    const k = suggestSpendKind(labelText);
+    if (k && subCategories?.some((s) => s.name === k)) setSubCategory(k);
+    else if (!labelText) setSubCategory("");
+  }, [labelText, isMiscSelected, kindTouched, subCategory, subCategories]);
+
   // Fetch the quick chips + learned words the first time the modal opens (picker mode).
   useEffect(() => {
     if (open && !fetchedKw.current && !fixedCategory) {
@@ -99,9 +111,11 @@ export function AddSpendModal({
   useEffect(() => {
     if (state.n > prevN.current) {
       prevN.current = state.n;
+      toast("Spend added", "success");
       if (keepAdding) {
         formRef.current?.reset(); // clears uncontrolled amount; category stays (controlled)
         setSubCategory(""); // controlled — reset for the next item
+        setKindTouched(false); // let the next item auto-fill its kind again
         setLabelText(""); // controlled — reset the item text
         setJustSaved(true);
         amountRef.current?.focus();
@@ -257,27 +271,6 @@ export function AddSpendModal({
                     </div>
                   )}
 
-                  {/* sub-category — misc spends only (reporting: Food, Travel…) */}
-                  {isMiscSelected && (
-                    <div>
-                      <label className="text-sm font-medium text-slate-600">
-                        Kind of spend <span className="text-red-500">*</span>
-                      </label>
-                      <select
-                        name="subCategory"
-                        required
-                        value={subCategory}
-                        onChange={(e) => setSubCategory(e.target.value)}
-                        className="mt-1.5 w-full rounded-xl border-2 border-slate-300 px-4 py-3 text-base outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
-                      >
-                        <option value="" disabled>Pick a kind…</option>
-                        {subCategories!.map((s) => (
-                          <option key={s.name} value={s.name}>{s.icon} {s.name}</option>
-                        ))}
-                      </select>
-                    </div>
-                  )}
-
                   <div>
                     <label className="text-sm font-medium text-slate-600">What was bought</label>
                     <input
@@ -289,6 +282,31 @@ export function AddSpendModal({
                       className="mt-1.5 w-full rounded-xl border-2 border-slate-300 px-4 py-3 text-lg outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
                     />
                   </div>
+
+                  {/* sub-category — misc spends only (reporting: Food, Travel…). Auto-filled
+                      from the item above; the user can still change it. */}
+                  {isMiscSelected && (
+                    <div>
+                      <label className="text-sm font-medium text-slate-600">
+                        Kind of spend <span className="text-red-500">*</span>
+                      </label>
+                      <p className="mt-0.5 text-xs text-slate-400">
+                        Auto-picked from what was bought — change it if it&apos;s off.
+                      </p>
+                      <select
+                        name="subCategory"
+                        required
+                        value={subCategory}
+                        onChange={(e) => { setKindTouched(true); setSubCategory(e.target.value); }}
+                        className="mt-1.5 w-full rounded-xl border-2 border-slate-300 px-4 py-3 text-base outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
+                      >
+                        <option value="" disabled>Pick a kind…</option>
+                        {subCategories!.map((s) => (
+                          <option key={s.name} value={s.name}>{s.icon} {s.name}</option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
 
                   {/* head-only: log a spend on behalf of another family member */}
                   {isHead && members && members.length > 0 && (

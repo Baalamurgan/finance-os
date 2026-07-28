@@ -3,6 +3,7 @@
 import { useActionState, useEffect, useRef, useState } from "react";
 import { addPersonalSpend, updatePersonalSpend, type PersonalSaveState } from "@/app/personal/actions";
 import { useToast } from "@/components/Toast";
+import { suggestSpendKind } from "@/lib/spendCategorize";
 import { formatINR } from "@/lib/format";
 import { PersonalSplitModal, type SplitPerson } from "@/components/personal/PersonalSplitModal";
 
@@ -42,6 +43,9 @@ export function PersonalSpendModal({
   const formRef = useRef<HTMLFormElement>(null);
   const prevN = useRef(0);
   const [amount, setAmount] = useState(isEdit ? String(initial!.amount) : "");
+  const [note, setNote] = useState(isEdit ? (initial!.note ?? "") : "");
+  const [categoryId, setCategoryId] = useState(isEdit ? String(initial!.categoryId) : "");
+  const [catTouched, setCatTouched] = useState(isEdit); // don't auto-fill once picked / when editing
   const [splits, setSplits] = useState<SplitPerson[] | null>(null); // others' shares (shared spend)
   const [myShare, setMyShare] = useState(0);
   const [splitOpen, setSplitOpen] = useState(false);
@@ -56,7 +60,7 @@ export function PersonalSpendModal({
       prevN.current = state.n;
       if (state.ok) {
         toast(isEdit ? "Updated" : "Spend added", "success");
-        if (!isEdit) { formRef.current?.reset(); setAmount(""); resetShared(); }
+        if (!isEdit) { formRef.current?.reset(); setAmount(""); setNote(""); setCategoryId(""); setCatTouched(false); resetShared(); }
         setOpen(false);
       } else toast(state.error ?? "Couldn't save", "error");
     }
@@ -115,7 +119,12 @@ export function PersonalSpendModal({
                 </div>
                 <div>
                   <label className="text-xs font-medium text-slate-500">Category</label>
-                  <select name="categoryId" required defaultValue={isEdit ? String(initial!.categoryId) : ""} className="input mt-1 w-full">
+                  <select
+                    name="categoryId" required
+                    value={categoryId}
+                    onChange={(e) => { setCatTouched(true); setCategoryId(e.target.value); }}
+                    className="input mt-1 w-full"
+                  >
                     <option value="" disabled>Pick a category</option>
                     {categories.map((c) => (
                       <option key={c.id} value={c.id}>{c.icon ? `${c.icon} ` : ""}{c.name}</option>
@@ -124,7 +133,22 @@ export function PersonalSpendModal({
                 </div>
                 <div>
                   <label className="text-xs font-medium text-slate-500">Name</label>
-                  <input name="note" required defaultValue={isEdit ? (initial!.note ?? "") : ""} placeholder="e.g. Swiggy dinner" className="input mt-1 w-full" />
+                  <input
+                    name="note" required
+                    value={note}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      setNote(v);
+                      // auto-pick the category from what's typed (until the user picks one)
+                      if (!catTouched) {
+                        const k = suggestSpendKind(v);
+                        const match = k ? categories.find((c) => c.name === k) : undefined;
+                        if (match) setCategoryId(String(match.id));
+                      }
+                    }}
+                    placeholder="e.g. Swiggy dinner"
+                    className="input mt-1 w-full"
+                  />
                 </div>
 
                 {!isEdit && (
