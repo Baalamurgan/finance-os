@@ -148,6 +148,7 @@ model Member {
   netWorthItems      NetWorthItem[]
   personalCardBills  PersonalCardBill[]
   personalSavings    PersonalSavings[]
+  integrations       Integration[]
 
   @@unique([householdId, code])
 }
@@ -165,6 +166,36 @@ model WebAuthnCredential {
   deviceLabel  String? // best-effort label ("iPhone", "This device")
   purpose      String   @default("family") // family | personal — which lock this unlocks
   createdAt    DateTime @default(now())
+}
+
+// ── Personal OS integrations (per-member secret vault) ────────────────────────
+// Holds third-party credentials that CANNOT be re-fetched and so must persist:
+//   • Google OAuth — one row per member (provider="google"), scopes accumulate via
+//     incremental consent; refreshToken is the long-lived grant. accessToken is a
+//     short-lived cache we can always re-mint from the refresh token.
+//   • AI providers (later) — provider="anthropic"|"openai", kind="apikey", apiKeyEnc.
+// Every secret column is AES-256-GCM encrypted at rest (see src/lib/crypto.ts). The
+// app is single-household, but rows are per-member so personal keys never cross members.
+model Integration {
+  id              Int      @id @default(autoincrement())
+  member          Member   @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  memberId        Int
+  provider        String // "google" | "anthropic" | "openai"
+  kind            String   @default("oauth") // "oauth" | "apikey"
+  // oauth (Google)
+  refreshTokenEnc String? // encrypted long-lived refresh token
+  accessTokenEnc  String? // encrypted short-lived access token (cache)
+  accessExpiresAt DateTime? // when the cached access token expires
+  scopes          String? // space-separated granted scopes (the union we may use)
+  // apikey (AI providers)
+  apiKeyEnc       String?
+  meta            Json? // provider account email, chosen model, etc.
+  status          String   @default("connected") // connected | revoked | error
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@unique([memberId, provider])
+  @@index([memberId])
 }
 
 // ── Personal finance (private per member; never referenced by family tables) ──

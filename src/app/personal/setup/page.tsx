@@ -126,6 +126,18 @@ export default async function PersonalSetup({
         </section>
 
         <PersonalSecurity hasBiometric={c.hasBiometric} />
+
+        {/* Personal OS: connect Google (calendar / tasks / contacts) for the Today dashboard. */}
+        <a
+          href="/personal/settings/permissions"
+          className="flex items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white p-4 hover:bg-slate-50"
+        >
+          <div>
+            <h2 className="text-sm font-semibold text-slate-900">Permissions &amp; integrations</h2>
+            <p className="mt-0.5 text-xs text-slate-500">Connect Google Calendar, Tasks &amp; Contacts for your Today dashboard.</p>
+          </div>
+          <span className="text-slate-300">→</span>
+        </a>
       </main>
     </>
   );
