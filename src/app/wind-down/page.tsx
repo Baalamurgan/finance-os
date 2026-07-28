@@ -68,12 +68,12 @@ export default async function WindDownPage({
   const sinkingAdd = sinkingRows.reduce((s, t) => s + t.remaining, 0);
   // a fund that would end negative (bill exceeded share + accrued fund)
   const sinkingNegative = sinkingRows.filter((t) => t.fund + t.remaining < 0);
-  const carriedRows = [
-    ...overBudget.map((t) => ({ name: `${t.name} — over by`, amount: -t.remaining })),
-    ...miscCards.map((t) => ({ name: `${t.name} (misc)`, amount: t.spent })),
-  ];
+  // over-budget now REDUCES the balance carried forward (folded in, no separate line);
+  // only misc (no-budget) spends carry as their own lines next month.
+  const overspendTotal = overBudget.reduce((s, t) => s + -t.remaining, 0);
+  const carriedRows = miscCards.map((t) => ({ name: `${t.name} (misc)`, amount: t.spent }));
   const carriedTotal = carriedRows.reduce((s, r) => s + r.amount, 0);
-  const carryOut = c.selected.carryForward + rollup.totalIncome - rollup.totalExpense;
+  const carryOut = c.selected.carryForward + rollup.totalIncome - rollup.totalExpense - overspendTotal;
   const nm = c.selected.month === 12 ? 1 : c.selected.month + 1;
   const ny = c.selected.month === 12 ? c.selected.year + 1 : c.selected.year;
   const nextLabel = `${new Date(ny, nm - 1, 1).toLocaleString("en-US", { month: "short" }).toUpperCase()} ${ny}`;
@@ -138,7 +138,12 @@ export default async function WindDownPage({
                 </p>
               )}
               <Breakdown
-                title="→ Carried to next month (added as expenses there)"
+                title="↓ Over-budget (reduces the balance carried forward)"
+                rows={overBudget.map((t) => ({ name: t.name, amount: t.remaining }))}
+                total={-overspendTotal}
+              />
+              <Breakdown
+                title="→ Misc spends carried to next month (added as expenses there)"
                 rows={carriedRows}
                 total={carriedTotal}
               />

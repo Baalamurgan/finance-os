@@ -105,7 +105,7 @@ export function PersonalFixedModal({
                         <option key={c.id} value={c.id}>{c.name} — pay at card bill</option>
                       ))}
                     </select>
-                    <p className="mt-1 text-[11px] text-slate-400">On a credit card, it&apos;s deferred — it leaves your cash when you mark that card&apos;s bill paid.</p>
+                    <p className="mt-1 text-[11px] text-slate-400">On a card, it still counts against this month — you just pay the cash later at the card&apos;s bill.</p>
                   </div>
                 )}
                 <label className="flex items-center gap-2 rounded-lg bg-slate-50 px-3 py-2 text-sm text-slate-700">

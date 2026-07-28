@@ -2,25 +2,25 @@ import { prisma } from "@/lib/prisma";
 import { currentCycle } from "@/lib/finance/cycle";
 import { computeCreditDashboard } from "@/lib/finance/creditDashboard";
 
-// Cash math for a personal month, with credit-card spends DEFERRED. This is the SINGLE
-// source of truth for "Remaining" — used by the Sheet, the Expenses tab, AND the
-// carry-forward on month rollover (ensurePersonalMonth) — so the number can never drift.
+// Cash math for a personal month. Every spend counts AT SPEND TIME — a credit-card spend
+// (or card fixed bill) reduces your spendable in the month you make it, exactly like cash,
+// because you'll owe it either way. This is the SINGLE source of truth for "Remaining",
+// used by the Sheet, Expenses, AND the carry-forward on rollover (ensurePersonalMonth).
 //
-// Model: a CC-tagged spend / fixed line does NOT reduce this month's cash. It sits as a
-// card liability until you "Mark bill paid", which posts one PersonalCardBill whose amount
-// leaves cash in the month it's paid. Over two months it nets out exactly.
+// "Mark bill paid" no longer moves cash here (the spend was already counted) — it just
+// settles the cycle (dropping it from unpaid dues) and records any cashback on the card.
+// `remaining` is therefore the true after-cards figure; cash-in-hand = remaining + unpaid
+// card dues (money still sitting in your account until you pay those bills).
 
 export type PersonalCash = {
   totalIn: number; // income + carry-in + ad-hoc income
-  fixedCash: number; // fixed Sheet lines paid from cash (CC-tagged ones deferred)
-  fixedCard: number; // fixed Sheet lines on a card (deferred)
+  fixedCash: number; // fixed Sheet lines paid from cash
+  fixedCard: number; // fixed Sheet lines on a card (still a committed bill → counts)
   cashSpends: number; // daily spends paid from cash
-  cardSpends: number; // daily spends on a card (deferred)
-  cardBillsPaid: number; // card bills marked paid THIS period → real cash out
-  personalExpense: number; // totalIn − fixedCash  (the "can spend" number)
-  spentFromCash: number; // cashSpends + cardBillsPaid
-  spentInclCards: number; // cashSpends + cardSpends — all this month's spending, cash + card
-  remaining: number; // personalExpense − spentFromCash
+  cardSpends: number; // daily spends on a card (counted at spend time)
+  personalExpense: number; // totalIn − all fixed bills (the "can spend" number)
+  spent: number; // cashSpends + cardSpends — all this month's spending
+  remaining: number; // personalExpense − spent  (true, after cards)
 };
 
 export async function getPersonalCash(period: {
@@ -28,33 +28,29 @@ export async function getPersonalCash(period: {
   income: number;
   carryForward: number;
 }): Promise<PersonalCash> {
-  const [fixedCashAgg, fixedCardAgg, cashSpendAgg, cardSpendAgg, extraAgg, billsAgg] = await Promise.all([
+  const [fixedCashAgg, fixedCardAgg, cashSpendAgg, cardSpendAgg, extraAgg] = await Promise.all([
     prisma.personalExpense.aggregate({ where: { periodId: period.id, cardAccountId: null }, _sum: { amount: true } }),
     prisma.personalExpense.aggregate({ where: { periodId: period.id, cardAccountId: { not: null } }, _sum: { amount: true } }),
     prisma.personalSpend.aggregate({ where: { periodId: period.id, cardAccountId: null }, _sum: { amount: true } }),
     prisma.personalSpend.aggregate({ where: { periodId: period.id, cardAccountId: { not: null } }, _sum: { amount: true } }),
     prisma.personalIncome.aggregate({ where: { periodId: period.id }, _sum: { amount: true } }),
-    prisma.personalCardBill.aggregate({ where: { paidPeriodId: period.id }, _sum: { amount: true } }),
   ]);
   const fixedCash = fixedCashAgg._sum.amount ?? 0;
   const fixedCard = fixedCardAgg._sum.amount ?? 0;
   const cashSpends = cashSpendAgg._sum.amount ?? 0;
   const cardSpends = cardSpendAgg._sum.amount ?? 0;
-  const cardBillsPaid = billsAgg._sum.amount ?? 0;
   const totalIn = period.income + period.carryForward + (extraAgg._sum.amount ?? 0);
-  const personalExpense = totalIn - fixedCash;
-  const spentFromCash = cashSpends + cardBillsPaid;
+  const personalExpense = totalIn - fixedCash - fixedCard;
+  const spent = cashSpends + cardSpends;
   return {
     totalIn,
     fixedCash,
     fixedCard,
     cashSpends,
     cardSpends,
-    cardBillsPaid,
     personalExpense,
-    spentFromCash,
-    spentInclCards: cashSpends + cardSpends,
-    remaining: personalExpense - spentFromCash,
+    spent,
+    remaining: personalExpense - spent,
   };
 }
 

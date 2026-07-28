@@ -157,7 +157,7 @@ export function PersonalSpendModal({
                       ))}
                     </select>
                     <p className="mt-1 text-[11px] text-slate-400">
-                      {shared ? "On a card, the full amount defers to the card bill; others still owe you their shares." : "On a credit card, it's deferred — it leaves your cash when you mark that card's bill paid."}
+                      {shared ? "On a card, it still counts this month; you pay the actual cash at the card's bill. Others owe you their shares." : "On a card, it still counts against this month — you just pay the cash later at the card's bill."}
                     </p>
                   </div>
                 )}

@@ -41,14 +41,13 @@ export default async function PersonalExpenses({
     getCardDues(c.member.id),
     prisma.personalSpend.findMany({ where: { periodId: period.id }, orderBy: [{ date: "desc" }, { id: "desc" }] }),
   ]);
-  const { personalExpense, spentFromCash, spentInclCards, remaining } = cash;
+  const { personalExpense, spent, remaining } = cash;
   const unpaidCardDues = cardDues.reduce((s, d) => s + d.unpaidTotal, 0);
-  const remainingAfterCards = remaining - unpaidCardDues;
+  const cashInHand = remaining + unpaidCardDues; // still in your account until cards are paid
 
-  // The category donut reflects CASH spends only (CC spends are deferred and shown in the
-  // "on card, unpaid" strip instead), so it reconciles with "Spent" above.
+  // The category donut reflects ALL spends (cash + card) — card spends count at spend time.
   const byCat = new Map<number, number>();
-  for (const s of spends) if (s.cardAccountId == null) byCat.set(s.categoryId, (byCat.get(s.categoryId) ?? 0) + s.amount);
+  for (const s of spends) byCat.set(s.categoryId, (byCat.get(s.categoryId) ?? 0) + s.amount);
   const groups = [...byCat.entries()].map(([id, total]) => ({ cat: cats.get(id), total })).filter((g) => g.cat).sort((a, b) => b.total - a.total);
   const segments = [
     ...groups.map((g, i) => ({ name: `${g.cat!.icon ?? ""} ${g.cat!.name}`.trim(), value: g.total, color: COLORS[i % COLORS.length] })),
@@ -81,17 +80,17 @@ export default async function PersonalExpenses({
           </div>
           <div className="rounded-xl border border-slate-200 bg-white p-4">
             <div className="text-[11px] font-medium uppercase tracking-wide text-slate-400">Spent</div>
-            <div className="mt-1 text-xl font-bold text-slate-800">{formatINR(spentFromCash)}</div>
-            <div className="text-[10px] text-slate-400">
-              from cash{unpaidCardDues > 0 ? ` · ${formatINR(spentInclCards)} incl. cards` : " (card spends deferred)"}
-            </div>
+            <div className="mt-1 text-xl font-bold text-slate-800">{formatINR(spent)}</div>
+            <div className="text-[10px] text-slate-400">cash + card, this month</div>
           </div>
           <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4">
-            <div className="text-[11px] font-medium uppercase tracking-wide text-emerald-700">Remaining</div>
+            <div className="text-[11px] font-medium uppercase tracking-wide text-emerald-700">
+              Remaining{unpaidCardDues > 0 ? " (after cards)" : ""}
+            </div>
             <div className={`mt-1 text-xl font-bold ${remaining >= 0 ? "text-emerald-800" : "text-red-600"}`}>{formatINR(remaining)}</div>
             {unpaidCardDues > 0 && (
-              <div className={`text-[10px] font-medium ${remainingAfterCards < 0 ? "text-red-600" : "text-emerald-700/80"}`}>
-                {remainingAfterCards >= 0 ? `${formatINR(remainingAfterCards)} after cards` : `short ${formatINR(-remainingAfterCards)} after cards`}
+              <div className="text-[10px] font-medium text-slate-500">
+                {formatINR(cashInHand)} in hand · {formatINR(unpaidCardDues)} owed
               </div>
             )}
           </div>
@@ -103,7 +102,7 @@ export default async function PersonalExpenses({
         {spends.length > 0 && segments.length > 0 && (
           <div className="rounded-xl border border-slate-200 bg-white p-5">
             <h2 className="mb-3 text-sm font-semibold text-slate-800">By category</h2>
-            <MoneyFlowDonut segments={segments} centerLabel="Cash spent" centerValue={formatINR(cash.cashSpends)} />
+            <MoneyFlowDonut segments={segments} centerLabel="Spent" centerValue={formatINR(spent)} />
           </div>
         )}
 

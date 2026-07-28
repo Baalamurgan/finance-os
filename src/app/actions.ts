@@ -1381,14 +1381,27 @@ const LEFTOVER_NOTE = "__leftover_income__"; // this month's under-budget leftov
 // (current open) month's live carry-out. Replaces any prior estimate.
 async function addEstimatedSurplus(
   tx: Tx,
-  source: { id: number; label: string; carryForward: number },
+  source: { id: number; label: string; carryForward: number; householdId: number },
   targetId: number,
 ) {
-  const [inc, exp] = await Promise.all([
+  const [inc, exp, budgets, spends, trackedCats] = await Promise.all([
     tx.incomeEntry.aggregate({ where: { periodId: source.id }, _sum: { amount: true } }),
     tx.expenseEntry.aggregate({ where: { periodId: source.id }, _sum: { amount: true } }),
+    tx.budget.findMany({ where: { periodId: source.id } }),
+    tx.spend.findMany({ where: { periodId: source.id } }),
+    tx.category.findMany({ where: { householdId: source.householdId, tracked: true, onHold: false } }),
   ]);
-  const carryOut = source.carryForward + (inc._sum.amount ?? 0) - (exp._sum.amount ?? 0);
+  // over-budget (non-sinking) folds into the carried balance — same rule as wind-down.
+  const spentOf = (c: number) => spends.filter((s) => s.categoryId === c).reduce((t, s) => t + s.amount, 0);
+  let overspend = 0;
+  for (const cat of trackedCats) {
+    if (cat.sinking) continue;
+    const b = budgets.find((x) => x.categoryId === cat.id)?.planned ?? 0;
+    if (b <= 0) continue;
+    const rem = b - spentOf(cat.id);
+    if (rem < 0) overspend += -rem;
+  }
+  const carryOut = source.carryForward + (inc._sum.amount ?? 0) - (exp._sum.amount ?? 0) - overspend;
   await tx.incomeEntry.deleteMany({ where: { periodId: targetId, note: SURPLUS_NOTE } });
   if (carryOut > 0) {
     await tx.incomeEntry.create({
@@ -1421,7 +1434,6 @@ async function addEstimatedCarry(
     tx.category.findMany({ where: { householdId: source.householdId, tracked: true, onHold: false } }),
   ]);
   const budgetOf = (c: number) => budgets.find((b) => b.categoryId === c)?.planned ?? 0;
-  const spentOf = (c: number) => spends.filter((s) => s.categoryId === c).reduce((a, s) => a + s.amount, 0);
 
   const mon = source.label.split(" ")[0]; // "JUL 2026" → "JUL"
   await tx.expenseEntry.deleteMany({ where: { periodId: targetId, note: CARRY_NOTE } });
@@ -1429,11 +1441,8 @@ async function addEstimatedCarry(
     const b = budgetOf(c.id);
     if (c.sinking && b > 0) continue; // sinking → its fund, never carried
     if (b > 0) {
-      const rem = b - spentOf(c.id);
-      if (rem >= 0) continue; // under budget → Piggy, not carried
-      await tx.expenseEntry.create({
-        data: { periodId: targetId, categoryId: c.id, label: `${c.name} over-budget (from ${source.label})`, amount: -rem, necessary: true, oneOff: true, note: CARRY_NOTE },
-      });
+      // over-budget is folded into the estimated carry (addEstimatedSurplus), not a line
+      continue;
     } else {
       // misc (no budget) → carry EACH spend as its own line, tagged to whoever spent
       // it (display only; excluded from settlement — the spend already credits them)
@@ -1798,12 +1807,24 @@ export async function windDownMonth(formData: FormData) {
 
   const income = incomes.reduce((s, i) => s + i.amount, 0);
   const expense = expenses.reduce((s, e) => s + e.amount, 0);
-  const carryOut = period.carryForward + income - expense;
 
   const budgetOf = (catId: number) =>
     budgets.find((b) => b.categoryId === catId)?.planned ?? 0;
   const spentOf = (catId: number) =>
     spends.filter((s) => s.categoryId === catId).reduce((sum, s) => sum + s.amount, 0);
+
+  // Over-budget on a tracked (non-sinking) envelope isn't captured in the ExpenseEntry
+  // total, so it reduces what carries into next month — folded into the carried balance
+  // (no separate "over-budget" line; rebuild-safe since it's not a row).
+  let overspendTotal = 0;
+  for (const cat of trackedCats) {
+    if (cat.sinking) continue;
+    const b = budgetOf(cat.id);
+    if (b <= 0) continue;
+    const rem = b - spentOf(cat.id);
+    if (rem < 0) overspendTotal += -rem;
+  }
+  const carryOut = period.carryForward + income - expense - overspendTotal;
 
   let movedToPiggy = 0;
   let leftoverIncome = 0; // under-budget leftovers routed to next month's income (opt-in)
@@ -1856,13 +1877,7 @@ export async function windDownMonth(formData: FormData) {
             movedToPiggy += remainder;
           }
         } else {
-          // over budget → carry the excess into next month as a one-off expense line
-          // (keeps the running balance honest; rebuild-safe via CARRY_NOTE).
-          carryToNext.push({
-            categoryId: cat.id,
-            amount: -remainder,
-            label: `${cat.name} over-budget (from ${period.label})`,
-          });
+          // over budget → already folded into carryOut above (no separate line)
         }
       } else if (spent > 0) {
         // tracked, no budget = Misc → carry EACH spend as its own line ("JUL · <spend>")

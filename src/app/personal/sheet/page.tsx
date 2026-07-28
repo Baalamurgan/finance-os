@@ -45,13 +45,12 @@ export default async function PersonalSheet({
     getUnpaidCardDues(c.member.id),
   ]);
   const monthlyExpenses = expenses.reduce((s, e) => s + e.amount, 0); // all fixed lines (display subtotal)
-  // Cash math from the shared helper: CC-tagged lines/spends are deferred, card bills paid
-  // this month ARE counted. "Spent" here means spent-from-cash.
-  const { totalIn, personalExpense, spentFromCash: spentTotal, spentInclCards, remaining } = cash;
+  // Cash math from the shared helper: every spend (cash OR card) counts at spend time, so
+  // `remaining` is the true after-cards figure. Cash-in-hand = remaining + unpaid card dues
+  // (money still in your account until those bills are paid).
+  const { totalIn, personalExpense, spent: spentTotal, remaining } = cash;
   const spentPct = personalExpense > 0 ? Math.min(100, (spentTotal / personalExpense) * 100) : 0;
-  // The "true" picture: you owe every unpaid CC bill either way, so subtract it to know
-  // what you can really spend, and show spending that includes card spends.
-  const remainingAfterCards = remaining - unpaidCardDues;
+  const cashInHand = remaining + unpaidCardDues;
 
   // group monthly expenses by category (collapsible)
   const byCat = new Map<number, { total: number; items: typeof expenses }>();
@@ -177,18 +176,13 @@ export default async function PersonalSheet({
           <div className="mt-2 h-2.5 overflow-hidden rounded-full bg-slate-100">
             <div className={`h-full rounded-full ${spentTotal > personalExpense ? "bg-red-500" : "bg-emerald-500"}`} style={{ width: `${spentPct}%` }} />
           </div>
-          <div className={`mt-1 text-xs ${remaining < 0 ? "text-red-600" : "text-slate-400"}`}>
+          {/* after-cards remaining is the primary figure; cash-in-hand is the small aside */}
+          <div className={`mt-2 text-2xl font-bold tabular-nums ${remaining < 0 ? "text-red-600" : "text-emerald-700"}`}>
             {remaining >= 0 ? `${formatINR(remaining)} left to spend` : `Over by ${formatINR(-remaining)}`}
           </div>
           {unpaidCardDues > 0 && (
-            <div className="mt-2 flex flex-wrap items-center justify-between gap-x-4 gap-y-1 border-t border-slate-100 pt-2 text-xs">
-              <span className="text-slate-500">
-                Incl. cards spent <b className="tabular-nums text-slate-700">{formatINR(spentInclCards)}</b>
-                <span className="text-slate-400"> · {formatINR(unpaidCardDues)} still on cards</span>
-              </span>
-              <span className={`font-medium tabular-nums ${remainingAfterCards < 0 ? "text-red-600" : "text-emerald-700"}`}>
-                {remainingAfterCards >= 0 ? `${formatINR(remainingAfterCards)} left after cards` : `Short ${formatINR(-remainingAfterCards)} after cards`}
-              </span>
+            <div className="mt-0.5 text-xs text-slate-400">
+              {formatINR(cashInHand)} in hand · {formatINR(unpaidCardDues)} still owed on cards
             </div>
           )}
         </div>
@@ -228,7 +222,7 @@ export default async function PersonalSheet({
                           {e.label}
                           {!e.recurring && <span className="text-[10px] text-slate-400">(one-off)</span>}
                           {card && (
-                            <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-500" title={`On ${card.name} — deferred until you pay the bill`}>
+                            <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-500" title={`On ${card.name} — counts now; pay the cash at the card's bill`}>
                               <span className="h-1.5 w-1.5 rounded-full" style={{ background: card.color }} />💳
                             </span>
                           )}
