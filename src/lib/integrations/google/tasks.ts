@@ -15,6 +15,9 @@ export type Task = {
   completed: boolean;
 };
 
+export type TaskList = { id: string; title: string };
+export type TaskWithList = Task & { tasklistId: string; listTitle: string };
+
 export async function tasksConnected(memberId: number): Promise<boolean> {
   return (await googleConnectedScopes(memberId)).includes(TASKS_SCOPE);
 }
@@ -25,6 +28,49 @@ async function api(token: string, path: string, init?: RequestInit): Promise<Res
     headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json", ...(init?.headers ?? {}) },
     cache: "no-store",
   });
+}
+
+// Parse a Tasks API `items` payload into our Task shape (incomplete titles only).
+type RawTask = { id: string; title?: string; notes?: string; due?: string; status?: string };
+function toTasks(items: RawTask[] | undefined): Task[] {
+  return (items ?? [])
+    .filter((t) => t.title?.trim())
+    .map((t) => ({ id: t.id, title: t.title!.trim(), notes: t.notes?.trim() || null, dueISO: t.due ? new Date(t.due).toISOString() : null, completed: t.status === "completed" }));
+}
+
+/** All the member's task lists. */
+export async function listTasklists(memberId: number): Promise<TaskList[]> {
+  const token = await getGoogleAccessToken(memberId);
+  if (!token) return [];
+  try {
+    const res = await api(token, "/users/@me/lists?maxResults=100");
+    if (!res.ok) return [];
+    const data = (await res.json()) as { items?: TaskList[] };
+    return (data.items ?? []).map((l) => ({ id: l.id, title: l.title }));
+  } catch {
+    return [];
+  }
+}
+
+/** Incomplete tasks across ALL lists, each tagged with the list it belongs to. */
+export async function listAllTasks(memberId: number): Promise<{ lists: TaskList[]; tasks: TaskWithList[] }> {
+  const token = await getGoogleAccessToken(memberId);
+  if (!token) return { lists: [], tasks: [] };
+  const lists = await listTasklists(memberId);
+  if (lists.length === 0) return { lists: [], tasks: [] };
+  const perList = await Promise.all(
+    lists.map(async (l) => {
+      try {
+        const res = await api(token, `/lists/${encodeURIComponent(l.id)}/tasks?showCompleted=false&showHidden=false&maxResults=100`);
+        if (!res.ok) return [];
+        const data = (await res.json()) as { items?: RawTask[] };
+        return toTasks(data.items).map((t) => ({ ...t, tasklistId: l.id, listTitle: l.title }));
+      } catch {
+        return [];
+      }
+    }),
+  );
+  return { lists, tasks: perList.flat() };
 }
 
 /** The member's default task list id (Tasks always has at least one list). */

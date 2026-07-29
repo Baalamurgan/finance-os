@@ -1,6 +1,6 @@
 import { listUpcomingEvents, listCalendarBirthdays, calendarConnected, type Birthday, type CalendarEvent } from "@/lib/integrations/google/calendar";
 import { listContactBirthdays, contactsConnected } from "@/lib/integrations/google/contacts";
-import { listTasks, tasksConnected, type Task } from "@/lib/integrations/google/tasks";
+import { listAllTasks, tasksConnected, type TaskWithList, type TaskList } from "@/lib/integrations/google/tasks";
 import { getBillReminders } from "@/lib/billReminders";
 import { getCardBillReminders, getPersonalCash } from "@/lib/personal/cash";
 import type { TodayItem } from "./timeline";
@@ -16,12 +16,12 @@ export type TodaySummary = { canSpend: number | null; personalExpense: number | 
 export type TodayData = {
   items: TodayItem[]; // events / bills / cards / birthdays (scheduled + due things)
   events: CalendarEvent[]; // today's calendar events (raw, with times) — for the Day grid
-  tasks: Task[]; // to-dos & reminders — rendered in their own interactive card
+  tasks: TaskWithList[]; // to-dos across ALL lists, each tagged with its list
+  tasklists: TaskList[]; // the member's Google Tasks lists (for filtering + add-target)
   summary: TodaySummary;
   calendarConnected: boolean;
   contactsConnected: boolean;
   tasksConnected: boolean;
-  tasklistId: string | null;
   generatedAtISO: string;
 };
 
@@ -56,7 +56,7 @@ export async function getTodayData(opts: {
     listUpcomingEvents(memberId),
     listCalendarBirthdays(memberId),
     listContactBirthdays(memberId),
-    listTasks(memberId),
+    listAllTasks(memberId),
     getBillReminders(householdId).catch(() => []),
     getCardBillReminders(memberId).catch(() => []),
     personalPeriod ? getPersonalCash(personalPeriod).catch(() => null) : Promise.resolve(null),
@@ -126,11 +126,11 @@ export async function getTodayData(opts: {
     items,
     events,
     tasks: taskData.tasks,
+    tasklists: taskData.lists,
     summary: { canSpend: cash?.canSpend ?? null, personalExpense: cash?.personalExpense ?? null },
     calendarConnected: calOn,
     contactsConnected: contactsOn,
     tasksConnected: tasksOn,
-    tasklistId: taskData.tasklistId,
     generatedAtISO: new Date().toISOString(),
   };
 }
