@@ -1,4 +1,4 @@
-import { listUpcomingEvents, listCalendarBirthdays, calendarConnected, type Birthday } from "@/lib/integrations/google/calendar";
+import { listUpcomingEvents, listCalendarBirthdays, calendarConnected, type Birthday, type CalendarEvent } from "@/lib/integrations/google/calendar";
 import { listContactBirthdays, contactsConnected } from "@/lib/integrations/google/contacts";
 import { listTasks, tasksConnected, type Task } from "@/lib/integrations/google/tasks";
 import { getBillReminders } from "@/lib/billReminders";
@@ -15,6 +15,7 @@ export type TodaySummary = { canSpend: number | null; personalExpense: number | 
 
 export type TodayData = {
   items: TodayItem[]; // events / bills / cards / birthdays (scheduled + due things)
+  events: CalendarEvent[]; // today's calendar events (raw, with times) — for the Day grid
   tasks: Task[]; // to-dos & reminders — rendered in their own interactive card
   summary: TodaySummary;
   calendarConnected: boolean;
@@ -123,6 +124,7 @@ export async function getTodayData(opts: {
 
   return {
     items,
+    events,
     tasks: taskData.tasks,
     summary: { canSpend: cash?.canSpend ?? null, personalExpense: cash?.personalExpense ?? null },
     calendarConnected: calOn,

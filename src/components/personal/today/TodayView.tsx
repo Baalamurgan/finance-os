@@ -6,9 +6,11 @@ import { useRouter } from "next/navigation";
 import { formatINR } from "@/lib/format";
 import { buildTimeline, buildGrouped, urgencyOf, type TodayItem, type Urgency } from "@/lib/os/timeline";
 import { TodoCard } from "@/components/personal/today/TodoCard";
+import { DayGrid } from "@/components/personal/today/DayGrid";
 import { flushOutbox } from "@/lib/os-sync/outbox";
 import { mutateTask } from "@/app/personal/os/actions";
 import type { Task } from "@/lib/integrations/google/tasks";
+import type { CalendarEvent } from "@/lib/integrations/google/calendar";
 
 type Summary = { canSpend: number | null; personalExpense: number | null };
 
@@ -29,6 +31,7 @@ function greeting(now: Date): string {
 
 export function TodayView({
   items,
+  events,
   tasks,
   tasklistId,
   tasksConnected,
@@ -38,6 +41,7 @@ export function TodayView({
   generatedAtISO,
 }: {
   items: TodayItem[];
+  events: CalendarEvent[];
   tasks: Task[];
   tasklistId: string | null;
   tasksConnected: boolean;
@@ -47,6 +51,7 @@ export function TodayView({
   generatedAtISO: string;
 }) {
   const router = useRouter();
+  const [tab, setTab] = useState<"day" | "overview">("day");
   const [view, setView] = useState<"timeline" | "grouped">("timeline");
   const [offline, setOffline] = useState(false);
   const [syncing, setSyncing] = useState(false);
@@ -69,6 +74,8 @@ export function TodayView({
   // Persist the last good payload so an offline open still shows something useful, and
   // remember the view choice.
   useEffect(() => {
+    const t = localStorage.getItem("today-tab");
+    if (t === "day" || t === "overview") setTab(t);
     const v = localStorage.getItem("today-view");
     if (v === "timeline" || v === "grouped") setView(v);
     try {
@@ -89,6 +96,10 @@ export function TodayView({
   const setViewPersist = (v: "timeline" | "grouped") => {
     setView(v);
     localStorage.setItem("today-view", v);
+  };
+  const setTabPersist = (t: "day" | "overview") => {
+    setTab(t);
+    localStorage.setItem("today-tab", t);
   };
 
   // Use the live items; if we somehow rendered empty while offline, fall back to snapshot.
@@ -127,51 +138,70 @@ export function TodayView({
         </div>
       )}
 
-      {!calendarConnected && (
-        <Link href="/personal/settings/permissions" className="flex items-center justify-between gap-3 rounded-xl border border-dashed border-emerald-300 bg-emerald-50 px-4 py-3 hover:bg-emerald-100/70">
-          <span className="text-sm font-medium text-emerald-800">Connect Google Calendar to see your schedule here</span>
-          <span className="text-emerald-500">→</span>
-        </Link>
-      )}
-
-      <TodoCard tasklistId={tasklistId} tasksConnected={tasksConnected} initial={tasks} />
-
-      {/* view toggle */}
+      {/* primary tabs: Day (today's schedule + to-dos) vs Overview (bills, cards, birthdays…) */}
       <div className="inline-flex rounded-lg border border-slate-200 bg-white p-0.5 text-sm">
-        {(["timeline", "grouped"] as const).map((v) => (
+        {([["day", "Day"], ["overview", "Overview"]] as const).map(([t, label]) => (
           <button
-            key={v}
-            onClick={() => setViewPersist(v)}
-            className={`rounded-md px-3 py-1.5 font-medium capitalize transition ${view === v ? "bg-emerald-600 text-white" : "text-slate-500 hover:text-slate-800"}`}
+            key={t}
+            onClick={() => setTabPersist(t)}
+            className={`rounded-md px-4 py-1.5 font-medium transition ${tab === t ? "bg-emerald-600 text-white" : "text-slate-500 hover:text-slate-800"}`}
           >
-            {v}
+            {label}
           </button>
         ))}
       </div>
 
-      {effective.length === 0 ? (
-        <div className="rounded-xl border border-slate-200 bg-white p-10 text-center">
-          <div className="text-4xl">🌤️</div>
-          <p className="mt-2 text-sm font-medium text-slate-700">Nothing needs you right now.</p>
-          <p className="text-xs text-slate-400">Bills, events and birthdays will show up here.</p>
-        </div>
-      ) : view === "timeline" ? (
-        <ul className="space-y-2">
-          {timeline.map(({ item, urgency }) => <Row key={item.id} item={item} urgency={urgency} showTime />)}
-        </ul>
+      {tab === "day" ? (
+        <>
+          {!calendarConnected && (
+            <Link href="/personal/settings/permissions" className="flex items-center justify-between gap-3 rounded-xl border border-dashed border-emerald-300 bg-emerald-50 px-4 py-3 hover:bg-emerald-100/70">
+              <span className="text-sm font-medium text-emerald-800">Connect Google Calendar to see your schedule here</span>
+              <span className="text-emerald-500">→</span>
+            </Link>
+          )}
+          <TodoCard tasklistId={tasklistId} tasksConnected={tasksConnected} initial={tasks} />
+          {calendarConnected && <DayGrid events={events} tasks={tasks} />}
+        </>
       ) : (
-        <div className="space-y-5">
-          {grouped.map((g) => (
-            <section key={g.key}>
-              <h2 className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-slate-400">
-                <span>{g.icon}</span> {g.label} <span className="text-slate-300">({g.items.length})</span>
-              </h2>
-              <ul className="space-y-2">
-                {g.items.map((item) => <Row key={item.id} item={item} urgency={urgencyOf(item, now)} />)}
-              </ul>
-            </section>
-          ))}
-        </div>
+        <>
+          {/* Overview: everything else, in a chronological or grouped list */}
+          <div className="inline-flex rounded-lg border border-slate-200 bg-white p-0.5 text-sm">
+            {(["timeline", "grouped"] as const).map((v) => (
+              <button
+                key={v}
+                onClick={() => setViewPersist(v)}
+                className={`rounded-md px-3 py-1.5 font-medium capitalize transition ${view === v ? "bg-emerald-600 text-white" : "text-slate-500 hover:text-slate-800"}`}
+              >
+                {v}
+              </button>
+            ))}
+          </div>
+
+          {effective.length === 0 ? (
+            <div className="rounded-xl border border-slate-200 bg-white p-10 text-center">
+              <div className="text-4xl">🌤️</div>
+              <p className="mt-2 text-sm font-medium text-slate-700">Nothing needs you right now.</p>
+              <p className="text-xs text-slate-400">Bills, events and birthdays will show up here.</p>
+            </div>
+          ) : view === "timeline" ? (
+            <ul className="space-y-2">
+              {timeline.map(({ item, urgency }) => <Row key={item.id} item={item} urgency={urgency} showTime />)}
+            </ul>
+          ) : (
+            <div className="space-y-5">
+              {grouped.map((g) => (
+                <section key={g.key}>
+                  <h2 className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-slate-400">
+                    <span>{g.icon}</span> {g.label} <span className="text-slate-300">({g.items.length})</span>
+                  </h2>
+                  <ul className="space-y-2">
+                    {g.items.map((item) => <Row key={item.id} item={item} urgency={urgencyOf(item, now)} />)}
+                  </ul>
+                </section>
+              ))}
+            </div>
+          )}
+        </>
       )}
     </main>
   );

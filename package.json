@@ -16,6 +16,7 @@
     "preview:rollover": "tsx scripts/preview-rollover.ts",
     "import:history": "tsx scripts/import-history.ts",
     "import:mstodo": "tsx scripts/import-mstodo.ts",
+    "tasklist:delete": "tsx scripts/delete-tasklist.ts",
     "import:real": "tsx scripts/import-real-history.ts",
     "db:backup": "tsx scripts/db-backup.ts",
     "db:restore": "tsx scripts/db-restore.ts"
