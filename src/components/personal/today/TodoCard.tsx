@@ -7,27 +7,24 @@ import { mutateTask, type TaskMutation } from "@/app/personal/os/actions";
 import { enqueue, flushOutbox, pendingCount } from "@/lib/os-sync/outbox";
 import type { Task } from "@/lib/integrations/google/tasks";
 
-// To-dos & reminders card. Google Tasks is the source of truth; changes go straight there
-// when online, and into the IndexedDB outbox (replayed on reconnect) when offline. UI is
-// optimistic so it feels instant either way.
-export function TodoCard({
-  tasklistId,
-  tasksConnected,
-  initial,
-}: {
-  tasklistId: string | null;
-  tasksConnected: boolean;
-  initial: Task[];
-}) {
+// To-dos & reminders card — full (minimalist) CRUD over Google Tasks. Add with an optional
+// due date; tap a to-do to edit its title/notes/due or delete it; check to complete. Online
+// changes go straight to Google; offline they queue in the IndexedDB outbox and replay on
+// reconnect. Optimistic UI throughout. (Note: Google's API can't set recurrence, so there's
+// no "repeat" here — that's a Google-app-only field.)
+const toDueISO = (d: string) => (d ? `${d}T00:00:00.000Z` : null);
+const toDateInput = (iso: string | null) => (iso ? iso.slice(0, 10) : "");
+
+export function TodoCard({ tasklistId, tasksConnected, initial }: { tasklistId: string | null; tasksConnected: boolean; initial: Task[] }) {
   const router = useRouter();
   const [tasks, setTasks] = useState<Task[]>(initial.filter((t) => !t.completed));
   const [draft, setDraft] = useState("");
+  const [draftDue, setDraftDue] = useState("");
   const [queued, setQueued] = useState(0);
+  const [editing, setEditing] = useState<Task | null>(null);
   const sig = initial.map((t) => t.id).join(",");
   const busy = useRef(false);
 
-  // Re-sync from the server's authoritative list when it changes — but not while we have
-  // un-flushed local changes (would clobber optimistic state).
   useEffect(() => {
     pendingCount().then((n) => {
       setQueued(n);
@@ -36,7 +33,6 @@ export function TodoCard({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sig]);
 
-  // Flush any queued offline changes on mount and whenever we come back online.
   useEffect(() => {
     const flush = async () => {
       if (typeof navigator !== "undefined" && !navigator.onLine) return;
@@ -51,9 +47,6 @@ export function TodoCard({
   }, []);
 
   const online = () => typeof navigator === "undefined" || navigator.onLine;
-
-  // Run a mutation online (direct) or stash it offline. clientId links an offline create to
-  // its later complete/delete before it has a real Google id.
   const run = async (m: TaskMutation, clientId?: string, onCreated?: (realId: string) => void) => {
     if (online()) {
       const res = await mutateTask(m).catch(() => ({ ok: false }) as const);
@@ -69,13 +62,12 @@ export function TodoCard({
   const add = async () => {
     const title = draft.trim();
     if (!title || !tasklistId) return;
-    setDraft("");
+    const dueISO = toDueISO(draftDue);
+    setDraft(""); setDraftDue("");
     const clientId = `local-${crypto.randomUUID()}`;
-    setTasks((t) => [{ id: clientId, title, notes: null, dueISO: null, completed: false }, ...t]);
+    setTasks((t) => [{ id: clientId, title, notes: null, dueISO, completed: false }, ...t]);
     busy.current = true;
-    await run({ op: "create", tasklistId, title }, clientId, (realId) =>
-      setTasks((t) => t.map((x) => (x.id === clientId ? { ...x, id: realId } : x))),
-    );
+    await run({ op: "create", tasklistId, title, dueISO }, clientId, (realId) => setTasks((t) => t.map((x) => (x.id === clientId ? { ...x, id: realId } : x))));
     busy.current = false;
   };
 
@@ -87,10 +79,30 @@ export function TodoCard({
     busy.current = false;
   };
 
+  const saveEdit = async (patch: { title: string; notes: string; due: string }) => {
+    if (!tasklistId || !editing) return;
+    const id = editing.id;
+    const next = { ...editing, title: patch.title.trim(), notes: patch.notes.trim() || null, dueISO: toDueISO(patch.due) };
+    setTasks((t) => t.map((x) => (x.id === id ? next : x)));
+    setEditing(null);
+    busy.current = true;
+    await run({ op: "update", tasklistId, taskId: id, title: next.title, notes: next.notes, dueISO: next.dueISO });
+    busy.current = false;
+  };
+
+  const remove = async () => {
+    if (!tasklistId || !editing) return;
+    const id = editing.id;
+    setTasks((t) => t.filter((x) => x.id !== id));
+    setEditing(null);
+    busy.current = true;
+    await run({ op: "delete", tasklistId, taskId: id });
+    busy.current = false;
+  };
+
   const fmtDue = (iso: string) => {
     const d = new Date(iso);
-    const overdue = d < new Date(new Date().toDateString());
-    return { label: d.toLocaleDateString("en-IN", { day: "numeric", month: "short" }), overdue };
+    return { label: d.toLocaleDateString("en-IN", { day: "numeric", month: "short" }), overdue: d < new Date(new Date().toDateString()) };
   };
 
   return (
@@ -107,19 +119,10 @@ export function TodoCard({
         </Link>
       ) : (
         <>
-          <form
-            onSubmit={(e) => { e.preventDefault(); add(); }}
-            className="mb-2 flex gap-2"
-          >
-            <input
-              value={draft}
-              onChange={(e) => setDraft(e.target.value)}
-              placeholder="Add a to-do…"
-              className="flex-1 rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100"
-            />
-            <button type="submit" disabled={!draft.trim() || !tasklistId} className="rounded-lg bg-emerald-600 px-3 py-2 text-sm font-medium text-white disabled:opacity-40">
-              Add
-            </button>
+          <form onSubmit={(e) => { e.preventDefault(); add(); }} className="mb-2 flex flex-wrap gap-2">
+            <input value={draft} onChange={(e) => setDraft(e.target.value)} placeholder="Add a to-do…" className="min-w-0 flex-1 rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100" />
+            <input type="date" value={draftDue} onChange={(e) => setDraftDue(e.target.value)} title="Due date (optional)" className="rounded-lg border border-slate-300 px-2 py-2 text-sm text-slate-600 outline-none focus:border-emerald-400" />
+            <button type="submit" disabled={!draft.trim() || !tasklistId} className="rounded-lg bg-emerald-600 px-3 py-2 text-sm font-medium text-white disabled:opacity-40">Add</button>
           </form>
 
           {tasks.length === 0 ? (
@@ -130,19 +133,14 @@ export function TodoCard({
                 const due = t.dueISO ? fmtDue(t.dueISO) : null;
                 return (
                   <li key={t.id} className="flex items-center gap-3 py-2.5">
-                    <button
-                      onClick={() => complete(t)}
-                      aria-label="Complete"
-                      className="grid h-5 w-5 shrink-0 place-items-center rounded-full border-2 border-slate-300 text-transparent hover:border-emerald-500 hover:text-emerald-500"
-                    >
+                    <button onClick={() => complete(t)} aria-label="Complete" className="grid h-5 w-5 shrink-0 place-items-center rounded-full border-2 border-slate-300 text-transparent hover:border-emerald-500 hover:text-emerald-500">
                       <svg width="12" height="12" viewBox="0 0 24 24" fill="none"><path d="M5 13l4 4L19 7" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" /></svg>
                     </button>
-                    <span className="min-w-0 flex-1 truncate text-sm text-slate-800">{t.title}</span>
-                    {due && (
-                      <span className={`shrink-0 text-[11px] font-medium ${due.overdue ? "text-red-600" : "text-slate-400"}`}>
-                        {due.overdue ? "overdue · " : ""}{due.label}
-                      </span>
-                    )}
+                    <button onClick={() => setEditing(t)} className="min-w-0 flex-1 text-left">
+                      <span className="block truncate text-sm text-slate-800">{t.title}</span>
+                      {t.notes && <span className="block truncate text-xs text-slate-400">{t.notes}</span>}
+                    </button>
+                    {due && <span className={`shrink-0 text-[11px] font-medium ${due.overdue ? "text-red-600" : "text-slate-400"}`}>{due.overdue ? "overdue · " : ""}{due.label}</span>}
                   </li>
                 );
               })}
@@ -150,6 +148,46 @@ export function TodoCard({
           )}
         </>
       )}
+
+      {editing && <EditModal task={editing} onClose={() => setEditing(null)} onSave={saveEdit} onDelete={remove} />}
     </section>
+  );
+}
+
+function EditModal({ task, onClose, onSave, onDelete }: { task: Task; onClose: () => void; onSave: (p: { title: string; notes: string; due: string }) => void; onDelete: () => void }) {
+  const [title, setTitle] = useState(task.title);
+  const [notes, setNotes] = useState(task.notes ?? "");
+  const [due, setDue] = useState(toDateInput(task.dueISO));
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 sm:items-center sm:p-4" onClick={onClose}>
+      <div className="w-full max-w-sm rounded-t-2xl bg-white shadow-xl sm:rounded-2xl" onClick={(e) => e.stopPropagation()} style={{ paddingBottom: "env(safe-area-inset-bottom)" }}>
+        <div className="flex items-center justify-between border-b border-slate-100 px-5 py-3">
+          <h2 className="text-base font-bold text-slate-900">Edit to-do</h2>
+          <button type="button" onClick={onClose} className="rounded-md px-2 text-slate-400 hover:bg-slate-100" aria-label="Close">✕</button>
+        </div>
+        <form onSubmit={(e) => { e.preventDefault(); if (title.trim()) onSave({ title, notes, due }); }} className="space-y-3 px-5 py-4">
+          <div>
+            <label className="text-xs font-medium text-slate-500">Title</label>
+            <input value={title} onChange={(e) => setTitle(e.target.value)} required className="input mt-1 w-full" />
+          </div>
+          <div>
+            <label className="text-xs font-medium text-slate-500">Notes</label>
+            <textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={2} placeholder="Optional details" className="input mt-1 w-full resize-none" />
+          </div>
+          <div>
+            <label className="text-xs font-medium text-slate-500">Due date</label>
+            <input type="date" value={due} onChange={(e) => setDue(e.target.value)} className="input mt-1 w-full" />
+          </div>
+          <div className="flex items-center justify-between border-t border-slate-100 pt-3">
+            <button type="button" onClick={onDelete} className="rounded-md px-3 py-2 text-sm font-medium text-red-600 hover:bg-red-50">Delete</button>
+            <div className="flex gap-2">
+              <button type="button" onClick={onClose} className="rounded-md px-3 py-2 text-sm text-slate-500 hover:bg-slate-100">Cancel</button>
+              <button type="submit" className="rounded-md bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700">Save</button>
+            </div>
+          </div>
+        </form>
+      </div>
+    </div>
   );
 }

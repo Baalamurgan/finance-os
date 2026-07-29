@@ -885,7 +885,7 @@ export async function toggleHold(formData: FormData) {
   revalidatePath("/", "layout");
 }
 
-// Per-bill reminder toggle: mute/unmute the 3-day-before due popup for one bill (head-only).
+// Per-bill reminder toggle: mute/unmute the due popup for one bill (head-only).
 export async function toggleRemind(formData: FormData) {
   if (!(await isHead())) return;
   const id = Number(formData.get("categoryId"));
@@ -893,6 +893,19 @@ export async function toggleRemind(formData: FormData) {
   const cat = await prisma.category.findUnique({ where: { id }, select: { remind: true } });
   if (!cat) return;
   await prisma.category.update({ where: { id }, data: { remind: !cat.remind } });
+  revalidatePath("/", "layout");
+}
+
+// Per-bill reminder settings (from the row's popup): notify on/off + how many days before due.
+export async function setBillReminderConfig(formData: FormData) {
+  if (!(await isHead())) return;
+  const id = Number(formData.get("categoryId"));
+  if (!id) return;
+  const remind = String(formData.get("remind")) === "on";
+  const rawDays = formData.get("reminderDays");
+  const n = rawDays == null || String(rawDays).trim() === "" ? null : Number(rawDays);
+  const reminderDays = n == null || Number.isNaN(n) ? null : Math.min(30, Math.max(0, Math.round(n)));
+  await prisma.category.update({ where: { id }, data: { remind, reminderDays } });
   revalidatePath("/", "layout");
 }
 

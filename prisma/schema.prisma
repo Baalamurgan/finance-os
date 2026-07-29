@@ -512,7 +512,8 @@ model Category {
   sinking      Boolean        @default(false) // true = accrues to its own hold until the bill is due
   cycleMonths  Int?           // payment cycle for sinking funds (WiFi=3, Mobile=12...)
   onHold       Boolean        @default(false) // paused: skipped when seeding new months & wind-down
-  remind       Boolean        @default(true) // per-bill: show the 3-day-before due popup (until paid)
+  remind       Boolean        @default(true) // per-bill: show the due popup (until paid)
+  reminderDays Int?          // per-bill: how many days before the due date to start reminding (null → default)
   fixed        Boolean        @default(false) // fixed monthly bill (e.g. subscription): a recurring Sheet expense tagged to the payer, not a budget
   // "Full bill on due month" (the alternative to a sinking fund for a periodic bill):
   // the whole billAmount lands as an expense ONLY in its due month(s) — no monthly share,

@@ -67,7 +67,7 @@ export default async function SetupPage({
     .filter((cat) => cat.tracked || cat.fixed || cat.billEveryMonths != null || cat.fundingStyle != null)
     .map((cat) => ({
       id: cat.id, name: cat.name, section: cat.section, monthlyBudget: cat.monthlyBudget,
-      sinking: cat.sinking, cycleMonths: cat.cycleMonths, onHold: cat.onHold, fixed: cat.fixed, remind: cat.remind,
+      sinking: cat.sinking, cycleMonths: cat.cycleMonths, onHold: cat.onHold, fixed: cat.fixed, remind: cat.remind, reminderDays: cat.reminderDays,
       responsibleMemberId: cat.responsibleMemberId ?? null, payerMemberId: cat.payerMemberId ?? null,
       billEveryMonths: cat.billEveryMonths, billMonth: cat.billMonth, billDay: cat.billDay, billAmount: cat.billAmount,
       fundingStyle: cat.fundingStyle, saveEveryMonths: cat.saveEveryMonths, onUnpaid: cat.onUnpaid, needsReview: cat.needsReview,

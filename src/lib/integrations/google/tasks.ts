@@ -88,11 +88,12 @@ export async function completeTask(memberId: number, tasklistId: string, taskId:
   return res.ok;
 }
 
-export async function updateTask(memberId: number, tasklistId: string, taskId: string, patch: { title?: string; dueISO?: string | null }): Promise<boolean> {
+export async function updateTask(memberId: number, tasklistId: string, taskId: string, patch: { title?: string; dueISO?: string | null; notes?: string | null }): Promise<boolean> {
   const token = await getGoogleAccessToken(memberId);
   if (!token) return false;
   const body: Record<string, unknown> = {};
   if (patch.title != null) body.title = patch.title;
+  if (patch.notes !== undefined) body.notes = patch.notes ?? "";
   if (patch.dueISO !== undefined) body.due = patch.dueISO; // null clears the due date
   const res = await api(token, `/lists/${encodeURIComponent(tasklistId)}/tasks/${encodeURIComponent(taskId)}`, {
     method: "PATCH",

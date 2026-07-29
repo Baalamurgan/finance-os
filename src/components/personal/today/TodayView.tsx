@@ -2,9 +2,12 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { formatINR } from "@/lib/format";
 import { buildTimeline, buildGrouped, urgencyOf, type TodayItem, type Urgency } from "@/lib/os/timeline";
 import { TodoCard } from "@/components/personal/today/TodoCard";
+import { flushOutbox } from "@/lib/os-sync/outbox";
+import { mutateTask } from "@/app/personal/os/actions";
 import type { Task } from "@/lib/integrations/google/tasks";
 
 type Summary = { canSpend: number | null; personalExpense: number | null };
@@ -43,9 +46,25 @@ export function TodayView({
   name: string;
   generatedAtISO: string;
 }) {
+  const router = useRouter();
   const [view, setView] = useState<"timeline" | "grouped">("timeline");
   const [offline, setOffline] = useState(false);
+  const [syncing, setSyncing] = useState(false);
   const [snapshot, setSnapshot] = useState<{ items: TodayItem[]; at: string } | null>(null);
+
+  // Manual sync: push any queued offline to-do changes to Google, then re-pull the whole
+  // dashboard (calendar + tasks are fetched live server-side on refresh).
+  const sync = async () => {
+    if (syncing) return;
+    setSyncing(true);
+    try {
+      await flushOutbox(mutateTask);
+      router.refresh();
+      await new Promise((r) => setTimeout(r, 600));
+    } finally {
+      setSyncing(false);
+    }
+  };
 
   // Persist the last good payload so an offline open still shows something useful, and
   // remember the view choice.
@@ -80,16 +99,26 @@ export function TodayView({
 
   return (
     <main className="mx-auto max-w-2xl space-y-4 p-4 pb-28 sm:p-6">
-      <header>
-        <h1 className="text-2xl font-bold text-slate-900">
-          {greeting(now)}{name ? `, ${name.split(" ")[0]}` : ""}.
-        </h1>
-        <p className="text-sm text-slate-500">
-          {now.toLocaleDateString("en-IN", { weekday: "long", day: "numeric", month: "long" })}
-          {summary.canSpend != null && (
-            <> · <span className={summary.canSpend >= 0 ? "text-emerald-700" : "text-red-600"}>{formatINR(summary.canSpend)} left to spend</span></>
-          )}
-        </p>
+      <header className="flex items-start justify-between gap-3">
+        <div>
+          <h1 className="text-2xl font-bold text-slate-900">
+            {greeting(now)}{name ? `, ${name.split(" ")[0]}` : ""}.
+          </h1>
+          <p className="text-sm text-slate-500">
+            {now.toLocaleDateString("en-IN", { weekday: "long", day: "numeric", month: "long" })}
+            {summary.canSpend != null && (
+              <> · <span className={summary.canSpend >= 0 ? "text-emerald-700" : "text-red-600"}>{formatINR(summary.canSpend)} left to spend</span></>
+            )}
+          </p>
+        </div>
+        <button
+          onClick={sync}
+          disabled={syncing || offline}
+          title="Sync Google Calendar & Tasks"
+          className="flex shrink-0 items-center gap-1.5 rounded-full border border-emerald-200 bg-white px-3 py-1.5 text-xs font-medium text-emerald-700 hover:bg-emerald-50 disabled:opacity-50"
+        >
+          <span className={syncing ? "animate-spin" : ""}>↻</span> {syncing ? "Syncing…" : "Sync"}
+        </button>
       </header>
 
       {offline && (

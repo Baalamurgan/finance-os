@@ -103,7 +103,7 @@ export function PersonalNav({
             ))}
           </select>
 
-          <RemindersBell />
+          <RemindersBell context="personal" />
 
           <form action={exitToFamily}>
             <button className="rounded-full border border-emerald-200 bg-white px-3 py-1.5 text-xs font-medium text-emerald-800 hover:bg-emerald-100">

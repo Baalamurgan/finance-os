@@ -1,7 +1,8 @@
 "use client";
 
 import { useActionState, useEffect, useState } from "react";
-import { saveAllRecurring, toggleHold, toggleRemind, deleteCategory, createCategory } from "@/app/actions";
+import { saveAllRecurring, toggleHold, deleteCategory, createCategory } from "@/app/actions";
+import { BillReminderModal } from "@/components/BillReminderModal";
 import { formatINR } from "@/lib/format";
 import { useToast } from "@/components/Toast";
 
@@ -15,6 +16,7 @@ type Row = {
   onHold: boolean;
   fixed: boolean;
   remind: boolean;
+  reminderDays: number | null;
   responsibleMemberId: number | null;
   payerMemberId: number | null;
   billEveryMonths: number | null;
@@ -354,19 +356,10 @@ function SetupRow({ r, draft, patch, members, readOnly }: { r: Row; draft: Draft
           <span className="text-xs text-slate-300">{r.onHold ? "off" : "on"}</span>
         ) : (
           <div className="flex items-center gap-2">
-            {/* per-bill reminder mute — only for bills (they have a due date & a paid state) */}
+            {/* per-bill reminder settings popup — only for bills (they have a due date & a paid
+                state). The month On/Off (pause) toggle stays inline, to its right. */}
             {(r.fixed || r.billEveryMonths != null || r.fundingStyle != null) && (
-              <form action={toggleRemind}>
-                <input type="hidden" name="categoryId" value={r.id} />
-                <button
-                  type="submit"
-                  aria-pressed={r.remind}
-                  title={r.remind ? "Reminder on — nags 3 days before the due date until paid. Tap to mute." : "Reminder muted. Tap to turn on."}
-                  className={`rounded-md px-1.5 py-1 text-sm transition-colors ${r.remind ? "text-amber-500 hover:bg-amber-50" : "text-slate-300 hover:bg-slate-100"}`}
-                >
-                  {r.remind ? "🔔" : "🔕"}
-                </button>
-              </form>
+              <BillReminderModal categoryId={r.id} name={r.name} remind={r.remind} reminderDays={r.reminderDays} />
             )}
             <form action={toggleHold}>
               <input type="hidden" name="categoryId" value={r.id} />

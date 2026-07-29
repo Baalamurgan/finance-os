@@ -38,7 +38,7 @@ export async function getBillReminders(householdId: number, now = new Date()): P
       where: { householdId, remind: true, onHold: false, kind: "expense" },
       select: {
         id: true, name: true, fixed: true, billEveryMonths: true, billMonth: true, billDay: true,
-        billAmount: true, responsibleMemberId: true, payerMemberId: true,
+        billAmount: true, responsibleMemberId: true, payerMemberId: true, reminderDays: true,
       },
     }),
     prisma.period.findMany({ where: { householdId }, select: { id: true, year: true, month: true, status: true } }),
@@ -71,7 +71,7 @@ export async function getBillReminders(householdId: number, now = new Date()): P
   const today = midnight(now);
   const out: BillReminder[] = [];
 
-  const inWindow = (days: number) => days <= BILL_REMINDER_WINDOW_DAYS && days >= -OVERDUE_LIMIT_DAYS;
+  const inWindow = (days: number, window: number) => days <= window && days >= -OVERDUE_LIMIT_DAYS;
   const push = (dueDate: Date, catId: number, name: string, amount: number | null, respIds: (number | null)[]) => {
     const days = Math.round((midnight(dueDate).getTime() - today.getTime()) / 86400000);
     const recipientIds = [...new Set([...respIds.filter((x): x is number => x != null), ...leaders])];
@@ -80,6 +80,7 @@ export async function getBillReminders(householdId: number, now = new Date()): P
 
   for (const c of categories) {
     const day = c.billDay && c.billDay >= 1 && c.billDay <= 28 ? c.billDay : 1; // "assume the 1st if no date"
+    const window = c.reminderDays ?? BILL_REMINDER_WINDOW_DAYS; // per-bill lead time (default 3)
 
     // A) periodic / annual due-month bills
     if (c.billMonth != null) {
@@ -92,7 +93,7 @@ export async function getBillReminders(householdId: number, now = new Date()): P
         const per = periodByYM.get(`${ym.year}:${ym.month}`);
         if (per && paidSet.has(`${c.id}:${per.id}`)) continue; // paid → no nag
         const days = Math.round((d.getTime() - today.getTime()) / 86400000);
-        if (!inWindow(days)) continue;
+        if (!inWindow(days, window)) continue;
         if (!best || Math.abs(days) < Math.abs(best.days)) best = { date: d, days };
       }
       if (best) push(best.date, c.id, c.name, c.billAmount, [c.payerMemberId, c.responsibleMemberId]);
@@ -105,7 +106,7 @@ export async function getBillReminders(householdId: number, now = new Date()): P
     if (c.fixed && openPeriod && fixedHasLine.has(c.id) && !fixedPaid.has(c.id)) {
       const d = new Date(openPeriod.year, openPeriod.month - 1, day);
       const days = Math.round((d.getTime() - today.getTime()) / 86400000);
-      if (inWindow(days)) push(d, c.id, c.name, c.billAmount, [c.responsibleMemberId, c.payerMemberId, fixedPayer.get(c.id) ?? null]);
+      if (inWindow(days, window)) push(d, c.id, c.name, c.billAmount, [c.responsibleMemberId, c.payerMemberId, fixedPayer.get(c.id) ?? null]);
     }
   }
 

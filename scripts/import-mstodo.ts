@@ -70,11 +70,26 @@ async function googleToken(): Promise<{ memberId: number; token: string }> {
 
 // ── Google Tasks API ───────────────────────────────────────────────────────────
 const TASKS = "https://tasks.googleapis.com/tasks/v1";
-async function g<T>(token: string, path: string, init?: RequestInit): Promise<T> {
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+const THROTTLE_MS = 500; // pace writes so we don't trip the burst limit
+
+// The Tasks API has a tight per-user rate/quota. On 429/403-quota we back off and retry, so a
+// bulk import rides through the limit instead of failing (and re-runs skip what's already there).
+async function g<T>(token: string, path: string, init?: RequestInit, attempt = 0): Promise<T> {
   const res = await fetch(`${TASKS}${path}`, {
     ...init,
     headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json", ...(init?.headers ?? {}) },
   });
+  if (res.status === 429 || res.status === 403) {
+    const body = await res.text();
+    if (/quota|rate/i.test(body) && attempt < 8) {
+      const wait = Math.min(64000, 2000 * 2 ** attempt);
+      console.warn(`   … rate-limited — waiting ${wait / 1000}s then retrying (attempt ${attempt + 1}/8)`);
+      await sleep(wait);
+      return g(token, path, init, attempt + 1);
+    }
+    throw new Error(`Google Tasks ${init?.method ?? "GET"} ${path} → ${res.status}: ${body.slice(0, 200)}`);
+  }
   if (!res.ok) throw new Error(`Google Tasks ${init?.method ?? "GET"} ${path} → ${res.status}: ${(await res.text()).slice(0, 200)}`);
   return (res.status === 204 ? undefined : await res.json()) as T;
 }
@@ -87,8 +102,18 @@ async function createTasklist(token: string, title: string): Promise<GList> {
   return g<GList>(token, "/users/@me/lists", { method: "POST", body: JSON.stringify({ title }) });
 }
 async function listTaskTitles(token: string, listId: string): Promise<Set<string>> {
-  const data = await g<{ items?: { title?: string }[] }>(token, `/lists/${encodeURIComponent(listId)}/tasks?showCompleted=true&showHidden=true&maxResults=100`);
-  return new Set((data.items ?? []).map((t) => (t.title ?? "").trim().toLowerCase()).filter(Boolean));
+  const titles = new Set<string>();
+  let pageToken: string | undefined;
+  do {
+    const qs = `showCompleted=true&showHidden=true&maxResults=100${pageToken ? `&pageToken=${pageToken}` : ""}`;
+    const data = await g<{ items?: { title?: string }[]; nextPageToken?: string }>(token, `/lists/${encodeURIComponent(listId)}/tasks?${qs}`);
+    for (const t of data.items ?? []) {
+      const s = (t.title ?? "").trim().toLowerCase();
+      if (s) titles.add(s);
+    }
+    pageToken = data.nextPageToken;
+  } while (pageToken);
+  return titles;
 }
 async function createTask(token: string, listId: string, t: GoogleTask): Promise<void> {
   const body: Record<string, unknown> = { title: t.title };
@@ -178,7 +203,9 @@ async function main() {
 
   for (const { list, tasks } of input) {
     const all = tasks.map(toGoogle).filter((x): x is GoogleTask => x != null);
-    const usable = ACTIVE_ONLY ? all.filter((t) => !t.completed) : all;
+    // Active before completed, so when a title appears as both, the de-dupe keeps the
+    // active (still-to-do) one rather than marking it done.
+    const usable = (ACTIVE_ONLY ? all.filter((t) => !t.completed) : all).sort((a, b) => Number(a.completed) - Number(b.completed));
     const activeCount = usable.filter((t) => !t.completed).length;
     const completedCount = usable.length - activeCount;
 
@@ -200,7 +227,10 @@ async function main() {
         skipped++;
         continue;
       }
-      if (COMMIT && target) await createTask(token, target.id, task);
+      if (COMMIT && target) {
+        await createTask(token, target.id, task);
+        await sleep(THROTTLE_MS);
+      }
       existingTitles.add(task.title.toLowerCase());
       created++;
       console.log(`   ${COMMIT ? "✓" : "·"} ${task.completed ? "☑" : "☐"} ${task.title}${task.due ? `  (due ${task.due.slice(0, 10)})` : ""}`);

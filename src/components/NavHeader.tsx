@@ -10,6 +10,7 @@ import { WindDownBanner } from "@/components/WindDownBanner";
 import { WindDownPopup } from "@/components/WindDownPopup";
 import { CardDueHighAlert } from "@/components/personal/CardDueHighAlert";
 import { BillDueHighAlert } from "@/components/BillDueHighAlert";
+import { RemindersBell } from "@/components/personal/RemindersBell";
 import { setViewAs } from "@/app/actions";
 import { formatINR } from "@/lib/format";
 import { MISC_SUBCATEGORIES } from "@/lib/misc";
@@ -196,6 +197,8 @@ export function NavHeader({
               subCategories={MISC_SUBCATEGORIES}
             />
           )}
+
+          <RemindersBell context="family" />
 
           {/* identity */}
           <div className="border-l border-slate-200 pl-2">
