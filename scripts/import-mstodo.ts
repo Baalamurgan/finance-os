@@ -13,8 +13,10 @@
 // USAGE:
 //   npm run import:mstodo                 # DRY RUN — shows the plan, writes nothing
 //   npm run import:mstodo -- --commit     # actually create the lists + tasks
-//   flags: --include-completed  --email=you@gmail.com  --dir=scripts/data/mstodo
+//   flags: --active-only  --email=you@gmail.com  --dir=scripts/data/mstodo
 //
+// By default EVERYTHING is imported; completed items are created already-completed (they land
+// in Google Tasks' "Completed" section). --active-only skips completed.
 // Safe to re-run: a task whose title already exists in the target Google list is skipped.
 
 import { config } from "dotenv";
@@ -31,7 +33,7 @@ const prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString: proc
 
 const args = process.argv.slice(2);
 const COMMIT = args.includes("--commit");
-const INCLUDE_COMPLETED = args.includes("--include-completed");
+const ACTIVE_ONLY = args.includes("--active-only"); // default imports everything, preserving completed
 const EMAIL = args.find((a) => a.startsWith("--email="))?.slice("--email=".length) ?? null;
 const DIR = args.find((a) => a.startsWith("--dir="))?.slice("--dir=".length) ?? "scripts/data/mstodo";
 
@@ -88,13 +90,27 @@ async function listTaskTitles(token: string, listId: string): Promise<Set<string
   const data = await g<{ items?: { title?: string }[] }>(token, `/lists/${encodeURIComponent(listId)}/tasks?showCompleted=true&showHidden=true&maxResults=100`);
   return new Set((data.items ?? []).map((t) => (t.title ?? "").trim().toLowerCase()).filter(Boolean));
 }
-async function createTask(token: string, listId: string, body: { title: string; notes?: string; due?: string }): Promise<void> {
+async function createTask(token: string, listId: string, t: GoogleTask): Promise<void> {
+  const body: Record<string, unknown> = { title: t.title };
+  if (t.notes) body.notes = t.notes;
+  if (t.due) body.due = t.due;
+  if (t.completed) {
+    body.status = "completed";
+    body.completed = t.completedISO ?? new Date().toISOString(); // → Google's "Completed" section
+  }
   await g(token, `/lists/${encodeURIComponent(listId)}/tasks`, { method: "POST", body: JSON.stringify(body) });
 }
 
 // ── Microsoft To Do input parsing ───────────────────────────────────────────────
-type MsTask = { title?: string; status?: string; body?: { content?: string; contentType?: string }; dueDateTime?: { dateTime?: string } };
+type MsTask = {
+  title?: string;
+  status?: string;
+  body?: { content?: string; contentType?: string };
+  dueDateTime?: { dateTime?: string };
+  completedDateTime?: { dateTime?: string };
+};
 type MsList = { id: string; displayName: string };
+type GoogleTask = { title: string; notes?: string; due?: string; completed: boolean; completedISO?: string };
 
 const sanitize = (s: string) => s.replace(/[^a-z0-9]+/gi, "").toLowerCase();
 const stripHtml = (s: string) =>
@@ -109,31 +125,44 @@ function loadInput(): { list: MsList; tasks: MsTask[] }[] {
   if (!existsSync(listsPath)) throw new Error(`Missing ${listsPath}. Save the GET /me/todo/lists response there.`);
   const lists = readJson<{ value?: MsList[] }>(listsPath).value ?? [];
   const files = readdirSync(DIR).filter((f) => f.endsWith(".json") && f !== "lists.json");
-  const byName = new Map(files.map((f) => [sanitize(basename(f, ".json")), f]));
 
+  // A tasks file belongs to a list if its (sanitized) name equals the list name, or the
+  // list name followed by digits — so multi-page exports like "Tasks-2.json" merge in.
   const out: { list: MsList; tasks: MsTask[] }[] = [];
   for (const list of lists) {
-    const file = byName.get(sanitize(list.displayName));
-    if (!file) {
+    const key = sanitize(list.displayName);
+    const matches = files.filter((f) => {
+      const s = sanitize(basename(f, ".json"));
+      return s === key || (s.startsWith(key) && /^\d+$/.test(s.slice(key.length)));
+    });
+    if (matches.length === 0) {
       console.warn(`  ⚠︎  no tasks file for list "${list.displayName}" (expected ${list.displayName}.json) — skipping`);
       continue;
     }
-    const parsed = readJson<{ value?: MsTask[]; "@odata.nextLink"?: string }>(join(DIR, file));
-    if (parsed["@odata.nextLink"]) console.warn(`  ⚠︎  "${list.displayName}" has MORE tasks than captured (pagination) — fetch the nextLink page too.`);
-    out.push({ list, tasks: parsed.value ?? [] });
+    const tasks: MsTask[] = [];
+    for (const file of matches) {
+      const parsed = readJson<{ value?: MsTask[]; "@odata.nextLink"?: string }>(join(DIR, file));
+      if (parsed["@odata.nextLink"]) console.warn(`  ⚠︎  "${file}" still has an @odata.nextLink — a later page is missing.`);
+      tasks.push(...(parsed.value ?? []));
+    }
+    out.push({ list, tasks });
   }
   return out;
 }
 
-function toGoogle(t: MsTask): { title: string; notes?: string; due?: string } | null {
+function toGoogle(t: MsTask): GoogleTask | null {
   const title = t.title?.trim();
   if (!title) return null;
   const notes = t.body?.content ? (t.body.contentType === "html" ? stripHtml(t.body.content) : t.body.content.trim()) : "";
   const dueDate = t.dueDateTime?.dateTime ? t.dueDateTime.dateTime.slice(0, 10) : null; // YYYY-MM-DD
+  const completed = t.status === "completed";
+  const completedISO = t.completedDateTime?.dateTime ? new Date(t.completedDateTime.dateTime).toISOString() : undefined;
   return {
     title,
     ...(notes ? { notes } : {}),
     ...(dueDate ? { due: `${dueDate}T00:00:00.000Z` } : {}),
+    completed,
+    ...(completedISO ? { completedISO } : {}),
   };
 }
 
@@ -148,13 +177,12 @@ async function main() {
   let created = 0, skipped = 0, listsMade = 0;
 
   for (const { list, tasks } of input) {
-    const completedSkipped = INCLUDE_COMPLETED ? 0 : tasks.filter((t) => t.status === "completed").length;
-    const usable = tasks
-      .filter((t) => INCLUDE_COMPLETED || t.status !== "completed")
-      .map(toGoogle)
-      .filter((x): x is { title: string; notes?: string; due?: string } => x != null);
+    const all = tasks.map(toGoogle).filter((x): x is GoogleTask => x != null);
+    const usable = ACTIVE_ONLY ? all.filter((t) => !t.completed) : all;
+    const activeCount = usable.filter((t) => !t.completed).length;
+    const completedCount = usable.length - activeCount;
 
-    console.log(`\n📋 ${list.displayName}  (${usable.length} to-do${usable.length === 1 ? "" : "s"}${completedSkipped ? `, ${completedSkipped} completed skipped` : ""})`);
+    console.log(`\n📋 ${list.displayName}  (${activeCount} active${completedCount ? `, ${completedCount} completed` : ""})`);
 
     let target = listByTitle.get(list.displayName.trim().toLowerCase()) ?? null;
     if (!target) {
@@ -175,7 +203,7 @@ async function main() {
       if (COMMIT && target) await createTask(token, target.id, task);
       existingTitles.add(task.title.toLowerCase());
       created++;
-      console.log(`   ${COMMIT ? "✓" : "·"} ${task.title}${task.due ? `  (due ${task.due.slice(0, 10)})` : ""}`);
+      console.log(`   ${COMMIT ? "✓" : "·"} ${task.completed ? "☑" : "☐"} ${task.title}${task.due ? `  (due ${task.due.slice(0, 10)})` : ""}`);
     }
   }
 
