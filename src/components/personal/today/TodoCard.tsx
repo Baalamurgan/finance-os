@@ -22,6 +22,7 @@ export function TodoCard({ lists, tasksConnected, initial }: { lists: TaskList[]
   const [draftDue, setDraftDue] = useState("");
   const [draftList, setDraftList] = useState(lists[0]?.id ?? "");
   const [filter, setFilter] = useState<string>("all");
+  const [showAll, setShowAll] = useState(false);
   const [queued, setQueued] = useState(0);
   const [editing, setEditing] = useState<TaskWithList | null>(null);
   const sig = initial.map((t) => t.id).join(",");
@@ -113,8 +114,15 @@ export function TodoCard({ lists, tasksConnected, initial }: { lists: TaskList[]
     return { label: d.toLocaleDateString("en-IN", { day: "numeric", month: "short" }), overdue: d < new Date(new Date().toDateString()) };
   };
 
+  // "Due today or earlier" — the agenda for the Day tab. dueISO is a UTC date; comparing
+  // against tomorrow's local midnight cleanly captures today + anything overdue.
+  const tomorrow = new Date(new Date().toDateString());
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  const dueToday = (t: TaskWithList) => t.dueISO != null && new Date(t.dueISO) < tomorrow;
+  const todays = tasks.filter(dueToday).sort((a, b) => (a.dueISO ?? "").localeCompare(b.dueISO ?? ""));
+
+  // The full backlog (all lists, exactly as before) — lives in a collapsible section.
   const shown = filter === "all" ? tasks : tasks.filter((t) => t.tasklistId === filter);
-  // group by list, in the lists' own order, for the "all" view
   const groups = lists
     .map((l) => ({ list: l, items: shown.filter((t) => t.tasklistId === l.id) }))
     .filter((g) => g.items.length > 0);
@@ -138,16 +146,8 @@ export function TodoCard({ lists, tasksConnected, initial }: { lists: TaskList[]
   return (
     <section className="rounded-xl border border-slate-200 bg-white p-4">
       <div className="mb-2 flex items-center justify-between gap-2">
-        <h2 className="flex items-center gap-1.5 text-sm font-semibold text-slate-800">✅ To-dos</h2>
-        <div className="flex items-center gap-2">
-          {queued > 0 && <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-medium text-slate-500">{queued} queued</span>}
-          {tasksConnected && lists.length > 1 && (
-            <select value={filter} onChange={(e) => setFilter(e.target.value)} className="rounded-md border border-slate-200 px-2 py-1 text-xs text-slate-600 outline-none">
-              <option value="all">All lists</option>
-              {lists.map((l) => <option key={l.id} value={l.id}>{l.title}</option>)}
-            </select>
-          )}
-        </div>
+        <h2 className="flex items-center gap-1.5 text-sm font-semibold text-slate-800">✅ To-dos for today</h2>
+        {queued > 0 && <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-medium text-slate-500">{queued} queued</span>}
       </div>
 
       {!tasksConnected ? (
@@ -157,7 +157,7 @@ export function TodoCard({ lists, tasksConnected, initial }: { lists: TaskList[]
         </Link>
       ) : (
         <>
-          <form onSubmit={(e) => { e.preventDefault(); add(); }} className="mb-2 flex flex-wrap gap-2">
+          <form onSubmit={(e) => { e.preventDefault(); add(); }} className="mb-3 flex flex-wrap gap-2">
             <input value={draft} onChange={(e) => setDraft(e.target.value)} placeholder="Add a to-do…" className="min-w-0 flex-1 rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100" />
             <input type="date" value={draftDue} onChange={(e) => setDraftDue(e.target.value)} title="Due date (optional)" className="rounded-lg border border-slate-300 px-2 py-2 text-sm text-slate-600 outline-none focus:border-emerald-400" />
             {lists.length > 1 && (
@@ -168,20 +168,48 @@ export function TodoCard({ lists, tasksConnected, initial }: { lists: TaskList[]
             <button type="submit" disabled={!draft.trim() || lists.length === 0} className="rounded-lg bg-emerald-600 px-3 py-2 text-sm font-medium text-white disabled:opacity-40">Add</button>
           </form>
 
-          {shown.length === 0 ? (
-            <p className="py-3 text-center text-xs text-slate-400">No open to-dos here. Nice.</p>
-          ) : filter === "all" ? (
-            <div className="space-y-3">
-              {groups.map((g) => (
-                <div key={g.list.id}>
-                  <h3 className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">{g.list.title} <span className="text-slate-300">({g.items.length})</span></h3>
-                  <ul className="divide-y divide-slate-100">{g.items.map(TaskRow)}</ul>
-                </div>
-              ))}
-            </div>
+          {/* Today's agenda: due today or overdue, across every list */}
+          {todays.length === 0 ? (
+            <p className="py-3 text-center text-xs text-slate-400">Nothing due today. Nice.</p>
           ) : (
-            <ul className="divide-y divide-slate-100">{shown.map(TaskRow)}</ul>
+            <ul className="divide-y divide-slate-100">{todays.map(TaskRow)}</ul>
           )}
+
+          {/* Full backlog (every list) — tucked away so the Day view stays focused on today */}
+          <div className="mt-3 border-t border-slate-100 pt-2">
+            <button
+              onClick={() => setShowAll((s) => !s)}
+              className="flex w-full items-center justify-between text-xs font-medium text-slate-500 hover:text-slate-800"
+            >
+              <span>All to-dos <span className="text-slate-300">({tasks.length})</span></span>
+              <span className={`transition ${showAll ? "rotate-180" : ""}`}>⌄</span>
+            </button>
+
+            {showAll && (
+              <div className="mt-2">
+                {lists.length > 1 && (
+                  <select value={filter} onChange={(e) => setFilter(e.target.value)} className="mb-2 rounded-md border border-slate-200 px-2 py-1 text-xs text-slate-600 outline-none">
+                    <option value="all">All lists</option>
+                    {lists.map((l) => <option key={l.id} value={l.id}>{l.title}</option>)}
+                  </select>
+                )}
+                {shown.length === 0 ? (
+                  <p className="py-3 text-center text-xs text-slate-400">No open to-dos here.</p>
+                ) : filter === "all" ? (
+                  <div className="space-y-3">
+                    {groups.map((g) => (
+                      <div key={g.list.id}>
+                        <h3 className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">{g.list.title} <span className="text-slate-300">({g.items.length})</span></h3>
+                        <ul className="divide-y divide-slate-100">{g.items.map(TaskRow)}</ul>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <ul className="divide-y divide-slate-100">{shown.map(TaskRow)}</ul>
+                )}
+              </div>
+            )}
+          </div>
         </>
       )}
 
