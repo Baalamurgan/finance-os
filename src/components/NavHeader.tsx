@@ -48,6 +48,7 @@ export function NavHeader({
     | "activity"
     | "analysis"
     | "piggy"
+    | "notes"
     | "loans"
     | "settlement"
     | "wind-down"
@@ -94,6 +95,7 @@ export function NavHeader({
     { key: "activity", label: "Activity", href: "/activity" },
     { key: "analysis", label: "Analysis", href: "/analysis" },
     { key: "piggy", label: "Piggy", href: "/piggy" },
+    { key: "notes", label: "Notes", href: "/notes" },
     { key: "loans", label: "Loans & Chits", href: "/loans" },
   ];
 

@@ -18,6 +18,11 @@ model Household {
   piggyHolderMemberId Int? // who physically holds the Piggy/pool in the in-hand view (defaults to head)
   windDownDay Int? // day of month the head aims to close/wind down; drives the reminder
   billRemindersOn Boolean @default(true) // master switch for the 3-day-before bill-due popups
+  // A single shared family scratch note (behind the app lock). Any member can edit it — a
+  // common place for important household details everyone should see.
+  notes            String?
+  notesUpdatedAt   DateTime?
+  notesUpdatedById Int?
   // App-lock: one shared PIN for the whole household (set/reset by the head).
   // Everyone enters it after Google login. null = lock disabled.
   pinHash           String? // PBKDF2 hash of the 4-digit PIN

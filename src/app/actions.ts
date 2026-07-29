@@ -909,6 +909,25 @@ export async function setBillReminderConfig(formData: FormData) {
   revalidatePath("/", "layout");
 }
 
+// Shared family note: ANY signed-in member may edit it (deliberately not head-gated) — it's
+// a common scratch pad. Still protected by the household app-lock like everything else.
+export type NoteState = { ok: boolean; n: number };
+export async function saveFamilyNote(prev: NoteState, formData: FormData): Promise<NoteState> {
+  const session = await auth();
+  if (!session?.user) return { ok: false, n: prev.n };
+  if (!(await unlocked())) return { ok: false, n: prev.n };
+  const household = await prisma.household.findFirst({ select: { id: true } });
+  if (!household) return { ok: false, n: prev.n };
+  const raw = String(formData.get("notes") ?? "");
+  const notes = raw.slice(0, 20000); // generous cap; it's a note, not a document store
+  await prisma.household.update({
+    where: { id: household.id },
+    data: { notes, notesUpdatedAt: new Date(), notesUpdatedById: session.user.memberId ?? null },
+  });
+  revalidatePath("/notes");
+  return { ok: true, n: prev.n + 1 };
+}
+
 // Master switch for bill-due reminders (head-only) — Settings.
 export async function setBillReminders(formData: FormData) {
   if (!(await isHead())) return;
