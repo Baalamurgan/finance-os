@@ -412,6 +412,7 @@ model CreditCardDetail {
   creditLimit   Float?
   statementDay  Int?     // 1–28: day of month the statement generates
   dueOffsetDays Int?     // days after the statement date the payment is due
+  reminderDays  Int?     // how many days before the due date the reminder fires (null → default)
 }
 
 // One ledger line on an account. The dashboard computes ONLY from these confirmed rows.

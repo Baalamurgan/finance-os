@@ -15,10 +15,28 @@ export type CardHighAlert = { cardName: string; dueISO: string; daysUntilDue: nu
 export async function getMyCardHighAlerts(): Promise<CardHighAlert[]> {
   const member = await me();
   if (!member) return [];
+  // getCardBillReminders already windows each card by its own reminderDays (default 5),
+  // so the popup fires exactly per the card's configured lead time.
   const reminders = await getCardBillReminders(member.id);
-  return reminders
-    .filter((r) => r.daysUntilDue <= 3)
-    .map((r) => ({ cardName: r.cardName, dueISO: r.dueISO, daysUntilDue: r.daysUntilDue, overdue: r.overdue }));
+  return reminders.map((r) => ({ cardName: r.cardName, dueISO: r.dueISO, daysUntilDue: r.daysUntilDue, overdue: r.overdue }));
+}
+
+// The bell's reminder inbox: every active card reminder (within its lead window or overdue),
+// with a link to pay. An item disappears here once its bill is marked paid — nothing to store.
+export type CardReminderItem = { cardId: number; cardName: string; color: string; dueISO: string; daysUntilDue: number; overdue: boolean; amount: number };
+export async function getMyCardReminders(): Promise<CardReminderItem[]> {
+  const member = await me();
+  if (!member) return [];
+  const reminders = await getCardBillReminders(member.id);
+  return reminders.map((r) => ({
+    cardId: r.cardId,
+    cardName: r.cardName,
+    color: r.color,
+    dueISO: r.dueISO,
+    daysUntilDue: r.daysUntilDue,
+    overdue: r.overdue,
+    amount: r.taggedTotal || r.ledgerOutstanding || 0,
+  }));
 }
 
 async function me() {

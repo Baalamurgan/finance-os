@@ -92,10 +92,12 @@ export async function setCreditConfig(formData: FormData) {
   const account = await prisma.financeAccount.findFirst({ where: { id, memberId: member.id } });
   if (!account || account.type !== "credit_card") return;
   const clampDay = (n: number | null) => (n == null ? null : Math.min(28, Math.max(1, Math.round(n))));
+  const clampReminder = (n: number | null) => (n == null ? null : Math.min(30, Math.max(0, Math.round(n))));
   const data = {
     creditLimit: num(formData.get("creditLimit")),
     statementDay: clampDay(num(formData.get("statementDay"))),
     dueOffsetDays: num(formData.get("dueOffsetDays")),
+    reminderDays: clampReminder(num(formData.get("reminderDays"))),
   };
   await prisma.creditCardDetail.upsert({
     where: { accountId: id },

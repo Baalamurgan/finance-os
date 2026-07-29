@@ -110,6 +110,9 @@ export default async function CreditCardDetail({
             <label className="text-xs font-medium text-slate-500">Due after (days)
               <input name="dueOffsetDays" defaultValue={cfg?.dueOffsetDays ?? ""} inputMode="numeric" className="input mt-1 w-full" />
             </label>
+            <label className="text-xs font-medium text-slate-500">Remind me before (days)
+              <input name="reminderDays" defaultValue={cfg?.reminderDays ?? ""} inputMode="numeric" placeholder="5" className="input mt-1 w-full" />
+            </label>
             <div className="sm:col-span-3">
               <button className="rounded-lg bg-emerald-600 px-4 py-1.5 text-sm font-semibold text-white hover:bg-emerald-700">Save</button>
             </div>

@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { exitToFamily } from "@/app/personal/lock/actions";
 import { CardDueHighAlert } from "@/components/personal/CardDueHighAlert";
+import { RemindersBell } from "@/components/personal/RemindersBell";
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
@@ -101,6 +102,8 @@ export function PersonalNav({
               </option>
             ))}
           </select>
+
+          <RemindersBell />
 
           <form action={exitToFamily}>
             <button className="rounded-full border border-emerald-200 bg-white px-3 py-1.5 text-xs font-medium text-emerald-800 hover:bg-emerald-100">

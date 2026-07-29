@@ -197,9 +197,10 @@ export async function getCardBillReminders(memberId: number, now = new Date()): 
     const next = withDue.reduce((a, b) => (a.dueISO < b.dueISO ? a : b));
     const dueDate = midnight(new Date(next.dueISO));
     const daysUntilDue = Math.round((dueDate.getTime() - today.getTime()) / 86400000);
-    if (daysUntilDue > CARD_REMINDER_WINDOW_DAYS) continue; // not near enough yet
-
     const card = cards.find((c) => c.id === due.cardId);
+    const window = card?.credit?.reminderDays ?? CARD_REMINDER_WINDOW_DAYS; // per-card lead time
+    if (daysUntilDue > window) continue; // not near enough yet
+
     const ledgerOutstanding = card
       ? Math.max(0, computeCreditDashboard({
           creditLimit: card.credit?.creditLimit,
