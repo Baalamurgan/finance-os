@@ -7,6 +7,7 @@ import { formatINR } from "@/lib/format";
 import { buildTimeline, buildGrouped, urgencyOf, type TodayItem, type Urgency } from "@/lib/os/timeline";
 import { TodoCard } from "@/components/personal/today/TodoCard";
 import { DayGrid } from "@/components/personal/today/DayGrid";
+import { GoodMorning } from "@/components/personal/today/GoodMorning";
 import { flushOutbox } from "@/lib/os-sync/outbox";
 import { mutateTask } from "@/app/personal/os/actions";
 import type { TaskWithList, TaskList } from "@/lib/integrations/google/tasks";
@@ -23,11 +24,6 @@ const URGENCY_STYLE: Record<Urgency, { dot: string; text: string; chip?: string 
 };
 
 const CACHE_KEY = "today-snapshot-v1";
-
-function greeting(now: Date): string {
-  const h = now.getHours();
-  return h < 12 ? "Good morning" : h < 17 ? "Good afternoon" : "Good evening";
-}
 
 export function TodayView({
   items,
@@ -113,17 +109,7 @@ export function TodayView({
 
   return (
     <main className="mx-auto max-w-2xl space-y-4 p-4 pb-28 sm:p-6">
-      <header>
-        <h1 className="text-2xl font-bold text-slate-900">
-          {greeting(now)}{name ? `, ${name.split(" ")[0]}` : ""}.
-        </h1>
-        <p className="text-sm text-slate-500">
-          {now.toLocaleDateString("en-IN", { weekday: "long", day: "numeric", month: "long" })}
-          {summary.canSpend != null && (
-            <> · <span className={summary.canSpend >= 0 ? "text-emerald-700" : "text-red-600"}>{formatINR(summary.canSpend)} left to spend</span></>
-          )}
-        </p>
-      </header>
+      <GoodMorning name={name} canSpend={summary.canSpend} tasks={tasks} items={effective} />
 
       {offline && (
         <div className="rounded-lg bg-slate-100 px-4 py-2 text-xs text-slate-500">
