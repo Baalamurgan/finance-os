@@ -83,6 +83,16 @@ async function unlocked() {
   return await isUnlocked(household.id);
 }
 
+// Gate every mutating action on the app-lock. If the session lock has collapsed, log it and
+// bounce to the PIN (forces a clean re-unlock) instead of the old silent no-op that made
+// actions look broken. `tag` is the action name so the log line says which one was blocked.
+async function requireUnlocked(tag: string): Promise<void> {
+  if (await unlocked()) return;
+  const session = await auth();
+  log.warn(tag, "relock", { outcome: "blocked", reason: "app-locked", memberId: session?.user?.memberId ?? null });
+  redirect("/lock");
+}
+
 // Authorization from the EFFECTIVE role (honours the head's "view as member").
 async function isHead() {
   if ((await effectiveRole()) !== "head") return false;
@@ -313,7 +323,7 @@ async function doAddSpend(formData: FormData): Promise<boolean> {
   const session = await auth();
   const selfId = session?.user?.memberId;
   if (!selfId) return false; // must be a mapped member
-  if (!(await unlocked())) return false; // app-lock
+  await requireUnlocked("deleteIncome");
 
   const periodId = Number(formData.get("periodId"));
   const categoryId = Number(formData.get("categoryId"));
@@ -464,7 +474,7 @@ export async function moveSpendShortcut(formData: FormData) {
 export async function moveSpendCategory(formData: FormData) {
   const session = await auth();
   if (!session?.user) return;
-  if (!(await unlocked())) return; // app-lock
+  await requireUnlocked("moveSpendCategory");
   const id = Number(formData.get("id"));
   const categoryId = Number(formData.get("categoryId"));
   if (!id || !categoryId) return;
@@ -493,7 +503,7 @@ export async function moveSpendCategory(formData: FormData) {
 export async function ignoreMiscReview(formData: FormData) {
   const session = await auth();
   if (!session?.user) return;
-  if (!(await unlocked())) return; // app-lock
+  await requireUnlocked("ignoreMiscReview");
   const id = Number(formData.get("id"));
   if (!id) return;
   const spend = await prisma.spend.findUnique({ where: { id } });
@@ -526,7 +536,7 @@ export async function addSpendAction(
 export async function deleteSpend(formData: FormData) {
   const session = await auth();
   if (!session?.user) return;
-  if (!(await unlocked())) return; // app-lock
+  await requireUnlocked("deleteSpend");
   const id = Number(formData.get("id"));
   if (!id) return;
   const spend = await prisma.spend.findUnique({ where: { id } });
@@ -547,7 +557,7 @@ export async function deleteSpend(formData: FormData) {
 export async function setSpendSubCategory(formData: FormData) {
   const session = await auth();
   if (!session?.user) return;
-  if (!(await unlocked())) return; // app-lock
+  await requireUnlocked("setSpendSubCategory");
   const id = Number(formData.get("id"));
   const value = String(formData.get("subCategory") ?? "").trim();
   if (!id) return;
@@ -574,7 +584,7 @@ export async function editSpendAction(
 ): Promise<EditSpendState> {
   const session = await auth();
   if (!session?.user) return prev;
-  if (!(await unlocked())) return prev; // app-lock
+  await requireUnlocked("editSpendAction");
   const id = Number(formData.get("id"));
   const label = String(formData.get("label") ?? "").trim();
   const amount = parseAmount(formData.get("amount"));
@@ -916,7 +926,7 @@ export type NoteState = { ok: boolean; n: number };
 export async function saveFamilyNote(prev: NoteState, formData: FormData): Promise<NoteState> {
   const session = await auth();
   if (!session?.user) return { ok: false, n: prev.n };
-  if (!(await unlocked())) return { ok: false, n: prev.n };
+  await requireUnlocked("saveFamilyNote");
   const household = await prisma.household.findFirst({ select: { id: true } });
   if (!household) return { ok: false, n: prev.n };
   const raw = String(formData.get("notes") ?? "");
@@ -1157,7 +1167,7 @@ export async function markSettled(formData: FormData) {
   const amount = parseAmount(formData.get("amount"));
   const note = String(formData.get("note") ?? "").trim() || null;
   if (!householdId || !periodId || !fromMemberId || !toMemberId || !amount) return;
-  if (!(await unlocked())) return; // app-lock
+  await requireUnlocked("markSettled");
   // head, OR the payer/receiver of THIS transfer, may mark it settled
   const me = session?.user?.memberId;
   const allowed = session?.user?.role === "head" || me === fromMemberId || me === toMemberId;
@@ -1187,7 +1197,7 @@ export async function unsettle(formData: FormData) {
   if (!id) return;
   const rec = await prisma.settlementRecord.findUnique({ where: { id } });
   if (!rec) return;
-  if (!(await unlocked())) return; // app-lock
+  await requireUnlocked("unsettle");
   const me = session?.user?.memberId;
   // head, OR the payer/receiver of this transfer, may undo it
   const allowed = session?.user?.role === "head" || me === rec.fromMemberId || me === rec.toMemberId;
