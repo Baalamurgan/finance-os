@@ -1,8 +1,11 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { payPeriodicBill } from "@/app/actions";
+import { useActionState, useEffect, useState } from "react";
+import { payPeriodicBill, type PayBillState } from "@/app/actions";
 import { formatINR } from "@/lib/format";
+import { useToast } from "@/components/Toast";
+
+const INIT: PayBillState = { ok: false, n: 0 };
 
 // Pay a due-month "save the share" bill. The bill's own fund is used first & fully; if it's
 // short, the user picks where the remainder comes from — general Piggy or out-of-pocket.
@@ -28,6 +31,10 @@ export function PayBillModal({
   carriedFrom?: string;
 }) {
   const [open, setOpen] = useState(false);
+  const toast = useToast();
+  // All four "pay" forms submit the same action; one useActionState drives them so we can toast
+  // the result (a blocked action used to just close the modal and look like it did nothing).
+  const [state, formAction] = useActionState(payPeriodicBill, INIT);
   // The ACTUAL amount to pay — bills like EB/WiFi vary month to month; defaults to the
   // configured amount. Whatever the fund doesn't need is simply left in the fund.
   const [amountStr, setAmountStr] = useState(String(bill));
@@ -38,6 +45,14 @@ export function PayBillModal({
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [open, bill]);
+
+  // React to the action result: success → toast + close; blocked → toast the reason, keep open.
+  useEffect(() => {
+    if (state.n === 0) return;
+    if (state.ok) { toast(`${name} marked paid`, "success"); setOpen(false); }
+    else if (state.error) toast(state.error, "error");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.n]);
 
   const actual = Math.max(0, Math.round((Number(amountStr) || 0) * 100) / 100);
   const fromFund = Math.min(fund, actual);
@@ -104,7 +119,7 @@ export function PayBillModal({
 
               {fundCovers ? (
                 <div className="space-y-3">
-                  <form action={payPeriodicBill} onSubmit={() => setOpen(false)} className="space-y-3">
+                  <form action={formAction} className="space-y-3">
                     {hidden("fund")}
                     <p className="text-xs text-slate-500">The fund fully covers this bill.</p>
                     <div className="flex items-center gap-3">
@@ -112,7 +127,7 @@ export function PayBillModal({
                       <button type="submit" disabled={actual <= 0} className="min-h-11 flex-1 rounded-xl bg-teal-600 px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-40">Pay {formatINR(actual)} from fund</button>
                     </div>
                   </form>
-                  <AlreadyPaidButton hidden={hidden} onDone={() => setOpen(false)} />
+                  <AlreadyPaidButton hidden={hidden} formAction={formAction} />
                 </div>
               ) : (
                 <div className="space-y-3">
@@ -121,19 +136,19 @@ export function PayBillModal({
                     ({formatINR(generalPiggy)} available) or out-of-pocket (logged as the payer&apos;s misc).
                   </p>
                   <div className="grid grid-cols-1 gap-2">
-                    <form action={payPeriodicBill} onSubmit={() => setOpen(false)}>
+                    <form action={formAction}>
                       {hidden("piggy")}
                       <button type="submit" className="min-h-11 w-full rounded-xl bg-amber-500 px-4 py-2.5 text-sm font-semibold text-white hover:bg-amber-600">
                         Remaining from Piggy{generalPiggy < remaining ? ` (₹${Math.round(generalPiggy).toLocaleString("en-IN")} + rest out-of-pocket)` : ""}
                       </button>
                     </form>
-                    <form action={payPeriodicBill} onSubmit={() => setOpen(false)}>
+                    <form action={formAction}>
                       {hidden("pocket")}
                       <button type="submit" className="min-h-11 w-full rounded-xl bg-slate-700 px-4 py-2.5 text-sm font-semibold text-white hover:bg-slate-800">
                         Remaining out-of-pocket
                       </button>
                     </form>
-                    <AlreadyPaidButton hidden={hidden} onDone={() => setOpen(false)} />
+                    <AlreadyPaidButton hidden={hidden} formAction={formAction} />
                     <button type="button" onClick={() => setOpen(false)} className="min-h-11 w-full rounded-xl border-2 border-slate-200 px-4 py-2.5 text-sm font-medium text-slate-600">Discard</button>
                   </div>
                 </div>
@@ -150,13 +165,13 @@ export function PayBillModal({
 // (fund/Piggy untouched, no misc spend). Reversible via Undo in the paid list.
 function AlreadyPaidButton({
   hidden,
-  onDone,
+  formAction,
 }: {
   hidden: (source: string) => React.ReactNode;
-  onDone: () => void;
+  formAction: (formData: FormData) => void;
 }) {
   return (
-    <form action={payPeriodicBill} onSubmit={onDone}>
+    <form action={formAction}>
       {hidden("already")}
       <button
         type="submit"

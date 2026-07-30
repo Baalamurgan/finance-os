@@ -6,6 +6,7 @@ import { redirect } from "next/navigation";
 import { cookies } from "next/headers";
 import { auth, signOut } from "@/auth";
 import { isUnlocked } from "@/lib/applock";
+import { log } from "@/lib/log";
 import { formatINR, parseAmount } from "@/lib/format";
 import { generateMonth } from "@/lib/periodClone";
 import { isMiscBucket, MISC_SUBCATEGORIES } from "@/lib/misc";
@@ -987,15 +988,18 @@ export async function setTreasurer(formData: FormData) {
 // of "budget left in hand" (that cash went out) and into the "Paid this month" list.
 export async function toggleBillPaid(formData: FormData) {
   const session = await auth();
+  const memberId = session?.user?.memberId ?? null;
+  if (!(await unlocked())) { log.warn("toggleBillPaid", "relock", { outcome: "blocked", reason: "app-locked", memberId }); redirect("/lock"); }
   const id = Number(formData.get("id"));
   const e = await prisma.expenseEntry.findUnique({ where: { id } });
-  if (!e) return;
+  if (!e) { log.warn("toggleBillPaid", "blocked", { outcome: "blocked", reason: "not-found", memberId, id }); return; }
   // head/manager may toggle any bill (subject to the settlement lock); the bill's own payer may
   // toggle their own in an open month. It's just a reminder flag — no money/settlement change.
-  const isPayer = session?.user?.memberId != null && session.user.memberId === e.memberId;
+  const isPayer = memberId != null && memberId === e.memberId;
   const allowed = (await canEdit()) ? await canEditNow(e.periodId) : isPayer && (await periodOpen(e.periodId));
-  if (!allowed) return;
+  if (!allowed) { log.warn("toggleBillPaid", "blocked", { outcome: "blocked", reason: "not-allowed", memberId, id, periodId: e.periodId }); return; }
   await prisma.expenseEntry.update({ where: { id }, data: { paid: !e.paid } });
+  log.info("toggleBillPaid", "ok", { outcome: "ok", memberId, id, paid: !e.paid, periodId: e.periodId });
   revalidatePath("/", "layout");
 }
 
@@ -1003,40 +1007,55 @@ export async function toggleBillPaid(formData: FormData) {
 // The bill's own fund is used FIRST and fully; any remainder comes from the general Piggy or
 // out-of-pocket (recorded as the payer's Misc spend). Idempotent via BillPayment (one per
 // category+period), so it survives a rebuild.
-export async function payPeriodicBill(formData: FormData) {
+export type PayBillState = { ok: boolean; error?: string; n: number };
+
+export async function payPeriodicBill(prev: PayBillState, formData: FormData): Promise<PayBillState> {
   const session = await auth();
-  if (!(await unlocked())) return; // app-lock
+  const memberId = session?.user?.memberId ?? null;
   const categoryId = Number(formData.get("categoryId"));
   const periodId = Number(formData.get("periodId"));
-  if (!categoryId || !periodId) return;
+  const source = String(formData.get("source") ?? "pocket");
+  const ctx = { memberId, categoryId, periodId, source };
+  const fail = (error: string, reason: string, extra: Record<string, unknown> = {}): PayBillState => {
+    log.warn("payPeriodicBill", "blocked", { outcome: "blocked", reason, ...ctx, ...extra });
+    return { ok: false, error, n: prev.n + 1 };
+  };
+
+  // App-lock collapsed (session cookie gone, e.g. app was reopened): don't fail silently —
+  // send them to the PIN so they can re-unlock, then retry. This is the common cause of
+  // "I clicked Paid and nothing happened".
+  if (!(await unlocked())) {
+    log.warn("payPeriodicBill", "relock", { outcome: "blocked", reason: "app-locked", ...ctx });
+    redirect("/lock");
+  }
+  if (!categoryId || !periodId) return fail("Something's off with this bill — reload and try again.", "bad-input");
   // Where the money actually moves. Normally the same open month. For a CARRIED (late) payment
   // of a prior CLOSED month's bill, the obligation stays `periodId` (closed, so its record marks
   // that month resolved) but the fund/Piggy draw + any out-of-pocket land in the current OPEN
   // month (`spendPeriodId`) so a settled month isn't disturbed.
   const spendPeriodId = Number(formData.get("spendPeriodId")) || periodId;
   const carried = spendPeriodId !== periodId;
-  if (!(await periodOpen(spendPeriodId))) return; // money only moves in an open month
+  if (!(await periodOpen(spendPeriodId))) return fail("This month is locked — it's already been closed.", "period-locked", { spendPeriodId });
   const cat = await prisma.category.findUnique({ where: { id: categoryId } });
-  if (!cat || cat.fundingStyle !== "auto" || cat.billAmount == null || cat.billAmount <= 0) return;
+  if (!cat || cat.fundingStyle !== "auto" || cat.billAmount == null || cat.billAmount <= 0) return fail("This bill can't be paid this way.", "not-a-fund-bill");
   const bill = cat.billAmount;
   const payer = cat.payerMemberId ?? cat.responsibleMemberId ?? null;
-  // where the payment comes from: fund | piggy | pocket, or "already" = paid outside the app.
-  const source = String(formData.get("source") ?? "pocket");
 
   // Head + manager may pay any bill; the bill's own payer may pay (or undo) their own bill too.
   const isEditor = await canEdit();
-  const isPayer = session?.user?.memberId != null && session.user.memberId === payer;
-  if (!isEditor && !isPayer) return;
+  const isPayer = memberId != null && memberId === payer;
+  if (!isEditor && !isPayer) return fail("Only the bill's payer or a manager can mark this paid.", "not-allowed", { payer });
 
   const already = await prisma.billPayment.findUnique({ where: { categoryId_periodId: { categoryId, periodId } } });
-  if (already) return; // already paid this period
+  if (already) return fail("This bill is already marked paid for the month.", "already-paid");
 
   // "Already paid" — pure record, no money moves (fund/Piggy untouched, no misc spend).
   if (source === "already") {
     await prisma.billPayment.create({ data: { householdId: cat.householdId, categoryId, periodId, spendPeriodId, memberId: payer, fromFund: 0, fromPiggy: 0, outOfPocket: 0 } });
     await logActivity("expense", "created", `Marked ${cat.name} bill already paid (outside)`, spendPeriodId);
+    log.info("payPeriodicBill", "ok", { outcome: "ok", ...ctx, mode: "already", amount: 0 });
     revalidatePath("/", "layout");
-    return;
+    return { ok: true, n: prev.n + 1 };
   }
 
   const [fundAgg, piggyAgg, setAsideAgg] = await Promise.all([
@@ -1081,23 +1100,27 @@ export async function payPeriodicBill(formData: FormData) {
     await tx.billPayment.create({ data: { householdId: cat.householdId, categoryId, periodId, spendPeriodId, memberId: payer, fromFund, fromSetAside, fromPiggy, outOfPocket } });
   });
   await logActivity("expense", "created", `Paid ${cat.name} bill ${formatINR(actual)}${carried ? " (carried)" : ""}`, spendPeriodId);
+  log.info("payPeriodicBill", "ok", { outcome: "ok", ...ctx, mode: source, amount: actual, fromFund, fromPiggy, outOfPocket });
   revalidatePath("/", "layout");
+  return { ok: true, n: prev.n + 1 };
 }
 
 // Undo a periodic-bill payment (head/manager, open month): reverse the fund/Piggy draws and the
 // out-of-pocket Misc spend, and drop the BillPayment record.
 export async function unpayPeriodicBill(formData: FormData) {
   const session = await auth();
+  const memberId = session?.user?.memberId ?? null;
+  if (!(await unlocked())) { log.warn("unpayPeriodicBill", "relock", { outcome: "blocked", reason: "app-locked", memberId }); redirect("/lock"); }
   const categoryId = Number(formData.get("categoryId"));
   const periodId = Number(formData.get("periodId"));
   if (!categoryId || !periodId) return;
   const bp = await prisma.billPayment.findUnique({ where: { categoryId_periodId: { categoryId, periodId } } });
-  if (!bp) return;
+  if (!bp) { log.warn("unpayPeriodicBill", "blocked", { outcome: "blocked", reason: "no-payment", memberId, categoryId, periodId }); return; }
   // head + manager may undo any payment; the bill's own payer may undo their own.
-  const isPayer = session?.user?.memberId != null && session.user.memberId === bp.memberId;
-  if (!(await canEdit()) && !isPayer) return;
+  const isPayer = memberId != null && memberId === bp.memberId;
+  if (!(await canEdit()) && !isPayer) { log.warn("unpayPeriodicBill", "blocked", { outcome: "blocked", reason: "not-allowed", memberId, categoryId, periodId }); return; }
   const sp = bp.spendPeriodId ?? bp.periodId; // where the money moved (the OPEN month for a carried pay)
-  if (!(await periodOpen(sp))) return;
+  if (!(await periodOpen(sp))) { log.warn("unpayPeriodicBill", "blocked", { outcome: "blocked", reason: "period-locked", memberId, categoryId, periodId, sp }); return; }
   const cat = await prisma.category.findUnique({ where: { id: categoryId }, select: { name: true } });
   await prisma.$transaction(async (tx) => {
     if (bp.fromFund > 0) await tx.piggyEntry.create({ data: { householdId: bp.householdId, periodId: sp, categoryId, kind: "sinking", amount: bp.fromFund, note: `${cat?.name ?? "bill"} payment undone` } });
@@ -1105,6 +1128,7 @@ export async function unpayPeriodicBill(formData: FormData) {
     if (bp.outOfPocket > 0) await tx.spend.deleteMany({ where: { periodId: sp, memberId: bp.memberId, amount: bp.outOfPocket, label: { endsWith: "(out-of-pocket)" } } });
     await tx.billPayment.delete({ where: { id: bp.id } });
   });
+  log.info("unpayPeriodicBill", "ok", { outcome: "ok", memberId, categoryId, periodId });
   revalidatePath("/", "layout");
 }
 

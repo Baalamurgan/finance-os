@@ -23,8 +23,12 @@ export function AutoLock({ enabled, thresholdMs = 300_000 }: { enabled: boolean;
       if (hiddenAt && Date.now() - hiddenAt > thresholdMs) void lockNow();
     };
     document.addEventListener("visibilitychange", onVisibility);
-    // Also cover a fresh mount that resumed from a long background without a visibility event.
-    onVisibility();
+    // If this component is mounting, we're already visible AND past the lock screen (unlocked),
+    // so only CLEAR any stale background marker — never re-lock here. Acting on a leftover
+    // timestamp (from a previous session that was closed while backgrounded) bounced a fresh
+    // unlock straight back to the PIN → the "enter the PIN twice" bug. Genuine background→
+    // foreground re-locks still fire through the real visibilitychange event above.
+    try { localStorage.removeItem(KEY); } catch {}
     return () => document.removeEventListener("visibilitychange", onVisibility);
   }, [enabled, thresholdMs]);
   return null;
