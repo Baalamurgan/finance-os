@@ -23,6 +23,7 @@ export function LockScreen({
   const [bioError, setBioError] = useState<string | null>(null);
   const [bioBusy, setBioBusy] = useState(false);
   const formRef = useRef<HTMLFormElement>(null);
+  const pinRef = useRef<HTMLInputElement>(null);
   const autoTried = useRef(false);
 
   // A correct PIN redirects from the server action itself (atomic cookie + nav),
@@ -30,7 +31,10 @@ export function LockScreen({
 
   // wrong / locked → clear the entered digits
   useEffect(() => {
-    if (!state.ok && (state.error || state.lockedMs)) setPin("");
+    if (!state.ok && (state.error || state.lockedMs)) {
+      setPin("");
+      if (!state.lockedMs) pinRef.current?.focus();
+    }
   }, [state]);
 
   // lockout countdown
@@ -51,11 +55,6 @@ export function LockScreen({
   useEffect(() => {
     if (pin.length === 4 && !disabled) formRef.current?.requestSubmit();
   }, [pin, disabled]);
-
-  const press = (d: string) => {
-    if (disabled) return;
-    setPin((p) => (p.length >= 4 ? p : p + d));
-  };
 
   const doBiometric = async () => {
     setBioError(null);
@@ -80,36 +79,60 @@ export function LockScreen({
     }
   };
 
-  // Prompt biometric automatically on open — the PIN pad is the fallback.
+  // Prompt biometric automatically on open — the PIN field is the fallback.
   useEffect(() => {
     if (hasBiometric && !autoTried.current) {
       autoTried.current = true;
       void doBiometric();
+    } else if (!hasBiometric) {
+      pinRef.current?.focus();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hasBiometric]);
 
   return (
     <div className="w-full max-w-xs text-center">
-      <div className="mx-auto grid h-14 w-14 place-items-center rounded-2xl bg-[#3f6152] text-white shadow-sm">
+      <div className="mx-auto grid h-16 w-16 place-items-center rounded-[1.35rem] bg-[#3f6152] text-white shadow-lg shadow-[#3f6152]/20">
         <LockGlyph />
       </div>
-      <h1 className="mt-5 font-display text-2xl text-[#1c1c1a]">
+      <h1 className="mt-6 font-display text-2xl text-[#1c1c1a]">
         {greetingName ? `Welcome back, ${greetingName.split(" ")[0]}` : "Welcome back"}
       </h1>
-      <p className="mt-1 text-[14px] text-[#8a877f]">Enter your {householdName} PIN</p>
+      <p className="mt-1.5 text-[14px] text-[#8a877f]">Enter your {householdName} PIN to unlock</p>
 
-      {/* dots */}
-      <div className="mt-7 flex justify-center gap-3.5" aria-hidden>
+      {/* PIN dots — tapping anywhere here focuses the hidden numeric field, so the
+          device's own number pad handles entry (no in-app keypad). */}
+      <button
+        type="button"
+        onClick={() => pinRef.current?.focus()}
+        disabled={disabled}
+        aria-label="Enter PIN"
+        className="relative mx-auto mt-9 flex w-max justify-center gap-4 rounded-2xl px-3 py-2"
+      >
         {[0, 1, 2, 3].map((i) => (
           <span
             key={i}
-            className={`h-3.5 w-3.5 rounded-full transition-colors ${
-              i < pin.length ? "bg-[#3f6152]" : "bg-[#dcd9d0]"
+            className={`h-4 w-4 rounded-full transition-all ${
+              i < pin.length
+                ? "scale-100 bg-[#3f6152]"
+                : i === pin.length && !locked
+                  ? "bg-transparent ring-2 ring-[#3f6152]/50"
+                  : "bg-[#dcd9d0]"
             }`}
           />
         ))}
-      </div>
+        <input
+          ref={pinRef}
+          value={pin}
+          onChange={(e) => setPin(e.target.value.replace(/\D/g, "").slice(0, 4))}
+          inputMode="numeric"
+          autoComplete="off"
+          enterKeyHint="done"
+          aria-hidden
+          disabled={disabled}
+          className="absolute inset-0 h-full w-full cursor-pointer text-[16px] opacity-0"
+        />
+      </button>
 
       {/* status line */}
       <div className="mt-4 h-5 text-[13px]">
@@ -117,8 +140,10 @@ export function LockScreen({
           <span className="text-[#b4685a]">Try again in {remaining}s</span>
         ) : state.error ? (
           <span className="text-[#b4685a]">{state.error}</span>
+        ) : pending ? (
+          <span className="text-[#8a877f]">Checking…</span>
         ) : (
-          <span className="text-transparent">·</span>
+          <span className="text-[#a9a69d]">Tap to enter</span>
         )}
       </div>
 
@@ -127,29 +152,13 @@ export function LockScreen({
         <input type="hidden" name="pin" value={pin} readOnly />
       </form>
 
-      {/* keypad — biometric is prompted automatically on open, not a key here */}
-      <div className="mt-2 grid grid-cols-3 gap-3">
-        {["1", "2", "3", "4", "5", "6", "7", "8", "9"].map((d) => (
-          <Key key={d} onClick={() => press(d)} disabled={disabled}>
-            {d}
-          </Key>
-        ))}
-        <span />
-        <Key onClick={() => press("0")} disabled={disabled}>
-          0
-        </Key>
-        <Key onClick={() => setPin((p) => p.slice(0, -1))} disabled={disabled} subtle aria-label="Delete">
-          ⌫
-        </Key>
-      </div>
-
-      {/* retry biometric (shown only if this device has it enrolled) */}
+      {/* biometric (shown only if this device has it enrolled) */}
       {hasBiometric && (
         <button
           type="button"
           onClick={doBiometric}
           disabled={bioBusy || pending}
-          className="mt-6 inline-flex items-center gap-2 text-[14px] font-medium text-[#3f6152] disabled:opacity-50"
+          className="mt-8 inline-flex items-center gap-2 text-[14px] font-medium text-[#3f6152] disabled:opacity-50"
         >
           <FaceIcon />
           {bioBusy ? "Waiting for biometric…" : "Use Face ID / fingerprint"}
@@ -159,7 +168,7 @@ export function LockScreen({
       {bioError && <p className="mt-3 text-[13px] text-[#b4685a]">{bioError}</p>}
 
       {/* switch modes without unlocking — mirrors Personal's "Use Family instead" */}
-      <form action={switchToPersonal} className="mt-6">
+      <form action={switchToPersonal} className="mt-8">
         <button type="submit" className="text-[13px] font-medium text-[#3f6152]/80 hover:text-[#3f6152]">
           Use Personal instead →
         </button>
@@ -172,38 +181,9 @@ export function LockScreen({
   );
 }
 
-function Key({
-  children,
-  onClick,
-  disabled,
-  subtle = false,
-  ...rest
-}: {
-  children: React.ReactNode;
-  onClick: () => void;
-  disabled?: boolean;
-  subtle?: boolean;
-} & React.ButtonHTMLAttributes<HTMLButtonElement>) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      disabled={disabled}
-      className={`mx-auto grid h-16 w-16 place-items-center rounded-full text-2xl font-medium transition active:scale-95 disabled:opacity-40 ${
-        subtle
-          ? "text-[#8a877f] hover:bg-black/5"
-          : "bg-white text-[#26251f] shadow-sm ring-1 ring-black/5 hover:bg-[#f4f2ec]"
-      }`}
-      {...rest}
-    >
-      {children}
-    </button>
-  );
-}
-
 function LockGlyph() {
   return (
-    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden>
+    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" aria-hidden>
       <rect x="5" y="11" width="14" height="9" rx="2.2" fill="currentColor" />
       <path d="M8 11V8a4 4 0 0 1 8 0v3" stroke="currentColor" strokeWidth="2" />
     </svg>

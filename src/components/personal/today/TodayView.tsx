@@ -39,6 +39,7 @@ export function TodayView({
   calendarConnected,
   name,
   generatedAtISO,
+  autoAddTodo = false,
 }: {
   items: TodayItem[];
   events: CalendarEvent[];
@@ -49,6 +50,7 @@ export function TodayView({
   calendarConnected: boolean;
   name: string;
   generatedAtISO: string;
+  autoAddTodo?: boolean;
 }) {
   const router = useRouter();
   const [tab, setTab] = useState<"day" | "overview">("day");
@@ -74,6 +76,7 @@ export function TodayView({
   // Persist the last good payload so an offline open still shows something useful, and
   // remember the view choice.
   useEffect(() => {
+    if (autoAddTodo) { setTab("day"); return; } // deep-linked "add a to-do" always lands on Day
     const t = localStorage.getItem("today-tab");
     if (t === "day" || t === "overview") setTab(t);
     const v = localStorage.getItem("today-view");
@@ -159,7 +162,7 @@ export function TodayView({
               <span className="text-emerald-500">→</span>
             </Link>
           )}
-          <TodoCard lists={tasklists} tasksConnected={tasksConnected} initial={tasks} />
+          <TodoCard lists={tasklists} tasksConnected={tasksConnected} initial={tasks} autoAdd={autoAddTodo} />
           {calendarConnected && <DayGrid events={events} tasks={tasks} />}
         </>
       ) : (

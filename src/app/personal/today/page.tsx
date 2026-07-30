@@ -8,7 +8,7 @@ import { getTodayData } from "@/lib/os/today";
 export default async function TodayPage({
   searchParams,
 }: {
-  searchParams: Promise<{ y?: string; m?: string }>;
+  searchParams: Promise<{ y?: string; m?: string; add?: string }>;
 }) {
   const sp = await searchParams;
   const c = await loadPersonal(sp);
@@ -32,6 +32,7 @@ export default async function TodayPage({
         calendarConnected={data.calendarConnected}
         name={c.account.name}
         generatedAtISO={data.generatedAtISO}
+        autoAddTodo={sp.add === "1"}
       />
     </>
   );

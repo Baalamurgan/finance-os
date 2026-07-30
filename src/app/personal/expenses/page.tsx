@@ -17,7 +17,7 @@ const COLORS = ["#059669", "#0ea5e9", "#f59e0b", "#8b5cf6", "#ef4444", "#14b8a6"
 export default async function PersonalExpenses({
   searchParams,
 }: {
-  searchParams: Promise<{ y?: string; m?: string }>;
+  searchParams: Promise<{ y?: string; m?: string; add?: string }>;
 }) {
   const sp = await searchParams;
   const c = await loadPersonal(sp);
@@ -129,7 +129,7 @@ export default async function PersonalExpenses({
         </section>
       </main>
 
-      <PersonalSpendFab periodId={period.id} categories={catList} cards={c.creditCards} remaining={canSpend} />
+      <PersonalSpendFab periodId={period.id} categories={catList} cards={c.creditCards} remaining={canSpend} autoOpen={sp.add === "1"} showButton={false} />
     </>
   );
 }

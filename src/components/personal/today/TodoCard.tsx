@@ -28,7 +28,7 @@ function dueLabel(d: string): string {
   return date.toLocaleDateString("en-IN", { day: "numeric", month: "short" });
 }
 
-export function TodoCard({ lists, tasksConnected, initial }: { lists: TaskList[]; tasksConnected: boolean; initial: TaskWithList[] }) {
+export function TodoCard({ lists, tasksConnected, initial, autoAdd = false }: { lists: TaskList[]; tasksConnected: boolean; initial: TaskWithList[]; autoAdd?: boolean }) {
   const router = useRouter();
   const [tasks, setTasks] = useState<TaskWithList[]>(initial.filter((t) => !t.completed));
   const [draft, setDraft] = useState("");
@@ -40,16 +40,26 @@ export function TodoCard({ lists, tasksConnected, initial }: { lists: TaskList[]
   const [editing, setEditing] = useState<TaskWithList | null>(null);
   const [composerOpen, setComposerOpen] = useState(false); // mobile MS-To-Do-style bottom sheet
   const [dateMenu, setDateMenu] = useState(false);
+  const [draftNote, setDraftNote] = useState("");
+  const [noteOpen, setNoteOpen] = useState(false);
+  const [bellHint, setBellHint] = useState(false);
   const [mounted, setMounted] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const sig = initial.map((t) => t.id).join(",");
   const busy = useRef(false);
 
   useEffect(() => setMounted(true), []);
+  useEffect(() => { if (autoAdd && tasksConnected) setComposerOpen(true); }, [autoAdd, tasksConnected]);
   useEffect(() => {
     if (composerOpen) setTimeout(() => inputRef.current?.focus(), 50);
-    else setDateMenu(false);
+    else { setDateMenu(false); setNoteOpen(false); setBellHint(false); setDraftNote(""); }
   }, [composerOpen]);
+
+  // Close the mobile composer; if it was deep-linked open (?add=1), tidy the URL.
+  const closeComposer = () => {
+    setComposerOpen(false);
+    if (autoAdd) router.replace("/personal/today");
+  };
 
   useEffect(() => {
     if (!draftList && lists[0]) setDraftList(lists[0].id);
@@ -95,12 +105,13 @@ export function TodoCard({ lists, tasksConnected, initial }: { lists: TaskList[]
     const listId = draftList || lists[0]?.id;
     if (!title || !listId) return;
     const dueISO = toDueISO(draftDue);
+    const notes = draftNote.trim() || null;
     const listTitle = lists.find((l) => l.id === listId)?.title ?? "";
-    setDraft(""); setDraftDue("");
+    setDraft(""); setDraftDue(""); setDraftNote(""); setNoteOpen(false); setDateMenu(false); setBellHint(false);
     const clientId = `local-${crypto.randomUUID()}`;
-    setTasks((t) => [{ id: clientId, title, notes: null, dueISO, completed: false, tasklistId: listId, listTitle }, ...t]);
+    setTasks((t) => [{ id: clientId, title, notes, dueISO, completed: false, tasklistId: listId, listTitle }, ...t]);
     busy.current = true;
-    await run({ op: "create", tasklistId: listId, title, dueISO }, clientId, (realId) => setTasks((t) => t.map((x) => (x.id === clientId ? { ...x, id: realId } : x))));
+    await run({ op: "create", tasklistId: listId, title, dueISO, notes }, clientId, (realId) => setTasks((t) => t.map((x) => (x.id === clientId ? { ...x, id: realId } : x))));
     busy.current = false;
   };
 
@@ -248,83 +259,113 @@ export function TodoCard({ lists, tasksConnected, initial }: { lists: TaskList[]
       {editing && <EditModal task={editing} onClose={() => setEditing(null)} onSave={saveEdit} onDelete={remove} />}
 
       {mounted && composerOpen && createPortal(
-        <div className="fixed inset-0 z-50 flex flex-col justify-end bg-black/30 sm:hidden" onClick={() => setComposerOpen(false)}>
+        <div className="fixed inset-0 z-50 flex flex-col justify-end bg-black/25 sm:hidden" onClick={closeComposer}>
           <div
-            className="rounded-t-2xl bg-white shadow-2xl"
+            className="rounded-t-[1.75rem] bg-white shadow-[0_-8px_40px_rgba(0,0,0,0.18)]"
             onClick={(e) => e.stopPropagation()}
             style={{ paddingBottom: "max(env(safe-area-inset-bottom), 0.5rem)" }}
           >
-            <div className="mx-auto mt-2 h-1 w-9 rounded-full bg-slate-200" />
-
-            {/* quick-action chips */}
-            <div className="flex items-center gap-2 px-4 pt-3">
-              <div className="relative">
-                <button
-                  type="button"
-                  onClick={() => setDateMenu((m) => !m)}
-                  className={`flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-medium ${draftDue ? "border-emerald-300 bg-emerald-50 text-emerald-700" : "border-slate-200 text-slate-500"}`}
-                >
-                  📅 {dueLabel(draftDue)}
-                  {draftDue && <span onClick={(e) => { e.stopPropagation(); setDraftDue(""); }} className="ml-0.5 text-slate-400">✕</span>}
-                </button>
-                {dateMenu && (
-                  <div className="absolute bottom-full left-0 z-10 mb-2 w-44 rounded-xl border border-slate-200 bg-white p-1 shadow-xl">
-                    {([["Today", 0], ["Tomorrow", 1], ["Next week", 7]] as const).map(([label, off]) => (
-                      <button
-                        key={label}
-                        type="button"
-                        onClick={() => { const d = new Date(new Date().toDateString()); d.setDate(d.getDate() + off); setDraftDue(ymd(d)); setDateMenu(false); }}
-                        className="flex w-full items-center justify-between rounded-lg px-3 py-2 text-left text-sm text-slate-700 hover:bg-slate-50"
-                      >
-                        {label}
-                      </button>
-                    ))}
-                    <label className="flex cursor-pointer items-center justify-between rounded-lg px-3 py-2 text-sm text-slate-700 hover:bg-slate-50">
-                      Pick a date
-                      <input type="date" value={draftDue} onChange={(e) => { setDraftDue(e.target.value); setDateMenu(false); }} className="w-0 opacity-0" />
-                    </label>
-                  </div>
-                )}
-              </div>
-
-              {lists.length > 1 && (
-                <div className="flex items-center gap-1.5 rounded-full border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-500">
-                  📋
-                  <select value={draftList} onChange={(e) => setDraftList(e.target.value)} className="max-w-[8rem] truncate bg-transparent outline-none">
-                    {lists.map((l) => <option key={l.id} value={l.id}>{l.title}</option>)}
-                  </select>
-                </div>
-              )}
-            </div>
-
-            {/* text input + send */}
+            {/* title + input, MS To Do style: big tap-target circle + roomy field */}
             <form
               onSubmit={(e) => { e.preventDefault(); if (draft.trim()) { add(); inputRef.current?.focus(); } }}
-              className="flex items-center gap-2 px-4 py-3"
+              className="flex items-center gap-3.5 px-5 pt-6 pb-4"
             >
-              <span className="grid h-5 w-5 shrink-0 place-items-center rounded-full border-2 border-slate-300" />
+              <span className="grid h-6 w-6 shrink-0 place-items-center rounded-full border-2 border-emerald-500/70" />
               <input
                 ref={inputRef}
                 value={draft}
                 onChange={(e) => setDraft(e.target.value)}
                 enterKeyHint="done"
-                placeholder="Add a to-do…"
-                className="min-w-0 flex-1 text-base text-slate-900 outline-none placeholder:text-slate-400"
+                placeholder="Add a to-do"
+                className="min-w-0 flex-1 text-[17px] text-slate-900 outline-none placeholder:text-emerald-600/80"
               />
-              <button
-                type="submit"
-                disabled={!draft.trim() || lists.length === 0}
-                aria-label="Add"
-                className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-emerald-600 text-white disabled:opacity-30"
-              >
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M12 19V5M5 12l7-7 7 7" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" /></svg>
-              </button>
+              <button type="submit" className="sr-only" aria-label="Add" />
             </form>
+
+            {/* optional note field */}
+            {noteOpen && (
+              <div className="px-5 pb-3">
+                <textarea
+                  value={draftNote}
+                  onChange={(e) => setDraftNote(e.target.value)}
+                  rows={2}
+                  placeholder="Add note"
+                  className="w-full resize-none rounded-lg bg-slate-50 px-3 py-2 text-[15px] text-slate-700 outline-none placeholder:text-slate-400"
+                />
+              </div>
+            )}
+
+            {/* selected due-date pill (tap ✕ to clear) */}
+            {draftDue && (
+              <div className="px-5 pb-1">
+                <button type="button" onClick={() => setDraftDue("")} className="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 px-3 py-1 text-[13px] font-medium text-emerald-700">
+                  📅 {dueLabel(draftDue)} <span className="text-emerald-400">✕</span>
+                </button>
+              </div>
+            )}
+            {bellHint && (
+              <p className="px-5 pb-1 text-[12px] text-slate-400">Google sends the reminder from the due date — set a date and it&apos;ll notify you.</p>
+            )}
+
+            {/* quick date options (revealed by the calendar icon) */}
+            {dateMenu && (
+              <div className="flex flex-wrap gap-2 px-5 pb-2 pt-1">
+                {([["Today", 0], ["Tomorrow", 1], ["Next week", 7]] as const).map(([label, off]) => (
+                  <button
+                    key={label}
+                    type="button"
+                    onClick={() => { const d = new Date(new Date().toDateString()); d.setDate(d.getDate() + off); setDraftDue(ymd(d)); setDateMenu(false); }}
+                    className="rounded-full border border-slate-200 px-3.5 py-1.5 text-[13px] font-medium text-slate-600 active:bg-slate-100"
+                  >
+                    {label}
+                  </button>
+                ))}
+                <label className="rounded-full border border-slate-200 px-3.5 py-1.5 text-[13px] font-medium text-slate-600 active:bg-slate-100">
+                  Pick a date
+                  <input type="date" value={draftDue} onChange={(e) => { setDraftDue(e.target.value); setDateMenu(false); }} className="w-0 opacity-0" />
+                </label>
+              </div>
+            )}
+
+            {/* icon toolbar — My Day · Remind · Due date · Note */}
+            <div className="flex items-center gap-1 border-t border-slate-100 px-3 py-2.5">
+              <ToolIcon label="My Day" active={dueLabel(draftDue) === "Today"} onClick={() => { const d = new Date(new Date().toDateString()); setDraftDue(dueLabel(draftDue) === "Today" ? "" : ymd(d)); }}>
+                <svg width="21" height="21" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="4" stroke="currentColor" strokeWidth="1.7" /><path d="M12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6l1.4 1.4M17 17l1.4 1.4M18.4 5.6L17 7M7 17l-1.4 1.4" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" /></svg>
+              </ToolIcon>
+              <ToolIcon label="Remind" active={bellHint} onClick={() => setBellHint((h) => !h)}>
+                <svg width="21" height="21" viewBox="0 0 24 24" fill="none"><path d="M6 8a6 6 0 0 1 12 0c0 5 2 6 2 6H4s2-1 2-6" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" /><path d="M10 20a2 2 0 0 0 4 0" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" /></svg>
+              </ToolIcon>
+              <ToolIcon label="Due date" active={!!draftDue || dateMenu} onClick={() => setDateMenu((m) => !m)}>
+                <svg width="21" height="21" viewBox="0 0 24 24" fill="none"><rect x="4" y="5" width="16" height="16" rx="2.5" stroke="currentColor" strokeWidth="1.7" /><path d="M4 9h16M8 3v4M16 3v4" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" /></svg>
+              </ToolIcon>
+              <ToolIcon label="Note" active={noteOpen} onClick={() => setNoteOpen((n) => !n)}>
+                <svg width="21" height="21" viewBox="0 0 24 24" fill="none"><path d="M14 4H6a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" /><path d="M14 4v6h6" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" /></svg>
+              </ToolIcon>
+
+              {lists.length > 1 && (
+                <select value={draftList} onChange={(e) => setDraftList(e.target.value)} className="ml-auto max-w-[9rem] truncate rounded-full bg-slate-100 px-3 py-1.5 text-[13px] font-medium text-slate-600 outline-none">
+                  {lists.map((l) => <option key={l.id} value={l.id}>{l.title}</option>)}
+                </select>
+              )}
+            </div>
           </div>
         </div>,
         document.body,
       )}
     </section>
+  );
+}
+
+function ToolIcon({ children, label, active, onClick }: { children: React.ReactNode; label: string; active?: boolean; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-label={label}
+      className={`grid h-11 w-11 place-items-center rounded-full transition active:scale-90 ${active ? "bg-emerald-50 text-emerald-600" : "text-slate-500"}`}
+    >
+      {children}
+    </button>
   );
 }
 
