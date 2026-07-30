@@ -92,7 +92,7 @@ export function UserMenu({
     <div className="relative" ref={ref}>
       <button
         onClick={() => setOpen((v) => !v)}
-        className="flex items-center gap-2 rounded-full border border-slate-200 py-1 pl-1 pr-2.5 transition hover:bg-slate-50"
+        className="flex shrink-0 items-center gap-2 rounded-full border border-slate-200 py-1 pl-1 pr-2 transition hover:bg-slate-50 sm:pr-2.5"
       >
         <Avatar name={name} email={email} image={image} initial={initial} />
         <span className="hidden max-w-[8rem] truncate text-sm font-medium text-slate-700 sm:inline">
@@ -241,14 +241,14 @@ function Avatar({
       <img
         src={image}
         alt={name || email}
-        className={`${dim} rounded-full object-cover`}
+        className={`${dim} shrink-0 rounded-full object-cover`}
         referrerPolicy="no-referrer"
       />
     );
   }
   return (
     <span
-      className={`${dim} flex items-center justify-center rounded-full bg-indigo-600 font-semibold text-white`}
+      className={`${dim} flex shrink-0 items-center justify-center rounded-full bg-indigo-600 font-semibold text-white`}
     >
       {initial}
     </span>

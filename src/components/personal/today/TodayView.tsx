@@ -36,6 +36,7 @@ export function TodayView({
   calendarConnected,
   name,
   generatedAtISO,
+  windDown,
   autoAddTodo = false,
 }: {
   items: TodayItem[];
@@ -48,6 +49,7 @@ export function TodayView({
   calendarConnected: boolean;
   name: string;
   generatedAtISO: string;
+  windDown: { daysUntil: number } | null;
   autoAddTodo?: boolean;
 }) {
   const router = useRouter();
@@ -111,7 +113,7 @@ export function TodayView({
 
   return (
     <main className="mx-auto max-w-2xl space-y-4 p-4 pb-28 sm:p-6">
-      <GoodMorning name={name} canSpend={summary.canSpend} tasks={tasks} events={weekEvents} items={effective} />
+      <GoodMorning name={name} canSpend={summary.canSpend} tasks={tasks} events={weekEvents} items={effective} windDown={windDown} />
 
       {offline && (
         <div className="rounded-lg bg-slate-100 px-4 py-2 text-xs text-slate-500">

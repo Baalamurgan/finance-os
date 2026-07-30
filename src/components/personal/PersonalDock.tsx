@@ -15,8 +15,8 @@ export function PersonalDock() {
 
   return (
     <div
-      className="pointer-events-none fixed inset-x-0 bottom-0 z-40 flex items-center justify-between px-4 sm:px-6"
-      style={{ paddingBottom: "max(env(safe-area-inset-bottom), 1rem)" }}
+      // Sits above the mobile bottom tab bar (~4.25rem) and at the normal bottom on desktop.
+      className="pointer-events-none fixed inset-x-0 bottom-0 z-40 flex items-center justify-between px-4 pb-[calc(env(safe-area-inset-bottom)+4.25rem)] sm:px-6 sm:pb-[calc(env(safe-area-inset-bottom)+1rem)]"
     >
       <Link
         href="/personal/expenses?add=1"

@@ -62,6 +62,12 @@ describe("buildBriefing", () => {
     expect(buildBriefing(input, DEFAULT_BRIEFING_PREFS, now).speech).toContain("Amma's birthday today");
   });
 
+  it("announces the family wind-down when it's near", () => {
+    expect(buildBriefing({ ...base, windDown: { daysUntil: 2 } }, DEFAULT_BRIEFING_PREFS, now).speech).toContain("wind-down is in 2 days");
+    expect(buildBriefing({ ...base, windDown: { daysUntil: 1 } }, DEFAULT_BRIEFING_PREFS, now).speech).toContain("wind-down is tomorrow");
+    expect(buildBriefing({ ...base, windDown: null }, DEFAULT_BRIEFING_PREFS, now).speech).not.toContain("wind-down");
+  });
+
   it("respects section prefs (cash off → no cash line)", () => {
     const b = buildBriefing({ ...base, canSpend: 500 }, { ...DEFAULT_BRIEFING_PREFS, cash: false }, now);
     expect(b.speech).not.toContain("running low");

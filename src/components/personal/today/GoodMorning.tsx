@@ -20,12 +20,14 @@ export function GoodMorning({
   tasks,
   events,
   items,
+  windDown,
 }: {
   name: string;
   canSpend: number | null;
   tasks: TaskWithList[];
   events: BriefEvent[];
   items: TodayItem[];
+  windDown: { daysUntil: number } | null;
 }) {
   const [prefs, setPrefs] = useState<BriefingPrefs>(DEFAULT_BRIEFING_PREFS);
   const [speaking, setSpeaking] = useState(false);
@@ -54,7 +56,19 @@ export function GoodMorning({
     };
   }, []);
 
-  const briefing = useMemo(() => buildBriefing({ name, canSpend, tasks, events, items }, prefs, new Date()), [name, canSpend, tasks, events, items, prefs]);
+  const briefing = useMemo(() => buildBriefing({ name, canSpend, tasks, events, items, windDown }, prefs, new Date()), [name, canSpend, tasks, events, items, windDown, prefs]);
+
+  // Keep speech alive while it's playing: Chrome silently cuts long utterances (~15s) and
+  // pauses when the tab is hidden. A periodic pause→resume and a resume-on-hide keep it going
+  // when you switch browser tabs. (True background playback while the phone is locked/app is
+  // backgrounded needs real audio via a TTS engine — the browser suspends JS there.)
+  useEffect(() => {
+    if (!speaking || !supported) return;
+    const onVis = () => { if (document.hidden) window.speechSynthesis.resume(); };
+    document.addEventListener("visibilitychange", onVis);
+    const keepAlive = setInterval(() => { window.speechSynthesis.pause(); window.speechSynthesis.resume(); }, 9000);
+    return () => { document.removeEventListener("visibilitychange", onVis); clearInterval(keepAlive); };
+  }, [speaking, supported]);
 
   const savePrefs = (p: BriefingPrefs) => {
     setPrefs(p);

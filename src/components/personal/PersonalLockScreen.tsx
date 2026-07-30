@@ -71,6 +71,7 @@ export function PersonalLockScreen({
       setBioError(e instanceof Error ? e.message : "Biometric unavailable.");
     } finally {
       setBioBusy(false);
+      pinRef.current?.focus(); // re-open the number pad if biometric was dismissed
     }
   };
 

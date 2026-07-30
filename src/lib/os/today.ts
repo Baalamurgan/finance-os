@@ -3,6 +3,7 @@ import { listContactBirthdays, contactsConnected } from "@/lib/integrations/goog
 import { listAllTasks, tasksConnected, type TaskWithList, type TaskList } from "@/lib/integrations/google/tasks";
 import { getBillReminders } from "@/lib/billReminders";
 import { getCardBillReminders, getPersonalCash } from "@/lib/personal/cash";
+import { prisma } from "@/lib/prisma";
 import type { TodayItem } from "./timeline";
 
 // Server aggregator for the Today dashboard. Composes calendar + birthdays (Google) with
@@ -20,11 +21,25 @@ export type TodayData = {
   tasks: TaskWithList[]; // to-dos across ALL lists, each tagged with its list
   tasklists: TaskList[]; // the member's Google Tasks lists (for filtering + add-target)
   summary: TodaySummary;
+  windDown: { daysUntil: number } | null; // family monthly close, if within the next 5 days
   calendarConnected: boolean;
   contactsConnected: boolean;
   tasksConnected: boolean;
   generatedAtISO: string;
 };
+
+// The family monthly close ("wind-down") if it's within the next 5 days — mirrors load.ts.
+async function getWindDown(householdId: number): Promise<{ daysUntil: number } | null> {
+  const hh = await prisma.household.findUnique({ where: { id: householdId }, select: { windDownDay: true } }).catch(() => null);
+  const wd = hh?.windDownDay;
+  if (!wd || wd < 1 || wd > 31) return null;
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  let close = new Date(today.getFullYear(), today.getMonth(), wd);
+  if (close.getTime() < today.getTime()) close = new Date(today.getFullYear(), today.getMonth() + 1, wd);
+  const daysUntil = Math.round((close.getTime() - today.getTime()) / 86400000);
+  return daysUntil <= 5 ? { daysUntil } : null;
+}
 
 const normName = (s: string) => s.toLowerCase().replace(/'s birthday$/i, "").replace(/[^a-z0-9]/g, "");
 const mmdd = (iso: string) => iso.slice(5, 10);
@@ -62,6 +77,8 @@ export async function getTodayData(opts: {
     getCardBillReminders(memberId).catch(() => []),
     personalPeriod ? getPersonalCash(personalPeriod).catch(() => null) : Promise.resolve(null),
   ]);
+
+  const windDown = await getWindDown(householdId);
 
   // The Day grid + Today timeline are about today only; the briefing looks a week out.
   const todayStr = new Date().toDateString();
@@ -134,6 +151,7 @@ export async function getTodayData(opts: {
     tasks: taskData.tasks,
     tasklists: taskData.lists,
     summary: { canSpend: cash?.canSpend ?? null, personalExpense: cash?.personalExpense ?? null },
+    windDown,
     calendarConnected: calOn,
     contactsConnected: contactsOn,
     tasksConnected: tasksOn,

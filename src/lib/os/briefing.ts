@@ -8,7 +8,7 @@ import type { TaskWithList } from "@/lib/integrations/google/tasks";
 // these same facts, so nothing here is throwaway. Calendar routine (recurring events) is filtered
 // out: you only hear what's different from a normal day.
 
-export const BRIEFING_SECTIONS = ["todos", "eventsToday", "eventsWeek", "familyBills", "cardBills", "cash", "birthdays"] as const;
+export const BRIEFING_SECTIONS = ["todos", "eventsToday", "eventsWeek", "familyBills", "cardBills", "cash", "windDown", "birthdays"] as const;
 export type BriefingSection = (typeof BRIEFING_SECTIONS)[number];
 export type BriefingPrefs = Record<BriefingSection, boolean>;
 
@@ -19,6 +19,7 @@ export const DEFAULT_BRIEFING_PREFS: BriefingPrefs = {
   familyBills: true,
   cardBills: true,
   cash: true,
+  windDown: true,
   birthdays: true,
 };
 
@@ -30,6 +31,7 @@ export const BRIEFING_OPTIONS: { key: BriefingSection; label: string; hint: stri
   { key: "familyBills", label: "Family bills due", hint: "Bills you're on the hook for, with amounts" },
   { key: "cardBills", label: "Card bills due", hint: "Credit-card dues coming up" },
   { key: "cash", label: "Cash & spending", hint: "What's left to spend, with a low-balance alert" },
+  { key: "windDown", label: "Family wind-down", hint: "A heads-up as the monthly family close approaches" },
   { key: "birthdays", label: "Birthdays", hint: "Today's and upcoming birthdays" },
 ];
 
@@ -43,6 +45,7 @@ export type BriefingInput = {
   events: BriefEvent[]; // today + next ~7 days, each flagged recurring (routine) or not
   items: TodayItem[]; // used for bills / cards / birthdays
   canSpend: number | null;
+  windDown?: { daysUntil: number } | null; // family monthly close, if it's near
   lowCashThreshold?: number;
 };
 
@@ -145,6 +148,13 @@ export function buildBriefing(input: BriefingInput, prefs: BriefingPrefs, now: D
     } else {
       push("💰", `₹${money(input.canSpend)} left to spend this month.`, `You've got ${money(input.canSpend)} rupees left to spend this month.`);
     }
+  }
+
+  // ── Family wind-down (monthly close) approaching ──
+  if (prefs.windDown && input.windDown) {
+    const d = input.windDown.daysUntil;
+    const when = d <= 0 ? "today" : d === 1 ? "tomorrow" : `in ${d} days`;
+    push("🌙", `Family wind-down ${when}.`, `Also, the family wind-down is ${when} — a good time to settle up before the month closes.`);
   }
 
   // ── Birthdays (today + next 7 days) ──

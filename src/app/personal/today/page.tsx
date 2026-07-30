@@ -33,6 +33,7 @@ export default async function TodayPage({
         calendarConnected={data.calendarConnected}
         name={c.account.name}
         generatedAtISO={data.generatedAtISO}
+        windDown={data.windDown}
         autoAddTodo={sp.add === "1"}
       />
     </>
