@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { mutateTask, type TaskMutation } from "@/app/personal/os/actions";
@@ -14,6 +15,18 @@ import type { TaskWithList, TaskList } from "@/lib/integrations/google/tasks";
 // set recurrence, so no "repeat" — that's a Google-app-only field.)
 const toDueISO = (d: string) => (d ? `${d}T00:00:00.000Z` : null);
 const toDateInput = (iso: string | null) => (iso ? iso.slice(0, 10) : "");
+const ymd = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+// Friendly label for a YYYY-MM-DD due date, MS-To-Do style ("Today" / "Tomorrow" / "5 Aug").
+function dueLabel(d: string): string {
+  if (!d) return "Due date";
+  const date = new Date(`${d}T00:00:00`);
+  const today = new Date(new Date().toDateString());
+  const diff = Math.round((date.getTime() - today.getTime()) / 86400000);
+  if (diff === 0) return "Today";
+  if (diff === 1) return "Tomorrow";
+  if (diff === -1) return "Yesterday";
+  return date.toLocaleDateString("en-IN", { day: "numeric", month: "short" });
+}
 
 export function TodoCard({ lists, tasksConnected, initial }: { lists: TaskList[]; tasksConnected: boolean; initial: TaskWithList[] }) {
   const router = useRouter();
@@ -25,8 +38,18 @@ export function TodoCard({ lists, tasksConnected, initial }: { lists: TaskList[]
   const [showAll, setShowAll] = useState(false);
   const [queued, setQueued] = useState(0);
   const [editing, setEditing] = useState<TaskWithList | null>(null);
+  const [composerOpen, setComposerOpen] = useState(false); // mobile MS-To-Do-style bottom sheet
+  const [dateMenu, setDateMenu] = useState(false);
+  const [mounted, setMounted] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
   const sig = initial.map((t) => t.id).join(",");
   const busy = useRef(false);
+
+  useEffect(() => setMounted(true), []);
+  useEffect(() => {
+    if (composerOpen) setTimeout(() => inputRef.current?.focus(), 50);
+    else setDateMenu(false);
+  }, [composerOpen]);
 
   useEffect(() => {
     if (!draftList && lists[0]) setDraftList(lists[0].id);
@@ -157,7 +180,8 @@ export function TodoCard({ lists, tasksConnected, initial }: { lists: TaskList[]
         </Link>
       ) : (
         <>
-          <form onSubmit={(e) => { e.preventDefault(); add(); }} className="mb-3 flex flex-wrap gap-2">
+          {/* Desktop: inline add form */}
+          <form onSubmit={(e) => { e.preventDefault(); add(); }} className="mb-3 hidden flex-wrap gap-2 sm:flex">
             <input value={draft} onChange={(e) => setDraft(e.target.value)} placeholder="Add a to-do…" className="min-w-0 flex-1 rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100" />
             <input type="date" value={draftDue} onChange={(e) => setDraftDue(e.target.value)} title="Due date (optional)" className="rounded-lg border border-slate-300 px-2 py-2 text-sm text-slate-600 outline-none focus:border-emerald-400" />
             {lists.length > 1 && (
@@ -167,6 +191,14 @@ export function TodoCard({ lists, tasksConnected, initial }: { lists: TaskList[]
             )}
             <button type="submit" disabled={!draft.trim() || lists.length === 0} className="rounded-lg bg-emerald-600 px-3 py-2 text-sm font-medium text-white disabled:opacity-40">Add</button>
           </form>
+
+          {/* Mobile: MS-To-Do-style bottom composer, opened from a docked "＋ Add a to-do" pill */}
+          <button
+            onClick={() => setComposerOpen(true)}
+            className="mb-3 flex w-full items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm font-medium text-emerald-700 sm:hidden"
+          >
+            <span className="text-lg leading-none">＋</span> Add a to-do
+          </button>
 
           {/* Today's agenda: due today or overdue, across every list */}
           {todays.length === 0 ? (
@@ -214,6 +246,84 @@ export function TodoCard({ lists, tasksConnected, initial }: { lists: TaskList[]
       )}
 
       {editing && <EditModal task={editing} onClose={() => setEditing(null)} onSave={saveEdit} onDelete={remove} />}
+
+      {mounted && composerOpen && createPortal(
+        <div className="fixed inset-0 z-50 flex flex-col justify-end bg-black/30 sm:hidden" onClick={() => setComposerOpen(false)}>
+          <div
+            className="rounded-t-2xl bg-white shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+            style={{ paddingBottom: "max(env(safe-area-inset-bottom), 0.5rem)" }}
+          >
+            <div className="mx-auto mt-2 h-1 w-9 rounded-full bg-slate-200" />
+
+            {/* quick-action chips */}
+            <div className="flex items-center gap-2 px-4 pt-3">
+              <div className="relative">
+                <button
+                  type="button"
+                  onClick={() => setDateMenu((m) => !m)}
+                  className={`flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-medium ${draftDue ? "border-emerald-300 bg-emerald-50 text-emerald-700" : "border-slate-200 text-slate-500"}`}
+                >
+                  📅 {dueLabel(draftDue)}
+                  {draftDue && <span onClick={(e) => { e.stopPropagation(); setDraftDue(""); }} className="ml-0.5 text-slate-400">✕</span>}
+                </button>
+                {dateMenu && (
+                  <div className="absolute bottom-full left-0 z-10 mb-2 w-44 rounded-xl border border-slate-200 bg-white p-1 shadow-xl">
+                    {([["Today", 0], ["Tomorrow", 1], ["Next week", 7]] as const).map(([label, off]) => (
+                      <button
+                        key={label}
+                        type="button"
+                        onClick={() => { const d = new Date(new Date().toDateString()); d.setDate(d.getDate() + off); setDraftDue(ymd(d)); setDateMenu(false); }}
+                        className="flex w-full items-center justify-between rounded-lg px-3 py-2 text-left text-sm text-slate-700 hover:bg-slate-50"
+                      >
+                        {label}
+                      </button>
+                    ))}
+                    <label className="flex cursor-pointer items-center justify-between rounded-lg px-3 py-2 text-sm text-slate-700 hover:bg-slate-50">
+                      Pick a date
+                      <input type="date" value={draftDue} onChange={(e) => { setDraftDue(e.target.value); setDateMenu(false); }} className="w-0 opacity-0" />
+                    </label>
+                  </div>
+                )}
+              </div>
+
+              {lists.length > 1 && (
+                <div className="flex items-center gap-1.5 rounded-full border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-500">
+                  📋
+                  <select value={draftList} onChange={(e) => setDraftList(e.target.value)} className="max-w-[8rem] truncate bg-transparent outline-none">
+                    {lists.map((l) => <option key={l.id} value={l.id}>{l.title}</option>)}
+                  </select>
+                </div>
+              )}
+            </div>
+
+            {/* text input + send */}
+            <form
+              onSubmit={(e) => { e.preventDefault(); if (draft.trim()) { add(); inputRef.current?.focus(); } }}
+              className="flex items-center gap-2 px-4 py-3"
+            >
+              <span className="grid h-5 w-5 shrink-0 place-items-center rounded-full border-2 border-slate-300" />
+              <input
+                ref={inputRef}
+                value={draft}
+                onChange={(e) => setDraft(e.target.value)}
+                enterKeyHint="done"
+                placeholder="Add a to-do…"
+                className="min-w-0 flex-1 text-base text-slate-900 outline-none placeholder:text-slate-400"
+              />
+              <button
+                type="submit"
+                disabled={!draft.trim() || lists.length === 0}
+                aria-label="Add"
+                className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-emerald-600 text-white disabled:opacity-30"
+              >
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M12 19V5M5 12l7-7 7 7" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" /></svg>
+              </button>
+            </form>
+          </div>
+        </div>,
+        document.body,
+      )}
     </section>
   );
 }
