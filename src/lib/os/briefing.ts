@@ -173,7 +173,7 @@ export function buildBriefing(input: BriefingInput, prefs: BriefingPrefs, now: D
       push("🎂", `Birthday today: ${names.join(", ")}`, `Oh, and it's ${andList(names)}'s birthday today — don't forget to wish ${names.length > 1 ? "them" : "them"}!`);
     }
     if (later.length) {
-      const parts = later.slice(0, 3).map((b) => `${bdayName(b.title)} on ${dayName(b.atISO)}`);
+      const parts = later.slice(0, 3).map((b) => `${bdayName(b.title)}'s birthday on ${dayName(b.atISO)}`);
       push("🎈", `Upcoming birthdays: ${parts.join("; ")}`, `Coming up: ${andList(parts)}.`);
     }
   }
