@@ -25,6 +25,7 @@ export default async function TodayPage({
       <TodayView
         items={data.items}
         events={data.events}
+        weekEvents={data.weekEvents}
         tasks={data.tasks}
         tasklists={data.tasklists}
         tasksConnected={data.tasksConnected}

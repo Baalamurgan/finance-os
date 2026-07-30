@@ -16,6 +16,7 @@ export type TodaySummary = { canSpend: number | null; personalExpense: number | 
 export type TodayData = {
   items: TodayItem[]; // events / bills / cards / birthdays (scheduled + due things)
   events: CalendarEvent[]; // today's calendar events (raw, with times) — for the Day grid
+  weekEvents: CalendarEvent[]; // today + next 7 days (with recurring flags) — for the briefing
   tasks: TaskWithList[]; // to-dos across ALL lists, each tagged with its list
   tasklists: TaskList[]; // the member's Google Tasks lists (for filtering + add-target)
   summary: TodaySummary;
@@ -49,11 +50,11 @@ export async function getTodayData(opts: {
 }): Promise<TodayData> {
   const { memberId, householdId, personalPeriod } = opts;
 
-  const [calOn, contactsOn, tasksOn, events, calBdays, contactBdays, taskData, billReminders, cardReminders, cash] = await Promise.all([
+  const [calOn, contactsOn, tasksOn, weekEvents, calBdays, contactBdays, taskData, billReminders, cardReminders, cash] = await Promise.all([
     calendarConnected(memberId),
     contactsConnected(memberId),
     tasksConnected(memberId),
-    listUpcomingEvents(memberId),
+    listUpcomingEvents(memberId, 8), // today + next 7 days (single fetch; sliced below)
     listCalendarBirthdays(memberId),
     listContactBirthdays(memberId),
     listAllTasks(memberId),
@@ -61,6 +62,10 @@ export async function getTodayData(opts: {
     getCardBillReminders(memberId).catch(() => []),
     personalPeriod ? getPersonalCash(personalPeriod).catch(() => null) : Promise.resolve(null),
   ]);
+
+  // The Day grid + Today timeline are about today only; the briefing looks a week out.
+  const todayStr = new Date().toDateString();
+  const events = weekEvents.filter((e) => new Date(e.startISO).toDateString() === todayStr);
 
   const items: TodayItem[] = [];
 
@@ -125,6 +130,7 @@ export async function getTodayData(opts: {
   return {
     items,
     events,
+    weekEvents,
     tasks: taskData.tasks,
     tasklists: taskData.lists,
     summary: { canSpend: cash?.canSpend ?? null, personalExpense: cash?.personalExpense ?? null },

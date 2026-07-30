@@ -123,10 +123,10 @@ export function NavHeader({
         stays visible while scrolling (it's easy to miss otherwise). */}
     <div className="sticky top-0 z-40">
     <header className="border-b border-slate-200 bg-white/90 backdrop-blur">
-      <div className="mx-auto flex max-w-7xl flex-wrap items-center gap-x-3 gap-y-2 px-4 py-3 sm:px-6">
-        <div className="mr-2">
-          <div className="text-base font-bold text-slate-900">{householdName}</div>
-          <div className="text-[11px] text-slate-400">Family Finance OS</div>
+      <div className="mx-auto flex max-w-7xl flex-nowrap items-center gap-x-2 px-4 py-2.5 sm:flex-wrap sm:gap-x-3 sm:gap-y-2 sm:py-3 sm:px-6">
+        <div className="mr-1 min-w-0 sm:mr-2">
+          <div className="truncate text-[15px] font-bold text-slate-900 sm:text-base">{householdName}</div>
+          <div className="hidden text-[11px] text-slate-400 sm:block">Family Finance OS</div>
         </div>
 
         {/* desktop tabs (mobile uses the bottom bar) */}
@@ -148,7 +148,7 @@ export function NavHeader({
           <MoreMenu items={moreTabs} q={q} active={active} />
         </nav>
 
-        <div className="ml-auto flex flex-wrap items-center gap-2">
+        <div className="ml-auto flex flex-nowrap items-center gap-1.5 sm:flex-wrap sm:gap-2">
           <span className="hidden rounded-full bg-amber-50 px-3 py-1 text-xs font-medium text-amber-700 sm:inline">
             🐷 {formatINR(piggyBalance)}
           </span>
@@ -157,7 +157,7 @@ export function NavHeader({
           <select
             value={selMonth}
             onChange={(e) => go(selYear, Number(e.target.value))}
-            className="rounded-md border border-slate-300 bg-white px-2 py-1.5 text-sm shadow-sm"
+            className="rounded-md border border-slate-300 bg-white px-1.5 py-1 text-[13px] shadow-sm sm:px-2 sm:py-1.5 sm:text-sm"
           >
             {MONTHS.map((mname, i) => {
               const mnum = i + 1;
@@ -179,7 +179,7 @@ export function NavHeader({
               const m = y === curYear && selMonth > curMonth ? curMonth : selMonth;
               go(y, m);
             }}
-            className="rounded-md border border-slate-300 bg-white px-2 py-1.5 text-sm shadow-sm"
+            className="rounded-md border border-slate-300 bg-white px-1.5 py-1 text-[13px] shadow-sm sm:px-2 sm:py-1.5 sm:text-sm"
           >
             {years.map((yr) => (
               <option key={yr} value={yr}>
@@ -188,16 +188,19 @@ export function NavHeader({
             ))}
           </select>
 
+          {/* primary Add-Spend button is desktop-only; mobile uses the thumb-reachable FAB */}
           {periodOpen && periodId && (
-            <AddSpendModal
-              periodId={periodId}
-              trigger="primary"
-              categories={spendCategories}
-              isHead={isHead}
-              members={members}
-              currentMemberId={currentMemberId}
-              subCategories={MISC_SUBCATEGORIES}
-            />
+            <span className="hidden sm:block">
+              <AddSpendModal
+                periodId={periodId}
+                trigger="primary"
+                categories={spendCategories}
+                isHead={isHead}
+                members={members}
+                currentMemberId={currentMemberId}
+                subCategories={MISC_SUBCATEGORIES}
+              />
+            </span>
           )}
 
           <RemindersBell context="family" />

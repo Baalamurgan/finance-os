@@ -28,6 +28,7 @@ const CACHE_KEY = "today-snapshot-v1";
 export function TodayView({
   items,
   events,
+  weekEvents,
   tasks,
   tasklists,
   tasksConnected,
@@ -39,6 +40,7 @@ export function TodayView({
 }: {
   items: TodayItem[];
   events: CalendarEvent[];
+  weekEvents: CalendarEvent[];
   tasks: TaskWithList[];
   tasklists: TaskList[];
   tasksConnected: boolean;
@@ -109,7 +111,7 @@ export function TodayView({
 
   return (
     <main className="mx-auto max-w-2xl space-y-4 p-4 pb-28 sm:p-6">
-      <GoodMorning name={name} canSpend={summary.canSpend} tasks={tasks} items={effective} />
+      <GoodMorning name={name} canSpend={summary.canSpend} tasks={tasks} events={weekEvents} items={effective} />
 
       {offline && (
         <div className="rounded-lg bg-slate-100 px-4 py-2 text-xs text-slate-500">

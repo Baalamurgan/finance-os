@@ -17,6 +17,7 @@ export type CalendarEvent = {
   allDay: boolean;
   location: string | null;
   htmlLink: string | null; // deep-link to open in Google Calendar
+  recurring: boolean; // instance of a repeating series → treated as "routine"
 };
 
 export type Birthday = {
@@ -35,6 +36,7 @@ type GEvent = {
   summary?: string;
   location?: string;
   htmlLink?: string;
+  recurringEventId?: string; // present on instances of a repeating series
   start?: { date?: string; dateTime?: string };
   end?: { date?: string; dateTime?: string };
 };
@@ -45,7 +47,7 @@ async function fetchEvents(token: string, calendarId: string, timeMinISO: string
     timeMax: timeMaxISO,
     singleEvents: "true",
     orderBy: "startTime",
-    maxResults: "50",
+    maxResults: "100",
   });
   const res = await fetch(`${CAL_API}/${encodeURIComponent(calendarId)}/events?${params}`, {
     headers: { Authorization: `Bearer ${token}` },
@@ -68,6 +70,7 @@ function toEvent(e: GEvent): CalendarEvent {
     allDay,
     location: e.location?.trim() || null,
     htmlLink: e.htmlLink ?? null,
+    recurring: !!e.recurringEventId,
   };
 }
 

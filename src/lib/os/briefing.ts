@@ -2,9 +2,11 @@ import type { TodayItem } from "./timeline";
 import type { TaskWithList } from "@/lib/integrations/google/tasks";
 
 // The deterministic "Good morning" briefing: turns the Today aggregation (to-dos, calendar,
-// bills, cash, birthdays) into (a) a short on-screen transcript and (b) a single speech string
-// for the browser's speech synthesizer. This is intentionally AI-free — when a local LLM is
-// wired in later it rephrases exactly these same facts, so nothing here is throwaway.
+// bills, cash, birthdays) into (a) a short on-screen transcript and (b) speech for the browser's
+// speech synthesizer. Each line carries its own `speech` so the UI can start reading from any
+// line you tap. Intentionally AI-free — when a local LLM is wired in later it rephrases exactly
+// these same facts, so nothing here is throwaway. Calendar routine (recurring events) is filtered
+// out: you only hear what's different from a normal day.
 
 export const BRIEFING_SECTIONS = ["todos", "eventsToday", "eventsWeek", "familyBills", "cardBills", "cash", "birthdays"] as const;
 export type BriefingSection = (typeof BRIEFING_SECTIONS)[number];
@@ -23,21 +25,23 @@ export const DEFAULT_BRIEFING_PREFS: BriefingPrefs = {
 // What the assistant can tell you — surfaced in the settings sheet so you choose what to hear.
 export const BRIEFING_OPTIONS: { key: BriefingSection; label: string; hint: string }[] = [
   { key: "todos", label: "To-dos due today", hint: "How many are due (and overdue) plus their titles" },
-  { key: "eventsToday", label: "Today's schedule", hint: "Calendar events for today, with times" },
-  { key: "eventsWeek", label: "The week ahead", hint: "Notable events over the next 7 days" },
+  { key: "eventsToday", label: "Today's schedule", hint: "Only events that aren't your usual routine" },
+  { key: "eventsWeek", label: "The week ahead", hint: "Non-routine events over the next 7 days" },
   { key: "familyBills", label: "Family bills due", hint: "Bills you're on the hook for, with amounts" },
   { key: "cardBills", label: "Card bills due", hint: "Credit-card dues coming up" },
   { key: "cash", label: "Cash & spending", hint: "What's left to spend, with a low-balance alert" },
   { key: "birthdays", label: "Birthdays", hint: "Today's and upcoming birthdays" },
 ];
 
-export type BriefingLine = { icon: string; text: string };
-export type Briefing = { greeting: string; subtitle: string; lines: BriefingLine[]; speech: string };
+export type BriefEvent = { title: string; startISO: string; allDay: boolean; recurring: boolean };
+export type BriefingLine = { icon: string; text: string; speech: string };
+export type Briefing = { greeting: string; subtitle: string; intro: string; outro: string; lines: BriefingLine[]; speech: string };
 
 export type BriefingInput = {
   name: string;
   tasks: TaskWithList[];
-  items: TodayItem[];
+  events: BriefEvent[]; // today + next ~7 days, each flagged recurring (routine) or not
+  items: TodayItem[]; // used for bills / cards / birthdays
   canSpend: number | null;
   lowCashThreshold?: number;
 };
@@ -47,6 +51,7 @@ const startOfDay = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDat
 const timeStr = (iso: string) => new Date(iso).toLocaleTimeString("en-IN", { hour: "numeric", minute: "2-digit" });
 const dayName = (iso: string) => new Date(iso).toLocaleDateString("en-IN", { weekday: "long" });
 const bdayName = (title: string) => title.replace(/'s birthday$/i, "");
+const andList = (xs: string[]) => (xs.length <= 1 ? (xs[0] ?? "") : `${xs.slice(0, -1).join(", ")} and ${xs[xs.length - 1]}`);
 
 export function buildBriefing(input: BriefingInput, prefs: BriefingPrefs, now: Date = new Date()): Briefing {
   const first = input.name?.split(" ")[0] ?? "";
@@ -54,9 +59,11 @@ export function buildBriefing(input: BriefingInput, prefs: BriefingPrefs, now: D
   const greetWord = h < 12 ? "Good morning" : h < 17 ? "Good afternoon" : "Good evening";
   const greeting = `${greetWord}${first ? `, ${first}` : ""}.`;
   const subtitle = now.toLocaleDateString("en-IN", { weekday: "long", day: "numeric", month: "long" });
+  const intro = `${greetWord}${first ? `, ${first}` : ""}! Here's how your day's looking.`;
+  const outro = "That's everything — go have a great one!";
 
   const lines: BriefingLine[] = [];
-  const speech: string[] = [`${greeting} Here's your day.`];
+  const push = (icon: string, text: string, speech: string) => lines.push({ icon, text, speech });
 
   const today0 = startOfDay(now).getTime();
   const tomorrow0 = startOfDay(now);
@@ -68,43 +75,43 @@ export function buildBriefing(input: BriefingInput, prefs: BriefingPrefs, now: D
     const overdue = due.filter((t) => new Date(t.dueISO!).getTime() < today0);
     if (due.length) {
       const titles = due.slice(0, 5).map((t) => t.title);
-      const more = due.length > titles.length ? "…" : "";
+      const more = due.length - titles.length;
       const od = overdue.length ? ` · ${overdue.length} overdue` : "";
-      lines.push({ icon: "✅", text: `${due.length} to-do${due.length > 1 ? "s" : ""} due today${od}: ${titles.join(", ")}${more}` });
-      speech.push(`You have ${due.length} to-do${due.length > 1 ? "s" : ""} due today${overdue.length ? `, ${overdue.length} of them overdue` : ""}. ${titles.join(". ")}.`);
+      push("✅", `${due.length} to-do${due.length > 1 ? "s" : ""} today${od}: ${titles.join(", ")}${more > 0 ? `, +${more} more` : ""}`,
+        `You've got ${due.length} thing${due.length > 1 ? "s" : ""} to do today${overdue.length ? `, and ${overdue.length} ${overdue.length > 1 ? "are" : "is"} already overdue` : ""}. ${andList(titles)}.${more > 0 ? ` Plus ${more} more.` : ""}`);
     } else {
-      lines.push({ icon: "✅", text: "No to-dos due today." });
-      speech.push("You have no to-dos due today.");
+      push("✅", "No to-dos due today.", "You're all clear on to-dos today. Nice.");
     }
   }
 
-  const events = input.items.filter((i) => i.kind === "event");
+  // Split the week's events into today vs. later, and routine vs. one-off.
+  const todayEvents = input.events.filter((e) => startOfDay(new Date(e.startISO)).getTime() === today0);
+  const laterEvents = input.events.filter((e) => {
+    const d = new Date(e.startISO);
+    return d >= tomorrow0;
+  });
 
-  // ── Today's schedule ──
+  // ── Today's schedule — only what's different from a normal day ──
   if (prefs.eventsToday) {
-    const todayEv = events.filter((e) => startOfDay(new Date(e.atISO)).getTime() === today0);
-    if (todayEv.length) {
-      const parts = todayEv.slice(0, 5).map((e) => (e.allDay ? e.title : `${e.title} at ${timeStr(e.atISO)}`));
-      lines.push({ icon: "📅", text: `Today: ${parts.join("; ")}` });
-      speech.push(`On your calendar today: ${parts.join(", ")}.`);
+    const oneOff = todayEvents.filter((e) => !e.recurring);
+    const routine = todayEvents.filter((e) => e.recurring);
+    if (oneOff.length) {
+      const parts = oneOff.slice(0, 5).map((e) => (e.allDay ? e.title : `${e.title} at ${timeStr(e.startISO)}`));
+      push("📅", `Not routine today: ${parts.join("; ")}`,
+        `${routine.length ? "Apart from your usual routine, you've" : "Today you've"} got ${andList(parts)}.`);
+    } else if (routine.length) {
+      push("📅", "Nothing outside your usual routine today.", "Nothing out of the ordinary today — just your usual routine.");
     } else {
-      lines.push({ icon: "📅", text: "Your calendar is clear today." });
-      speech.push("Your calendar is clear today.");
+      push("📅", "Your calendar's clear today.", "Your calendar's totally clear today.");
     }
   }
 
-  // ── The week ahead ──
+  // ── The week ahead (non-routine only) ──
   if (prefs.eventsWeek) {
-    const weekEnd = startOfDay(now);
-    weekEnd.setDate(weekEnd.getDate() + 8);
-    const upcoming = events.filter((e) => {
-      const d = new Date(e.atISO);
-      return d >= tomorrow0 && d < weekEnd;
-    });
+    const upcoming = laterEvents.filter((e) => !e.recurring);
     if (upcoming.length) {
-      const parts = upcoming.slice(0, 4).map((e) => `${e.title} on ${dayName(e.atISO)}`);
-      lines.push({ icon: "🗓️", text: `This week: ${parts.join("; ")}` });
-      speech.push(`Coming up this week: ${parts.join(", ")}.`);
+      const parts = upcoming.slice(0, 4).map((e) => `${e.title} on ${dayName(e.startISO)}`);
+      push("🗓️", `Later this week: ${parts.join("; ")}`, `Later this week, keep an eye on ${andList(parts)}.`);
     }
   }
 
@@ -113,9 +120,8 @@ export function buildBriefing(input: BriefingInput, prefs: BriefingPrefs, now: D
     const bills = input.items.filter((i) => i.kind === "bill");
     if (bills.length) {
       const disp = bills.map((b) => `${b.title}${b.amount ? ` ₹${money(b.amount)}` : ""}${b.overdue ? " (overdue)" : ""}`);
-      const spk = bills.map((b) => `${b.title}${b.amount ? `, ${money(b.amount)} rupees` : ""}${b.overdue ? ", overdue" : ""}`);
-      lines.push({ icon: "🔔", text: `Family bills: ${disp.join("; ")}` });
-      speech.push(`You have ${bills.length} family bill${bills.length > 1 ? "s" : ""} to pay: ${spk.join(", ")}.`);
+      const spk = bills.map((b) => `${b.title}${b.amount ? `, ${money(b.amount)} rupees` : ""}${b.overdue ? ", which is overdue" : ""}`);
+      push("🔔", `Family bills: ${disp.join("; ")}`, `Don't forget, you've got ${bills.length} family bill${bills.length > 1 ? "s" : ""} to pay: ${andList(spk)}.`);
     }
   }
 
@@ -125,8 +131,7 @@ export function buildBriefing(input: BriefingInput, prefs: BriefingPrefs, now: D
     if (cards.length) {
       const disp = cards.map((c) => `${c.title}${c.amount ? ` ₹${money(c.amount)}` : ""}${c.overdue ? " (overdue)" : ""}`);
       const spk = cards.map((c) => `${c.title}${c.amount ? `, ${money(c.amount)} rupees` : ""}${c.overdue ? ", overdue" : ""}`);
-      lines.push({ icon: "💳", text: `Card bills: ${disp.join("; ")}` });
-      speech.push(`Card bills due: ${spk.join(", ")}.`);
+      push("💳", `Card bills: ${disp.join("; ")}`, `Heads up on card bills: ${andList(spk)}.`);
     }
   }
 
@@ -134,14 +139,11 @@ export function buildBriefing(input: BriefingInput, prefs: BriefingPrefs, now: D
   if (prefs.cash && input.canSpend != null) {
     const low = input.lowCashThreshold ?? 1000;
     if (input.canSpend < 0) {
-      lines.push({ icon: "⚠️", text: `Over budget by ₹${money(-input.canSpend)} this month.` });
-      speech.push(`Heads up. You're over budget by ${money(-input.canSpend)} rupees this month.`);
+      push("⚠️", `Over budget by ₹${money(-input.canSpend)} this month.`, `Quick heads up — you're over budget by ${money(-input.canSpend)} rupees this month. Might want to ease off.`);
     } else if (input.canSpend < low) {
-      lines.push({ icon: "⚠️", text: `Running low — only ₹${money(input.canSpend)} left to spend.` });
-      speech.push(`Heads up, you're running low. Only ${money(input.canSpend)} rupees left to spend this month.`);
+      push("⚠️", `Running low — only ₹${money(input.canSpend)} left to spend.`, `You're running a bit low — only ${money(input.canSpend)} rupees left to spend this month.`);
     } else {
-      lines.push({ icon: "💰", text: `₹${money(input.canSpend)} left to spend this month.` });
-      speech.push(`You have ${money(input.canSpend)} rupees left to spend this month.`);
+      push("💰", `₹${money(input.canSpend)} left to spend this month.`, `You've got ${money(input.canSpend)} rupees left to spend this month.`);
     }
   }
 
@@ -158,16 +160,14 @@ export function buildBriefing(input: BriefingInput, prefs: BriefingPrefs, now: D
     const later = relevant.filter((b) => startOfDay(new Date(b.atISO)).getTime() !== today0);
     if (todays.length) {
       const names = todays.map((b) => bdayName(b.title));
-      lines.push({ icon: "🎂", text: `Birthday today: ${names.join(", ")}` });
-      speech.push(`It's ${names.join(" and ")}'s birthday today.`);
+      push("🎂", `Birthday today: ${names.join(", ")}`, `Oh, and it's ${andList(names)}'s birthday today — don't forget to wish ${names.length > 1 ? "them" : "them"}!`);
     }
     if (later.length) {
       const parts = later.slice(0, 3).map((b) => `${bdayName(b.title)} on ${dayName(b.atISO)}`);
-      lines.push({ icon: "🎈", text: `Upcoming birthdays: ${parts.join("; ")}` });
-      speech.push(`Upcoming birthdays: ${parts.join(", ")}.`);
+      push("🎈", `Upcoming birthdays: ${parts.join("; ")}`, `Coming up: ${andList(parts)}.`);
     }
   }
 
-  speech.push("Have a great day.");
-  return { greeting, subtitle, lines, speech: speech.join(" ") };
+  const speech = [intro, ...lines.map((l) => l.speech), outro].join(" ");
+  return { greeting, subtitle, intro, outro, lines, speech };
 }

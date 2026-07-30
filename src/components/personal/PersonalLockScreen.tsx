@@ -74,12 +74,12 @@ export function PersonalLockScreen({
     }
   };
 
+  // Open the device number pad by default, and still offer biometric on top.
   useEffect(() => {
+    pinRef.current?.focus();
     if (hasBiometric && !autoTried.current) {
       autoTried.current = true;
       void doBiometric();
-    } else if (!hasBiometric) {
-      pinRef.current?.focus();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hasBiometric]);
@@ -120,6 +120,7 @@ export function PersonalLockScreen({
           inputMode="numeric"
           autoComplete="off"
           enterKeyHint="done"
+          autoFocus
           aria-hidden
           disabled={disabled}
           className="absolute inset-0 h-full w-full cursor-pointer text-[16px] opacity-0"
