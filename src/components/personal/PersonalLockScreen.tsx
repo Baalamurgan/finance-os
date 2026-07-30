@@ -136,9 +136,21 @@ export function PersonalLockScreen({
         ) : pending ? (
           <span className="text-[#8a877f]">Checking…</span>
         ) : (
-          <span className="text-[#a9a69d]">Tap to enter</span>
+          <span className="text-transparent">·</span>
         )}
       </div>
+
+      {/* obvious tap target — on phones the keyboard only opens on a real tap */}
+      {!locked && pin.length === 0 && (
+        <button
+          type="button"
+          onClick={() => pinRef.current?.focus()}
+          disabled={disabled}
+          className="mt-1 inline-flex items-center gap-2 rounded-full bg-emerald-600 px-5 py-2.5 text-sm font-semibold text-white shadow-sm transition active:scale-95 disabled:opacity-50"
+        >
+          <KeypadIcon /> Tap to enter PIN
+        </button>
+      )}
 
       <form ref={formRef} action={formAction} className="hidden">
         <input type="hidden" name="pin" value={pin} readOnly />
@@ -172,6 +184,13 @@ function LockGlyph() {
     <svg width="24" height="24" viewBox="0 0 24 24" fill="none" aria-hidden>
       <rect x="5" y="11" width="14" height="9" rx="2.2" fill="currentColor" />
       <path d="M8 11V8a4 4 0 0 1 8 0v3" stroke="currentColor" strokeWidth="2" />
+    </svg>
+  );
+}
+function KeypadIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden>
+      {[6, 12, 18].map((cy) => [6, 12, 18].map((cx) => <circle key={`${cx}-${cy}`} cx={cx} cy={cy} r="1.6" />))}
     </svg>
   );
 }
