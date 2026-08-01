@@ -1,4 +1,8 @@
-import "dotenv/config";
+import { config } from "dotenv";
+// Prefer .env.local (real DB URL from `vercel env pull`) over .env's stale local `file:./dev.db`.
+// dotenv won't override already-set keys, so loading .env.local first makes it win.
+config({ path: ".env.local" });
+config();
 import { PrismaClient } from "@prisma/client";
 import { PrismaPg } from "@prisma/adapter-pg";
 

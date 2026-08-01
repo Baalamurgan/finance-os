@@ -1,4 +1,9 @@
-import "dotenv/config";
+import { config } from "dotenv";
+// Prefer .env.local (the real DB URL from `vercel env pull`) over .env, which may hold a stale
+// local `file:./dev.db`. dotenv doesn't override already-set keys, so loading .env.local first
+// makes it win. (Next.js loads .env.local for you; standalone tsx scripts must do it explicitly.)
+config({ path: ".env.local" });
+config();
 import { PrismaClient } from "@prisma/client";
 import { PrismaPg } from "@prisma/adapter-pg";
 
