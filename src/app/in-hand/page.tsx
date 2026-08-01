@@ -208,18 +208,22 @@ function PersonGroup({
             </span>
           </li>
         ))}
-        {unpaidBills.map((b) => (
-          <li key={b.id} className="flex items-center justify-between gap-2 text-xs">
-            <span className="truncate text-slate-500">
-              {b.name} <span className="text-[10px] text-indigo-400">bill</span>
-            </span>
-            <span className="flex shrink-0 items-center gap-1.5">
-              <span className="tabular-nums text-slate-600">{formatINR(b.amount)}</span>
-              <span className="rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-400">to pay</span>
-              {canPay && <PaidToggle id={b.id} title="Mark this bill paid" label="✓ paid" />}
-            </span>
-          </li>
-        ))}
+        {unpaidBills.map((b) => {
+          const st = b.due?.status;
+          return (
+            <li key={b.id} className={`flex items-center justify-between gap-2 rounded-md text-xs ${st === "overdue" ? "bg-red-50 px-1.5 py-0.5" : st === "soon" ? "bg-amber-50 px-1.5 py-0.5" : ""}`}>
+              <span className={`truncate ${st === "overdue" ? "text-red-700" : "text-slate-500"}`}>
+                {b.name} <span className="text-[10px] text-indigo-400">bill</span>
+                {b.due && <DueChip due={b.due} />}
+              </span>
+              <span className="flex shrink-0 items-center gap-1.5">
+                <span className={`tabular-nums ${st === "overdue" ? "font-medium text-red-700" : "text-slate-600"}`}>{formatINR(b.amount)}</span>
+                {!b.due && <span className="rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-400">to pay</span>}
+                {canPay && <PaidToggle id={b.id} title="Mark this bill paid" label="✓ paid" />}
+              </span>
+            </li>
+          );
+        })}
         {/* Savings this person is holding toward a periodic bill (moves to the fund at wind-down) */}
         {earmarked.map((e) => (
           <li key={`sv${e.id}`} className="flex items-center justify-between gap-2 text-xs">
@@ -328,6 +332,25 @@ function PersonGroup({
       )}
     </div>
   );
+}
+
+const ord = (n: number) => {
+  const s = ["th", "st", "nd", "rd"];
+  const v = n % 100;
+  return `${n}${s[(v - 20) % 10] ?? s[v] ?? s[0]}`;
+};
+
+// Due-date pill: red overdue · amber due-soon (≤2d) · slate for a set-but-chill date.
+function DueChip({ due }: { due: { day: number; days: number; status: "overdue" | "soon" | "normal" } }) {
+  if (due.status === "overdue") {
+    const by = Math.abs(due.days);
+    return <span className="ml-1 rounded-full bg-red-100 px-1.5 py-0.5 text-[10px] font-semibold text-red-700">overdue {by > 0 ? `${by}d` : ""} · was {ord(due.day)}</span>;
+  }
+  if (due.status === "soon") {
+    const when = due.days === 0 ? "today" : due.days === 1 ? "tomorrow" : `in ${due.days}d`;
+    return <span className="ml-1 rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700">due {when}</span>;
+  }
+  return <span className="ml-1 rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-400">due {ord(due.day)}</span>;
 }
 
 function PaidToggle({ id, title, label }: { id: number; title: string; label: string }) {

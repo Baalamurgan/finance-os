@@ -17,7 +17,7 @@ export type RItem = {
 // Periodic "every N months" bills live on the Category now (Budgets & sinking funds →
 // "Full bill"), so recurring items are just monthly lines or fixed-term installments.
 type SchedKind = "monthly" | "installment";
-type SchedState = { kind: SchedKind; total: string; current: string };
+type SchedState = { kind: SchedKind; total: string; current: string; dueDay: string };
 
 function initSched(item?: RItem): SchedState {
   const kind: SchedKind = item && item.installmentsTotal != null && item.intervalMonths <= 1 ? "installment" : "monthly";
@@ -25,11 +25,12 @@ function initSched(item?: RItem): SchedState {
     kind,
     total: item && item.intervalMonths <= 1 && item.installmentsTotal != null ? String(item.installmentsTotal) : "",
     current: item?.installmentCurrent != null ? String(item.installmentCurrent) : "",
+    dueDay: item?.dueDay != null ? String(item.dueDay) : "",
   };
 }
-const schedKey = (s: SchedState) => [s.kind, s.total, s.current].join("|");
+const schedKey = (s: SchedState) => [s.kind, s.total, s.current, s.dueDay].join("|");
 
-function ScheduleEditor({ s, set }: { s: SchedState; set: (s: SchedState) => void }) {
+function ScheduleEditor({ s, set, kind }: { s: SchedState; set: (s: SchedState) => void; kind: "income" | "expense" }) {
   return (
     <span className="flex flex-wrap items-center gap-1 text-[11px] text-slate-600">
       <select value={s.kind} onChange={(e) => set({ ...s, kind: e.target.value as SchedKind })} className="input py-1 text-xs" title="How often this repeats">
@@ -42,6 +43,10 @@ function ScheduleEditor({ s, set }: { s: SchedState; set: (s: SchedState) => voi
           on #<input type="number" min="1" value={s.current} onChange={(e) => set({ ...s, current: e.target.value })} placeholder="this mo" className="input w-14 py-1 text-xs" title="which payment is THIS month" />
         </span>
       )}
+      <span className="flex items-center gap-1 text-slate-500" title={kind === "income" ? "Day of the month this income arrives" : "Day of the month this is due"}>
+        {kind === "income" ? "arrives" : "due"} day
+        <input type="number" min="1" max="31" value={s.dueDay} onChange={(e) => set({ ...s, dueDay: e.target.value })} placeholder="–" className="input w-12 py-1 text-xs" />
+      </span>
     </span>
   );
 }
@@ -51,6 +56,7 @@ function SchedHidden({ s }: { s: SchedState }) {
   return (
     <>
       <input type="hidden" name="scheduleKind" value={s.kind} />
+      <input type="hidden" name="dueDay" value={s.dueDay} />
       {s.kind === "installment" && (
         <>
           <input type="hidden" name="installmentsTotal" value={s.total} />
@@ -188,7 +194,7 @@ function ItemRow({ item, members, categories, readOnly }: { item: RItem; members
           {categories.map((c) => <option key={c.id} value={String(c.id)}>{c.name}</option>)}
         </select>
       )}
-      <ScheduleEditor s={sched} set={setSched} />
+      <ScheduleEditor s={sched} set={setSched} kind={item.kind === "income" ? "income" : "expense"} />
       <div className="ml-auto flex items-center gap-1">
         <form action={updateRecurringItem}>
           <input type="hidden" name="id" value={item.id} />
@@ -239,7 +245,7 @@ function AddItem({ householdId, categories, members }: { householdId: number; ca
             {categories.map((c) => <option key={c.id} value={String(c.id)}>{c.name} · {c.section}</option>)}
           </select>
         )}
-        <ScheduleEditor s={sched} set={setSched} />
+        <ScheduleEditor s={sched} set={setSched} kind={kind} />
         <SchedHidden s={sched} />
         <button className="btn">Add</button>
       </form>

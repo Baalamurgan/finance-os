@@ -79,7 +79,7 @@ export async function generateMonth(
     if (label == null) continue; // installment outside its schedule
     if (it.kind === "income") {
       await tx.incomeEntry.create({
-        data: { periodId: targetId, source: label, amount: it.amount, ownerId: it.memberId, oneOff: false },
+        data: { periodId: targetId, source: label, amount: it.amount, ownerId: it.memberId, oneOff: false, dueDay: it.dueDay },
       });
       continue;
     }
@@ -99,6 +99,7 @@ export async function generateMonth(
         memberId: it.memberId,
         necessary: cat?.necessary ?? true,
         oneOff: false,
+        dueDay: it.dueDay,
       },
     });
   }

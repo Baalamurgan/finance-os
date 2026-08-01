@@ -1720,21 +1720,23 @@ type ScheduleFields = {
 // the Setup form. `scheduleKind` selects the mode; unknown/absent → plain monthly.
 async function scheduleFromForm(householdId: number, formData: FormData): Promise<ScheduleFields> {
   const kind = String(formData.get("scheduleKind") ?? "monthly");
+  // Due day / arrival day (1–31) is independent of the repeat schedule — it's the day of the
+  // month this expense is due (or income arrives). Empty → no date (shown as "normal").
+  const dueDay = formData.get("dueDay") ? Math.min(31, Math.max(1, Number(formData.get("dueDay")))) : null;
   if (kind === "installment") {
     const total = formData.get("installmentsTotal") ? Number(formData.get("installmentsTotal")) : null;
     const current = Number(formData.get("installmentCurrent")) || 1;
     const inst = await installmentStartFrom(householdId, total, current);
-    return { intervalMonths: 1, dueDay: null, ...inst };
+    return { intervalMonths: 1, dueDay, ...inst };
   }
   if (kind === "periodic") {
     const interval = Math.min(60, Math.max(2, Number(formData.get("intervalMonths")) || 12));
     const y = Number(formData.get("periodicYear")) || new Date().getFullYear();
     const m = Math.min(12, Math.max(1, Number(formData.get("periodicMonth")) || 1));
     const total = formData.get("periodicCount") ? Math.max(1, Number(formData.get("periodicCount"))) : null;
-    const dueDay = formData.get("dueDay") ? Math.min(31, Math.max(1, Number(formData.get("dueDay")))) : null;
     return { intervalMonths: interval, installmentsTotal: total, installmentStartYear: y, installmentStartMonth: m, dueDay };
   }
-  return { intervalMonths: 1, installmentsTotal: null, installmentStartYear: null, installmentStartMonth: null, dueDay: null };
+  return { intervalMonths: 1, installmentsTotal: null, installmentStartYear: null, installmentStartMonth: null, dueDay };
 }
 
 export async function createRecurringItem(formData: FormData) {

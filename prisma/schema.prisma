@@ -558,6 +558,7 @@ model IncomeEntry {
   ownerId   Int?
   oneOff    Boolean  @default(false) // one-time income (e.g. a loan/piggy top-up) — NOT copied forward
   note      String?
+  dueDay    Int?     // day-of-month this income arrives (from the template) — for the Money Plan ordering
   createdAt DateTime @default(now())
 }
 
@@ -575,6 +576,7 @@ model ExpenseEntry {
   oneOff     Boolean  @default(false) // wind-down carry (misc/over-budget) — NOT copied to future months
   note       String?
   paid       Boolean  @default(false) // a bill marked paid → drops out of "budget left in hand"
+  dueDay     Int?     // day-of-month this bill is due (from the template) — powers overdue/near-due In-Hand highlighting
   createdAt  DateTime @default(now())
 }
 

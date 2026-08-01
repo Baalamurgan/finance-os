@@ -775,12 +775,29 @@ export async function getInHand(householdId: number, periodId: number) {
       return { categoryId: c.id, name: c.name, bill: c.billAmount!, payer: c.payerMemberId ?? c.responsibleMemberId ?? null, fund, afterWindDown: projected > 0 ? projectionLabel : null, paid: paidCats.has(c.id) };
     });
 
+  // Due-date status for a bill line, evaluated against today for THIS period's month. `overdue`
+  // = due date has passed & still unpaid; `soon` = due within 2 days; `normal` = dated but not
+  // urgent; null = no date set (render plain, per "no due date → show as normal").
+  const now = new Date();
+  const today0 = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  const dueOf = (dueDay: number | null | undefined) => {
+    if (!dueDay || !period) return null;
+    const lastDay = new Date(period.year, period.month, 0).getDate();
+    const day = Math.min(Math.max(dueDay, 1), lastDay);
+    const due0 = new Date(period.year, period.month - 1, day).getTime();
+    const days = Math.round((due0 - today0) / 86400000);
+    const status = days < 0 ? "overdue" : days <= 2 ? "soon" : "normal";
+    return { day: dueDay, days, status } as const;
+  };
+  const billRank = (d: { status: string } | null) => (d?.status === "overdue" ? 0 : d?.status === "soon" ? 1 : 2);
+
   const build = (key: number | null, name: string) => {
     const cats = rows.filter((r) => (r.responsibleMemberId ?? null) === key);
     const memberBills = bills
       .filter((e) => (e.memberId ?? null) === key)
-      .map((e) => ({ id: e.id, name: e.label, amount: e.amount, paid: e.paid }));
-    const unpaidBills = memberBills.filter((b) => !b.paid);
+      .map((e) => ({ id: e.id, name: e.label, amount: e.amount, paid: e.paid, due: dueOf(e.dueDay) }));
+    // urgent (overdue → soon) bills float to the top of the unpaid list
+    const unpaidBills = memberBills.filter((b) => !b.paid).sort((a, b) => billRank(a.due) - billRank(b.due));
     const paidBills = memberBills.filter((b) => b.paid);
     // set-asides this member is holding toward a bill (saver) — but once a due-month bill was
     // PAID from this month's share (BillPayment.fromSetAside), that cash has left their hand and
