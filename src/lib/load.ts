@@ -55,18 +55,18 @@ export async function loadCommon(params?: { y?: string; m?: string }) {
   if (y && m) {
     selected = periods.find((p) => p.year === y && p.month === m) ?? null;
   } else {
-    // Prefer TODAY's calendar month. Once the calendar rolls over (e.g. Aug 1) but the
-    // previous month hasn't been wound down yet, that month usually only exists as a
-    // next-month PREVIEW draft — open it by default (shown with a "Preview" badge) so the
-    // family lands on the month they're now living in. Falls back to the latest open month
-    // (so an old closed/imported current month doesn't hide the Add buttons), else latest.
+    // Land on the WORKING month — the one the family is actually living in and logging into.
+    // That's the current calendar month if it's open, else any still-open month (e.g. during the
+    // wind-down window: the calendar rolls to Aug 1 but July stays the working month until it winds
+    // down on the 5th, so daily spends/bills land in July — NOT the August preview). The next-month
+    // PREVIEW draft is only the default when nothing is open, and always reachable via the picker.
     const t = new Date();
     const cy = t.getFullYear();
     const cm = t.getMonth() + 1;
     selected =
       periods.find((p) => p.year === cy && p.month === cm && p.status === "open") ??
-      periods.find((p) => p.year === cy && p.month === cm && p.status === "draft") ??
       periods.find((p) => p.status === "open") ??
+      periods.find((p) => p.year === cy && p.month === cm && p.status === "draft") ??
       periods[0] ??
       null;
   }

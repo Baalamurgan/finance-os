@@ -148,7 +148,7 @@ export function NavHeader({
           <MoreMenu items={moreTabs} q={q} active={active} />
         </nav>
 
-        <div className="ml-auto flex flex-nowrap items-center gap-1.5 sm:flex-wrap sm:gap-2">
+        <div className="ml-auto flex min-w-0 flex-wrap items-center justify-end gap-1.5 sm:gap-2">
           <span className="hidden rounded-full bg-amber-50 px-3 py-1 text-xs font-medium text-amber-700 sm:inline">
             🐷 {formatINR(piggyBalance)}
           </span>

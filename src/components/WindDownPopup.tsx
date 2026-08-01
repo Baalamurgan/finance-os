@@ -53,6 +53,13 @@ export function WindDownPopup({ daysUntil, day, q }: { daysUntil: number; day: n
         </div>
         <div className="flex flex-col gap-2 px-6 py-6">
           <Link
+            href={`/expenses${q}`}
+            onClick={close}
+            className="w-full rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-center text-base font-semibold text-amber-800 hover:bg-amber-100"
+          >
+            Add pending expenses →
+          </Link>
+          <Link
             href={`/wind-down${q}`}
             onClick={close}
             className="w-full rounded-xl bg-amber-600 px-4 py-3 text-center text-base font-semibold text-white hover:bg-amber-700"

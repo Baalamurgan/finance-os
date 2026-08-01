@@ -13,6 +13,7 @@
     "db:migrate": "prisma migrate dev",
     "db:seed": "tsx prisma/seed.ts",
     "ensure-month": "tsx scripts/ensure-month.ts",
+    "explain-surplus": "tsx scripts/explain-surplus.ts",
     "preview:rollover": "tsx scripts/preview-rollover.ts",
     "import:history": "tsx scripts/import-history.ts",
     "import:mstodo": "tsx scripts/import-mstodo.ts",
