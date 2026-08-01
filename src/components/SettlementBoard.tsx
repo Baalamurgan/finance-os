@@ -4,8 +4,7 @@ import { useState, useTransition } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { formatINR } from "@/lib/format";
-import { markSettled, unsettle, setTreasurer } from "@/app/actions";
-import { ConfirmForm } from "@/components/ConfirmForm";
+import { setTreasurer } from "@/app/actions";
 
 type PaidItem = { label: string; amount: number; category: string; kind: "sheet" | "spend" };
 type Row = { id: number; name: string; contributed: number; paid: number; net: number; paidItems: PaidItem[] };
@@ -15,7 +14,7 @@ type Transfer = {
 };
 
 export function SettlementBoard({
-  y, m, householdId, periodId, isHead, currentMemberId, members,
+  y, m, householdId, periodId, isHead, members,
   treasurerId, defaultId, treasurerName,
   transfers, rows, settledCount, total, allSettled,
 }: {
@@ -25,8 +24,6 @@ export function SettlementBoard({
   treasurerId: number | null; defaultId: number | null; treasurerName: string | null;
   transfers: Transfer[]; rows: Row[]; settledCount: number; total: number; allSettled: boolean;
 }) {
-  // head, or the payer/receiver of a transfer, may mark it paid / undo it
-  const canSettle = (t: Transfer) => isHead || currentMemberId === t.fromId || currentMemberId === t.toId;
   const router = useRouter();
   const [pending, startTransition] = useTransition();
   const [sel, setSel] = useState<number>(treasurerId ?? members[0]?.id ?? 0);
@@ -78,9 +75,12 @@ export function SettlementBoard({
       {/* who owes whom */}
       <section className="rounded-xl border border-slate-200 bg-white p-5">
         <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-          <h2 className="text-sm font-semibold text-slate-700">
-            Who owes whom {treasurerName && <span className="text-slate-400">(hub: {treasurerName})</span>}
-          </h2>
+          <div>
+            <h2 className="text-sm font-semibold text-slate-700">
+              Who owes whom {treasurerName && <span className="text-slate-400">(hub: {treasurerName})</span>}
+            </h2>
+            <p className="text-[11px] text-slate-400">Mark transfers paid in the <b>🧭 Money plan</b> tab — they show up here automatically.</p>
+          </div>
           {total > 0 &&
             (allSettled ? (
               <span className="rounded-full bg-green-100 px-3 py-1 text-xs font-medium text-green-700">✓ Fully settled</span>
@@ -112,24 +112,9 @@ export function SettlementBoard({
                       {t.amountChanged && (
                         <span className="rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-700">amount changed since</span>
                       )}
-                      {canSettle(t) && t.recordId && (
-                        <form action={unsettle}>
-                          <input type="hidden" name="id" value={t.recordId} />
-                          <button className="text-xs text-slate-400 hover:text-red-600">Undo</button>
-                        </form>
-                      )}
                     </span>
                   ) : (
-                    canSettle(t) && (
-                      <ConfirmForm action={markSettled} message={`Mark ${t.from} → ${t.to} ${formatINR(t.amount)} as paid?`}>
-                        <input type="hidden" name="householdId" value={householdId} />
-                        <input type="hidden" name="periodId" value={periodId} />
-                        <input type="hidden" name="fromMemberId" value={t.fromId} />
-                        <input type="hidden" name="toMemberId" value={t.toId} />
-                        <input type="hidden" name="amount" value={t.amount} />
-                        <button className="rounded-md bg-indigo-600 px-3 py-1 text-xs font-medium text-white hover:bg-indigo-700">Mark paid</button>
-                      </ConfirmForm>
-                    )
+                    <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-500">pending</span>
                   )}
                 </div>
               </li>

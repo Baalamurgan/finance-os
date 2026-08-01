@@ -1,6 +1,7 @@
 "use server";
 
 import { prisma } from "@/lib/prisma";
+import { Prisma } from "@prisma/client";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { cookies, headers } from "next/headers";
@@ -1783,6 +1784,117 @@ export async function updateRecurringItem(formData: FormData) {
   }
   await prisma.recurringItem.update({ where: { id }, data });
   revalidatePath("/", "layout");
+}
+
+// Refresh the CURRENT open month from the Setup template: re-pull each generated line's due day
+// and amount from its RecurringItem. Setup edits normally apply only from next month (the current
+// sheet is a frozen snapshot), so this lets the family pull date/amount changes into this month on
+// demand and re-order the Money Plan. Only touches template-generated lines (never one-offs or
+// manual additions); budgeted / bill-with-fund categories own their amount & due day in
+// Budgets & sinking funds, so their items are skipped here.
+export async function syncMonthFromSetup(
+  householdId: number,
+  periodId: number,
+): Promise<{ ok: boolean; updated: number; error?: string }> {
+  if (!(await canEdit())) { log.warn("syncMonthFromSetup", "blocked", { householdId, periodId }); return { ok: false, updated: 0, error: "Not allowed." }; }
+  const period = await prisma.period.findUnique({ where: { id: periodId } });
+  if (!period || period.householdId !== householdId) return { ok: false, updated: 0, error: "Month not found." };
+  if (period.status !== "open") return { ok: false, updated: 0, error: "This month is closed." };
+
+  const [items, cats, incomes, expenses] = await Promise.all([
+    prisma.recurringItem.findMany({ where: { householdId, active: true } }),
+    prisma.category.findMany({ where: { householdId }, select: { id: true, fundingStyle: true, billEveryMonths: true, monthlyBudget: true } }),
+    prisma.incomeEntry.findMany({ where: { periodId, oneOff: false } }),
+    prisma.expenseEntry.findMany({ where: { periodId, oneOff: false } }),
+  ]);
+  const catById = new Map(cats.map((c) => [c.id, c]));
+  // Categories that generate their own monthly line (budget / flat bill / bill-with-fund): their
+  // items were skipped at generation, so skip them here too — never touch that Category's line.
+  const selfGen = (categoryId: number | null): boolean => {
+    if (categoryId == null) return false;
+    const c = catById.get(categoryId);
+    return !!c && (c.fundingStyle != null || c.billEveryMonths != null || (c.monthlyBudget != null && c.monthlyBudget > 0));
+  };
+
+  const usedInc = new Set<number>();
+  const usedExp = new Set<number>();
+  const updates: Prisma.PrismaPromise<unknown>[] = [];
+
+  for (const it of items) {
+    if (it.kind === "income") {
+      const cands = incomes.filter((e) => !usedInc.has(e.id) && e.ownerId === it.memberId);
+      const match = cands.length === 1 ? cands[0] : cands.find((e) => stripInstNumber(e.source) === stripInstNumber(it.name));
+      if (!match) continue;
+      usedInc.add(match.id);
+      if (match.dueDay !== it.dueDay || match.amount !== it.amount)
+        updates.push(prisma.incomeEntry.update({ where: { id: match.id }, data: { dueDay: it.dueDay, amount: it.amount } }));
+    } else {
+      if (it.categoryId == null || selfGen(it.categoryId)) continue;
+      const cands = expenses.filter((e) => !usedExp.has(e.id) && e.categoryId === it.categoryId && e.memberId === it.memberId);
+      const match = cands.length === 1 ? cands[0] : cands.find((e) => stripInstNumber(e.label) === stripInstNumber(it.name));
+      if (!match) continue;
+      usedExp.add(match.id);
+      if (match.dueDay !== it.dueDay || match.amount !== it.amount)
+        updates.push(prisma.expenseEntry.update({ where: { id: match.id }, data: { dueDay: it.dueDay, amount: it.amount } }));
+    }
+  }
+  if (updates.length) await prisma.$transaction(updates);
+  log.info("syncMonthFromSetup", "ok", { householdId, periodId, updated: updates.length });
+  revalidatePath("/", "layout");
+  return { ok: true, updated: updates.length };
+}
+
+// Batch-save the recurring template rows edited in Setup (one floating "N changes → Save" bar).
+export async function saveAllRecurringItems(
+  prev: SaveRecurringState,
+  formData: FormData,
+): Promise<SaveRecurringState> {
+  const n = (prev?.n ?? 0) + 1;
+  if (!(await isHead())) return { ok: false, error: "Only the head can edit setup.", n };
+  let rows: Record<string, string>[];
+  try {
+    rows = JSON.parse(String(formData.get("rows") ?? "[]"));
+  } catch {
+    return { ok: false, error: "Couldn't read the changes.", n };
+  }
+  if (!Array.isArray(rows) || rows.length === 0) return { ok: true, n };
+
+  for (const r of rows) {
+    const id = Number(r.id);
+    if (!id) continue;
+    const item = await prisma.recurringItem.findUnique({ where: { id } });
+    if (!item) continue;
+    const name = String(r.name ?? "").trim();
+    if (!name) return { ok: false, error: "Every row needs a name.", n };
+    const amount = parseAmount(r.amount);
+    if (!amount || amount <= 0) return { ok: false, error: `${name}: amount must be more than 0.`, n };
+
+    const fd = new FormData();
+    fd.set("scheduleKind", String(r.scheduleKind ?? "monthly"));
+    if (r.dueDay) fd.set("dueDay", String(r.dueDay));
+    if (r.installmentsTotal) fd.set("installmentsTotal", String(r.installmentsTotal));
+    if (r.installmentCurrent) fd.set("installmentCurrent", String(r.installmentCurrent));
+    const sched = await scheduleFromForm(item.householdId, fd);
+
+    const finalName = sched.installmentsTotal && sched.intervalMonths === 1 ? stripInstNumber(name) : name;
+    await prisma.recurringItem.update({
+      where: { id },
+      data: {
+        name: finalName,
+        amount,
+        memberId: r.memberId ? Number(r.memberId) : null,
+        categoryId: item.kind === "expense" && r.categoryId ? Number(r.categoryId) : item.categoryId,
+        intervalMonths: sched.intervalMonths,
+        installmentsTotal: sched.installmentsTotal,
+        installmentStartYear: sched.installmentStartYear,
+        installmentStartMonth: sched.installmentStartMonth,
+        dueDay: sched.dueDay,
+      },
+    });
+  }
+  log.info("saveAllRecurringItems", "ok", { count: rows.length });
+  revalidatePath("/", "layout");
+  return { ok: true, n };
 }
 
 export async function deleteRecurringItem(formData: FormData) {
