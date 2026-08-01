@@ -17,7 +17,32 @@ async function ensureForHousehold(householdId: number, year: number, month: numb
     where: { householdId_year_month: { householdId, year, month } },
   });
   if (existing) {
-    console.log(`  household ${householdId}: ${MONTHS[month - 1]} ${year} already exists — skip`);
+    // Keep the "one open month + one preview" invariant (mirrors src/lib/ensureMonth.ts — keep
+    // the two in sync). The "working month" = any OTHER month still open.
+    const openElsewhere = await prisma.period.findFirst({
+      where: { householdId, status: "open", NOT: { year, month } },
+      select: { id: true },
+    });
+    if (existing.status === "draft" && !openElsewhere) {
+      await prisma.period.update({ where: { id: existing.id }, data: { status: "open" } });
+      console.log(`  household ${householdId}: ${label} promoted draft → open`);
+    } else if (existing.status === "open" && openElsewhere) {
+      // Promoted too early (calendar rolled over before the prior month wound down) → two open
+      // months, hiding the next-month preview. Demote back to a preview draft if it has no real
+      // activity yet; wind-down will re-promote it. Otherwise leave it and warn.
+      const activity =
+        (await prisma.spend.count({ where: { periodId: existing.id } })) +
+        (await prisma.settlementRecord.count({ where: { periodId: existing.id } })) +
+        (await prisma.piggyEntry.count({ where: { periodId: existing.id } }));
+      if (activity === 0) {
+        await prisma.period.update({ where: { id: existing.id }, data: { status: "draft" } });
+        console.log(`  household ${householdId}: ${label} demoted → preview draft (earlier month still open)`);
+      } else {
+        console.log(`  household ${householdId}: ${label} is open alongside an earlier open month but has activity — left as-is (please wind down the earlier month)`);
+      }
+    } else {
+      console.log(`  household ${householdId}: ${MONTHS[month - 1]} ${year} already exists — skip`);
+    }
     return;
   }
   const latest = await prisma.period.findFirst({
