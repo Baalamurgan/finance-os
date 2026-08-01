@@ -1,0 +1,43 @@
+import { describe, expect, it } from "vitest";
+import { buildMoneyPlan, type PlanTransfer, type PlanBill } from "./moneyPlan";
+
+const T = 1; // treasurer id
+const xfer = (o: Partial<PlanTransfer>): PlanTransfer => ({ fromId: 2, from: "B", toId: T, to: "A", amount: 100, settled: false, recordId: null, ...o });
+const bill = (o: Partial<PlanBill>): PlanBill => ({ key: `k${Math.random()}`, payerId: T, payerName: "A", vendor: "JL1", amount: 50, done: false, day: null, status: null, ...o });
+
+describe("buildMoneyPlan", () => {
+  it("orders income-in → bills → disbursement-out and counts progress", () => {
+    const plan = buildMoneyPlan({
+      treasurerId: T,
+      transfers: [xfer({ fromId: 2, toId: T, amount: 50, settled: true }), xfer({ fromId: T, from: "A", toId: 3, to: "C", amount: 20 })],
+      bills: [bill({ payerId: T, vendor: "Rent", amount: 40, day: 2 })],
+      incomeDayByMember: { 2: 1 },
+    });
+    expect(plan.steps.map((s) => s.kind)).toEqual(["transfer-in", "bill", "transfer-out"]);
+    expect(plan.total).toBe(3);
+    expect(plan.done).toBe(1); // the settled inbound transfer
+  });
+
+  it("flags a hub shortfall when an outflow runs before enough has arrived", () => {
+    // treasurer must pay a 50 bill on the 1st, but only 30 arrives (on the 1st)
+    const plan = buildMoneyPlan({
+      treasurerId: T,
+      transfers: [xfer({ fromId: 2, toId: T, amount: 30 })],
+      bills: [bill({ payerId: T, vendor: "Loan", amount: 50, day: 1 })],
+      incomeDayByMember: { 2: 1 },
+    });
+    expect(plan.hubShortfall).toBe(20);
+    const billStep = plan.steps.find((s) => s.kind === "bill");
+    expect(billStep?.short).toBe(20);
+  });
+
+  it("a bill paid by a non-treasurer member doesn't touch the hub balance", () => {
+    const plan = buildMoneyPlan({
+      treasurerId: T,
+      transfers: [],
+      bills: [bill({ payerId: 5, payerName: "E", vendor: "Cook", amount: 999, day: 1 })],
+      incomeDayByMember: {},
+    });
+    expect(plan.hubShortfall).toBe(0);
+  });
+});

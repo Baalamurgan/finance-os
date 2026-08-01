@@ -474,6 +474,36 @@ export async function getSettlement(
   return computeSettlement({ members, incomes, expenses, spends, records, treasurerId, prevLabel });
 }
 
+// The Money Plan for a month: the settlement transfers + dated bill payments, ordered into one
+// executable checklist. Pure ordering/feasibility lives in buildMoneyPlan (unit-tested); this
+// just gathers the inputs from the existing In-Hand + settlement computations (one source of truth).
+export type MoneyPlanResult = Awaited<ReturnType<typeof getMoneyPlan>>;
+export async function getMoneyPlan(householdId: number, periodId: number, inhandArg?: InHand) {
+  const inhand = inhandArg ?? (await getInHand(householdId, periodId));
+  const [settlement, incomes] = await Promise.all([
+    getSettlement(householdId, periodId, inhand.treasurerId),
+    prisma.incomeEntry.findMany({ where: { periodId }, select: { ownerId: true, dueDay: true } }),
+  ]);
+
+  const incomeDayByMember: Record<number, number> = {};
+  for (const i of incomes) {
+    if (i.ownerId == null || i.dueDay == null) continue;
+    incomeDayByMember[i.ownerId] = Math.min(incomeDayByMember[i.ownerId] ?? 99, i.dueDay);
+  }
+
+  const bills: import("./moneyPlan").PlanBill[] = [];
+  for (const g of inhand.byPerson) {
+    for (const b of g.unpaidBills) bills.push({ key: `bill-${b.id}`, payerId: g.memberId, payerName: g.name, vendor: b.name, amount: b.amount, done: false, day: b.due?.day ?? null, status: b.due?.status ?? null, billId: b.id });
+    for (const b of g.paidBills) bills.push({ key: `bill-${b.id}`, payerId: g.memberId, payerName: g.name, vendor: b.name, amount: b.amount, done: true, day: b.due?.day ?? null, status: b.due?.status ?? null, billId: b.id });
+    for (const p of g.unpaidPeriodic) bills.push({ key: `fund-${p.categoryId}`, payerId: g.memberId, payerName: g.name, vendor: p.name, amount: p.bill, done: false, day: null, status: null, categoryId: p.categoryId, fund: true, fundAvail: p.fund });
+    for (const p of g.paidPeriodic) bills.push({ key: `fund-${p.categoryId}`, payerId: g.memberId, payerName: g.name, vendor: p.name, amount: p.bill, done: true, day: null, status: null, categoryId: p.categoryId, fund: true, fundAvail: p.fund });
+  }
+  const transfers = settlement.transfers.map((t) => ({ fromId: t.fromId, from: t.from, toId: t.toId, to: t.to, amount: t.amount, settled: t.settled, recordId: t.recordId }));
+
+  const { buildMoneyPlan } = await import("./moneyPlan");
+  return { ...buildMoneyPlan({ treasurerId: inhand.treasurerId, transfers, bills, incomeDayByMember }), treasurerId: inhand.treasurerId, periodId };
+}
+
 export type SettlementHistory = Awaited<ReturnType<typeof getSettlementHistory>>;
 
 /**
