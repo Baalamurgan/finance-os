@@ -64,7 +64,7 @@ export function MoneyPlan({
       <div className="mb-3 flex items-center justify-between gap-2">
         <div>
           <h2 className="flex items-center gap-1.5 text-sm font-semibold text-slate-900">🧭 Money plan</h2>
-          <p className="text-[11px] text-slate-400">The order to move money this month. Tick each as it happens.</p>
+          <p className="text-[11px] text-slate-400">The order to move money this month. Tick each as it happens. <span className="text-slate-300">·</span> <span className="text-slate-400">hub = the treasurer&apos;s running balance</span></p>
         </div>
         <span className="shrink-0 text-xs font-medium text-slate-500">{plan.done}/{plan.total} done</span>
       </div>
@@ -125,7 +125,14 @@ export function MoneyPlan({
                     <DayTag kind={s.kind} day={s.day} status={s.status ?? null} days={s.days ?? null} />
                     {s.feedsBills && !s.done && <span className="shrink-0 rounded-full bg-indigo-50 px-1.5 py-0.5 text-[9px] font-medium text-indigo-500">funds bills ↓</span>}
                   </div>
-                  {s.short != null && !s.done && <div className="text-[10px] font-medium text-red-600">short {formatINR(s.short)} at this point</div>}
+                  {!s.done && s.hubAfter != null && (
+                    <div className={`text-[10px] ${s.hubAfter < -0.005 ? "font-semibold text-red-600" : "text-slate-400"}`}>
+                      {s.hubAfter < -0.005 ? `⚠ hub short ${formatINR(-s.hubAfter)} here` : `hub ${formatINR(s.hubAfter)} after`}
+                    </div>
+                  )}
+                  {!s.done && s.actorLeft != null && (
+                    <div className="text-[10px] text-slate-400">{s.payerName}: {s.actorLeft > 0.005 ? `${formatINR(s.actorLeft)} to go` : "all paid ✓"}</div>
+                  )}
                 </div>
 
                 <span className={`shrink-0 tabular-nums ${s.done ? "text-slate-400 line-through" : s.status === "overdue" ? "font-semibold text-red-700" : "text-slate-700"}`}>{formatINR(s.amount)}</span>

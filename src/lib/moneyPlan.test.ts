@@ -42,6 +42,26 @@ describe("buildMoneyPlan", () => {
     expect(plan.steps.map((s) => s.vendor ?? s.kind)).toEqual(["transfer-in", "Dated", "Undated"]);
   });
 
+  it("tracks the hub running balance and each member's remaining outflow", () => {
+    const plan = buildMoneyPlan({
+      treasurerId: T,
+      transfers: [xfer({ fromId: 2, from: "B", toId: T, amount: 50 })], // B → hub 50
+      bills: [
+        bill({ payerId: T, vendor: "Rent", amount: 30, day: 2 }), // hub pays 30
+        bill({ payerId: 2, payerName: "B", vendor: "Chit", amount: 20, day: 2 }), // B pays 20
+        bill({ payerId: 2, payerName: "B", vendor: "Cook", amount: 5, day: 3 }), // B pays 5
+      ],
+      incomeDayByMember: { 2: 1 },
+    });
+    const byKind = Object.fromEntries(plan.steps.map((s) => [s.vendor ?? s.kind, s]));
+    expect(byKind["transfer-in"].hubAfter).toBe(50); // collected
+    expect(byKind["Rent"].hubAfter).toBe(20); // 50 − 30, hub pays it
+    expect(byKind["Chit"].hubAfter).toBeUndefined(); // member-paid, never touches the hub
+    // B's remaining outflow: transfer 50 + Chit 20 + Cook 5 = 75 total; after Chit → 5, after Cook → 0
+    expect(byKind["Chit"].actorLeft).toBe(5);
+    expect(byKind["Cook"].actorLeft).toBe(0);
+  });
+
   it("a bill paid by a non-treasurer member doesn't touch the hub balance", () => {
     const plan = buildMoneyPlan({
       treasurerId: T,

@@ -24,6 +24,8 @@ export type PlanStep = {
   status?: "overdue" | "soon" | "normal" | null;
   days?: number | null; // days until due (negative = overdue), for the urgency tag
   short?: number; // hub is short this much when this step runs (funds not in yet)
+  hubAfter?: number; // treasurer's running settlement balance right after this step (hub steps only)
+  actorLeft?: number; // for a member's own step: how much they still have to pay out after this
 };
 
 export type MoneyPlan = { steps: PlanStep[]; done: number; total: number; hubShortfall: number };
@@ -72,21 +74,32 @@ export function buildMoneyPlan(input: {
   const eff = (s: PlanStep) => (s.day == null ? Infinity : s.day);
   steps.sort((a, b) => eff(a) - eff(b) || rank(a) - rank(b) || b.amount - a.amount);
 
-  // Feasibility: walk the treasurer's running balance in the order money actually MOVES (by day),
-  // with the remainder-out pinned to the end and undated bills paid just before it (they have no
-  // deadline, so they don't create a false "money not in yet" gap). Inbound adds; treasurer-paid
-  // bills and disbursements subtract. If an outflow runs before enough has arrived, flag the gap.
-  const walkOrder = [...steps].sort((a, b) => {
-    const wa = a.kind === "transfer-out" ? 1e9 : a.day == null ? 1e8 : a.day;
-    const wb = b.kind === "transfer-out" ? 1e9 : b.day == null ? 1e8 : b.day;
-    return wa - wb || rank(a) - rank(b);
-  });
+  // Hub (treasurer) running balance, walked in DISPLAY order = the settlement cash collected minus
+  // paid out, so far. Starts at 0 (before any collection this month). Inbound adds; the treasurer's
+  // own bills and the disbursements-out subtract; member-paid bills never touch the hub. If it dips
+  // below 0 at any step, the treasurer is short there — money is needed before it has arrived.
   let hub = 0;
   let hubShortfall = 0;
-  for (const s of walkOrder) {
-    if (s.kind === "transfer-in") hub += s.amount;
-    else if (s.kind === "transfer-out") { hub -= s.amount; if (hub < -0.005) { s.short = Math.round(-hub); hubShortfall = Math.max(hubShortfall, -hub); } }
-    else if (s.kind === "bill" && s.payerId === treasurerId) { hub -= s.amount; if (hub < -0.005) { s.short = Math.round(-hub); hubShortfall = Math.max(hubShortfall, -hub); } }
+  for (const s of steps) {
+    if (s.kind === "transfer-in") { hub += s.amount; s.hubAfter = hub; }
+    else if (s.kind === "transfer-out") { hub -= s.amount; s.hubAfter = hub; }
+    else if (s.kind === "bill" && s.payerId === treasurerId) { hub -= s.amount; s.hubAfter = hub; }
+    if (s.hubAfter != null && s.hubAfter < -0.005) { s.short = Math.round(-s.hubAfter); hubShortfall = Math.max(hubShortfall, -s.hubAfter); }
+  }
+
+  // Per-actor "still to pay" for the member chip: a pure running sum of that person's own outgoing
+  // steps (their transfer to the hub + the bills they pay), decremented as the plan proceeds. Since
+  // it's derived only from the plan's own steps it can't drift from anything. The treasurer is shown
+  // via the hub balance above, so they're excluded here.
+  const actorOf = (s: PlanStep): number | null => (s.kind === "bill" ? s.payerId ?? null : s.fromId ?? null);
+  const remaining = new Map<number, number>();
+  for (const s of steps) { const a = actorOf(s); if (a != null && a !== treasurerId && !s.done) remaining.set(a, (remaining.get(a) ?? 0) + s.amount); }
+  for (const s of steps) {
+    const a = actorOf(s);
+    if (a == null || a === treasurerId || s.done) continue;
+    const after = Math.round(((remaining.get(a) ?? 0) - s.amount) * 100) / 100;
+    remaining.set(a, after);
+    s.actorLeft = after;
   }
 
   const done = steps.filter((s) => s.done).length;
