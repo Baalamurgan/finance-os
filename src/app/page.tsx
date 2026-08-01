@@ -426,7 +426,7 @@ export default async function SheetPage({
             >
               ↓ Export CSV
             </a>
-            {c.canEdit && open && !isDraft && (
+            {c.canEdit && open && !isDraft && !c.provisional && (
               <form action={createNextMonthDraft}>
                 <input type="hidden" name="householdId" value={c.household.id} />
                 <button className="rounded-full border border-violet-300 bg-violet-50 px-3 py-1 text-xs font-medium text-violet-700 hover:bg-violet-100">
@@ -434,7 +434,7 @@ export default async function SheetPage({
                 </button>
               </form>
             )}
-            {!c.canEdit && open && !isDraft && draftPeriod && (
+            {!c.canEdit && open && !isDraft && !c.provisional && draftPeriod && (
               <a
                 href={`/?y=${draftPeriod.year}&m=${draftPeriod.month}`}
                 className="rounded-full border border-violet-300 bg-violet-50 px-3 py-1 text-xs font-medium text-violet-700 hover:bg-violet-100"

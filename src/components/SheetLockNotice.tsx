@@ -19,8 +19,8 @@ export function SheetLockNotice({ isHead, y, m }: { isHead: boolean; y: number; 
           <span>🔒</span>
           <span>
             {isHead
-              ? "This month is settled — the sheet is locked for members. You can still edit."
-              : "This month is settled — the sheet is locked. Money numbers can't be changed."}
+              ? "Settlement has started for this month — the sheet is locked for members. You can still edit."
+              : "Settlement has started — the sheet is locked. Money numbers can't be changed."}
           </span>
         </span>
         {isHead ? (

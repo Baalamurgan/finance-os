@@ -31,7 +31,7 @@ export function ProvisionalBanner({ workingLabel, periodId, canEdit }: { working
       <div className="mx-auto flex max-w-7xl flex-wrap items-center gap-x-2 gap-y-1 px-4 py-2 text-sm sm:px-6">
         <span className="text-base leading-none">⏳</span>
         <span className="min-w-0 flex-1">
-          <b>Preview</b> — {workingLabel} hasn&apos;t been wound down yet, so the carry-forward here is an estimate.
+          <b>Preview</b> — {workingLabel}{" "}hasn&apos;t been wound down yet, so the carry-forward here is an estimate.
         </span>
         {canEdit && (
           <button
