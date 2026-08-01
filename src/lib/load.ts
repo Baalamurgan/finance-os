@@ -55,17 +55,19 @@ export async function loadCommon(params?: { y?: string; m?: string }) {
   if (y && m) {
     selected = periods.find((p) => p.year === y && p.month === m) ?? null;
   } else {
-    // Land on the WORKING month — the one the family is actually living in and logging into.
-    // That's the current calendar month if it's open, else any still-open month (e.g. during the
-    // wind-down window: the calendar rolls to Aug 1 but July stays the working month until it winds
-    // down on the 5th, so daily spends/bills land in July — NOT the August preview). The next-month
-    // PREVIEW draft is only the default when nothing is open, and always reachable via the picker.
+    // Land on the WORKING month — the EARLIEST still-open month (wind-down closes the oldest open
+    // month first, so that's the one the family is still living in and logging into). During the
+    // wind-down window the calendar rolls to Aug 1 but July stays the working month until it winds
+    // down on the 5th, so daily spends/bills default to July — NOT the August calendar month, even
+    // if August is (prematurely) open. The next-month PREVIEW draft is the default only when
+    // nothing is open, and is always reachable via the month picker.
     const t = new Date();
     const cy = t.getFullYear();
     const cm = t.getMonth() + 1;
+    const openPeriods = periods.filter((p) => p.status === "open"); // getPeriods is year/month desc
+    const workingOpen = openPeriods[openPeriods.length - 1] ?? null; // last = earliest open
     selected =
-      periods.find((p) => p.year === cy && p.month === cm && p.status === "open") ??
-      periods.find((p) => p.status === "open") ??
+      workingOpen ??
       periods.find((p) => p.year === cy && p.month === cm && p.status === "draft") ??
       periods[0] ??
       null;
