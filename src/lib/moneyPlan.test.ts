@@ -31,6 +31,17 @@ describe("buildMoneyPlan", () => {
     expect(billStep?.short).toBe(20);
   });
 
+  it("sinks undated bills to the bottom — no due date = lowest priority", () => {
+    const plan = buildMoneyPlan({
+      treasurerId: T,
+      transfers: [xfer({ fromId: 2, toId: T, amount: 100 })],
+      bills: [bill({ vendor: "Undated", amount: 10, day: null, payerId: 5 }), bill({ vendor: "Dated", amount: 20, day: 3, payerId: 5 })],
+      incomeDayByMember: { 2: 1 },
+    });
+    // transfer-in (day 1) → Dated bill (day 3) → Undated bill (no date, last)
+    expect(plan.steps.map((s) => s.vendor ?? s.kind)).toEqual(["transfer-in", "Dated", "Undated"]);
+  });
+
   it("a bill paid by a non-treasurer member doesn't touch the hub balance", () => {
     const plan = buildMoneyPlan({
       treasurerId: T,

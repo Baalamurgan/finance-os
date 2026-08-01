@@ -480,9 +480,10 @@ export async function getSettlement(
 export type MoneyPlanResult = Awaited<ReturnType<typeof getMoneyPlan>>;
 export async function getMoneyPlan(householdId: number, periodId: number, inhandArg?: InHand) {
   const inhand = inhandArg ?? (await getInHand(householdId, periodId));
-  const [settlement, incomes] = await Promise.all([
+  const [settlement, incomes, period] = await Promise.all([
     getSettlement(householdId, periodId, inhand.treasurerId),
     prisma.incomeEntry.findMany({ where: { periodId }, select: { ownerId: true, dueDay: true } }),
+    prisma.period.findUnique({ where: { id: periodId }, select: { year: true, month: true } }),
   ]);
 
   const incomeDayByMember: Record<number, number> = {};
@@ -491,14 +492,29 @@ export async function getMoneyPlan(householdId: number, periodId: number, inhand
     incomeDayByMember[i.ownerId] = Math.min(incomeDayByMember[i.ownerId] ?? 99, i.dueDay);
   }
 
+  // Same overdue/soon/normal test the bills use — applied to a transfer's arrival day so an inbound
+  // collection that's past its income day reads as overdue too.
+  const now = new Date();
+  const today0 = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  const dayStatus = (day: number | undefined): { status: "overdue" | "soon" | "normal"; days: number } | null => {
+    if (day == null || !period) return null;
+    const due0 = new Date(period.year, period.month - 1, Math.min(day, new Date(period.year, period.month, 0).getDate())).getTime();
+    const days = Math.round((due0 - today0) / 86400000);
+    return { status: days < 0 ? "overdue" : days <= 2 ? "soon" : "normal", days };
+  };
+
   const bills: import("./moneyPlan").PlanBill[] = [];
   for (const g of inhand.byPerson) {
-    for (const b of g.unpaidBills) bills.push({ key: `bill-${b.id}`, payerId: g.memberId, payerName: g.name, vendor: b.name, amount: b.amount, done: false, day: b.due?.day ?? null, status: b.due?.status ?? null, billId: b.id });
-    for (const b of g.paidBills) bills.push({ key: `bill-${b.id}`, payerId: g.memberId, payerName: g.name, vendor: b.name, amount: b.amount, done: true, day: b.due?.day ?? null, status: b.due?.status ?? null, billId: b.id });
+    for (const b of g.unpaidBills) bills.push({ key: `bill-${b.id}`, payerId: g.memberId, payerName: g.name, vendor: b.name, amount: b.amount, done: false, day: b.due?.day ?? null, status: b.due?.status ?? null, days: b.due?.days ?? null, billId: b.id });
+    for (const b of g.paidBills) bills.push({ key: `bill-${b.id}`, payerId: g.memberId, payerName: g.name, vendor: b.name, amount: b.amount, done: true, day: b.due?.day ?? null, status: b.due?.status ?? null, days: b.due?.days ?? null, billId: b.id });
     for (const p of g.unpaidPeriodic) bills.push({ key: `fund-${p.categoryId}`, payerId: g.memberId, payerName: g.name, vendor: p.name, amount: p.bill, done: false, day: null, status: null, categoryId: p.categoryId, fund: true, fundAvail: p.fund });
     for (const p of g.paidPeriodic) bills.push({ key: `fund-${p.categoryId}`, payerId: g.memberId, payerName: g.name, vendor: p.name, amount: p.bill, done: true, day: null, status: null, categoryId: p.categoryId, fund: true, fundAvail: p.fund });
   }
-  const transfers = settlement.transfers.map((t) => ({ fromId: t.fromId, from: t.from, toId: t.toId, to: t.to, amount: t.amount, settled: t.settled, recordId: t.recordId }));
+  const transfers = settlement.transfers.map((t) => {
+    // inbound (to the treasurer): urgency from the payer's income arrival day
+    const st = t.toId === inhand.treasurerId ? dayStatus(incomeDayByMember[t.fromId]) : null;
+    return { fromId: t.fromId, from: t.from, toId: t.toId, to: t.to, amount: t.amount, settled: t.settled, recordId: t.recordId, status: st?.status ?? null, days: st?.days ?? null };
+  });
 
   const { buildMoneyPlan } = await import("./moneyPlan");
   return { ...buildMoneyPlan({ treasurerId: inhand.treasurerId, transfers, bills, incomeDayByMember }), treasurerId: inhand.treasurerId, periodId };

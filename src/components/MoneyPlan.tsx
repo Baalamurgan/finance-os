@@ -120,9 +120,10 @@ export function MoneyPlan({
                 </span>
 
                 <div className="min-w-0 flex-1">
-                  <div className={`flex items-center gap-1.5 ${s.done ? "text-slate-400 line-through" : "text-slate-800"}`}>
+                  <div className={`flex flex-wrap items-center gap-1.5 ${s.done ? "text-slate-400 line-through" : "text-slate-800"}`}>
                     <span className="truncate font-medium">{title}</span>
-                    <DayTag kind={s.kind} day={s.day} status={s.status ?? null} />
+                    <DayTag kind={s.kind} day={s.day} status={s.status ?? null} days={s.days ?? null} />
+                    {s.feedsBills && !s.done && <span className="shrink-0 rounded-full bg-indigo-50 px-1.5 py-0.5 text-[9px] font-medium text-indigo-500">funds bills ↓</span>}
                   </div>
                   {s.short != null && !s.done && <div className="text-[10px] font-medium text-red-600">short {formatINR(s.short)} at this point</div>}
                 </div>
@@ -181,10 +182,18 @@ function MiniBtn({ children, primary }: { children: React.ReactNode; primary?: b
   );
 }
 
-function DayTag({ kind, day, status }: { kind: string; day: number | null; status: "overdue" | "soon" | "normal" | null }) {
+function DayTag({ kind, day, status, days }: { kind: string; day: number | null; status: "overdue" | "soon" | "normal" | null; days: number | null }) {
   if (kind === "transfer-out") return <span className="shrink-0 rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-400">after collection</span>;
-  if (day == null) return null;
+  // No due date set = lowest priority (shown last). Make that explicit rather than blank.
+  if (day == null) return <span className="shrink-0 rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-400">no date</span>;
   const ord = `${day}${["th", "st", "nd", "rd"][((day % 100) - 20) % 10] ?? ["th", "st", "nd", "rd"][day % 100] ?? "th"}`;
-  const cls = status === "overdue" ? "bg-red-100 text-red-700" : status === "soon" ? "bg-amber-100 text-amber-700" : "bg-slate-100 text-slate-400";
-  return <span className={`shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-medium ${cls}`}>{status === "overdue" ? "was " : "by "}{ord}</span>;
+  if (status === "overdue") {
+    const late = days != null ? Math.abs(days) : 0;
+    return <span className="shrink-0 rounded-full bg-red-100 px-1.5 py-0.5 text-[10px] font-semibold text-red-700">overdue{late > 0 ? ` ${late}d` : ""} · was {ord}</span>;
+  }
+  if (status === "soon") {
+    const when = days === 0 ? "due today" : days === 1 ? "due tomorrow" : days != null ? `in ${days}d` : `by ${ord}`;
+    return <span className="shrink-0 rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700">{when}</span>;
+  }
+  return <span className="shrink-0 rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-400">by {ord}</span>;
 }
