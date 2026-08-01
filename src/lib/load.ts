@@ -116,10 +116,20 @@ export async function loadCommon(params?: { y?: string; m?: string }) {
   const draft = periods.find((p) => p.status === "draft") ?? null;
   const previewPeriod = draft ? { year: draft.year, month: draft.month, label: draft.label } : null;
 
+  // "Provisional" = the selected month is OPEN but an earlier month is still open (not wound down
+  // yet). It's a real, editable month, but its carry-forward from the working month isn't final —
+  // so we badge it as a preview and offer a "refresh estimate" until that earlier month winds down.
+  const earlierOpen =
+    selected && selected.status === "open"
+      ? periods.find((p) => p.status === "open" && (p.year < selected.year || (p.year === selected.year && p.month < selected.month))) ?? null
+      : null;
+  const provisional = earlierOpen ? { workingLabel: earlierOpen.label } : null;
+
   return {
     household,
     windDownReminder,
     previewPeriod,
+    provisional,
     periods,
     selected,
     selYear,

@@ -1590,6 +1590,16 @@ async function latestOpenPeriod(householdId: number) {
   });
 }
 
+// The WORKING month = the EARLIEST still-open month (the one you close first at wind-down). "Next
+// month" is built off this, so when a later month is already open (e.g. Aug prematurely promoted
+// while Jul is the working month) we don't skip ahead and spawn a bogus month-after-next draft.
+async function earliestOpenPeriod(householdId: number) {
+  return prisma.period.findFirst({
+    where: { householdId, status: "open" },
+    orderBy: [{ year: "asc" }, { month: "asc" }],
+  });
+}
+
 function nextYM(year: number, month: number) {
   return month === 12 ? { year: year + 1, month: 1 } : { year, month: month + 1 };
 }
@@ -1618,7 +1628,7 @@ export async function createNextMonthDraft(formData: FormData) {
   if (!(await canEdit())) return; // head + manager
   const householdId = Number(formData.get("householdId"));
   if (!householdId) return;
-  const current = await latestOpenPeriod(householdId);
+  const current = await earliestOpenPeriod(householdId);
   if (!current) return;
   const { year, month } = nextYM(current.year, current.month);
   const label = `${new Date(year, month - 1, 1).toLocaleString("en-US", { month: "short" }).toUpperCase()} ${year}`;
@@ -1654,6 +1664,36 @@ export async function rebuildDraft(formData: FormData) {
   });
   revalidatePath("/", "layout");
   redirect(`/?y=${draft.year}&m=${draft.month}`);
+}
+
+// Refresh ONLY the estimate lines (last-month surplus + carried over-budget/misc) on a PROVISIONAL
+// month — one that's open but whose earlier working month hasn't wound down yet — from that working
+// month. Lets the family see the up-to-date carry before wind-down WITHOUT rebuilding (which would
+// wipe their real bill-paid/settlement work). Touches only SURPLUS_NOTE / CARRY_NOTE lines; wind-
+// down deletes & replaces these with the finals, so this can never double-count.
+export async function refreshCarryEstimates(formData: FormData): Promise<{ ok: boolean; message: string }> {
+  if (!(await canEdit())) return { ok: false, message: "Only the head or a manager can refresh." };
+  const periodId = Number(formData.get("periodId"));
+  const target = await prisma.period.findUnique({ where: { id: periodId }, select: { id: true, householdId: true, year: true, month: true } });
+  if (!target) return { ok: false, message: "Month not found." };
+  // The working month = the latest OPEN month strictly earlier than this one.
+  const source = await prisma.period.findFirst({
+    where: {
+      householdId: target.householdId,
+      status: "open",
+      OR: [{ year: { lt: target.year } }, { year: target.year, month: { lt: target.month } }],
+    },
+    orderBy: [{ year: "desc" }, { month: "desc" }],
+    select: { id: true, label: true, carryForward: true, householdId: true },
+  });
+  if (!source) return { ok: false, message: "No earlier open month to estimate from." };
+  await prisma.$transaction(async (tx) => {
+    await addEstimatedCarry(tx, { id: source.id, label: source.label, householdId: source.householdId }, target.id);
+    await addEstimatedSurplus(tx, source, target.id);
+  });
+  log.info("refreshCarryEstimates", "ok", { targetId: target.id, sourceId: source.id });
+  revalidatePath("/", "layout");
+  return { ok: true, message: `Estimate refreshed from ${source.label}.` };
 }
 
 // Same as rebuildDraft but returns a result instead of redirecting, so the client can

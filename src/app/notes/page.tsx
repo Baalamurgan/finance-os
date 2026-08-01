@@ -24,6 +24,7 @@ export default async function NotesPage({
         selYear={c.selYear}
         selMonth={c.selMonth}
         previewPeriod={c.previewPeriod}
+        provisional={c.provisional}
         members={c.members}
         categories={c.categories}
         account={c.account}

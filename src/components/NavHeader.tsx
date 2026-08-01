@@ -7,6 +7,7 @@ import { AddSpendModal } from "@/components/AddSpendModal";
 import { AutoLock } from "@/components/AutoLock";
 import { UserMenu } from "@/components/UserMenu";
 import { WindDownBanner } from "@/components/WindDownBanner";
+import { ProvisionalBanner } from "@/components/ProvisionalBanner";
 import { WindDownPopup } from "@/components/WindDownPopup";
 import { CardDueHighAlert } from "@/components/personal/CardDueHighAlert";
 import { BillDueHighAlert } from "@/components/BillDueHighAlert";
@@ -35,6 +36,7 @@ export function NavHeader({
   currentMemberId,
   windDownReminder,
   previewPeriod,
+  provisional,
   canEdit,
   pinEnabled,
   hasBiometric,
@@ -67,6 +69,7 @@ export function NavHeader({
   currentMemberId?: number | null;
   windDownReminder?: { daysUntil: number; day: number } | null;
   previewPeriod?: { year: number; month: number; label: string } | null;
+  provisional?: { workingLabel: string } | null;
   canEdit?: boolean;
   pinEnabled?: boolean;
   hasBiometric?: boolean;
@@ -240,6 +243,7 @@ export function NavHeader({
       </div>
     )}
     {windDownReminder && <WindDownBanner daysUntil={windDownReminder.daysUntil} />}
+    {provisional && periodId && <ProvisionalBanner workingLabel={provisional.workingLabel} periodId={periodId} canEdit={!!canEdit} />}
     </div>
 
     {/* high-alert popups (once/day, post-unlock): wind-down window (family) + a member's
