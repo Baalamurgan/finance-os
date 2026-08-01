@@ -13,6 +13,7 @@ const prisma = new PrismaClient({
 const MONTHS = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"];
 
 async function ensureForHousehold(householdId: number, year: number, month: number) {
+  const label = `${MONTHS[month - 1]} ${year}`;
   const existing = await prisma.period.findUnique({
     where: { householdId_year_month: { householdId, year, month } },
   });
@@ -49,7 +50,6 @@ async function ensureForHousehold(householdId: number, year: number, month: numb
     where: { householdId },
     orderBy: [{ year: "desc" }, { month: "desc" }],
   });
-  const label = `${MONTHS[month - 1]} ${year}`;
 
   await prisma.$transaction(async (tx) => {
     const p = await tx.period.create({ data: { householdId, year, month, label } });
