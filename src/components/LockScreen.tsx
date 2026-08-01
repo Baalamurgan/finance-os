@@ -11,10 +11,12 @@ export function LockScreen({
   householdName,
   greetingName,
   hasBiometric,
+  next = "/",
 }: {
   householdName: string;
   greetingName: string | null;
   hasBiometric: boolean;
+  next?: string;
 }) {
   const router = useRouter();
   const [state, formAction, pending] = useActionState(verifyPin, INITIAL);
@@ -70,7 +72,7 @@ export function LockScreen({
         body: JSON.stringify(assertion),
       });
       const data = await verifyRes.json();
-      if (data.verified) router.replace("/");
+      if (data.verified) router.replace(next);
       else throw new Error(data.error ?? "Biometric didn’t match.");
     } catch (e) {
       setBioError(e instanceof Error ? e.message : "Biometric unavailable.");
@@ -163,6 +165,7 @@ export function LockScreen({
       {/* hidden form drives the server action */}
       <form ref={formRef} action={formAction} className="hidden">
         <input type="hidden" name="pin" value={pin} readOnly />
+        <input type="hidden" name="next" value={next} readOnly />
       </form>
 
       {/* biometric (shown only if this device has it enrolled) */}

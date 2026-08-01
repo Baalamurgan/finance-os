@@ -6,7 +6,7 @@ import { PersonalLockScreen } from "@/components/personal/PersonalLockScreen";
 
 export const metadata = { title: "Personal — locked" };
 
-export default async function PersonalLockPage() {
+export default async function PersonalLockPage({ searchParams }: { searchParams: Promise<{ next?: string }> }) {
   const session = await auth();
   if (!session?.user) redirect("/signin");
   const email = session.user.email?.toLowerCase();
@@ -22,9 +22,12 @@ export default async function PersonalLockPage() {
   const hasBiometric =
     (await prisma.webAuthnCredential.count({ where: { memberId: member.id, purpose: "personal" } })) > 0;
 
+  const sp = await searchParams;
+  const next = typeof sp?.next === "string" && sp.next.startsWith("/personal") && !sp.next.startsWith("//") ? sp.next : "/personal/today";
+
   return (
     <main className="flex min-h-screen items-center justify-center bg-[#faf9f6] px-6 py-10">
-      <PersonalLockScreen greetingName={session.user.memberName ?? session.user.name ?? null} hasBiometric={hasBiometric} />
+      <PersonalLockScreen greetingName={session.user.memberName ?? session.user.name ?? null} hasBiometric={hasBiometric} next={next} />
     </main>
   );
 }

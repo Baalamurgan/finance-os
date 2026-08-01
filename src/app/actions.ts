@@ -3,7 +3,7 @@
 import { prisma } from "@/lib/prisma";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { cookies } from "next/headers";
+import { cookies, headers } from "next/headers";
 import { auth, signOut } from "@/auth";
 import { isUnlocked } from "@/lib/applock";
 import { log } from "@/lib/log";
@@ -83,14 +83,28 @@ async function unlocked() {
   return await isUnlocked(household.id);
 }
 
+// The page the current action was fired from (so a forced re-lock can send the user back there
+// after they re-enter the PIN, instead of dumping them on the home tab).
+async function currentPath(): Promise<string | null> {
+  const ref = (await headers()).get("referer");
+  if (!ref) return null;
+  try { const u = new URL(ref); return u.pathname + u.search; } catch { return null; }
+}
+
+// Log a collapsed app-lock and bounce to the PIN, remembering where to return.
+async function relock(tag: string): Promise<never> {
+  const session = await auth();
+  const next = await currentPath();
+  log.warn(tag, "relock", { outcome: "blocked", reason: "app-locked", memberId: session?.user?.memberId ?? null, next });
+  redirect(next ? `/lock?next=${encodeURIComponent(next)}` : "/lock");
+}
+
 // Gate every mutating action on the app-lock. If the session lock has collapsed, log it and
 // bounce to the PIN (forces a clean re-unlock) instead of the old silent no-op that made
 // actions look broken. `tag` is the action name so the log line says which one was blocked.
 async function requireUnlocked(tag: string): Promise<void> {
   if (await unlocked()) return;
-  const session = await auth();
-  log.warn(tag, "relock", { outcome: "blocked", reason: "app-locked", memberId: session?.user?.memberId ?? null });
-  redirect("/lock");
+  await relock(tag);
 }
 
 // Authorization from the EFFECTIVE role (honours the head's "view as member").
@@ -999,15 +1013,18 @@ export async function setTreasurer(formData: FormData) {
 export async function toggleBillPaid(formData: FormData) {
   const session = await auth();
   const memberId = session?.user?.memberId ?? null;
-  if (!(await unlocked())) { log.warn("toggleBillPaid", "relock", { outcome: "blocked", reason: "app-locked", memberId }); redirect("/lock"); }
+  if (!(await unlocked())) await relock("toggleBillPaid");
   const id = Number(formData.get("id"));
   const e = await prisma.expenseEntry.findUnique({ where: { id } });
   if (!e) { log.warn("toggleBillPaid", "blocked", { outcome: "blocked", reason: "not-found", memberId, id }); return; }
-  // head/manager may toggle any bill (subject to the settlement lock); the bill's own payer may
-  // toggle their own in an open month. It's just a reminder flag — no money/settlement change.
+  // Marking a bill paid TRACKS REALITY — it doesn't change the planned sheet, so the settlement
+  // lock (which freezes planned numbers) must NOT apply here, or a manager gets blocked while a
+  // member-payer isn't. Head + manager + the bill's own payer may toggle it; head may do any
+  // month, everyone else only while the month is still open.
+  const isEditor = await canEdit(); // head or manager (and unlocked)
   const isPayer = memberId != null && memberId === e.memberId;
-  const allowed = (await canEdit()) ? await canEditNow(e.periodId) : isPayer && (await periodOpen(e.periodId));
-  if (!allowed) { log.warn("toggleBillPaid", "blocked", { outcome: "blocked", reason: "not-allowed", memberId, id, periodId: e.periodId }); return; }
+  if (!isEditor && !isPayer) { log.warn("toggleBillPaid", "blocked", { outcome: "blocked", reason: "not-allowed", memberId, id, periodId: e.periodId }); return; }
+  if (!(await isHead()) && !(await periodOpen(e.periodId))) { log.warn("toggleBillPaid", "blocked", { outcome: "blocked", reason: "period-closed", memberId, id, periodId: e.periodId }); return; }
   await prisma.expenseEntry.update({ where: { id }, data: { paid: !e.paid } });
   log.info("toggleBillPaid", "ok", { outcome: "ok", memberId, id, paid: !e.paid, periodId: e.periodId });
   revalidatePath("/", "layout");
@@ -1034,10 +1051,7 @@ export async function payPeriodicBill(prev: PayBillState, formData: FormData): P
   // App-lock collapsed (session cookie gone, e.g. app was reopened): don't fail silently —
   // send them to the PIN so they can re-unlock, then retry. This is the common cause of
   // "I clicked Paid and nothing happened".
-  if (!(await unlocked())) {
-    log.warn("payPeriodicBill", "relock", { outcome: "blocked", reason: "app-locked", ...ctx });
-    redirect("/lock");
-  }
+  if (!(await unlocked())) await relock("payPeriodicBill");
   if (!categoryId || !periodId) return fail("Something's off with this bill — reload and try again.", "bad-input");
   // Where the money actually moves. Normally the same open month. For a CARRIED (late) payment
   // of a prior CLOSED month's bill, the obligation stays `periodId` (closed, so its record marks
@@ -1120,7 +1134,7 @@ export async function payPeriodicBill(prev: PayBillState, formData: FormData): P
 export async function unpayPeriodicBill(formData: FormData) {
   const session = await auth();
   const memberId = session?.user?.memberId ?? null;
-  if (!(await unlocked())) { log.warn("unpayPeriodicBill", "relock", { outcome: "blocked", reason: "app-locked", memberId }); redirect("/lock"); }
+  if (!(await unlocked())) await relock("unpayPeriodicBill");
   const categoryId = Number(formData.get("categoryId"));
   const periodId = Number(formData.get("periodId"));
   if (!categoryId || !periodId) return;

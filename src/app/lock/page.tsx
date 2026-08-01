@@ -7,7 +7,7 @@ import { LockScreen } from "@/components/LockScreen";
 
 export const metadata = { title: "Locked · Family Finance OS" };
 
-export default async function LockPage() {
+export default async function LockPage({ searchParams }: { searchParams: Promise<{ next?: string }> }) {
   const session = await auth();
   if (!session?.user) redirect("/signin");
 
@@ -26,12 +26,16 @@ export default async function LockPage() {
     ? (await prisma.webAuthnCredential.count({ where: { memberId } })) > 0
     : false;
 
+  const sp = await searchParams;
+  const next = typeof sp?.next === "string" && sp.next.startsWith("/") && !sp.next.startsWith("//") ? sp.next : "/";
+
   return (
     <main className="flex min-h-screen items-center justify-center bg-[#faf9f6] px-6 py-10">
       <LockScreen
         householdName={household.name}
         greetingName={session.user.memberName ?? session.user.name ?? null}
         hasBiometric={hasBiometric}
+        next={next}
       />
     </main>
   );

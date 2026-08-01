@@ -2,9 +2,12 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
+import { headers } from "next/headers";
 import { prisma } from "@/lib/prisma";
 import { auth } from "@/auth";
 import { parseAmount } from "@/lib/format";
+import { log } from "@/lib/log";
+import { isPersonalUnlocked } from "@/lib/personal-lock";
 import { ensurePersonalMonth, ensurePersonalPreview, rebuildPersonalPreview, seedPersonalCategories } from "@/lib/personal";
 import { getCardBillReminders } from "@/lib/personal/cash";
 
@@ -13,7 +16,7 @@ import { getCardBillReminders } from "@/lib/personal/cash";
 // Deliberately amount-free — full detail lives behind the personal PIN.
 export type CardHighAlert = { cardName: string; dueISO: string; daysUntilDue: number; overdue: boolean };
 export async function getMyCardHighAlerts(): Promise<CardHighAlert[]> {
-  const member = await me();
+  const member = await meRead();
   if (!member) return [];
   // getCardBillReminders already windows each card by its own reminderDays (default 5),
   // so the popup fires exactly per the card's configured lead time.
@@ -25,7 +28,7 @@ export async function getMyCardHighAlerts(): Promise<CardHighAlert[]> {
 // with a link to pay. An item disappears here once its bill is marked paid — nothing to store.
 export type CardReminderItem = { cardId: number; cardName: string; color: string; dueISO: string; daysUntilDue: number; overdue: boolean; amount: number };
 export async function getMyCardReminders(): Promise<CardReminderItem[]> {
-  const member = await me();
+  const member = await meRead();
   if (!member) return [];
   const reminders = await getCardBillReminders(member.id);
   return reminders.map((r) => ({
@@ -39,7 +42,9 @@ export async function getMyCardReminders(): Promise<CardReminderItem[]> {
   }));
 }
 
-async function me() {
+// Resolve the signed-in member WITHOUT touching the personal lock. Used by read-only actions
+// that also run in Family view (where the personal-unlock cookie is intentionally absent).
+async function meRead() {
   const session = await auth();
   if (!session?.user) return null;
   const email = session.user.email?.toLowerCase();
@@ -48,6 +53,21 @@ async function me() {
     : email
       ? prisma.member.findFirst({ where: { email } })
       : null;
+}
+
+// Resolve the member AND enforce the personal app-lock (mirrors loadPersonal): if the personal
+// unlock has collapsed, log a `relock` line and bounce to /personal/lock instead of a silent
+// no-op. Every mutating action uses this, so none can silently fail on a collapsed lock.
+async function me(tag = "personal") {
+  const member = await meRead();
+  if (member && !(await isPersonalUnlocked(member.id))) {
+    const ref = (await headers()).get("referer");
+    let next: string | null = null;
+    try { if (ref) { const u = new URL(ref); next = u.pathname + u.search; } } catch {}
+    log.warn(tag, "relock", { outcome: "blocked", reason: "personal-locked", memberId: member.id, next });
+    redirect(next ? `/personal/lock?next=${encodeURIComponent(next)}` : "/personal/lock");
+  }
+  return member;
 }
 
 async function ownsPeriod(memberId: number, periodId: number) {
@@ -72,7 +92,8 @@ export type PersonalSaveState = { ok: boolean; error?: string; n: number };
 
 // ── Onboarding ───────────────────────────────────────────────────────────────
 export async function finishPersonalOnboarding(formData: FormData) {
-  const member = await me();
+  // Onboarding runs before the personal lock exists — resolve without enforcing it.
+  const member = await meRead();
   if (!member) return;
   await seedPersonalCategories(member.id);
   const period = await ensurePersonalMonth(member.id);
@@ -287,17 +308,18 @@ export async function deletePersonalSpend(formData: FormData) {
 
 // ── Credit-card bills (settle a card's cycle → real cash outflow this month) ──
 export async function markCardBillPaid(formData: FormData) {
-  const member = await me();
+  const member = await me("markCardBillPaid");
   if (!member) return;
   const cardAccountId = Number(formData.get("cardAccountId"));
   const cycleEndISO = String(formData.get("cycleEnd") ?? "");
   const amount = parseAmount(formData.get("amount"));
   const cycleTotal = parseAmount(formData.get("cycleTotal")); // tagged total for the cycle (for cashback)
-  if (!cardAccountId || !cycleEndISO || !amount || amount <= 0) return;
+  const ctx = { memberId: member.id, cardAccountId };
+  if (!cardAccountId || !cycleEndISO || !amount || amount <= 0) { log.warn("markCardBillPaid", "blocked", { outcome: "blocked", reason: "bad-input", ...ctx }); return; }
   const card = await prisma.financeAccount.findUnique({ where: { id: cardAccountId }, select: { memberId: true, type: true } });
-  if (!card || card.memberId !== member.id || card.type !== "credit_card") return;
+  if (!card || card.memberId !== member.id || card.type !== "credit_card") { log.warn("markCardBillPaid", "blocked", { outcome: "blocked", reason: "not-owner", ...ctx }); return; }
   const cycleEnd = new Date(cycleEndISO);
-  if (isNaN(cycleEnd.getTime())) return;
+  if (isNaN(cycleEnd.getTime())) { log.warn("markCardBillPaid", "blocked", { outcome: "blocked", reason: "bad-date", ...ctx }); return; }
   // The payment leaves cash in the CURRENT open personal month.
   const period = await ensurePersonalMonth(member.id);
   // Paid less than the tagged total → the difference is a saving/cashback on that card.
@@ -327,20 +349,22 @@ export async function markCardBillPaid(formData: FormData) {
       });
     }
   });
+  log.info("markCardBillPaid", "ok", { outcome: "ok", ...ctx, amount, cashback });
   rev();
 }
 
 export async function unmarkCardBillPaid(formData: FormData) {
-  const member = await me();
+  const member = await me("unmarkCardBillPaid");
   if (!member) return;
   const id = Number(formData.get("id"));
   const bill = await prisma.personalCardBill.findUnique({ where: { id } });
-  if (!bill || bill.memberId !== member.id) return;
+  if (!bill || bill.memberId !== member.id) { log.warn("unmarkCardBillPaid", "blocked", { outcome: "blocked", reason: "not-owner", memberId: member.id, id }); return; }
   const cashbackMarker = `__billcashback__:${bill.cycleEnd.toISOString()}`;
   await prisma.$transaction([
     prisma.accountTransaction.deleteMany({ where: { accountId: bill.cardAccountId, category: cashbackMarker } }),
     prisma.personalCardBill.delete({ where: { id } }),
   ]);
+  log.info("unmarkCardBillPaid", "ok", { outcome: "ok", memberId: member.id, id });
   rev();
 }
 

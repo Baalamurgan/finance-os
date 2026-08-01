@@ -48,17 +48,24 @@ export type UnlockState = {
   relogin?: boolean; // too many attempts → bounce to Google
 };
 
+// Only allow returning to an in-app path (never an absolute URL → open-redirect safe).
+function safeNext(raw: FormDataEntryValue | null): string {
+  const s = typeof raw === "string" ? raw : "";
+  return s.startsWith("/") && !s.startsWith("//") ? s : "/";
+}
+
 export async function verifyPin(_prev: UnlockState, formData: FormData): Promise<UnlockState> {
   const session = await auth();
   if (!session?.user) return { ok: false, relogin: true, error: "Signed out. Please sign in." };
 
   const household = await prisma.household.findFirst();
   if (!household) return { ok: false, error: "No household found." };
+  const next = safeNext(formData.get("next"));
 
   // no PIN configured → nothing to unlock, let them through
   if (!household.pinHash || !household.pinSalt) {
     await setUnlockCookie(household.id);
-    redirect("/");
+    redirect(next);
   }
 
   const now = Date.now();
@@ -82,7 +89,7 @@ export async function verifyPin(_prev: UnlockState, formData: FormData): Promise
     // response — the follow-up request always carries the cookie. (Returning
     // {ok:true} and navigating from a client effect raced the re-render and, with
     // the digits still filled, re-fired the submit → the "enter PIN twice" bug.)
-    redirect("/");
+    redirect(next);
   }
 
   // wrong PIN → advance the brute-force ladder

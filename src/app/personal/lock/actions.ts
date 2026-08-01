@@ -28,9 +28,11 @@ export async function verifyPersonalPin(
 ): Promise<PersonalUnlockState> {
   const member = await currentMember();
   if (!member) return { ok: false, error: "Signed out." };
+  const nextRaw = formData.get("next");
+  const next = typeof nextRaw === "string" && nextRaw.startsWith("/personal") && !nextRaw.startsWith("//") ? nextRaw : "/personal/today";
   if (!member.personalPinHash || !member.personalPinSalt) {
     await setPersonalUnlock(member.id);
-    redirect("/personal/today");
+    redirect(next);
   }
 
   const now = Date.now();
@@ -48,7 +50,7 @@ export async function verifyPersonalPin(
     // Redirect from the server so the unlock cookie + navigation are one atomic
     // response (fixes the intermittent "enter PIN twice" on the phone PWA — the
     // old client-effect nav raced the post-action re-render and re-fired submit).
-    redirect("/personal/today");
+    redirect(next);
   }
 
   const attempts = member.personalPinFailedAttempts + 1;
