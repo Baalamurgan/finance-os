@@ -124,8 +124,10 @@ export function NavHeader({
     <>
     <AutoLock enabled={!!pinEnabled} />
     {/* header + state banners stick together at the top, so the wind-down reminder
-        stays visible while scrolling (it's easy to miss otherwise). */}
-    <div className="sticky top-0 z-40">
+        stays visible while scrolling (it's easy to miss otherwise). overflow-x-clip keeps a wide
+        banner/header from pushing the whole page past the viewport (which forced mobile zoom-out),
+        while page content stays free to pan/zoom. x-only clip so a dropdown can still open downward. */}
+    <div className="sticky top-0 z-40 overflow-x-clip">
     <header className="border-b border-slate-200 bg-white/90 backdrop-blur">
       <div className="mx-auto flex max-w-7xl flex-nowrap items-center gap-x-2 px-4 py-2.5 sm:flex-wrap sm:gap-x-3 sm:gap-y-2 sm:py-3 sm:px-6">
         <div className="mr-1 min-w-0 sm:mr-2">

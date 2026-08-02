@@ -51,10 +51,10 @@ body {
   background: #f8fafc; /* slate-50 */
   color: #0f172a; /* slate-900 */
   font-family: var(--font-geist-sans), Arial, Helvetica, sans-serif;
-  /* Never let a stray wide element push the page past the viewport (which makes mobile
-     browsers zoom out to fit). `clip` — not `hidden` — so it doesn't become a scroll
-     container and break the sticky header. Wide tables/rows keep their own overflow-x-auto. */
-  overflow-x: clip;
+  /* NOTE: no `overflow-x: clip` here on purpose — it was clipping genuinely-wide content with no
+     way to pan or pinch-zoom to reach it on mobile. The sticky header (the original overflow
+     culprit) clips itself instead (see NavHeader), and wide tables/rows keep their own
+     overflow-x-auto, so a stray wide element scrolls/zooms rather than being cut off. */
 }
 .dark body {
   background: #0b1220; /* a touch darker than the cards so they lift off it */
