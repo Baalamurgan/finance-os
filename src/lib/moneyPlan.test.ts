@@ -123,6 +123,19 @@ describe("buildMoneyPlan", () => {
     expect(plan.done).toBe(1);
   });
 
+  it("tracks each member's running cash position after every step", () => {
+    const plan = buildMoneyPlan({
+      treasurerId: T,
+      transfers: [xfer({ fromId: 2, from: "B", toId: T, amount: 100 })], // B → hub 100
+      bills: [bill({ payerId: 2, payerName: "B", vendor: "Cook", amount: 30, day: 2 })], // B pays 30
+      incomeDayByMember: { 2: 1 },
+    });
+    const last = plan.steps[plan.steps.length - 1];
+    // B handed 100 to the hub then paid 30 out → −130; the treasurer (hub) holds +100.
+    expect(last.balancesAfter?.[2]).toBe(-130);
+    expect(last.balancesAfter?.[T]).toBe(100);
+  });
+
   it("flags a hub shortfall when an allowance is sent but nothing was collected", () => {
     const plan = buildMoneyPlan({
       treasurerId: T,

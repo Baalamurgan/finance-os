@@ -33,6 +33,7 @@ export type PlanStep = {
   short?: number; // hub is short this much when this step runs (funds not in yet)
   hubAfter?: number; // treasurer's running settlement balance right after this step (hub steps only)
   actorLeft?: number; // for a member's own step: how much they still have to pay out after this
+  balancesAfter?: Record<number, number>; // every member's running cash position right after this step
 };
 
 export type MoneyPlan = { steps: PlanStep[]; done: number; total: number; hubShortfall: number };
@@ -130,6 +131,25 @@ export function buildMoneyPlan(input: {
     const after = Math.round(((remaining.get(a) ?? 0) - s.amount) * 100) / 100;
     remaining.set(a, after);
     s.actorLeft = after;
+  }
+
+  // Every member's running cash position after each step (seed 0): money flowing TO someone adds,
+  // money they pay out subtracts. Fund bills are paid from their own fund (no member cash moves).
+  // A positive figure = that person is holding family cash at that point (could pay elsewhere); the
+  // treasurer's mirrors the hub. Snapshotted per step so the UI can show "who holds what, when".
+  const bal = new Map<number, number>();
+  const shift = (id: number | null | undefined, delta: number) => {
+    if (id == null) return;
+    bal.set(id, Math.round(((bal.get(id) ?? 0) + delta) * 100) / 100);
+  };
+  for (const s of steps) {
+    if (s.kind === "transfer-in" || s.kind === "transfer-out" || s.kind === "allowance" || s.kind === "piggy") {
+      shift(s.fromId, -s.amount);
+      shift(s.toId, s.amount);
+    } else if (s.kind === "bill" && !s.fund) {
+      shift(s.payerId, -s.amount); // paid to an external vendor — leaves the family
+    }
+    s.balancesAfter = Object.fromEntries(bal);
   }
 
   // Piggy returns are live projections (finalised at wind-down), so they don't count toward the

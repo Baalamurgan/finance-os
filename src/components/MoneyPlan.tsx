@@ -35,6 +35,7 @@ export function MoneyPlan({
   const [pending, startTransition] = useTransition();
   const [who, setWho] = useState<number | null>(null);
   const [addOpen, setAddOpen] = useState(false);
+  const [balances, setBalances] = useState<{ s: MoneyPlanResult["steps"][number]; n: number } | null>(null);
 
   // Everyone involved in a step (payer / from / to) → the filter's member list.
   const people = useMemo(() => {
@@ -153,9 +154,14 @@ export function MoneyPlan({
 
             return (
               <li key={s.id} className={`flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-xs ${s.done ? "bg-emerald-50/50" : urgent ? "bg-red-50" : soon ? "bg-amber-50" : "bg-slate-50"}`}>
-                <span className="grid h-5 w-5 shrink-0 place-items-center rounded-full text-[11px] font-semibold text-slate-400">
+                <button
+                  type="button"
+                  onClick={() => setBalances({ s, n })}
+                  title="Tap to see everyone's cash at this step"
+                  className="grid h-5 w-5 shrink-0 place-items-center rounded-full text-[11px] font-semibold text-slate-400 hover:bg-slate-200 hover:text-slate-700"
+                >
                   {s.done ? <span className="text-emerald-600">✓</span> : n}
-                </span>
+                </button>
 
                 <div className="min-w-0 flex-1">
                   <div className={`flex flex-wrap items-center gap-1.5 ${s.done ? "text-slate-400 line-through" : "text-slate-800"}`}>
@@ -211,8 +217,49 @@ export function MoneyPlan({
           })}
         </ol>
       )}
+
+      {/* Per-step balances — a mobile-friendly bottom sheet: everyone's running cash right after the
+          tapped step, so you can see who's holding money and could pay elsewhere. */}
+      {balances && (
+        <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 sm:items-center sm:p-4" onClick={() => setBalances(null)}>
+          <div
+            className="w-full max-w-sm rounded-t-2xl bg-white p-4 shadow-xl sm:rounded-2xl"
+            onClick={(e) => e.stopPropagation()}
+            style={{ paddingBottom: "max(1rem, env(safe-area-inset-bottom))" }}
+          >
+            <div className="flex items-start justify-between gap-2">
+              <div className="min-w-0">
+                <h3 className="text-sm font-semibold text-slate-800">Cash after step {balances.n}</h3>
+                <p className="truncate text-[11px] text-slate-400">{stepTitle(balances.s)}</p>
+              </div>
+              <button type="button" onClick={() => setBalances(null)} className="shrink-0 rounded-md px-1.5 text-slate-400 hover:bg-slate-100" aria-label="Close">✕</button>
+            </div>
+            <p className="mt-2 text-[10px] text-slate-400">+ holding family cash (could pay elsewhere) · − already paid out this month</p>
+            <ul className="mt-2 space-y-1">
+              {members.map((m) => {
+                const v = balances.s.balancesAfter?.[m.id] ?? 0;
+                const acting = m.id === balances.s.fromId || m.id === balances.s.payerId || m.id === balances.s.toId;
+                return (
+                  <li key={m.id} className={`flex items-center justify-between rounded-md px-2 py-1.5 text-sm ${acting ? "bg-slate-50" : ""}`}>
+                    <span className={acting ? "font-semibold text-slate-800" : "text-slate-600"}>{m.name}</span>
+                    <span className={`tabular-nums ${v < -0.005 ? "text-red-600" : v > 0.005 ? "font-medium text-emerald-700" : "text-slate-400"}`}>{formatINR(v)}</span>
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+        </div>
+      )}
     </section>
   );
+}
+
+// Human label for a step (shared by the row + the balances sheet).
+function stepTitle(s: MoneyPlanResult["steps"][number]): string {
+  if (s.kind === "allowance") return `Personal expense → ${s.toName}`;
+  if (s.kind === "piggy") return `${s.fromName} → ${s.toName} · Piggy`;
+  if (s.kind === "bill") return `${s.payerName} → ${s.vendor}`;
+  return `${s.fromName} → ${s.toName}`;
 }
 
 function FilterPill({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
