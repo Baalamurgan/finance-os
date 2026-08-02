@@ -2,14 +2,15 @@
 
 import { useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { refreshCarryEstimates } from "@/app/actions";
+import { syncMonthFromSetup } from "@/app/actions";
 import { useToast } from "@/components/Toast";
 
 /**
  * Shown when the month you're viewing is OPEN but an earlier month hasn't wound down yet. It's a
  * real, editable month — but its carry-forward from the working month is only an ESTIMATE until
- * that month closes, so we badge it as a preview and (for head/manager) offer a one-tap refresh
- * that recomputes just the surplus/carry estimate lines from the working month.
+ * that month closes, so we badge it as a preview and (for head/manager) offer a one-tap refresh.
+ * The refresh re-pulls the whole month from Setup (amounts, due days, budgets & bills) AND
+ * recomputes the carry estimate — the same comprehensive refresh as the Money-plan button.
  */
 export function ProvisionalBanner({ workingLabel, periodId, canEdit }: { workingLabel: string; periodId: number; canEdit: boolean }) {
   const [pending, start] = useTransition();
@@ -17,11 +18,9 @@ export function ProvisionalBanner({ workingLabel, periodId, canEdit }: { working
   const router = useRouter();
 
   const refresh = () => {
-    const fd = new FormData();
-    fd.set("periodId", String(periodId));
     start(async () => {
-      const res = await refreshCarryEstimates(fd);
-      toast(res.message, res.ok ? "success" : "error");
+      const res = await syncMonthFromSetup(periodId);
+      toast(res.ok ? `Refreshed from Setup (carry est. from ${workingLabel})` : (res.error ?? "Couldn't refresh"), res.ok ? "success" : "error");
       if (res.ok) router.refresh();
     });
   };

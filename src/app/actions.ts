@@ -1911,30 +1911,34 @@ export async function updateRecurringItem(formData: FormData) {
   revalidatePath("/", "layout");
 }
 
-// Refresh the CURRENT open month from the Setup template: re-pull each generated line's due day
-// and amount from its RecurringItem. Setup edits normally apply only from next month (the current
-// sheet is a frozen snapshot), so this lets the family pull date/amount changes into this month on
-// demand and re-order the Money Plan. Only touches template-generated lines (never one-offs or
-// manual additions); budgeted / bill-with-fund categories own their amount & due day in
-// Budgets & sinking funds, so their items are skipped here.
+// Refresh the CURRENT open month from Setup: Setup is the source of truth for AMOUNTS + DUE DAYS, so
+// every EXISTING template-generated line is re-pulled — recurring lines (income, monthly expenses,
+// loans, chits, installments), budget envelopes (+ their Budget), and flat/periodic bills. It only
+// UPDATES lines that are already there (matched to their Setup source); it never adds or removes a
+// line, so hand-added one-offs, hand-removed lines, ✓ paid flags, spends and settlements are all
+// left exactly as they are. A template line the family hand-edited IS re-pulled (Setup wins). For a
+// preview month it also recomputes the carried surplus/estimate + over-budget cut from the working
+// month (what the old "Refresh estimate" did). NOTE: bill-with-a-fund SHARE amounts (WiFi/EB/YouTube
+// "monthly share") are schedule-computed from the fund, so they're not re-pulled here.
 export async function syncMonthFromSetup(
-  householdId: number,
   periodId: number,
 ): Promise<{ ok: boolean; updated: number; error?: string }> {
-  if (!(await canEdit())) { log.warn("syncMonthFromSetup", "blocked", { householdId, periodId }); return { ok: false, updated: 0, error: "Not allowed." }; }
-  const period = await prisma.period.findUnique({ where: { id: periodId } });
-  if (!period || period.householdId !== householdId) return { ok: false, updated: 0, error: "Month not found." };
+  if (!(await canEdit())) { log.warn("syncMonthFromSetup", "blocked", { periodId }); return { ok: false, updated: 0, error: "Not allowed." }; }
+  const period = await prisma.period.findUnique({ where: { id: periodId }, select: { id: true, householdId: true, year: true, month: true, status: true } });
+  if (!period) return { ok: false, updated: 0, error: "Month not found." };
   if (period.status !== "open") return { ok: false, updated: 0, error: "This month is closed." };
+  const householdId = period.householdId;
 
-  const [items, cats, incomes, expenses] = await Promise.all([
+  const [items, cats, incomes, expenses, budgets] = await Promise.all([
     prisma.recurringItem.findMany({ where: { householdId, active: true } }),
-    prisma.category.findMany({ where: { householdId }, select: { id: true, fundingStyle: true, billEveryMonths: true, monthlyBudget: true } }),
-    prisma.incomeEntry.findMany({ where: { periodId, oneOff: false } }),
-    prisma.expenseEntry.findMany({ where: { periodId, oneOff: false } }),
+    prisma.category.findMany({ where: { householdId }, select: { id: true, name: true, onHold: true, monthlyBudget: true, fundingStyle: true, billEveryMonths: true, billDay: true, billAmount: true } }),
+    prisma.incomeEntry.findMany({ where: { periodId, oneOff: false, note: null } }),
+    prisma.expenseEntry.findMany({ where: { periodId, oneOff: false, note: null } }),
+    prisma.budget.findMany({ where: { periodId } }),
   ]);
   const catById = new Map(cats.map((c) => [c.id, c]));
-  // Categories that generate their own monthly line (budget / flat bill / bill-with-fund): their
-  // items were skipped at generation, so skip them here too — never touch that Category's line.
+  // Budget envelopes & bills own their own line (generated from the Category, not a RecurringItem),
+  // so their items are skipped in the recurring pass and handled by the category pass below.
   const selfGen = (categoryId: number | null): boolean => {
     if (categoryId == null) return false;
     const c = catById.get(categoryId);
@@ -1945,6 +1949,7 @@ export async function syncMonthFromSetup(
   const usedExp = new Set<number>();
   const updates: Prisma.PrismaPromise<unknown>[] = [];
 
+  // 1. recurring lines (income + non-budgeted expenses: loans, chits, cook, misc, installments)
   for (const it of items) {
     if (it.kind === "income") {
       const cands = incomes.filter((e) => !usedInc.has(e.id) && e.ownerId === it.memberId);
@@ -1963,8 +1968,43 @@ export async function syncMonthFromSetup(
         updates.push(prisma.expenseEntry.update({ where: { id: match.id }, data: { dueDay: it.dueDay, amount: it.amount } }));
     }
   }
+
+  // 2. budget envelopes + flat/periodic bills: one generated line per category — re-pull amount
+  //    (and, for a bill, its due day) from the Category. Match the existing line by category.
+  for (const cat of cats) {
+    if (cat.onHold) continue;
+    const line = expenses.find((e) => e.categoryId === cat.id && !usedExp.has(e.id));
+    const isBudget = cat.fundingStyle == null && cat.billEveryMonths == null && cat.monthlyBudget != null && cat.monthlyBudget > 0;
+    const isFullBill = cat.fundingStyle == null && cat.billEveryMonths != null && cat.billAmount != null && cat.billAmount > 0;
+    if (isBudget) {
+      usedExp.add(line?.id ?? -1);
+      if (line && line.amount !== cat.monthlyBudget) updates.push(prisma.expenseEntry.update({ where: { id: line.id }, data: { amount: cat.monthlyBudget! } }));
+      const b = budgets.find((x) => x.categoryId === cat.id);
+      if (b && b.planned !== cat.monthlyBudget) updates.push(prisma.budget.update({ where: { id: b.id }, data: { planned: cat.monthlyBudget! } }));
+    } else if (isFullBill && line) {
+      usedExp.add(line.id);
+      if (line.amount !== cat.billAmount || line.dueDay !== cat.billDay) updates.push(prisma.expenseEntry.update({ where: { id: line.id }, data: { amount: cat.billAmount!, dueDay: cat.billDay } }));
+    }
+  }
+
   if (updates.length) await prisma.$transaction(updates);
-  log.info("syncMonthFromSetup", "ok", { householdId, periodId, updated: updates.length });
+
+  // 3. preview/provisional month → recompute the carried surplus/estimate + over-budget cut from the
+  //    latest OPEN month strictly earlier than this one (a plain working month has none, so skip).
+  const source = await prisma.period.findFirst({
+    where: { householdId, status: "open", OR: [{ year: { lt: period.year } }, { year: period.year, month: { lt: period.month } }] },
+    orderBy: [{ year: "desc" }, { month: "desc" }],
+    select: { id: true, label: true, carryForward: true },
+  });
+  if (source) {
+    await prisma.$transaction(async (tx) => {
+      await addEstimatedCarry(tx, { id: source.id, label: source.label, householdId }, periodId);
+      await addEstimatedSurplus(tx, { ...source, householdId }, periodId);
+      await applyBudgetShortfall(tx, { id: source.id, householdId, carryForward: source.carryForward }, periodId);
+    });
+  }
+
+  log.info("syncMonthFromSetup", "ok", { householdId, periodId, updated: updates.length, hadSource: !!source });
   revalidatePath("/", "layout");
   return { ok: true, updated: updates.length };
 }

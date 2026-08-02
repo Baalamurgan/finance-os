@@ -61,9 +61,9 @@ export function MoneyPlan({
 
   const refresh = () =>
     startTransition(async () => {
-      const r = await syncMonthFromSetup(householdId, periodId);
+      const r = await syncMonthFromSetup(periodId);
       router.refresh();
-      toast(r.ok ? (r.updated > 0 ? `Refreshed — ${r.updated} line${r.updated > 1 ? "s" : ""} synced from Setup` : "Already up to date with Setup") : (r.error ?? "Couldn't refresh"), r.ok ? "success" : "error");
+      toast(r.ok ? (r.updated > 0 ? `Refreshed — ${r.updated} line${r.updated > 1 ? "s" : ""} updated from Setup` : "Refreshed from Setup") : (r.error ?? "Couldn't refresh"), r.ok ? "success" : "error");
     });
 
   return (
