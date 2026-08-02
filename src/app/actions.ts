@@ -12,7 +12,7 @@ import { formatINR, parseAmount } from "@/lib/format";
 import { generateMonth } from "@/lib/periodClone";
 import { isMiscBucket, MISC_SUBCATEGORIES } from "@/lib/misc";
 import { isLearnable } from "@/lib/spendCategorize";
-import { getSpendShortcuts, getMatcherKeywords, getFrequentSpendItems } from "@/lib/queries";
+import { getSpendShortcuts, getMatcherKeywords, getFrequentSpendItems, getMoneyPlan } from "@/lib/queries";
 import { planBillMonth, isLumpDue, type FundingStyle } from "@/lib/schedule";
 import { getBillReminders } from "@/lib/billReminders";
 import { budgetShortfallReductions } from "@/lib/budgetCarry";
@@ -983,6 +983,39 @@ export async function getMyBillReminders(): Promise<MyBillReminder[]> {
   return reminders
     .filter((r) => r.recipientIds.includes(member.id))
     .map((r) => ({ categoryId: r.categoryId, name: r.name, dueISO: r.dueISO, daysUntilDue: r.daysUntilDue, overdue: r.overdue, amount: r.amount }));
+}
+
+export type MyDueStep = { label: string; amount: number; overdue: boolean };
+// The current member's OWN Money-plan steps that need action NOW in the working (earliest-open)
+// month — i.e. they're the actor (bill payer / transfer sender / allowance sender) and the step is
+// unpaid and either overdue or due today. Powers the dismissible due-today banner in the header.
+export async function getMyDueTodaySteps(): Promise<{ periodQ: string; steps: MyDueStep[] }> {
+  const empty = { periodQ: "", steps: [] as MyDueStep[] };
+  const session = await auth();
+  if (!session?.user) return empty;
+  const household = await prisma.household.findFirst({ select: { id: true } });
+  if (!household) return empty;
+  const email = session.user.email?.toLowerCase();
+  const member =
+    (session.user.memberId ? await prisma.member.findUnique({ where: { id: session.user.memberId }, select: { id: true } }) : null) ??
+    (email ? await prisma.member.findFirst({ where: { householdId: household.id, email }, select: { id: true } }) : null);
+  if (!member) return empty;
+  const working = await prisma.period.findFirst({ where: { householdId: household.id, status: "open" }, orderBy: [{ year: "asc" }, { month: "asc" }], select: { id: true, year: true, month: true } });
+  if (!working) return empty;
+  const plan = await getMoneyPlan(household.id, working.id);
+  const mine = plan.steps.filter(
+    (s) =>
+      !s.done &&
+      (s.status === "overdue" || (s.status === "soon" && (s.days ?? 1) <= 0)) &&
+      // the ACTOR: the bill's payer, or a transfer/allowance sender (never the mere recipient)
+      (s.payerId === member.id || s.fromId === member.id),
+  );
+  const steps = mine.map((s) => ({
+    label: s.kind === "allowance" ? `Send → ${s.toName}` : s.kind !== "bill" ? `${s.fromName} → ${s.toName}` : `${s.payerName} → ${s.vendor}`,
+    amount: s.amount,
+    overdue: s.status === "overdue",
+  }));
+  return { periodQ: `?y=${working.year}&m=${working.month}`, steps };
 }
 
 // Choose the treasurer/hub that everyone settles with (head-only).

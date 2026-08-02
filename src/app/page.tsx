@@ -2,7 +2,7 @@ import { redirect } from "next/navigation";
 import { formatINR } from "@/lib/format";
 import { categoryEmoji } from "@/lib/categoryEmoji";
 import { loadCommon } from "@/lib/load";
-import { getRollup, getWindDownPreview, getSkippedSetAsides } from "@/lib/queries";
+import { getRollup, getWindDownPreview, getSkippedSetAsides, getProjectedPiggy } from "@/lib/queries";
 import { NavHeader } from "@/components/NavHeader";
 import { RowActions } from "@/components/RowActions";
 import { ExpenseRowActions } from "@/components/ExpenseRowActions";
@@ -256,6 +256,16 @@ export default async function SheetPage({
   // Draft estimate: what the current open month will carry in + leave in Piggy.
   const draftSource = isDraft ? c.periods.find((p) => p.status === "open") ?? null : null;
   const preview = draftSource ? await getWindDownPreview(c.household.id, draftSource.id) : null;
+
+  // 🐷 Piggy bank figure (general only — sinking is always excluded, since getPiggyBalance sums
+  // kind:"piggy"). On a PREVIEW/PROVISIONAL month, show the PROJECTED general Piggy (what it'll be
+  // once the working month winds down) to match the Piggy tab — not the stale live balance.
+  const piggyPreview = isDraft || !!c.provisional;
+  const piggySource = piggyPreview
+    ? c.periods.find((p) => p.status === "open" && (p.year < c.selected!.year || (p.year === c.selected!.year && p.month < c.selected!.month))) ?? null
+    : null;
+  const projectedPiggy = piggySource ? await getProjectedPiggy(c.household.id, piggySource.id) : null;
+  const shownPiggy = projectedPiggy ? projectedPiggy.generalTotal : c.piggyBalance;
 
   // Safeguard: if the current calendar month has no period yet (e.g. the monthly
   // auto-create didn't run), nudge the head to start it so the family always has
@@ -705,7 +715,7 @@ export default async function SheetPage({
         {/* balance + piggy */}
         <div className="grid grid-cols-2 gap-4 rounded-xl border border-slate-200 bg-white p-5">
           <Stat label="Balance (Income − Expense)" value={formatINR(rollup.balance)} accent />
-          <Stat label="🐷 Piggy bank" value={formatINR(c.piggyBalance)} />
+          <Stat label={piggyPreview ? "🐷 Piggy bank (est.)" : "🐷 Piggy bank"} value={formatINR(shownPiggy)} />
         </div>
 
         {/* where did the income go — quick visual breakdown */}

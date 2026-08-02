@@ -114,9 +114,13 @@ export function MoneyPlan({
             const canActBill = open && (canEdit || currentMemberId === s.payerId);
             const canActAllowance = open && (canEdit || currentMemberId === s.fromId || currentMemberId === s.toId);
             const title = isAllowance ? `Send → ${s.toName}` : isTransfer ? `${s.fromName} → ${s.toName}` : `${s.payerName} → ${s.vendor}`;
+            // Urgency (only while unpaid — a done step is never "overdue"): RED for overdue OR due
+            // today (needs action now), AMBER for due in 1–2 days, plain otherwise.
+            const urgent = !s.done && (s.status === "overdue" || (s.status === "soon" && (s.days ?? 1) <= 0));
+            const soon = !s.done && s.status === "soon" && (s.days ?? 0) > 0;
 
             return (
-              <li key={s.id} className={`flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-xs ${s.done ? "bg-emerald-50/50" : s.status === "overdue" ? "bg-red-50" : s.status === "soon" ? "bg-amber-50" : "bg-slate-50"}`}>
+              <li key={s.id} className={`flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-xs ${s.done ? "bg-emerald-50/50" : urgent ? "bg-red-50" : soon ? "bg-amber-50" : "bg-slate-50"}`}>
                 <span className="grid h-5 w-5 shrink-0 place-items-center rounded-full text-[11px] font-semibold text-slate-400">
                   {s.done ? <span className="text-emerald-600">✓</span> : n}
                 </span>
@@ -125,7 +129,7 @@ export function MoneyPlan({
                   <div className={`flex flex-wrap items-center gap-1.5 ${s.done ? "text-slate-400 line-through" : "text-slate-800"}`}>
                     <span className="truncate font-medium">{title}</span>
                     {isAllowance && <span className="shrink-0 rounded-full bg-violet-50 px-1.5 py-0.5 text-[9px] font-medium text-violet-500">allowance</span>}
-                    <DayTag kind={s.kind} day={s.day} status={s.status ?? null} days={s.days ?? null} />
+                    {!s.done && <DayTag kind={s.kind} day={s.day} status={s.status ?? null} days={s.days ?? null} />}
                     {s.feedsBills && !s.done && <span className="shrink-0 rounded-full bg-indigo-50 px-1.5 py-0.5 text-[9px] font-medium text-indigo-500">funds bills ↓</span>}
                   </div>
                   {!s.done && s.hubAfter != null && (
@@ -138,7 +142,7 @@ export function MoneyPlan({
                   )}
                 </div>
 
-                <span className={`shrink-0 tabular-nums ${s.done ? "text-slate-400 line-through" : s.status === "overdue" ? "font-semibold text-red-700" : "text-slate-700"}`}>{formatINR(s.amount)}</span>
+                <span className={`shrink-0 tabular-nums ${s.done ? "text-slate-400 line-through" : urgent ? "font-semibold text-red-700" : "text-slate-700"}`}>{formatINR(s.amount)}</span>
 
                 {/* action */}
                 <span className="flex w-16 shrink-0 justify-end">
@@ -205,8 +209,13 @@ function DayTag({ kind, day, status, days }: { kind: string; day: number | null;
     const late = days != null ? Math.abs(days) : 0;
     return <span className="shrink-0 rounded-full bg-red-100 px-1.5 py-0.5 text-[10px] font-semibold text-red-700">overdue{late > 0 ? ` ${late}d` : ""} · was {ord}</span>;
   }
+  // Due TODAY = red (needs action now), same urgency as overdue.
+  if (status === "soon" && days === 0) {
+    return <span className="shrink-0 rounded-full bg-red-100 px-1.5 py-0.5 text-[10px] font-semibold text-red-700">due today</span>;
+  }
+  // Due in 1–2 days = amber.
   if (status === "soon") {
-    const when = days === 0 ? "due today" : days === 1 ? "due tomorrow" : days != null ? `in ${days}d` : `by ${ord}`;
+    const when = days === 1 ? "due tomorrow" : days != null ? `in ${days}d` : `by ${ord}`;
     return <span className="shrink-0 rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700">{when}</span>;
   }
   return <span className="shrink-0 rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-400">by {ord}</span>;

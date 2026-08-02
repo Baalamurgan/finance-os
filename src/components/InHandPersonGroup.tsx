@@ -276,8 +276,11 @@ function DueChip({ due }: { due: { day: number; days: number; status: "overdue" 
     const by = Math.abs(due.days);
     return <span className="ml-1 rounded-full bg-red-100 px-1.5 py-0.5 text-[10px] font-semibold text-red-700">overdue {by > 0 ? `${by}d` : ""} · was {ord(due.day)}</span>;
   }
+  if (due.status === "soon" && due.days === 0) {
+    return <span className="ml-1 rounded-full bg-red-100 px-1.5 py-0.5 text-[10px] font-semibold text-red-700">due today</span>;
+  }
   if (due.status === "soon") {
-    const when = due.days === 0 ? "today" : due.days === 1 ? "tomorrow" : `in ${due.days}d`;
+    const when = due.days === 1 ? "tomorrow" : `in ${due.days}d`;
     return <span className="ml-1 rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700">due {when}</span>;
   }
   return <span className="ml-1 rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-400">due {ord(due.day)}</span>;

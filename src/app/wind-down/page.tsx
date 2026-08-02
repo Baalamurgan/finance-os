@@ -1,3 +1,4 @@
+import { redirect } from "next/navigation";
 import { formatINR } from "@/lib/format";
 import { loadCommon } from "@/lib/load";
 import { getRollup, getTrackedExpenses } from "@/lib/queries";
@@ -12,6 +13,16 @@ export default async function WindDownPage({
   const sp = await searchParams;
   const c = await loadCommon(sp);
   if (!c) return null;
+
+  // You wind down the EARLIEST open month first (the working month). If a later open month (e.g. a
+  // provisional next month) is selected, bounce to the earliest open so this always shows the right
+  // card. Closed months (viewing history) and the earliest-open itself are left alone.
+  const earliestOpen = c.periods
+    .filter((p) => p.status === "open")
+    .sort((a, b) => a.year - b.year || a.month - b.month)[0] ?? null;
+  if (earliestOpen && c.selected?.status === "open" && c.selected.id !== earliestOpen.id) {
+    redirect(`/wind-down?y=${earliestOpen.year}&m=${earliestOpen.month}`);
+  }
 
   const nav = (
     <NavHeader

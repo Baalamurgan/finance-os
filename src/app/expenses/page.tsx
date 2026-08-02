@@ -160,6 +160,7 @@ export default async function ExpensesPage({
               isHead={c.isHead}
               members={c.members}
               currentMemberId={c.currentMember?.id}
+              filterMemberName={filterMemberName}
             />
           ))}
         </div>
@@ -213,6 +214,7 @@ function SpendCard({
   isHead,
   members,
   currentMemberId,
+  filterMemberName,
 }: {
   card: SpendCardData;
   open: boolean;
@@ -220,31 +222,38 @@ function SpendCard({
   isHead: boolean;
   members: { id: number; name: string }[];
   currentMemberId?: number | null;
+  filterMemberName?: string | null;
 }) {
   const pct = card.allocation > 0 ? Math.min((card.spent / card.allocation) * 100, 100) : 0;
   const owner = card.responsibleMemberId != null ? members.find((m) => m.id === card.responsibleMemberId)?.name ?? null : null;
   const isMisc = card.section === "Misc"; // the Personal/Misc bucket — spends carry a sub-category
+  // When filtered to a member, the card's spends list is already just theirs — so the header shows
+  // THEIR spend in this category (allocation/remaining are household-wide, so we hide them).
+  const filtered = filterMemberName != null;
+  const memberSpent = filtered ? card.spends.reduce((s, x) => s + x.amount, 0) : card.spent;
   const cid = `card-${card.id}`;
   return (
     <section className="flex flex-col rounded-xl border border-slate-200 bg-white">
       {/* mobile-only collapse toggle (pure CSS): body is hidden on mobile until checked,
           always visible from sm: up. No JS → no hydration flash. */}
       <input type="checkbox" id={cid} className="peer sr-only" />
-      <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3">
-        <label htmlFor={cid} className="flex min-w-0 flex-1 cursor-pointer items-baseline gap-2 sm:cursor-default">
-          <h2 className="truncate font-semibold text-slate-800">{card.name}</h2>
+      <div className="flex items-start justify-between gap-2 border-b border-slate-100 px-4 py-3">
+        {/* Name gets the room: it wraps in full on mobile (no truncation) with the owner chip on a
+            second line; from sm: up it sits inline and truncates. */}
+        <label htmlFor={cid} className="flex min-w-0 flex-1 cursor-pointer flex-col gap-1 sm:flex-row sm:items-baseline sm:gap-2 sm:cursor-default">
+          <h2 className="font-semibold leading-tight text-slate-800 break-words sm:truncate">{card.name}</h2>
           <span
-            className={`shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-medium ${owner ? "bg-indigo-50 text-indigo-500" : "bg-slate-100 text-slate-400"}`}
+            className={`w-fit shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-medium ${owner ? "bg-indigo-50 text-indigo-500" : "bg-slate-100 text-slate-400"}`}
             title={owner ? `${owner} holds this budget — a spend here doesn't change their settlement` : "Shared budget — a spend here is credited to the spender at settlement"}
           >
             {owner ?? "shared"}
           </span>
         </label>
-        <div className="flex items-center gap-2">
+        <div className="flex shrink-0 items-center gap-2">
           {/* compact figure so a collapsed card still shows the spend at a glance (mobile) */}
           <span className="shrink-0 text-xs tabular-nums text-slate-500 sm:hidden">
-            {formatINR(card.spent)}
-            {card.allocation > 0 && <span className="text-slate-400"> / {formatINR(card.allocation)}</span>}
+            {formatINR(memberSpent)}
+            {!filtered && card.allocation > 0 && <span className="text-slate-400"> / {formatINR(card.allocation)}</span>}
           </span>
           {open && (
             <AddSpendModal
@@ -267,7 +276,15 @@ function SpendCard({
 
       <div className="hidden peer-checked:block sm:block">
       <div className="px-4 pt-3">
-        {card.sinking && card.allocation > 0 ? (
+        {filtered ? (
+          <div className="flex items-center justify-between text-sm">
+            <span className="text-slate-500">
+              <b className="text-indigo-600">{filterMemberName}</b> spent{" "}
+              <b className="text-slate-800">{formatINR(memberSpent)}</b>
+            </span>
+            <span className="text-xs text-slate-400">{card.spends.length} spend{card.spends.length === 1 ? "" : "s"}</span>
+          </div>
+        ) : card.sinking && card.allocation > 0 ? (
           <>
             <div className="flex items-center justify-between text-sm">
               <span className="text-slate-500">

@@ -7,6 +7,7 @@ import { AddSpendModal } from "@/components/AddSpendModal";
 import { AutoLock } from "@/components/AutoLock";
 import { UserMenu } from "@/components/UserMenu";
 import { WindDownBanner } from "@/components/WindDownBanner";
+import { DueTodayBanner } from "@/components/DueTodayBanner";
 import { ProvisionalBanner } from "@/components/ProvisionalBanner";
 import { WindDownPopup } from "@/components/WindDownPopup";
 import { CardDueHighAlert } from "@/components/personal/CardDueHighAlert";
@@ -243,6 +244,7 @@ export function NavHeader({
       </div>
     )}
     {windDownReminder && <WindDownBanner daysUntil={windDownReminder.daysUntil} />}
+    <DueTodayBanner />
     {provisional && periodId && <ProvisionalBanner workingLabel={provisional.workingLabel} periodId={periodId} canEdit={!!canEdit} />}
     </div>
 
