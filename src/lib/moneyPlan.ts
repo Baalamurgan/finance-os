@@ -26,6 +26,7 @@ export type PlanStep = {
   done: boolean;
   // transfer
   fromId?: number; toId?: number; fromName?: string; toName?: string; recordId?: number | null; feedsBills?: boolean;
+  fundsMember?: boolean; // a disbursement pulled early to fund the recipient's own bills below
   // bill
   payerId?: number | null; payerName?: string; vendor?: string; billId?: number; categoryId?: number; fund?: boolean; fundAvail?: number;
   status?: "overdue" | "soon" | "normal" | null;
@@ -34,6 +35,7 @@ export type PlanStep = {
   hubAfter?: number; // treasurer's running settlement balance right after this step (hub steps only)
   actorLeft?: number; // for a member's own step: how much they still have to pay out after this
   balancesAfter?: Record<number, number>; // every member's running cash position right after this step
+  senderShort?: number; // the step's sender can't cover it from cash-in-hand yet — short by this much
 };
 
 export type MoneyPlan = { steps: PlanStep[]; done: number; total: number; hubShortfall: number };
@@ -46,8 +48,9 @@ export function buildMoneyPlan(input: {
   allowances?: PlanAllowance[];
   piggyReturns?: PlanPiggyReturn[];
   incomeDayByMember: Record<number, number>; // earliest arrival day per member
+  incomeByMember?: Record<number, number>; // total income each member owns this month (their own cash)
 }): MoneyPlan {
-  const { treasurerId, treasurerName, transfers, bills, allowances = [], piggyReturns = [], incomeDayByMember } = input;
+  const { treasurerId, treasurerName, transfers, bills, allowances = [], piggyReturns = [], incomeDayByMember, incomeByMember = {} } = input;
 
   const inbound = transfers.filter((t) => t.toId === treasurerId);
   // Disbursements happen only after everything has been collected AND the bills paid, so anchor
@@ -95,11 +98,27 @@ export function buildMoneyPlan(input: {
     });
   }
 
-  // Display order: by due date (soonest first), then income-in → bills → disbursements-out as the
-  // within-day tie-break (money comes in, bills get paid, remainder flows back). Anything with NO
-  // due date is the lowest priority — it sinks to the very bottom; piggy returns sink below even those.
-  // income in (0) → bills (1) → disbursements + allowances out (2) → piggy returns (3, dead last)
-  const rank = (s: PlanStep) => (s.kind === "transfer-in" ? 0 : s.kind === "bill" ? 1 : s.kind === "piggy" ? 3 : 2);
+  // Fund members before they pay: a disbursement (hub → member) that has bills/outflows below it is
+  // pulled up to land right before that member's EARLIEST outflow, so they have the cash in hand to
+  // do it — instead of sitting at the end with all the disbursements. (If the hub hasn't collected
+  // enough by then, the hub-short flag below still catches it.)
+  const outflowDay = new Map<number, number>();
+  for (const s of steps) {
+    const sender = s.kind === "bill" ? s.payerId : s.kind === "transfer-in" || s.kind === "piggy" ? s.fromId : null;
+    if (sender == null || sender === treasurerId) continue;
+    outflowDay.set(sender, Math.min(outflowDay.get(sender) ?? Infinity, s.day ?? Infinity));
+  }
+  for (const s of steps) {
+    if (s.kind !== "transfer-out" || s.toId == null) continue;
+    const need = outflowDay.get(s.toId);
+    if (need != null && need !== Infinity) { s.day = need; s.fundsMember = true; }
+  }
+
+  // Display order: by due date (soonest first). Within a day: income in → funding disbursements →
+  // bills → other disbursements/allowances out → piggy returns (money comes in, members get funded,
+  // bills get paid, the remainder flows back). Anything with NO due date sinks to the very bottom.
+  const rank = (s: PlanStep) =>
+    s.kind === "transfer-in" ? 0 : s.kind === "transfer-out" && s.fundsMember ? 1 : s.kind === "bill" ? 2 : s.kind === "piggy" ? 4 : 3;
   const eff = (s: PlanStep) => (s.day == null ? Infinity : s.day);
   steps.sort((a, b) => eff(a) - eff(b) || rank(a) - rank(b) || b.amount - a.amount);
 
@@ -133,16 +152,26 @@ export function buildMoneyPlan(input: {
     s.actorLeft = after;
   }
 
-  // Every member's running cash position after each step (seed 0): money flowing TO someone adds,
-  // money they pay out subtracts. Fund bills are paid from their own fund (no member cash moves).
-  // A positive figure = that person is holding family cash at that point (could pay elsewhere); the
-  // treasurer's mirrors the hub. Snapshotted per step so the UI can show "who holds what, when".
-  const bal = new Map<number, number>();
+  // Every member's running cash position after each step, seeded from their OWN income this month
+  // (members hold their salary and spend it on their own bills; only the net settles with the hub).
+  // Money flowing TO someone adds, money they pay out subtracts; fund bills are paid from their own
+  // fund (no member cash moves). For each UNPAID step, the SENDER on the left must have enough cash
+  // in hand to do it — if not, it's flagged short (paid steps are done, so never flagged). Snapshotted
+  // per step so the UI can show "who holds what, when" and where a payment can't be funded yet.
+  const bal = new Map<number, number>(Object.entries(incomeByMember).map(([k, v]) => [Number(k), v]));
   const shift = (id: number | null | undefined, delta: number) => {
     if (id == null) return;
     bal.set(id, Math.round(((bal.get(id) ?? 0) + delta) * 100) / 100);
   };
+  const senderOf = (s: PlanStep): number | null => (s.kind === "bill" ? s.payerId ?? null : s.fromId ?? null);
   for (const s of steps) {
+    // fund bills are paid from the sinking fund, not the payer's cash — they don't need cash in hand
+    const usesCash = !(s.kind === "bill" && s.fund);
+    const senderId = senderOf(s);
+    if (!s.done && usesCash && senderId != null) {
+      const before = bal.get(senderId) ?? 0;
+      if (before < s.amount - 0.005) s.senderShort = Math.round((s.amount - before) * 100) / 100;
+    }
     if (s.kind === "transfer-in" || s.kind === "transfer-out" || s.kind === "allowance" || s.kind === "piggy") {
       shift(s.fromId, -s.amount);
       shift(s.toId, s.amount);

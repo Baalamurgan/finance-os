@@ -484,13 +484,16 @@ export async function getMoneyPlan(householdId: number, periodId: number, inhand
   const inhand = inhandArg ?? (await getInHand(householdId, periodId));
   const [settlement, incomes, period] = await Promise.all([
     getSettlement(householdId, periodId, inhand.treasurerId),
-    prisma.incomeEntry.findMany({ where: { periodId }, select: { ownerId: true, dueDay: true } }),
+    prisma.incomeEntry.findMany({ where: { periodId }, select: { ownerId: true, dueDay: true, amount: true } }),
     prisma.period.findUnique({ where: { id: periodId }, select: { year: true, month: true, status: true } }),
   ]);
 
   const incomeDayByMember: Record<number, number> = {};
+  const incomeByMember: Record<number, number> = {};
   for (const i of incomes) {
-    if (i.ownerId == null || i.dueDay == null) continue;
+    if (i.ownerId == null) continue;
+    incomeByMember[i.ownerId] = (incomeByMember[i.ownerId] ?? 0) + i.amount;
+    if (i.dueDay == null) continue;
     incomeDayByMember[i.ownerId] = Math.min(incomeDayByMember[i.ownerId] ?? 99, i.dueDay);
   }
 
@@ -541,7 +544,7 @@ export async function getMoneyPlan(householdId: number, periodId: number, inhand
       : [];
 
   const { buildMoneyPlan } = await import("./moneyPlan");
-  return { ...buildMoneyPlan({ treasurerId: inhand.treasurerId, treasurerName: settlement.treasurer?.name, transfers, bills, allowances, piggyReturns, incomeDayByMember }), treasurerId: inhand.treasurerId, periodId };
+  return { ...buildMoneyPlan({ treasurerId: inhand.treasurerId, treasurerName: settlement.treasurer?.name, transfers, bills, allowances, piggyReturns, incomeDayByMember, incomeByMember }), treasurerId: inhand.treasurerId, periodId };
 }
 
 export type SettlementHistory = Awaited<ReturnType<typeof getSettlementHistory>>;

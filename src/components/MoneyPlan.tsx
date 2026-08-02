@@ -170,6 +170,7 @@ export function MoneyPlan({
                     {isPiggy && <span className="shrink-0 rounded-full bg-pink-50 px-1.5 py-0.5 text-[9px] font-medium text-pink-500">🐷 to piggy · at wind-down</span>}
                     {!s.done && !isPiggy && <DayTag kind={s.kind} day={s.day} status={s.status ?? null} days={s.days ?? null} />}
                     {s.feedsBills && !s.done && <span className="shrink-0 rounded-full bg-indigo-50 px-1.5 py-0.5 text-[9px] font-medium text-indigo-500">funds bills ↓</span>}
+                    {s.fundsMember && !s.done && <span className="shrink-0 rounded-full bg-emerald-50 px-1.5 py-0.5 text-[9px] font-medium text-emerald-600">funds {s.toName} ↓</span>}
                   </div>
                   {!s.done && s.hubAfter != null && (
                     <div className={`text-[10px] ${s.hubAfter < -0.005 ? "font-semibold text-red-600" : "text-slate-400"}`}>
@@ -178,6 +179,11 @@ export function MoneyPlan({
                   )}
                   {!s.done && s.actorLeft != null && (
                     <div className="text-[10px] text-slate-400">{s.payerName ?? s.fromName}: {s.actorLeft > 0.005 ? `${formatINR(s.actorLeft)} to go` : "all paid ✓"}</div>
+                  )}
+                  {!s.done && s.senderShort != null && s.senderShort > 0.005 && (
+                    <div className="text-[10px] font-semibold text-red-600">
+                      ⚠ {isPiggy || isTransfer || isAllowance ? s.fromName : s.payerName} short {formatINR(s.senderShort)} here — needs money in first
+                    </div>
                   )}
                 </div>
 
@@ -234,7 +240,7 @@ export function MoneyPlan({
               </div>
               <button type="button" onClick={() => setBalances(null)} className="shrink-0 rounded-md px-1.5 text-slate-400 hover:bg-slate-100" aria-label="Close">✕</button>
             </div>
-            <p className="mt-2 text-[10px] text-slate-400">+ holding family cash (could pay elsewhere) · − already paid out this month</p>
+            <p className="mt-2 text-[10px] text-slate-400">Cash in hand, starting from each person&apos;s own income, as the plan runs to here. + = has money to spend (could pay elsewhere) · − = short / already fronted.</p>
             <ul className="mt-2 space-y-1">
               {members.map((m) => {
                 const v = balances.s.balancesAfter?.[m.id] ?? 0;

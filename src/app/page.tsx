@@ -712,10 +712,16 @@ export default async function SheetPage({
           );
         })()}
 
-        {/* balance + piggy */}
-        <div className="grid grid-cols-2 gap-4 rounded-xl border border-slate-200 bg-white p-5">
-          <Stat label="Balance (Income − Expense)" value={formatINR(rollup.balance)} accent />
-          <Stat label={piggyPreview ? "🐷 Piggy bank (est.)" : "🐷 Piggy bank"} value={formatINR(shownPiggy)} />
+        {/* balance + piggy (+ their sum, if you swept the whole Piggy into hand) */}
+        <div className="rounded-xl border border-slate-200 bg-white p-5">
+          <div className="grid grid-cols-2 gap-4">
+            <Stat label="Balance (Income − Expense)" value={formatINR(rollup.balance)} accent />
+            <Stat label={piggyPreview ? "🐷 Piggy bank (est.)" : "🐷 Piggy bank"} value={formatINR(shownPiggy)} />
+          </div>
+          <div className="mt-3 flex items-center justify-between border-t border-dashed border-slate-200 pt-3">
+            <span className="text-xs font-medium uppercase tracking-wide text-slate-400">Balance + Piggy</span>
+            <span className="text-lg font-bold tabular-nums text-slate-900">{formatINR(rollup.balance + shownPiggy)}</span>
+          </div>
         </div>
 
         {/* where did the income go — quick visual breakdown */}

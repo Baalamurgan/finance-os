@@ -136,6 +136,39 @@ describe("buildMoneyPlan", () => {
     expect(last.balancesAfter?.[T]).toBe(100);
   });
 
+  it("seeds each member from their own income and flags a sender who can't cover a step", () => {
+    const plan = buildMoneyPlan({
+      treasurerId: T,
+      transfers: [],
+      bills: [bill({ payerId: 5, payerName: "E", vendor: "Rent", amount: 100, day: 2 })], // E pays 100
+      incomeDayByMember: {},
+      incomeByMember: {}, // E has no income and no disbursement → can't cover
+    });
+    const b = plan.steps.find((s) => s.vendor === "Rent")!;
+    expect(b.senderShort).toBe(100);
+  });
+
+  it("pulls a member's disbursement up to fund their bills, clearing the shortfall", () => {
+    const plan = buildMoneyPlan({
+      treasurerId: T,
+      transfers: [
+        xfer({ fromId: 2, from: "B", toId: T, amount: 200, settled: false }), // B → hub 200 on day 1
+        xfer({ fromId: T, from: "A", toId: 3, to: "H", amount: 120 }), // hub → Harish 120 (disbursement)
+      ],
+      bills: [bill({ payerId: 3, payerName: "H", vendor: "Loan", amount: 100, day: 5 })], // Harish pays 100 due day 5
+      incomeDayByMember: { 2: 1 },
+      incomeByMember: {}, // Harish has no own income — relies on the disbursement
+    });
+    const kinds = plan.steps.map((s) => s.kind);
+    // income in → funding disbursement → the member's bill
+    expect(kinds).toEqual(["transfer-in", "transfer-out", "bill"]);
+    const disb = plan.steps.find((s) => s.kind === "transfer-out")!;
+    expect(disb.fundsMember).toBe(true);
+    const loan = plan.steps.find((s) => s.vendor === "Loan")!;
+    expect(loan.senderShort).toBeUndefined(); // funded first → not short
+    expect(loan.balancesAfter?.[3]).toBe(20); // 120 received − 100 paid
+  });
+
   it("flags a hub shortfall when an allowance is sent but nothing was collected", () => {
     const plan = buildMoneyPlan({
       treasurerId: T,
