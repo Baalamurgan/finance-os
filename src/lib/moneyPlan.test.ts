@@ -169,6 +169,45 @@ describe("buildMoneyPlan", () => {
     expect(loan.balancesAfter?.[3]).toBe(20); // 120 received − 100 paid
   });
 
+  it("counts the treasurer's own income so his own bills don't phantom-flag a shortfall", () => {
+    const plan = buildMoneyPlan({
+      treasurerId: T,
+      transfers: [],
+      bills: [bill({ payerId: T, vendor: "Rent", amount: 100, day: null })], // undated, hub pays 100
+      incomeDayByMember: {},
+      incomeByMember: { [T]: 500 }, // treasurer holds 500 of his own salary
+    });
+    expect(plan.hubShortfall).toBe(0);
+    const b = plan.steps.find((s) => s.vendor === "Rent")!;
+    expect(b.hubAfter).toBe(400); // 500 own − 100 paid; hubAfter == his real cash
+  });
+
+  it("collects undated inbound before undated outflows, so the hub isn't phantom-short", () => {
+    const plan = buildMoneyPlan({
+      treasurerId: T,
+      transfers: [xfer({ fromId: 2, toId: T, amount: 100 })], // undated inbound (no income day)
+      bills: [bill({ payerId: T, vendor: "Rent", amount: 80, day: null })], // undated hub bill
+      incomeDayByMember: {}, // no income days at all
+    });
+    expect(plan.steps.map((s) => s.kind)).toEqual(["transfer-in", "bill"]); // money in, THEN money out
+    expect(plan.hubShortfall).toBe(0);
+  });
+
+  it("does not pull a disbursement early to cover a fund bill (paid from sinking, not cash)", () => {
+    const plan = buildMoneyPlan({
+      treasurerId: T,
+      transfers: [
+        xfer({ fromId: 2, toId: T, amount: 10 }),
+        xfer({ fromId: T, from: "A", toId: 3, to: "H", amount: 50 }), // disbursement to H
+      ],
+      bills: [bill({ payerId: 3, payerName: "H", vendor: "Insurance", amount: 40, day: 1, fund: true, fundAvail: 40 })],
+      incomeDayByMember: { 2: 10 }, // inbound arrives day 10 → lastDay = 10
+    });
+    const disb = plan.steps.find((s) => s.kind === "transfer-out")!;
+    expect(disb.fundsMember).toBeFalsy(); // a day-1 FUND bill must NOT drag the disbursement early
+    expect(disb.day).toBe(10); // stays at lastDay, not pulled to day 1
+  });
+
   it("flags a hub shortfall when an allowance is sent but nothing was collected", () => {
     const plan = buildMoneyPlan({
       treasurerId: T,

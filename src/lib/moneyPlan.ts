@@ -101,12 +101,13 @@ export function buildMoneyPlan(input: {
   // Fund members before they pay: a disbursement (hub → member) that has bills/outflows below it is
   // pulled up to land right before that member's EARLIEST outflow, so they have the cash in hand to
   // do it — instead of sitting at the end with all the disbursements. (If the hub hasn't collected
-  // enough by then, the hub-short flag below still catches it.)
+  // enough by then, the hub-short flag below still catches it.) Only a DATED CASH bill counts as an
+  // outflow that needs funding: a fund bill is paid from its sinking fund (no cash), and an undated
+  // bill has no deadline to beat — neither should drag a disbursement early.
   const outflowDay = new Map<number, number>();
   for (const s of steps) {
-    const sender = s.kind === "bill" ? s.payerId : s.kind === "transfer-in" || s.kind === "piggy" ? s.fromId : null;
-    if (sender == null || sender === treasurerId) continue;
-    outflowDay.set(sender, Math.min(outflowDay.get(sender) ?? Infinity, s.day ?? Infinity));
+    if (!(s.kind === "bill" && !s.fund) || s.payerId == null || s.payerId === treasurerId || s.day == null) continue;
+    outflowDay.set(s.payerId, Math.min(outflowDay.get(s.payerId) ?? Infinity, s.day));
   }
   for (const s of steps) {
     if (s.kind !== "transfer-out" || s.toId == null) continue;
@@ -119,14 +120,20 @@ export function buildMoneyPlan(input: {
   // bills get paid, the remainder flows back). Anything with NO due date sinks to the very bottom.
   const rank = (s: PlanStep) =>
     s.kind === "transfer-in" ? 0 : s.kind === "transfer-out" && s.fundsMember ? 1 : s.kind === "bill" ? 2 : s.kind === "piggy" ? 4 : 3;
-  const eff = (s: PlanStep) => (s.day == null ? Infinity : s.day);
+  // Undated INBOUND collections are gathered UP FRONT (money in before money out) — an unknown income
+  // day must never sort a collection AFTER the disbursements/bills it funds, which would make the hub
+  // look deeply negative when in truth the cash is simply collected first. Undated bills, disbursements
+  // and piggy returns still sink to the very bottom (no deadline = lowest priority).
+  const eff = (s: PlanStep) => (s.day == null ? (s.kind === "transfer-in" ? 0 : Infinity) : s.day);
   steps.sort((a, b) => eff(a) - eff(b) || rank(a) - rank(b) || b.amount - a.amount);
 
-  // Hub (treasurer) running balance, walked in DISPLAY order = the settlement cash collected minus
-  // paid out, so far. Starts at 0 (before any collection this month). Inbound adds; the treasurer's
-  // own bills and the disbursements-out subtract; member-paid bills never touch the hub. If it dips
-  // below 0 at any step, the treasurer is short there — money is needed before it has arrived.
-  let hub = 0;
+  // Hub (treasurer) running cash, walked in DISPLAY order = what the treasurer actually holds so far.
+  // Seeded with the treasurer's OWN income — he pays the pooled bills from his own pocket AND the
+  // collections, so starting at 0 would phantom-flag a shortfall when his salary in fact covers it.
+  // Inbound adds; the treasurer's own bills and the disbursements-out subtract; member-paid bills
+  // never touch the hub. If it dips below 0 at any step, he's genuinely short there — real money
+  // needed before it has arrived. (This now equals balancesAfter[treasurerId] — one source of truth.)
+  let hub = treasurerId != null ? incomeByMember[treasurerId] ?? 0 : 0;
   let hubShortfall = 0;
   for (const s of steps) {
     if (s.kind === "transfer-in") { hub += s.amount; s.hubAfter = hub; }
