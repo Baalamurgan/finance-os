@@ -512,6 +512,12 @@ export async function getMoneyPlan(householdId: number, periodId: number, inhand
     for (const p of g.unpaidPeriodic) bills.push({ key: `fund-${p.categoryId}`, payerId: g.memberId, payerName: g.name, vendor: p.name, amount: p.bill, done: false, day: p.due?.day ?? null, status: p.due?.status ?? null, days: p.due?.days ?? null, categoryId: p.categoryId, fund: true, fundAvail: p.fund });
     for (const p of g.paidPeriodic) bills.push({ key: `fund-${p.categoryId}`, payerId: g.memberId, payerName: g.name, vendor: p.name, amount: p.bill, done: true, day: p.due?.day ?? null, status: p.due?.status ?? null, days: p.due?.days ?? null, categoryId: p.categoryId, fund: true, fundAvail: p.fund });
   }
+  // Shared (no-payer) bills — e.g. an expense added from the plan with payer "Shared" — are paid from
+  // the pool, so the treasurer covers them. Without this they'd land on the Sheet but never show as a step.
+  const treasurerName = settlement.treasurer?.name ?? "Treasurer";
+  for (const b of inhand.shared.unpaidBills) bills.push({ key: `bill-${b.id}`, payerId: inhand.treasurerId, payerName: treasurerName, vendor: b.name, amount: b.amount, done: false, day: b.due?.day ?? null, status: b.due?.status ?? null, days: b.due?.days ?? null, billId: b.id });
+  for (const b of inhand.shared.paidBills) bills.push({ key: `bill-${b.id}`, payerId: inhand.treasurerId, payerName: treasurerName, vendor: b.name, amount: b.amount, done: true, day: b.due?.day ?? null, status: b.due?.status ?? null, days: b.due?.days ?? null, billId: b.id });
+
   const transfers = settlement.transfers.map((t) => {
     // inbound (to the treasurer): urgency from the payer's income arrival day
     const st = t.toId === inhand.treasurerId ? dayStatus(incomeDayByMember[t.fromId]) : null;

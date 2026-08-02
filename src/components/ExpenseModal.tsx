@@ -24,6 +24,8 @@ export function ExpenseModal({
   balance,
   sheetLabel = "+ Add expense",
   newCategoryDefaultSection = "Monthly",
+  showDueDay = false,
+  defaultRepeat = true,
 }: {
   categories: Cat[];
   members: Mem[];
@@ -35,6 +37,7 @@ export function ExpenseModal({
     categoryId: number;
     memberId: number | null;
     necessary: boolean;
+    dueDay?: number | null;
   };
   trigger?: "primary" | "row" | "menuitem" | "sheet";
   controlledOpen?: boolean; // when provided, parent controls open state
@@ -43,6 +46,8 @@ export function ExpenseModal({
   balance?: number; // current sheet balance — new expense can't exceed it (create only)
   sheetLabel?: string; // text for the "sheet" trigger button
   newCategoryDefaultSection?: string; // preselected section when creating a new category
+  showDueDay?: boolean; // show an optional "due day" field (drives Money-plan ordering)
+  defaultRepeat?: boolean; // default state of the "repeat every month" checkbox (create only)
 }) {
   const [openState, setOpenState] = useState(false);
   const open = controlledOpen ?? openState;
@@ -282,10 +287,30 @@ export function ExpenseModal({
                   />
                 </div>
 
+                {/* optional due day — drives Money-plan ordering / overdue tags */}
+                {showDueDay && (
+                  <div>
+                    <label className="text-xs font-medium text-slate-500">Due day (optional)</label>
+                    <input
+                      name="dueDay"
+                      type="number"
+                      min="1"
+                      max="31"
+                      inputMode="numeric"
+                      defaultValue={initial?.dueDay ?? ""}
+                      placeholder="e.g. 15"
+                      className="input mt-1 w-full"
+                    />
+                    <p className="mt-1 text-[11px] text-slate-400">
+                      Day of the month it&apos;s due — leave blank for no date (it sorts last in the Money plan).
+                    </p>
+                  </div>
+                )}
+
                 {/* recurring vs one-time — create mode only */}
                 {!initial && (
                   <label className="flex items-center gap-2 rounded-lg bg-slate-50 px-3 py-2 text-sm text-slate-700">
-                    <input type="checkbox" name="repeat" defaultChecked className="h-4 w-4 accent-indigo-600" />
+                    <input type="checkbox" name="repeat" defaultChecked={defaultRepeat} className="h-4 w-4 accent-indigo-600" />
                     Repeat every month
                     <span className="text-xs text-slate-400">(uncheck = only this month)</span>
                   </label>

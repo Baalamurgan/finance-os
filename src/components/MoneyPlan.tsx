@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { formatINR } from "@/lib/format";
 import { markSettled, unsettle, toggleBillPaid, syncMonthFromSetup } from "@/app/actions";
 import { PayBillModal } from "@/components/PayBillModal";
+import { ExpenseModal } from "@/components/ExpenseModal";
 import { useToast } from "@/components/Toast";
 import type { MoneyPlanResult } from "@/lib/queries";
 
@@ -15,6 +16,7 @@ import type { MoneyPlanResult } from "@/lib/queries";
 // Refresh re-pulls due dates + amounts from Setup into this month, then re-orders the plan.
 export function MoneyPlan({
   plan, householdId, periodId, isHead, currentMemberId, canEdit, open, generalPiggy,
+  billCategories, members, monthBalance,
 }: {
   plan: MoneyPlanResult;
   householdId: number;
@@ -24,11 +26,15 @@ export function MoneyPlan({
   canEdit: boolean;
   open: boolean;
   generalPiggy: number;
+  billCategories: { id: number; name: string; section?: string }[];
+  members: { id: number; name: string }[];
+  monthBalance: number;
 }) {
   const router = useRouter();
   const toast = useToast();
   const [pending, startTransition] = useTransition();
   const [who, setWho] = useState<number | null>(null);
+  const [addOpen, setAddOpen] = useState(false);
 
   // Everyone involved in a step (payer / from / to) → the filter's member list.
   const people = useMemo(() => {
@@ -85,6 +91,16 @@ export function MoneyPlan({
         {open && canEdit && (
           <button
             type="button"
+            onClick={() => setAddOpen(true)}
+            title="Add an expense to pay from the remaining balance — it lands on the Sheet and slots into the plan by its due date"
+            className="shrink-0 rounded-full border border-slate-200 px-2.5 py-1 text-[11px] font-medium text-slate-500 hover:border-emerald-300 hover:text-emerald-600"
+          >
+            + Expense
+          </button>
+        )}
+        {open && canEdit && (
+          <button
+            type="button"
             onClick={refresh}
             disabled={pending}
             title="Re-pull due dates & amounts from Setup into this month, then re-order"
@@ -94,6 +110,21 @@ export function MoneyPlan({
           </button>
         )}
       </div>
+
+      {/* Add a one-off expense to pay from the remaining balance — lands on the Sheet and slots into
+          the plan by its due date. Capped at the month balance; a blank due day sorts it last. */}
+      <ExpenseModal
+        hideTrigger
+        controlledOpen={addOpen}
+        onOpenChange={setAddOpen}
+        periodId={periodId}
+        categories={billCategories}
+        members={members}
+        balance={monthBalance}
+        showDueDay
+        defaultRepeat={false}
+        newCategoryDefaultSection="Misc"
+      />
 
       {plan.hubShortfall > 0 && who == null && (
         <div className="mb-3 rounded-lg bg-red-50 px-3 py-2 text-xs text-red-700">

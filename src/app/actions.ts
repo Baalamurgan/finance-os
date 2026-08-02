@@ -194,6 +194,11 @@ async function doSaveExpense(formData: FormData): Promise<boolean> {
   const memberRaw = formData.get("memberId");
   const memberId = memberRaw ? Number(memberRaw) : null;
   const necessaryRaw = formData.get("necessary"); // "default" | "yes" | "no"
+  // Optional day-of-month the expense is due (drives Money-plan ordering / overdue tags). Blank = undated.
+  const dueRaw = String(formData.get("dueDay") ?? "").trim();
+  const dueNum = dueRaw === "" ? null : Number(dueRaw);
+  const dueDay = dueNum != null && Number.isFinite(dueNum) && dueNum >= 1 && dueNum <= 31 ? Math.round(dueNum) : null;
+  const hasDueField = formData.has("dueDay"); // only touch dueDay when the form actually sent it
 
   if (!periodId || !amount || !label) return false; // note required
   if (!(await canEditNow(periodId))) return false;
@@ -224,7 +229,7 @@ async function doSaveExpense(formData: FormData): Promise<boolean> {
   if (id) {
     await prisma.expenseEntry.update({
       where: { id },
-      data: { categoryId, amount, label, memberId: finalMemberId, necessary },
+      data: { categoryId, amount, label, memberId: finalMemberId, necessary, ...(hasDueField ? { dueDay } : {}) },
     });
     await logActivity("expense", "updated", `Edited expense “${label}” to ${formatINR(amount)}`, periodId);
   } else {
@@ -239,7 +244,7 @@ async function doSaveExpense(formData: FormData): Promise<boolean> {
     // generated every month; unchecked → one-off (this month only)
     const oneOff = formData.get("repeat") !== "on";
     await prisma.expenseEntry.create({
-      data: { periodId, categoryId, amount, label, memberId: finalMemberId, necessary, oneOff },
+      data: { periodId, categoryId, amount, label, memberId: finalMemberId, necessary, oneOff, dueDay },
     });
     if (!oneOff) await promoteToTemplate(periodId, "expense", label, amount, categoryId, finalMemberId);
     await logActivity("expense", "created", `Added expense “${label}” ${formatINR(amount)}`, periodId);

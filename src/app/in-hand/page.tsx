@@ -84,6 +84,11 @@ export default async function InHandPage({
           canEdit={c.canEdit}
           open={open}
           generalPiggy={inHand.generalPiggy}
+          billCategories={c.categories
+            .filter((cat) => !cat.tracked && cat.fundingStyle == null && !cat.isAllowance)
+            .map((cat) => ({ id: cat.id, name: cat.name, section: cat.section }))}
+          members={c.members.map((m) => ({ id: m.id, name: m.name }))}
+          monthBalance={inHand.monthBalance}
         />
 
         {showInHand ? (
