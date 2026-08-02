@@ -15,6 +15,7 @@ import { isLearnable } from "@/lib/spendCategorize";
 import { getSpendShortcuts, getMatcherKeywords, getFrequentSpendItems } from "@/lib/queries";
 import { planBillMonth, isLumpDue, type FundingStyle } from "@/lib/schedule";
 import { getBillReminders } from "@/lib/billReminders";
+import { budgetShortfallReductions } from "@/lib/budgetCarry";
 
 // Record a money-affecting change for the head-only activity log (who + what + when).
 async function logActivity(
@@ -1578,6 +1579,43 @@ async function addEstimatedCarry(
   }
 }
 
+// User-chosen carry model: a budgeted category's overspend, once the month's sheet surplus can't
+// absorb it, shrinks that category's budget NEXT month (proportionally when several overspend). We
+// recompute each target budget from the category TEMPLATE minus its reduction, so re-running (a
+// refresh, then wind-down) is idempotent and never stacks. Sinking funds are excluded — they
+// already deplete their own fund balance. See src/lib/budgetCarry.ts (unit-tested).
+async function applyBudgetShortfall(
+  tx: Tx,
+  source: { id: number; householdId: number; carryForward: number },
+  targetId: number,
+) {
+  const [inc, exp, budgets, spends, trackedCats] = await Promise.all([
+    tx.incomeEntry.aggregate({ where: { periodId: source.id }, _sum: { amount: true } }),
+    tx.expenseEntry.aggregate({ where: { periodId: source.id }, _sum: { amount: true } }),
+    tx.budget.findMany({ where: { periodId: source.id } }),
+    tx.spend.findMany({ where: { periodId: source.id } }),
+    tx.category.findMany({ where: { householdId: source.householdId, tracked: true, onHold: false, sinking: false }, select: { id: true, monthlyBudget: true } }),
+  ]);
+  const spentOf = (c: number) => spends.filter((s) => s.categoryId === c).reduce((t, s) => t + s.amount, 0);
+  const budgetOf = (c: number) => budgets.find((b) => b.categoryId === c)?.planned ?? 0;
+  const overspendByCat: Record<number, number> = {};
+  for (const cat of trackedCats) {
+    const b = budgetOf(cat.id);
+    if (b <= 0) continue;
+    const over = spentOf(cat.id) - b;
+    if (over > 0.005) overspendByCat[cat.id] = over;
+  }
+  const surplus = source.carryForward + (inc._sum.amount ?? 0) - (exp._sum.amount ?? 0);
+  const { reductionByCat } = budgetShortfallReductions({ surplus, overspendByCat });
+  // Reset every tracked non-sinking target budget to template − reduction (0 for most). Resetting
+  // all — not just the overspent ones — clears any stale reduction from a prior run.
+  for (const cat of trackedCats) {
+    if (cat.monthlyBudget == null) continue;
+    const reduced = Math.max(0, Math.round((cat.monthlyBudget - (reductionByCat[cat.id] ?? 0)) * 100) / 100);
+    await tx.budget.updateMany({ where: { periodId: targetId, categoryId: cat.id }, data: { planned: reduced } });
+  }
+}
+
 // ── Next-month preview (head-only draft) ─────────────────────────────────────
 // A draft is a Period with status "draft": it never resolves as the "current"
 // month (loadCommon prefers "open"), can't be wound down (windDownMonth requires
@@ -1642,6 +1680,7 @@ export async function createNextMonthDraft(formData: FormData) {
       await generateMonth(tx, p.id, householdId);
       await addEstimatedCarry(tx, current, p.id);
       await addEstimatedSurplus(tx, current, p.id);
+      await applyBudgetShortfall(tx, current, p.id);
     });
   }
   revalidatePath("/", "layout");
@@ -1661,6 +1700,7 @@ export async function rebuildDraft(formData: FormData) {
     await generateMonth(tx, periodId, draft.householdId);
     await addEstimatedCarry(tx, current, periodId);
     await addEstimatedSurplus(tx, current, periodId);
+    await applyBudgetShortfall(tx, current, periodId);
   });
   revalidatePath("/", "layout");
   redirect(`/?y=${draft.year}&m=${draft.month}`);
@@ -1690,6 +1730,7 @@ export async function refreshCarryEstimates(formData: FormData): Promise<{ ok: b
   await prisma.$transaction(async (tx) => {
     await addEstimatedCarry(tx, { id: source.id, label: source.label, householdId: source.householdId }, target.id);
     await addEstimatedSurplus(tx, source, target.id);
+    await applyBudgetShortfall(tx, { id: source.id, householdId: source.householdId, carryForward: source.carryForward }, target.id);
   });
   log.info("refreshCarryEstimates", "ok", { targetId: target.id, sourceId: source.id });
   revalidatePath("/", "layout");
@@ -1710,6 +1751,7 @@ export async function rebuildDraftToast(formData: FormData): Promise<{ ok: boole
     await generateMonth(tx, periodId, draft.householdId);
     await addEstimatedCarry(tx, current, periodId);
     await addEstimatedSurplus(tx, current, periodId);
+    await applyBudgetShortfall(tx, current, periodId);
   });
   revalidatePath("/", "layout");
   return { ok: true, message: "Preview rebuilt from your latest setup." };
@@ -2215,15 +2257,22 @@ export async function windDownMonth(formData: FormData) {
 
     const next = await tx.period.upsert({
       where: { householdId_year_month: { householdId, year: nextYear, month: nextMonth } },
-      create: { householdId, year: nextYear, month: nextMonth, label: nextLabel, carryForward: carryOut },
+      // A surplus rides as a positive carried-in balance (→ income line below); a DEFICIT is not a
+      // negative opening balance anymore — it's charged to the overspent categories' budgets
+      // (applyBudgetShortfall), so carryForward floors at 0.
+      create: { householdId, year: nextYear, month: nextMonth, label: nextLabel, carryForward: Math.max(0, carryOut) },
       // if next month already exists as a preview draft, promote it to a real open
       // month (keeping the head's edits — hasStructure below prevents re-cloning)
-      update: { carryForward: carryOut, status: "open" },
+      update: { carryForward: Math.max(0, carryOut), status: "open" },
     });
 
     // clone recurring structure into the next month if it's empty
     const hasStructure = await tx.expenseEntry.count({ where: { periodId: next.id } });
     if (hasStructure === 0) await clonePeriodStructure(tx, periodId, next.id, householdId);
+
+    // Overspend carry: shrink next month's overspent-category budgets by the net shortfall the
+    // month's surplus couldn't absorb (user-chosen model). Idempotent; supersedes any draft estimate.
+    await applyBudgetShortfall(tx, { id: periodId, householdId, carryForward: period.carryForward }, next.id);
 
     // add the carried over-budget + misc as one-off expenses on next month's sheet
     // (oneOff so they are NOT copied forward again into later months). Replace any
