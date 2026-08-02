@@ -72,6 +72,20 @@ describe("buildMoneyPlan", () => {
     expect(plan.hubShortfall).toBe(0);
   });
 
+  it("a dated fund bill is net-neutral to the hub (paid from its fund, not collected cash)", () => {
+    // Fund bill due on the 2nd (before any income arrives on the 5th); it must NOT flag a hub short.
+    const plan = buildMoneyPlan({
+      treasurerId: T,
+      transfers: [xfer({ fromId: 2, toId: T, amount: 100 })],
+      bills: [bill({ payerId: T, vendor: "EB", amount: 4000, day: 2, fund: true, fundAvail: 4000 })],
+      incomeDayByMember: { 2: 5 },
+    });
+    const eb = plan.steps.find((s) => s.vendor === "EB")!;
+    expect(eb.day).toBe(2); // dated → sorts by its due day
+    expect(eb.hubAfter).toBeUndefined(); // never touches the hub
+    expect(plan.hubShortfall).toBe(0); // no phantom shortfall
+  });
+
   it("disburses an allowance after collection — never dated, subtracts from the hub", () => {
     const plan = buildMoneyPlan({
       treasurerId: T,

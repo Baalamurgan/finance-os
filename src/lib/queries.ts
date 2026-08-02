@@ -509,8 +509,8 @@ export async function getMoneyPlan(householdId: number, periodId: number, inhand
   for (const g of inhand.byPerson) {
     for (const b of g.unpaidBills) bills.push({ key: `bill-${b.id}`, payerId: g.memberId, payerName: g.name, vendor: b.name, amount: b.amount, done: false, day: b.due?.day ?? null, status: b.due?.status ?? null, days: b.due?.days ?? null, billId: b.id });
     for (const b of g.paidBills) bills.push({ key: `bill-${b.id}`, payerId: g.memberId, payerName: g.name, vendor: b.name, amount: b.amount, done: true, day: b.due?.day ?? null, status: b.due?.status ?? null, days: b.due?.days ?? null, billId: b.id });
-    for (const p of g.unpaidPeriodic) bills.push({ key: `fund-${p.categoryId}`, payerId: g.memberId, payerName: g.name, vendor: p.name, amount: p.bill, done: false, day: null, status: null, categoryId: p.categoryId, fund: true, fundAvail: p.fund });
-    for (const p of g.paidPeriodic) bills.push({ key: `fund-${p.categoryId}`, payerId: g.memberId, payerName: g.name, vendor: p.name, amount: p.bill, done: true, day: null, status: null, categoryId: p.categoryId, fund: true, fundAvail: p.fund });
+    for (const p of g.unpaidPeriodic) bills.push({ key: `fund-${p.categoryId}`, payerId: g.memberId, payerName: g.name, vendor: p.name, amount: p.bill, done: false, day: p.due?.day ?? null, status: p.due?.status ?? null, days: p.due?.days ?? null, categoryId: p.categoryId, fund: true, fundAvail: p.fund });
+    for (const p of g.paidPeriodic) bills.push({ key: `fund-${p.categoryId}`, payerId: g.memberId, payerName: g.name, vendor: p.name, amount: p.bill, done: true, day: p.due?.day ?? null, status: p.due?.status ?? null, days: p.due?.days ?? null, categoryId: p.categoryId, fund: true, fundAvail: p.fund });
   }
   const transfers = settlement.transfers.map((t) => {
     // inbound (to the treasurer): urgency from the payer's income arrival day
@@ -666,7 +666,7 @@ export async function getInHand(householdId: number, periodId: number) {
     prisma.expenseEntry.findMany({ where: { periodId, note: null, category: { fundingStyle: { not: null } } }, select: { id: true, label: true, amount: true, memberId: true, paid: true, categoryId: true, category: { select: { name: true } } } }),
     // bill-with-a-fund categories (config) — for the misc exclusion AND to synthesize the
     // due-month "to pay" bill (auto bills don't put the bill on the Sheet anymore).
-    prisma.category.findMany({ where: { householdId, fundingStyle: { not: null }, onHold: false }, select: { id: true, name: true, fundingStyle: true, billAmount: true, billMonth: true, billEveryMonths: true, responsibleMemberId: true, payerMemberId: true, onUnpaid: true } }),
+    prisma.category.findMany({ where: { householdId, fundingStyle: { not: null }, onHold: false }, select: { id: true, name: true, fundingStyle: true, billAmount: true, billMonth: true, billDay: true, billEveryMonths: true, responsibleMemberId: true, payerMemberId: true, onUnpaid: true } }),
     getSinkingBalances(householdId),
     prisma.billPayment.findMany({ where: { periodId }, select: { categoryId: true, memberId: true, fromSetAside: true } }),
     prisma.member.findMany({ where: { householdId }, orderBy: { id: "asc" } }),
@@ -826,7 +826,7 @@ export async function getInHand(householdId: number, periodId: number) {
     .map((c) => {
       const projected = Math.max(0, Math.round((projectedByCat.get(c.id) ?? 0) * 100) / 100);
       const fund = Math.round(((sinkBal[c.id] ?? 0) + (pendingByCat.get(c.id) ?? 0) + projected) * 100) / 100;
-      return { categoryId: c.id, name: c.name, bill: c.billAmount!, payer: c.payerMemberId ?? c.responsibleMemberId ?? null, fund, afterWindDown: projected > 0 ? projectionLabel : null, paid: paidCats.has(c.id) };
+      return { categoryId: c.id, name: c.name, bill: c.billAmount!, payer: c.payerMemberId ?? c.responsibleMemberId ?? null, fund, afterWindDown: projected > 0 ? projectionLabel : null, paid: paidCats.has(c.id), day: c.billDay ?? null };
     });
 
   // Due-date status for a bill line, evaluated against today for THIS period's month. `overdue`
@@ -862,8 +862,8 @@ export async function getInHand(householdId: number, periodId: number) {
       .filter((e) => e.amount > 0.005);
     // due-month periodic bills this member pays (net-neutral; paid from fund/Piggy in the modal)
     const memberDue = dueBills.filter((b) => b.payer === key);
-    const unpaidPeriodic = memberDue.filter((b) => !b.paid).map((b) => ({ categoryId: b.categoryId, name: b.name, bill: b.bill, fund: b.fund, afterWindDown: b.afterWindDown }));
-    const paidPeriodic = memberDue.filter((b) => b.paid).map((b) => ({ categoryId: b.categoryId, name: b.name, bill: b.bill, fund: b.fund, afterWindDown: b.afterWindDown }));
+    const unpaidPeriodic = memberDue.filter((b) => !b.paid).map((b) => ({ categoryId: b.categoryId, name: b.name, bill: b.bill, fund: b.fund, afterWindDown: b.afterWindDown, due: dueOf(b.day) }));
+    const paidPeriodic = memberDue.filter((b) => b.paid).map((b) => ({ categoryId: b.categoryId, name: b.name, bill: b.bill, fund: b.fund, afterWindDown: b.afterWindDown, due: dueOf(b.day) }));
 
     // bills carried over from an earlier closed month, still not marked paid (net-neutral nag)
     const carried = carriedBills

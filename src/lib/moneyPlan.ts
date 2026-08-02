@@ -98,7 +98,9 @@ export function buildMoneyPlan(input: {
   for (const s of steps) {
     if (s.kind === "transfer-in") { hub += s.amount; s.hubAfter = hub; }
     else if (s.kind === "transfer-out" || s.kind === "allowance") { hub -= s.amount; s.hubAfter = hub; }
-    else if (s.kind === "bill" && s.payerId === treasurerId) { hub -= s.amount; s.hubAfter = hub; }
+    // A fund bill is paid from its own sinking fund (net-neutral to the hub), so it never draws the
+    // treasurer's collected cash — exclude it, else dating it early would flag a phantom shortfall.
+    else if (s.kind === "bill" && s.payerId === treasurerId && !s.fund) { hub -= s.amount; s.hubAfter = hub; }
     if (s.hubAfter != null && s.hubAfter < -0.005) { s.short = Math.round(-s.hubAfter); hubShortfall = Math.max(hubShortfall, -s.hubAfter); }
   }
 
