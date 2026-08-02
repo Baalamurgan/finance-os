@@ -1011,7 +1011,7 @@ export async function getMyDueTodaySteps(): Promise<{ periodQ: string; steps: My
       (s.payerId === member.id || s.fromId === member.id),
   );
   const steps = mine.map((s) => ({
-    label: s.kind === "allowance" ? `Send → ${s.toName}` : s.kind !== "bill" ? `${s.fromName} → ${s.toName}` : `${s.payerName} → ${s.vendor}`,
+    label: s.kind === "allowance" ? `Personal expense → ${s.toName}` : s.kind !== "bill" ? `${s.fromName} → ${s.toName}` : `${s.payerName} → ${s.vendor}`,
     amount: s.amount,
     overdue: s.status === "overdue",
   }));

@@ -85,7 +85,11 @@ export default async function WindDownPage({
   const overspendTotal = overBudget.reduce((s, t) => s + -t.remaining, 0);
   const carriedRows = miscCards.map((t) => ({ name: `${t.name} (misc)`, amount: t.spent }));
   const carriedTotal = carriedRows.reduce((s, r) => s + r.amount, 0);
-  const carryOut = c.selected.carryForward + rollup.totalIncome - rollup.totalExpense - overspendTotal;
+  // The month's surplus BEFORE over-budget is absorbed (carry-in + income − expense). Over-budget
+  // spending eats into it; whatever's left over (if negative) is the net shortfall.
+  const preOverspend = c.selected.carryForward + rollup.totalIncome - rollup.totalExpense;
+  const carryOut = preOverspend - overspendTotal;
+  const absorbed = Math.max(0, Math.min(preOverspend, overspendTotal));
   const nm = c.selected.month === 12 ? 1 : c.selected.month + 1;
   const ny = c.selected.month === 12 ? c.selected.year + 1 : c.selected.year;
   const nextLabel = `${new Date(ny, nm - 1, 1).toLocaleString("en-US", { month: "short" }).toUpperCase()} ${ny}`;
@@ -160,11 +164,20 @@ export default async function WindDownPage({
                 total={carriedTotal}
               />
               <div className="flex justify-between border-t border-slate-100 pt-3 text-sm font-semibold text-slate-800">
-                <span>{carryOut < 0 ? "Deficit carried to next month" : "Balance carried to next month"}</span>
+                <span>{carryOut < 0 ? "Net shortfall → next month's budget" : "Balance carried to next month"}</span>
                 <span className={`tabular-nums ${carryOut < 0 ? "text-red-700" : ""}`}>
                   {formatINR(carryOut)}
                 </span>
               </div>
+              {carryOut < 0 && overspendTotal > 0 && (
+                <p className="rounded-lg bg-slate-50 px-3 py-2 text-xs leading-relaxed text-slate-500">
+                  Why: this month&apos;s <b>{formatINR(preOverspend)}</b> surplus (carry-in + income − expense)
+                  covered <b>{formatINR(absorbed)}</b> of the <b>{formatINR(overspendTotal)}</b> over-budget spending.
+                  The remaining <b className="text-red-600">{formatINR(-carryOut)}</b> isn&apos;t carried as a negative
+                  balance — it comes off next month&apos;s budget for the over-budget categor{overBudget.length > 1 ? "ies" : "y"}
+                  {overBudget.length > 0 && <> ({overBudget.map((t) => t.name).join(", ")})</>}.
+                </p>
+              )}
 
               <WindDownButton periodId={c.selected.id} label={c.selected.label} leftovers={piggyAdd} nextLabel={nextLabel} />
             </section>

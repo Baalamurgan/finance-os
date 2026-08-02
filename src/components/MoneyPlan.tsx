@@ -113,7 +113,7 @@ export function MoneyPlan({
             const canActTransfer = open && (isHead || currentMemberId === s.fromId || currentMemberId === s.toId);
             const canActBill = open && (canEdit || currentMemberId === s.payerId);
             const canActAllowance = open && (canEdit || currentMemberId === s.fromId || currentMemberId === s.toId);
-            const title = isAllowance ? `Send → ${s.toName}` : isTransfer ? `${s.fromName} → ${s.toName}` : `${s.payerName} → ${s.vendor}`;
+            const title = isAllowance ? `Personal expense → ${s.toName}` : isTransfer ? `${s.fromName} → ${s.toName}` : `${s.payerName} → ${s.vendor}`;
             // Urgency (only while unpaid — a done step is never "overdue"): RED for overdue OR due
             // today (needs action now), AMBER for due in 1–2 days, plain otherwise.
             const urgent = !s.done && (s.status === "overdue" || (s.status === "soon" && (s.days ?? 1) <= 0));
@@ -128,7 +128,7 @@ export function MoneyPlan({
                 <div className="min-w-0 flex-1">
                   <div className={`flex flex-wrap items-center gap-1.5 ${s.done ? "text-slate-400 line-through" : "text-slate-800"}`}>
                     <span className="truncate font-medium">{title}</span>
-                    {isAllowance && <span className="shrink-0 rounded-full bg-violet-50 px-1.5 py-0.5 text-[9px] font-medium text-violet-500">allowance</span>}
+                    {isAllowance && <span className="shrink-0 rounded-full bg-violet-50 px-1.5 py-0.5 text-[9px] font-medium text-violet-500">personal · from hub</span>}
                     {!s.done && <DayTag kind={s.kind} day={s.day} status={s.status ?? null} days={s.days ?? null} />}
                     {s.feedsBills && !s.done && <span className="shrink-0 rounded-full bg-indigo-50 px-1.5 py-0.5 text-[9px] font-medium text-indigo-500">funds bills ↓</span>}
                   </div>
