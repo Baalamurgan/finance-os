@@ -1608,11 +1608,15 @@ async function applyBudgetShortfall(
   const surplus = source.carryForward + (inc._sum.amount ?? 0) - (exp._sum.amount ?? 0);
   const { reductionByCat } = budgetShortfallReductions({ surplus, overspendByCat });
   // Reset every tracked non-sinking target budget to template − reduction (0 for most). Resetting
-  // all — not just the overspent ones — clears any stale reduction from a prior run.
+  // all — not just the overspent ones — clears any stale reduction from a prior run. We update BOTH
+  // the Budget.planned row (used by roll-up/in-hand) AND the generated envelope ExpenseEntry
+  // (oneOff:false — the editable "Budgeted · leftover → Piggy" line the SHEET actually renders), so
+  // the displayed amount drops too. Hand-added one-off lines (oneOff:true) are left untouched.
   for (const cat of trackedCats) {
     if (cat.monthlyBudget == null) continue;
     const reduced = Math.max(0, Math.round((cat.monthlyBudget - (reductionByCat[cat.id] ?? 0)) * 100) / 100);
     await tx.budget.updateMany({ where: { periodId: targetId, categoryId: cat.id }, data: { planned: reduced } });
+    await tx.expenseEntry.updateMany({ where: { periodId: targetId, categoryId: cat.id, oneOff: false }, data: { amount: reduced } });
   }
 }
 
