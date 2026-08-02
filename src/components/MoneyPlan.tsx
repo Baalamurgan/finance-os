@@ -109,11 +109,12 @@ export function MoneyPlan({
         <ol className="space-y-1.5">
           {shown.map(({ s, n }) => {
             const isAllowance = s.kind === "allowance";
-            const isTransfer = s.kind !== "bill" && !isAllowance;
+            const isPiggy = s.kind === "piggy";
+            const isTransfer = s.kind !== "bill" && !isAllowance && !isPiggy;
             const canActTransfer = open && (isHead || currentMemberId === s.fromId || currentMemberId === s.toId);
             const canActBill = open && (canEdit || currentMemberId === s.payerId);
             const canActAllowance = open && (canEdit || currentMemberId === s.fromId || currentMemberId === s.toId);
-            const title = isAllowance ? `Personal expense → ${s.toName}` : isTransfer ? `${s.fromName} → ${s.toName}` : `${s.payerName} → ${s.vendor}`;
+            const title = isAllowance ? `Personal expense → ${s.toName}` : isPiggy ? `${s.fromName} → ${s.toName} · Piggy` : isTransfer ? `${s.fromName} → ${s.toName}` : `${s.payerName} → ${s.vendor}`;
             // Urgency (only while unpaid — a done step is never "overdue"): RED for overdue OR due
             // today (needs action now), AMBER for due in 1–2 days, plain otherwise.
             const urgent = !s.done && (s.status === "overdue" || (s.status === "soon" && (s.days ?? 1) <= 0));
@@ -129,7 +130,8 @@ export function MoneyPlan({
                   <div className={`flex flex-wrap items-center gap-1.5 ${s.done ? "text-slate-400 line-through" : "text-slate-800"}`}>
                     <span className="truncate font-medium">{title}</span>
                     {isAllowance && <span className="shrink-0 rounded-full bg-violet-50 px-1.5 py-0.5 text-[9px] font-medium text-violet-500">personal · from hub</span>}
-                    {!s.done && <DayTag kind={s.kind} day={s.day} status={s.status ?? null} days={s.days ?? null} />}
+                    {isPiggy && <span className="shrink-0 rounded-full bg-pink-50 px-1.5 py-0.5 text-[9px] font-medium text-pink-500">🐷 to piggy · at wind-down</span>}
+                    {!s.done && !isPiggy && <DayTag kind={s.kind} day={s.day} status={s.status ?? null} days={s.days ?? null} />}
                     {s.feedsBills && !s.done && <span className="shrink-0 rounded-full bg-indigo-50 px-1.5 py-0.5 text-[9px] font-medium text-indigo-500">funds bills ↓</span>}
                   </div>
                   {!s.done && s.hubAfter != null && (
@@ -138,7 +140,7 @@ export function MoneyPlan({
                     </div>
                   )}
                   {!s.done && s.actorLeft != null && (
-                    <div className="text-[10px] text-slate-400">{s.payerName}: {s.actorLeft > 0.005 ? `${formatINR(s.actorLeft)} to go` : "all paid ✓"}</div>
+                    <div className="text-[10px] text-slate-400">{s.payerName ?? s.fromName}: {s.actorLeft > 0.005 ? `${formatINR(s.actorLeft)} to go` : "all paid ✓"}</div>
                   )}
                 </div>
 
@@ -146,7 +148,9 @@ export function MoneyPlan({
 
                 {/* action */}
                 <span className="flex w-16 shrink-0 justify-end">
-                  {isAllowance ? (
+                  {isPiggy ? (
+                    <span className="text-[9px] text-slate-300">est.</span>
+                  ) : isAllowance ? (
                     s.billId != null && canActAllowance ? (
                       <form action={toggleBillPaid}><input type="hidden" name="id" value={s.billId} /><MiniBtn primary={!s.done}>{s.done ? "undo" : "✓ sent"}</MiniBtn></form>
                     ) : null

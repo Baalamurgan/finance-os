@@ -13,10 +13,14 @@ export type PlanBill = {
 // An allowance = personal money the treasurer SENDS a member (not a bill they owe). Disbursed after
 // collection, never dated/overdue; completion writes through to the Sheet line's paid flag (billId).
 export type PlanAllowance = { key: string; recipientId: number; recipientName: string; amount: number; done: boolean; billId: number };
+// A piggy return = a budget holder handing their unspent budget (gross positive leftovers) to the
+// Piggy holder at wind-down, so the general Piggy ends up under one person. A live projection (not
+// final until wind-down), always LOWEST priority — the sender only pays it once they're flush.
+export type PlanPiggyReturn = { key: string; fromId: number; fromName: string; toId: number; toName: string; amount: number };
 
 export type PlanStep = {
   id: string;
-  kind: "transfer-in" | "transfer-out" | "bill" | "allowance";
+  kind: "transfer-in" | "transfer-out" | "bill" | "allowance" | "piggy";
   day: number | null; // effective day-of-month for ordering/display (null = undated)
   amount: number;
   done: boolean;
@@ -39,9 +43,10 @@ export function buildMoneyPlan(input: {
   transfers: PlanTransfer[];
   bills: PlanBill[];
   allowances?: PlanAllowance[];
+  piggyReturns?: PlanPiggyReturn[];
   incomeDayByMember: Record<number, number>; // earliest arrival day per member
 }): MoneyPlan {
-  const { treasurerId, treasurerName, transfers, bills, allowances = [], incomeDayByMember } = input;
+  const { treasurerId, treasurerName, transfers, bills, allowances = [], piggyReturns = [], incomeDayByMember } = input;
 
   const inbound = transfers.filter((t) => t.toId === treasurerId);
   // Disbursements happen only after everything has been collected AND the bills paid, so anchor
@@ -80,12 +85,20 @@ export function buildMoneyPlan(input: {
       billId: a.billId, status: null, days: null,
     });
   }
+  // Piggy returns: the very last thing each month — a holder hands their unspent budget to the Piggy
+  // holder. Undated + lowest priority (below even other undated steps), a projection until wind-down.
+  for (const p of piggyReturns) {
+    steps.push({
+      id: p.key, kind: "piggy", day: null, amount: p.amount, done: false,
+      fromId: p.fromId, toId: p.toId, fromName: p.fromName, toName: p.toName, status: null, days: null,
+    });
+  }
 
   // Display order: by due date (soonest first), then income-in → bills → disbursements-out as the
   // within-day tie-break (money comes in, bills get paid, remainder flows back). Anything with NO
-  // due date is the lowest priority — it sinks to the very bottom.
-  // income in (0) → bills (1) → disbursements + allowances out (2), all after collection
-  const rank = (s: PlanStep) => (s.kind === "transfer-in" ? 0 : s.kind === "bill" ? 1 : 2);
+  // due date is the lowest priority — it sinks to the very bottom; piggy returns sink below even those.
+  // income in (0) → bills (1) → disbursements + allowances out (2) → piggy returns (3, dead last)
+  const rank = (s: PlanStep) => (s.kind === "transfer-in" ? 0 : s.kind === "bill" ? 1 : s.kind === "piggy" ? 3 : 2);
   const eff = (s: PlanStep) => (s.day == null ? Infinity : s.day);
   steps.sort((a, b) => eff(a) - eff(b) || rank(a) - rank(b) || b.amount - a.amount);
 
@@ -119,6 +132,9 @@ export function buildMoneyPlan(input: {
     s.actorLeft = after;
   }
 
-  const done = steps.filter((s) => s.done).length;
-  return { steps, done, total: steps.length, hubShortfall: Math.round(hubShortfall) };
+  // Piggy returns are live projections (finalised at wind-down), so they don't count toward the
+  // "N/total done" progress — they're a heads-up of the last move, not a tickable settlement step.
+  const counted = steps.filter((s) => s.kind !== "piggy");
+  const done = counted.filter((s) => s.done).length;
+  return { steps, done, total: counted.length, hubShortfall: Math.round(hubShortfall) };
 }

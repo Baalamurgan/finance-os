@@ -37,7 +37,7 @@ export function InHandPersonGroup({
   selYear: number;
   selMonth: number;
 }) {
-  const { name, cats, unpaidBills, paidBills, earmarked, unpaidPeriodic, paidPeriodic, carried, carriedDue, miscSpent, net } = group;
+  const { name, cats, unpaidBills, paidBills, earmarked, sinkingFunds, sinkingHeld, unpaidPeriodic, paidPeriodic, carried, carriedDue, miscSpent, net } = group;
   // Per-card toggle: include or exclude this member's own misc/out-of-pocket in their total.
   // Default = include (the true position). Excluding shows "budget + bills + savings" only, so
   // someone can see where they'd stand without their discretionary spending counted.
@@ -50,7 +50,7 @@ export function InHandPersonGroup({
   const canPay = canToggle || selfPayer;
   const poolAmt = isTreasurer ? pool : 0;
   const piggyAmt = isPiggyHolder ? piggy : 0;
-  const total = shownNet + poolAmt + piggyAmt;
+  const total = shownNet + poolAmt + piggyAmt + sinkingHeld;
   const paidCount = paidBills.length + paidPeriodic.length;
   return (
     <div className="rounded-xl border border-slate-200 p-3">
@@ -142,6 +142,15 @@ export function InHandPersonGroup({
             <span className="shrink-0 tabular-nums text-teal-700">{formatINR(e.amount)}</span>
           </li>
         ))}
+        {/* Accrued sinking-fund holds this person is the saver of — held separately from the Piggy. */}
+        {sinkingFunds.map((f) => (
+          <li key={`sf${f.name}`} className="flex items-center justify-between gap-2 text-xs">
+            <span className="truncate text-indigo-600">
+              🏦 Sinking · {f.name} <span className="text-[10px] text-slate-400">fund held</span>
+            </span>
+            <span className="shrink-0 tabular-nums font-medium text-indigo-700">{formatINR(f.amount)}</span>
+          </li>
+        ))}
         {miscSpent > 0 && (
           <li className="flex items-center justify-between gap-2 text-xs">
             <span className={`flex min-w-0 items-center gap-1.5 ${inclMisc ? "text-amber-600" : "text-slate-400"}`}>
@@ -181,7 +190,7 @@ export function InHandPersonGroup({
         )}
         {isPiggyHolder && piggy !== 0 && (
           <li className="flex items-center justify-between gap-2 text-xs">
-            <span className="truncate text-pink-600">🐷 Piggy bank held</span>
+            <span className="truncate text-pink-600">🐷 General Piggy held <span className="text-[10px] text-slate-400">excl. sinking</span></span>
             <span className="shrink-0 tabular-nums font-medium text-pink-700">{formatINR(piggy)}</span>
           </li>
         )}

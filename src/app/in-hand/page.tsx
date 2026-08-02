@@ -97,7 +97,7 @@ export default async function InHandPage({
                 sharedNet={inHand.shared.net}
                 monthBalance={inHand.monthBalance}
                 isPiggyHolder={g.memberId === inHand.piggyHolderId}
-                piggy={inHand.piggyTotal}
+                piggy={inHand.generalPiggy}
                 canToggle={canToggle}
                 periodId={periodId}
                 generalPiggy={inHand.generalPiggy}

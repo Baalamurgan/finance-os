@@ -485,7 +485,7 @@ export async function getMoneyPlan(householdId: number, periodId: number, inhand
   const [settlement, incomes, period] = await Promise.all([
     getSettlement(householdId, periodId, inhand.treasurerId),
     prisma.incomeEntry.findMany({ where: { periodId }, select: { ownerId: true, dueDay: true } }),
-    prisma.period.findUnique({ where: { id: periodId }, select: { year: true, month: true } }),
+    prisma.period.findUnique({ where: { id: periodId }, select: { year: true, month: true, status: true } }),
   ]);
 
   const incomeDayByMember: Record<number, number> = {};
@@ -520,8 +520,22 @@ export async function getMoneyPlan(householdId: number, periodId: number, inhand
 
   const allowances = inhand.allowances.map((a) => ({ key: `allow-${a.id}`, recipientId: a.recipientId, recipientName: a.recipientName, amount: a.amount, done: a.done, billId: a.id }));
 
+  // Piggy returns (open month only): each budget holder who isn't the Piggy holder hands their GROSS
+  // positive budget leftovers (Σ max(0, remaining) — over-budget categories don't reduce it, matching
+  // how the Piggy is booked) to the Piggy holder, so the general Piggy ends up under one person.
+  const piggyHolderId = inhand.piggyHolderId;
+  const piggyHolderName = inhand.byPerson.find((g) => g.memberId === piggyHolderId)?.name ?? "Piggy holder";
+  const piggyReturns =
+    period?.status === "open" && piggyHolderId != null
+      ? inhand.byPerson
+          .filter((g) => g.memberId != null && g.memberId !== piggyHolderId)
+          .map((g) => ({ fromId: g.memberId as number, fromName: g.name, amount: Math.round(g.cats.reduce((s, c) => s + Math.max(0, c.remaining), 0) * 100) / 100 }))
+          .filter((x) => x.amount > 0.005)
+          .map((x) => ({ key: `piggy-${x.fromId}`, fromId: x.fromId, fromName: x.fromName, toId: piggyHolderId, toName: piggyHolderName, amount: x.amount }))
+      : [];
+
   const { buildMoneyPlan } = await import("./moneyPlan");
-  return { ...buildMoneyPlan({ treasurerId: inhand.treasurerId, treasurerName: settlement.treasurer?.name, transfers, bills, allowances, incomeDayByMember }), treasurerId: inhand.treasurerId, periodId };
+  return { ...buildMoneyPlan({ treasurerId: inhand.treasurerId, treasurerName: settlement.treasurer?.name, transfers, bills, allowances, piggyReturns, incomeDayByMember }), treasurerId: inhand.treasurerId, periodId };
 }
 
 export type SettlementHistory = Awaited<ReturnType<typeof getSettlementHistory>>;
@@ -644,7 +658,7 @@ export type InHand = Awaited<ReturnType<typeof getInHand>>;
  * default to the head and always appear even with no personal in-hand.
  */
 export async function getInHand(householdId: number, periodId: number) {
-  const [household, period, categories, budgets, spends, billLines, miscLines, fundLines, fundCats, sinkBal, billPayments, members, piggy, incomeAgg, expenseAgg, carriedRaw, closedPeriods, allPays, allowanceLines] = await Promise.all([
+  const [household, period, categories, budgets, spends, billLines, miscLines, fundLines, fundCats, sinkBal, billPayments, members, piggy, incomeAgg, expenseAgg, carriedRaw, closedPeriods, allPays, allowanceLines, sinkCats] = await Promise.all([
     prisma.household.findUnique({ where: { id: householdId }, select: { treasurerMemberId: true, piggyHolderMemberId: true } }),
     prisma.period.findUnique({ where: { id: periodId }, select: { treasurerMemberId: true, status: true, month: true, year: true } }),
     prisma.category.findMany({ where: { householdId, tracked: true, onHold: false } }),
@@ -689,6 +703,9 @@ export async function getInHand(householdId: number, periodId: number) {
     // Not a bill they owe — surfaced separately as a "Send ₹X to <member>" disbursement in the
     // Money Plan, and taken OUT of the settlement blob so it isn't double-counted.
     prisma.expenseEntry.findMany({ where: { periodId, note: null, category: { isAllowance: true } }, select: { id: true, label: true, amount: true, memberId: true, paid: true } }),
+    // Sinking-fund categories + their SAVER (responsible member), so each accrued fund hold is shown
+    // under the person who actually holds it — separate from the general Piggy holder.
+    prisma.category.findMany({ where: { householdId, OR: [{ sinking: true }, { fundingStyle: { not: null } }] }, select: { id: true, name: true, responsibleMemberId: true } }),
   ]);
   const isDraft = period?.status === "draft";
   // In a draft, Misc lines are a lump estimate (below), so keep them OUT of the bill list.
@@ -874,12 +891,21 @@ export async function getInHand(householdId: number, periodId: number) {
       .filter((b) => b.payer === key)
       .map((b) => ({ categoryId: b.categoryId, name: b.name, bill: b.bill, fund: b.fund, fromMonth: b.fromMonth, periodId: b.periodId }));
 
+    // Accrued sinking-fund holds this person is the SAVER of — held separately from the general
+    // Piggy (which sits with the Piggy holder). Shown as its own "held for the bill" line.
+    const sinkingFunds = sinkCats
+      .filter((c) => (c.responsibleMemberId ?? piggyHolderId) === key)
+      .map((c) => ({ name: c.name, amount: Math.round((sinkBal[c.id] ?? 0) * 100) / 100 }))
+      .filter((f) => Math.abs(f.amount) > 0.005);
+    const sinkingHeld = sinkingFunds.reduce((s, f) => s + f.amount, 0);
+
     const budgetRemaining = cats.reduce((s, r) => s + r.remaining, 0);
     const unpaidTotal = unpaidBills.reduce((s, b) => s + b.amount, 0);
     const earmarkedTotal = earmarked.reduce((s, e) => s + e.amount, 0);
     const miscSpent = miscByMember.get(key) ?? 0;
     return {
       memberId: key, name, cats, unpaidBills, paidBills, earmarked, unpaidPeriodic, paidPeriodic, carried, carriedDue,
+      sinkingFunds, sinkingHeld,
       budgetRemaining, unpaidTotal, earmarkedTotal, miscSpent,
       // carried bills are NOT in `net` — they were already settled in their own month.
       net: budgetRemaining + unpaidTotal + earmarkedTotal - miscSpent,
@@ -894,7 +920,7 @@ export async function getInHand(householdId: number, periodId: number) {
   // pool/piggy row always shows, even with no personal in-hand).
   const byPerson = members
     .map((m) => build(m.id, m.name))
-    .filter((g) => g.cats.length > 0 || g.miscSpent > 0 || g.unpaidBills.length > 0 || g.paidBills.length > 0 || g.earmarked.length > 0 || g.unpaidPeriodic.length > 0 || g.paidPeriodic.length > 0 || g.carried.length > 0 || g.carriedDue.length > 0 || g.memberId === treasurerId || g.memberId === piggyHolderId);
+    .filter((g) => g.cats.length > 0 || g.miscSpent > 0 || g.unpaidBills.length > 0 || g.paidBills.length > 0 || g.earmarked.length > 0 || g.sinkingFunds.length > 0 || g.unpaidPeriodic.length > 0 || g.paidPeriodic.length > 0 || g.carried.length > 0 || g.carriedDue.length > 0 || g.memberId === treasurerId || g.memberId === piggyHolderId);
   const shared = build(null, "Shared / pool");
   const piggyTotal = piggy.generalTotal + piggy.sinking.reduce((s, x) => s + x.hold, 0);
   const monthBalance = (incomeAgg._sum.amount ?? 0) - (expenseAgg._sum.amount ?? 0);

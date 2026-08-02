@@ -105,6 +105,24 @@ describe("buildMoneyPlan", () => {
     expect(plan.hubShortfall).toBe(0);
   });
 
+  it("piggy returns sink to dead last, don't touch the hub, and aren't counted in progress", () => {
+    const plan = buildMoneyPlan({
+      treasurerId: T,
+      transfers: [xfer({ fromId: 2, toId: T, amount: 100, settled: true })],
+      bills: [bill({ vendor: "Undated", amount: 10, day: null, payerId: 5 })],
+      piggyReturns: [{ key: "piggy-5", fromId: 5, fromName: "E", toId: 9, toName: "Baala", amount: 3171 }],
+      incomeDayByMember: { 2: 1 },
+    });
+    // piggy return is the very last step, below even the undated bill
+    expect(plan.steps[plan.steps.length - 1].kind).toBe("piggy");
+    const pg = plan.steps.find((s) => s.kind === "piggy")!;
+    expect(pg.hubAfter).toBeUndefined(); // never touches the hub
+    expect(pg.actorLeft).toBe(0); // it's E's last outflow
+    // progress counts real steps only (transfer-in + bill = 2), not the piggy projection
+    expect(plan.total).toBe(2);
+    expect(plan.done).toBe(1);
+  });
+
   it("flags a hub shortfall when an allowance is sent but nothing was collected", () => {
     const plan = buildMoneyPlan({
       treasurerId: T,
