@@ -103,6 +103,8 @@ export default async function InHandPage({
                 generalPiggy={inHand.generalPiggy}
                 currentMemberId={currentMemberId}
                 open={open}
+                selYear={c.selYear}
+                selMonth={c.selMonth}
               />
             ))}
           </div>

@@ -77,6 +77,11 @@ export default async function ExpensesPage({
   const cards = rawCards.map((card) => ({ ...card, spends: orderSpends(card.spends) }));
   const budgetedCards = cards.filter((card) => card.allocation > 0);
   const miscCards = cards.filter((card) => card.allocation === 0);
+  // When filtered to a member, the summary reflects only THAT member's spends ("everything they
+  // spent") — allocation/remaining don't apply to one person, so we show budgeted-spend + misc.
+  const sumSpends = (cs: typeof cards) => cs.reduce((s, c) => s + c.spends.reduce((a, x) => a + x.amount, 0), 0);
+  const filteredBudgetedSpent = filterMemberId != null ? sumSpends(budgetedCards) : null;
+  const filteredMisc = filterMemberId != null ? sumSpends(miscCards) : null;
   const open = c.selected.status === "open";
   // Head-only tidy-up: misc spends that look like a tracked category (open month only).
   const miscReview = c.isHead && open ? await getMiscReview(c.household.id, c.selected.id) : [];
@@ -98,21 +103,34 @@ export default async function ExpensesPage({
           </div>
           <div className="flex items-center gap-3">
             <ExpensesSortControl sort={sort} />
-            <div className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-right">
-              <div className="text-[11px] font-medium uppercase tracking-wide text-slate-400">
-                Spent / Allocated
+            {filterMemberId != null ? (
+              <div className="rounded-xl border border-indigo-200 bg-white px-4 py-2 text-right">
+                <div className="text-[11px] font-medium uppercase tracking-wide text-indigo-400">
+                  {filterMemberName}&apos;s spend
+                </div>
+                <div className="text-lg font-bold text-slate-800">
+                  {formatINR(filteredBudgetedSpent ?? 0)}{" "}
+                  <span className="text-sm font-normal text-slate-400">budgeted</span>
+                </div>
+                <div className="text-xs text-amber-600">+ {formatINR(filteredMisc ?? 0)} misc</div>
               </div>
-              <div className="text-lg font-bold text-slate-800">
-                {formatINR(totalSpent)}{" "}
-                <span className="text-sm font-normal text-slate-400">
-                  / {formatINR(totalAllocation)}
-                </span>
+            ) : (
+              <div className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-right">
+                <div className="text-[11px] font-medium uppercase tracking-wide text-slate-400">
+                  Spent / Allocated
+                </div>
+                <div className="text-lg font-bold text-slate-800">
+                  {formatINR(totalSpent)}{" "}
+                  <span className="text-sm font-normal text-slate-400">
+                    / {formatINR(totalAllocation)}
+                  </span>
+                </div>
+                <div className={`text-xs ${totalRemaining >= 0 ? "text-green-600" : "text-red-600"}`}>
+                  {totalRemaining >= 0 ? "Remaining " : "Over by "}
+                  {formatINR(Math.abs(totalRemaining))}
+                </div>
               </div>
-              <div className={`text-xs ${totalRemaining >= 0 ? "text-green-600" : "text-red-600"}`}>
-                {totalRemaining >= 0 ? "Remaining " : "Over by "}
-                {formatINR(Math.abs(totalRemaining))}
-              </div>
-            </div>
+            )}
           </div>
         </div>
 
@@ -154,8 +172,10 @@ export default async function ExpensesPage({
                 Miscellaneous · unplanned
               </h2>
               <span className="text-sm text-slate-500">
-                spent <b className="tabular-nums text-slate-700">{formatINR(miscSpent)}</b>{" "}
-                <span className="text-xs text-slate-400">(not in allocation)</span>
+                spent <b className="tabular-nums text-slate-700">{formatINR(filteredMisc ?? miscSpent)}</b>{" "}
+                <span className="text-xs text-slate-400">
+                  {filterMemberName ? `(${filterMemberName}, not in allocation)` : "(not in allocation)"}
+                </span>
               </span>
             </div>
             <MiscReview items={miscReview} />

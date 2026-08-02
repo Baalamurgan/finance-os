@@ -19,6 +19,8 @@ export function InHandPersonGroup({
   generalPiggy,
   currentMemberId,
   open,
+  selYear,
+  selMonth,
 }: {
   group: InHand["byPerson"][number];
   isTreasurer: boolean;
@@ -32,6 +34,8 @@ export function InHandPersonGroup({
   generalPiggy: number;
   currentMemberId: number | null;
   open: boolean;
+  selYear: number;
+  selMonth: number;
 }) {
   const { name, cats, unpaidBills, paidBills, earmarked, unpaidPeriodic, paidPeriodic, carried, carriedDue, miscSpent, net } = group;
   // Per-card toggle: include or exclude this member's own misc/out-of-pocket in their total.
@@ -141,7 +145,17 @@ export function InHandPersonGroup({
         {miscSpent > 0 && (
           <li className="flex items-center justify-between gap-2 text-xs">
             <span className={`flex min-w-0 items-center gap-1.5 ${inclMisc ? "text-amber-600" : "text-slate-400"}`}>
-              <span className={`truncate ${inclMisc ? "" : "line-through"}`}>Miscellaneous &amp; out-of-pocket</span>
+              {group.memberId != null ? (
+                <a
+                  href={`/expenses?y=${selYear}&m=${selMonth}&member=${group.memberId}`}
+                  title={`See ${name}'s misc & out-of-pocket spends`}
+                  className={`truncate underline decoration-dotted underline-offset-2 hover:text-amber-700 ${inclMisc ? "" : "line-through"}`}
+                >
+                  Miscellaneous &amp; out-of-pocket
+                </a>
+              ) : (
+                <span className={`truncate ${inclMisc ? "" : "line-through"}`}>Miscellaneous &amp; out-of-pocket</span>
+              )}
               <button
                 type="button"
                 onClick={() => setInclMisc((v) => !v)}
