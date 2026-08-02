@@ -10,10 +10,13 @@ export type PlanBill = {
   key: string; payerId: number | null; payerName: string; vendor: string; amount: number; done: boolean;
   day: number | null; status: "overdue" | "soon" | "normal" | null; days?: number | null; billId?: number; categoryId?: number; fund?: boolean; fundAvail?: number;
 };
+// An allowance = personal money the treasurer SENDS a member (not a bill they owe). Disbursed after
+// collection, never dated/overdue; completion writes through to the Sheet line's paid flag (billId).
+export type PlanAllowance = { key: string; recipientId: number; recipientName: string; amount: number; done: boolean; billId: number };
 
 export type PlanStep = {
   id: string;
-  kind: "transfer-in" | "transfer-out" | "bill";
+  kind: "transfer-in" | "transfer-out" | "bill" | "allowance";
   day: number | null; // effective day-of-month for ordering/display (null = undated)
   amount: number;
   done: boolean;
@@ -32,11 +35,13 @@ export type MoneyPlan = { steps: PlanStep[]; done: number; total: number; hubSho
 
 export function buildMoneyPlan(input: {
   treasurerId: number | null;
+  treasurerName?: string;
   transfers: PlanTransfer[];
   bills: PlanBill[];
+  allowances?: PlanAllowance[];
   incomeDayByMember: Record<number, number>; // earliest arrival day per member
 }): MoneyPlan {
-  const { treasurerId, transfers, bills, incomeDayByMember } = input;
+  const { treasurerId, treasurerName, transfers, bills, allowances = [], incomeDayByMember } = input;
 
   const inbound = transfers.filter((t) => t.toId === treasurerId);
   // Disbursements happen only after everything has been collected AND the bills paid, so anchor
@@ -66,10 +71,20 @@ export function buildMoneyPlan(input: {
       payerId: b.payerId, payerName: b.payerName, vendor: b.vendor, billId: b.billId, categoryId: b.categoryId, fund: b.fund, fundAvail: b.fundAvail, status: b.status, days: b.days ?? null,
     });
   }
+  // Allowances: the treasurer disburses these AFTER collection (like a payout), never dated/overdue.
+  // Rendered as "Send → <member>"; ticking one writes through to the Sheet line's paid flag (billId).
+  for (const a of allowances) {
+    steps.push({
+      id: a.key, kind: "allowance", day: lastDay, amount: a.amount, done: a.done,
+      fromId: treasurerId ?? undefined, toId: a.recipientId, fromName: treasurerName, toName: a.recipientName,
+      billId: a.billId, status: null, days: null,
+    });
+  }
 
   // Display order: by due date (soonest first), then income-in → bills → disbursements-out as the
   // within-day tie-break (money comes in, bills get paid, remainder flows back). Anything with NO
   // due date is the lowest priority — it sinks to the very bottom.
+  // income in (0) → bills (1) → disbursements + allowances out (2), all after collection
   const rank = (s: PlanStep) => (s.kind === "transfer-in" ? 0 : s.kind === "bill" ? 1 : 2);
   const eff = (s: PlanStep) => (s.day == null ? Infinity : s.day);
   steps.sort((a, b) => eff(a) - eff(b) || rank(a) - rank(b) || b.amount - a.amount);
@@ -82,7 +97,7 @@ export function buildMoneyPlan(input: {
   let hubShortfall = 0;
   for (const s of steps) {
     if (s.kind === "transfer-in") { hub += s.amount; s.hubAfter = hub; }
-    else if (s.kind === "transfer-out") { hub -= s.amount; s.hubAfter = hub; }
+    else if (s.kind === "transfer-out" || s.kind === "allowance") { hub -= s.amount; s.hubAfter = hub; }
     else if (s.kind === "bill" && s.payerId === treasurerId) { hub -= s.amount; s.hubAfter = hub; }
     if (s.hubAfter != null && s.hubAfter < -0.005) { s.short = Math.round(-s.hubAfter); hubShortfall = Math.max(hubShortfall, -s.hubAfter); }
   }

@@ -1404,7 +1404,7 @@ export async function saveAllRecurring(
   }
   if (!Array.isArray(rows) || rows.length === 0) return { ok: true, n };
 
-  const parsed: { id: number; name: string; section: string; responsibleMemberId: number | null; payerMemberId: number | null; fields: BillingFields }[] = [];
+  const parsed: { id: number; name: string; section: string; responsibleMemberId: number | null; payerMemberId: number | null; isAllowance: boolean; fields: BillingFields }[] = [];
   for (const r of rows) {
     const id = Number(r.id);
     if (!id) continue;
@@ -1420,6 +1420,7 @@ export async function saveAllRecurring(
       section,
       responsibleMemberId: r.responsibleMemberId ? Number(r.responsibleMemberId) : null,
       payerMemberId: r.payerMemberId ? Number(r.payerMemberId) : null,
+      isAllowance: r.isAllowance === "on",
       fields: billing.fields,
     });
   }
@@ -1429,7 +1430,7 @@ export async function saveAllRecurring(
         prisma.category.update({
           where: { id: u.id },
           // saving is an explicit review → clears the migrated "review due month" flag
-          data: { name: u.name, section: u.section, responsibleMemberId: u.responsibleMemberId, payerMemberId: u.payerMemberId, needsReview: false, ...u.fields },
+          data: { name: u.name, section: u.section, responsibleMemberId: u.responsibleMemberId, payerMemberId: u.payerMemberId, isAllowance: u.isAllowance, needsReview: false, ...u.fields },
         }),
       ),
     );

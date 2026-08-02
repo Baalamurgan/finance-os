@@ -71,4 +71,35 @@ describe("buildMoneyPlan", () => {
     });
     expect(plan.hubShortfall).toBe(0);
   });
+
+  it("disburses an allowance after collection — never dated, subtracts from the hub", () => {
+    const plan = buildMoneyPlan({
+      treasurerId: T,
+      treasurerName: "A",
+      transfers: [xfer({ fromId: 2, from: "B", toId: T, amount: 100, settled: true })], // hub +100 on day 1
+      bills: [],
+      allowances: [{ key: "allow-1", recipientId: 3, recipientName: "Harish", amount: 40, done: false, billId: 99 }],
+      incomeDayByMember: { 2: 1 },
+    });
+    // income-in first, allowance disbursed after collection (last)
+    expect(plan.steps.map((s) => s.kind)).toEqual(["transfer-in", "allowance"]);
+    const a = plan.steps.find((s) => s.kind === "allowance")!;
+    expect(a.status).toBeNull(); // never overdue
+    expect(a.toId).toBe(3);
+    expect(a.billId).toBe(99);
+    expect(a.hubAfter).toBe(60); // 100 collected − 40 sent
+    expect(plan.hubShortfall).toBe(0);
+  });
+
+  it("flags a hub shortfall when an allowance is sent but nothing was collected", () => {
+    const plan = buildMoneyPlan({
+      treasurerId: T,
+      treasurerName: "A",
+      transfers: [],
+      bills: [],
+      allowances: [{ key: "allow-1", recipientId: 3, recipientName: "Harish", amount: 40, done: false, billId: 99 }],
+      incomeDayByMember: {},
+    });
+    expect(plan.hubShortfall).toBe(40);
+  });
 });

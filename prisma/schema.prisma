@@ -520,6 +520,11 @@ model Category {
   remind       Boolean        @default(true) // per-bill: show the due popup (until paid)
   reminderDays Int?          // per-bill: how many days before the due date to start reminding (null → default)
   fixed        Boolean        @default(false) // fixed monthly bill (e.g. subscription): a recurring Sheet expense tagged to the payer, not a budget
+  // Allowance: a fixed monthly amount the family GIVES a member to spend at their discretion
+  // (e.g. Harish/Lakshmi's personal money). Still a Sheet expense (leaves the pool), but it is
+  // NOT a bill the member owes — it never shows a due date / overdue, and the Money Plan renders
+  // it as a "Send ₹X to <member>" disbursement from the treasurer, not a bill or settlement blob.
+  isAllowance  Boolean        @default(false)
   // "Full bill on due month" (the alternative to a sinking fund for a periodic bill):
   // the whole billAmount lands as an expense ONLY in its due month(s) — no monthly share,
   // no fund. billEveryMonths != null marks the category as this mode.

@@ -467,7 +467,9 @@ export async function getSettlement(
   // line), which zeroed out everyone's tagged expenses. They're tagged to the
   // spender for DISPLAY, but the credit already comes from last month's spend, so
   // counting the carried expense too would double-credit.
-  const expenses = allExpenses.filter((e) => e.note !== "__carry__");
+  // Allowances (personal money the family sends a member) are shown as their own Money-Plan
+  // disbursement, so keep them OUT of the settlement net or the member would be credited twice.
+  const expenses = allExpenses.filter((e) => e.note !== "__carry__" && !e.category.isAllowance);
   const prevLabel = prevPeriod?.label ?? null;
 
   // pure math (unit-tested in settlement-core.test.ts)
@@ -516,8 +518,10 @@ export async function getMoneyPlan(householdId: number, periodId: number, inhand
     return { fromId: t.fromId, from: t.from, toId: t.toId, to: t.to, amount: t.amount, settled: t.settled, recordId: t.recordId, status: st?.status ?? null, days: st?.days ?? null };
   });
 
+  const allowances = inhand.allowances.map((a) => ({ key: `allow-${a.id}`, recipientId: a.recipientId, recipientName: a.recipientName, amount: a.amount, done: a.done, billId: a.id }));
+
   const { buildMoneyPlan } = await import("./moneyPlan");
-  return { ...buildMoneyPlan({ treasurerId: inhand.treasurerId, transfers, bills, incomeDayByMember }), treasurerId: inhand.treasurerId, periodId };
+  return { ...buildMoneyPlan({ treasurerId: inhand.treasurerId, treasurerName: settlement.treasurer?.name, transfers, bills, allowances, incomeDayByMember }), treasurerId: inhand.treasurerId, periodId };
 }
 
 export type SettlementHistory = Awaited<ReturnType<typeof getSettlementHistory>>;
@@ -640,7 +644,7 @@ export type InHand = Awaited<ReturnType<typeof getInHand>>;
  * default to the head and always appear even with no personal in-hand.
  */
 export async function getInHand(householdId: number, periodId: number) {
-  const [household, period, categories, budgets, spends, billLines, miscLines, fundLines, fundCats, sinkBal, billPayments, members, piggy, incomeAgg, expenseAgg, carriedRaw, closedPeriods, allPays] = await Promise.all([
+  const [household, period, categories, budgets, spends, billLines, miscLines, fundLines, fundCats, sinkBal, billPayments, members, piggy, incomeAgg, expenseAgg, carriedRaw, closedPeriods, allPays, allowanceLines] = await Promise.all([
     prisma.household.findUnique({ where: { id: householdId }, select: { treasurerMemberId: true, piggyHolderMemberId: true } }),
     prisma.period.findUnique({ where: { id: periodId }, select: { treasurerMemberId: true, status: true, month: true, year: true } }),
     prisma.category.findMany({ where: { householdId, tracked: true, onHold: false } }),
@@ -650,7 +654,7 @@ export async function getInHand(householdId: number, periodId: number) {
     // interest, fixed bills, plain "pay someone" (cook, milk…), AND hand-added Misc lines
     // (tracked:false). Each shows with a "paid" toggle. Excludes tracked-budget lines
     // (handled via budgets), goal-based bill funds (fundingStyle) and carried misc (note set).
-    prisma.expenseEntry.findMany({ where: { periodId, note: null, category: { tracked: false, fundingStyle: null } }, include: { category: { select: { section: true } } } }),
+    prisma.expenseEntry.findMany({ where: { periodId, note: null, category: { tracked: false, fundingStyle: null, isAllowance: false } }, include: { category: { select: { section: true } } } }),
     // Preview/draft ONLY: own-period misc Sheet lines (Misc section, no carry marker),
     // subtracted as an estimated lump — a draft can't log Spends or mark bills paid, so misc
     // is just a planned reduction. In an OPEN/closed month these same lines instead ride in
@@ -681,6 +685,10 @@ export async function getInHand(householdId: number, periodId: number) {
     // in a closed month and never paid (carried, still owed to the vendor).
     prisma.period.findMany({ where: { householdId, status: "closed" }, select: { id: true, year: true, month: true, label: true } }),
     prisma.billPayment.findMany({ where: { householdId }, select: { categoryId: true, periodId: true } }),
+    // Allowances: fixed monthly personal money the family SENDS a member (category.isAllowance).
+    // Not a bill they owe — surfaced separately as a "Send ₹X to <member>" disbursement in the
+    // Money Plan, and taken OUT of the settlement blob so it isn't double-counted.
+    prisma.expenseEntry.findMany({ where: { periodId, note: null, category: { isAllowance: true } }, select: { id: true, label: true, amount: true, memberId: true, paid: true } }),
   ]);
   const isDraft = period?.status === "draft";
   // In a draft, Misc lines are a lump estimate (below), so keep them OUT of the bill list.
@@ -893,7 +901,13 @@ export async function getInHand(householdId: number, periodId: number) {
   // the treasurer additionally holds the family pool: shared in-hand + the month's balance
   const treasurerPool = shared.net + monthBalance;
 
-  return { byPerson, shared, piggyTotal, generalPiggy: piggy.generalTotal, treasurerId, piggyHolderId, monthBalance, treasurerPool };
+  // Allowances to send this month (treasurer → member). `done` = the Sheet line's paid flag.
+  const nameOf = (id: number | null) => members.find((m) => m.id === id)?.name ?? "member";
+  const allowances = allowanceLines
+    .filter((e) => e.memberId != null)
+    .map((e) => ({ id: e.id, recipientId: e.memberId as number, recipientName: nameOf(e.memberId), amount: e.amount, done: e.paid }));
+
+  return { byPerson, shared, allowances, piggyTotal, generalPiggy: piggy.generalTotal, treasurerId, piggyHolderId, monthBalance, treasurerPool };
 }
 
 /**

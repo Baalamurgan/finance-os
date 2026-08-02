@@ -27,6 +27,7 @@ type Row = {
   saveEveryMonths: number | null;
   onUnpaid: string;
   needsReview: boolean;
+  isAllowance: boolean;
 };
 
 type MemberLite = { id: number; name: string };
@@ -55,7 +56,7 @@ const round2 = (x: number) => Math.round(x * 100) / 100;
 type MonthlyKind = "track" | "fixed" | "bill";
 type Draft = {
   name: string; section: string; cycle: string; amount: string; monthlyKind: MonthlyKind;
-  fundingStyle: string; saveEvery: string; billMonth: string; billDay: string; resp: string; payer: string; onUnpaid: string;
+  fundingStyle: string; saveEvery: string; billMonth: string; billDay: string; resp: string; payer: string; onUnpaid: string; allowance: boolean;
 };
 const toDraft = (r: Row): Draft => ({
   name: r.name,
@@ -70,6 +71,7 @@ const toDraft = (r: Row): Draft => ({
   resp: r.responsibleMemberId != null ? String(r.responsibleMemberId) : "",
   payer: r.payerMemberId != null ? String(r.payerMemberId) : "",
   onUnpaid: r.onUnpaid === "skip" ? "skip" : "carry",
+  allowance: r.isAllowance,
 });
 const isPeriodic = (d: Draft) => Number(d.cycle) > 1;
 const isMonthlyBill = (d: Draft) => !isPeriodic(d) && d.monthlyKind === "bill";
@@ -94,6 +96,8 @@ const draftPayload = (id: number, d: Draft) => {
     saveEveryMonths: periodic ? (d.fundingStyle === "auto" ? d.saveEvery : "") : monthlyBill ? "1" : "",
     // overdue behaviour only applies to a "save the share" (auto) bill-with-a-fund
     onUnpaid: bill && (periodic ? d.fundingStyle === "auto" : true) ? d.onUnpaid : "carry",
+    // allowance = flat monthly personal money sent to a member (only a flat fixed monthly expense)
+    isAllowance: !periodic && d.monthlyKind === "fixed" && d.allowance ? "on" : "",
   };
 };
 
@@ -287,6 +291,12 @@ function SetupRow({ r, draft, patch, members, readOnly }: { r: Row; draft: Draft
               <option value="fixed">Flat fixed bill</option>
               <option value="bill">Save the share · pay in In-Hand</option>
             </select>
+            {draft.monthlyKind === "fixed" && (
+              <label className="flex items-center gap-1.5 text-[11px] text-violet-600" title="Personal money the family SENDS this member — shows in the Money plan as 'Send ₹X to <member>', never a bill/overdue. Tag the recipient on the matching line under 'Recurring items'.">
+                <input type="checkbox" checked={draft.allowance} onChange={(e) => patch({ allowance: e.target.checked })} disabled={readOnly} className="h-3.5 w-3.5 accent-violet-600" />
+                Allowance (send to member)
+              </label>
+            )}
             {monthlyBill && (
               <>
                 <div className="flex flex-wrap items-center gap-1">

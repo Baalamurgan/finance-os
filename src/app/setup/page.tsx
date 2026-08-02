@@ -71,6 +71,7 @@ export default async function SetupPage({
       responsibleMemberId: cat.responsibleMemberId ?? null, payerMemberId: cat.payerMemberId ?? null,
       billEveryMonths: cat.billEveryMonths, billMonth: cat.billMonth, billDay: cat.billDay, billAmount: cat.billAmount,
       fundingStyle: cat.fundingStyle, saveEveryMonths: cat.saveEveryMonths, onUnpaid: cat.onUnpaid, needsReview: cat.needsReview,
+      isAllowance: cat.isAllowance,
     }));
 
   return (

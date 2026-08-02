@@ -108,10 +108,12 @@ export function MoneyPlan({
       ) : (
         <ol className="space-y-1.5">
           {shown.map(({ s, n }) => {
-            const isTransfer = s.kind !== "bill";
+            const isAllowance = s.kind === "allowance";
+            const isTransfer = s.kind !== "bill" && !isAllowance;
             const canActTransfer = open && (isHead || currentMemberId === s.fromId || currentMemberId === s.toId);
             const canActBill = open && (canEdit || currentMemberId === s.payerId);
-            const title = isTransfer ? `${s.fromName} → ${s.toName}` : `${s.payerName} → ${s.vendor}`;
+            const canActAllowance = open && (canEdit || currentMemberId === s.fromId || currentMemberId === s.toId);
+            const title = isAllowance ? `Send → ${s.toName}` : isTransfer ? `${s.fromName} → ${s.toName}` : `${s.payerName} → ${s.vendor}`;
 
             return (
               <li key={s.id} className={`flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-xs ${s.done ? "bg-emerald-50/50" : s.status === "overdue" ? "bg-red-50" : s.status === "soon" ? "bg-amber-50" : "bg-slate-50"}`}>
@@ -122,6 +124,7 @@ export function MoneyPlan({
                 <div className="min-w-0 flex-1">
                   <div className={`flex flex-wrap items-center gap-1.5 ${s.done ? "text-slate-400 line-through" : "text-slate-800"}`}>
                     <span className="truncate font-medium">{title}</span>
+                    {isAllowance && <span className="shrink-0 rounded-full bg-violet-50 px-1.5 py-0.5 text-[9px] font-medium text-violet-500">allowance</span>}
                     <DayTag kind={s.kind} day={s.day} status={s.status ?? null} days={s.days ?? null} />
                     {s.feedsBills && !s.done && <span className="shrink-0 rounded-full bg-indigo-50 px-1.5 py-0.5 text-[9px] font-medium text-indigo-500">funds bills ↓</span>}
                   </div>
@@ -139,7 +142,11 @@ export function MoneyPlan({
 
                 {/* action */}
                 <span className="flex w-16 shrink-0 justify-end">
-                  {isTransfer ? (
+                  {isAllowance ? (
+                    s.billId != null && canActAllowance ? (
+                      <form action={toggleBillPaid}><input type="hidden" name="id" value={s.billId} /><MiniBtn primary={!s.done}>{s.done ? "undo" : "✓ sent"}</MiniBtn></form>
+                    ) : null
+                  ) : isTransfer ? (
                     s.done ? (
                       canActTransfer && s.recordId != null ? (
                         <form action={unsettle}><input type="hidden" name="id" value={s.recordId} /><MiniBtn>undo</MiniBtn></form>
@@ -190,7 +197,7 @@ function MiniBtn({ children, primary }: { children: React.ReactNode; primary?: b
 }
 
 function DayTag({ kind, day, status, days }: { kind: string; day: number | null; status: "overdue" | "soon" | "normal" | null; days: number | null }) {
-  if (kind === "transfer-out") return <span className="shrink-0 rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-400">after collection</span>;
+  if (kind === "transfer-out" || kind === "allowance") return <span className="shrink-0 rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-400">after collection</span>;
   // No due date set = lowest priority (shown last). Make that explicit rather than blank.
   if (day == null) return <span className="shrink-0 rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-400">no date</span>;
   const ord = `${day}${["th", "st", "nd", "rd"][((day % 100) - 20) % 10] ?? ["th", "st", "nd", "rd"][day % 100] ?? "th"}`;
