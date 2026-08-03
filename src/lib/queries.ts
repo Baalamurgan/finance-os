@@ -538,7 +538,11 @@ export async function getMoneyPlan(householdId: number, periodId: number, inhand
   const transfers = settlement.transfers.map((t) => {
     // inbound (to the treasurer): urgency from the payer's income arrival day
     const st = t.toId === inhand.treasurerId ? dayStatus(incomeDayByMember[t.fromId]) : null;
-    return { fromId: t.fromId, from: t.from, toId: t.toId, to: t.to, amount: t.amount, settled: t.settled, recordId: t.recordId, status: st?.status ?? null, days: st?.days ?? null };
+    // A settled transfer shows what was ACTUALLY paid (the frozen record), not the live-recomputed net —
+    // so a later expense can't redraw a payment you already made at a new amount. It's also the real cash
+    // the hub holds, so the running-balance walk stays honest.
+    const amount = t.settled && t.paidAmount != null ? t.paidAmount : t.amount;
+    return { fromId: t.fromId, from: t.from, toId: t.toId, to: t.to, amount, settled: t.settled, recordId: t.recordId, status: st?.status ?? null, days: st?.days ?? null };
   });
 
   const allowances = inhand.allowances.map((a) => ({ key: `allow-${a.id}`, recipientId: a.recipientId, recipientName: a.recipientName, amount: a.amount, done: a.done, billId: a.id }));

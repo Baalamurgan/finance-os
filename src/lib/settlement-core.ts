@@ -86,6 +86,9 @@ export function computeSettlement(opts: {
             settled: !!rec,
             recordId: rec?.id ?? null,
             settledAt: rec?.settledAt ?? null,
+            // What was ACTUALLY handed over (frozen once paid) — the plan shows this on a settled step,
+            // not the live-recomputed base, so a payment you already made never redraws at a new number.
+            paidAmount: rec?.amount ?? null,
             amountChanged: rec ? Math.abs(rec.amount - base.amount) >= 0.005 : false,
           };
         })
