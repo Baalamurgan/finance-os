@@ -305,6 +305,19 @@ describe("buildMoneyPlan", () => {
     expect(plan.hubShortfall).toBe(0);
   });
 
+  it("snapshots each member's cash BEFORE a step, for the before→after display", () => {
+    const plan = buildMoneyPlan({
+      treasurerId: T,
+      transfers: [],
+      bills: [bill({ payerId: 5, payerName: "E", vendor: "Rent", amount: 40, day: 2 })],
+      incomeDayByMember: {},
+      incomeByMember: { 5: 100 },
+    });
+    const rent = plan.steps.find((s) => s.vendor === "Rent")!;
+    expect(rent.balancesBefore?.[5]).toBe(100); // E holds 100 before paying
+    expect(rent.balancesAfter?.[5]).toBe(60); // 100 − 40 after
+  });
+
   it("flags a hub shortfall when an allowance is sent but nothing was collected", () => {
     const plan = buildMoneyPlan({
       treasurerId: T,

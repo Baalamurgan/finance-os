@@ -37,6 +37,7 @@ export type PlanStep = {
   short?: number; // hub is short this much when this step runs (funds not in yet)
   hubAfter?: number; // treasurer's running settlement balance right after this step (hub steps only)
   actorLeft?: number; // for a member's own step: how much they still have to pay out after this
+  balancesBefore?: Record<number, number>; // every member's cash right BEFORE this step runs
   balancesAfter?: Record<number, number>; // every member's running cash position right after this step
   senderShort?: number; // the step's sender can't cover it from cash-in-hand yet — short by this much
 };
@@ -277,6 +278,7 @@ export function buildMoneyPlan(input: {
   let hubShortfall = 0;
   for (const s of steps) {
     creditUpTo(eff(s)); // credit every income that has landed by the time this step runs
+    s.balancesBefore = Object.fromEntries(bal); // snapshot each person's cash BEFORE this step moves any
     const usesCash = !(s.kind === "bill" && s.fund);
     const senderId = senderOf(s);
     if (!s.done && usesCash && senderId != null) {
