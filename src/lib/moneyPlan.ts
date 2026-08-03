@@ -49,8 +49,9 @@ export function buildMoneyPlan(input: {
   piggyReturns?: PlanPiggyReturn[];
   incomeDayByMember: Record<number, number>; // earliest arrival day per member
   incomeByMember?: Record<number, number>; // total income each member owns this month (their own cash)
+  incomeArrivals?: { memberId: number; day: number | null; amount: number }[]; // each income event + the day it lands
 }): MoneyPlan {
-  const { treasurerId, treasurerName, transfers, bills, allowances = [], piggyReturns = [], incomeDayByMember, incomeByMember = {} } = input;
+  const { treasurerId, treasurerName, transfers, bills, allowances = [], piggyReturns = [], incomeDayByMember, incomeByMember = {}, incomeArrivals } = input;
 
   const inbound = transfers.filter((t) => t.toId === treasurerId);
   // Disbursements happen only after everything has been collected AND the bills paid, so anchor
@@ -127,23 +128,6 @@ export function buildMoneyPlan(input: {
   const eff = (s: PlanStep) => (s.day == null ? (s.kind === "transfer-in" ? 0 : Infinity) : s.day);
   steps.sort((a, b) => eff(a) - eff(b) || rank(a) - rank(b) || b.amount - a.amount);
 
-  // Hub (treasurer) running cash, walked in DISPLAY order = what the treasurer actually holds so far.
-  // Seeded with the treasurer's OWN income — he pays the pooled bills from his own pocket AND the
-  // collections, so starting at 0 would phantom-flag a shortfall when his salary in fact covers it.
-  // Inbound adds; the treasurer's own bills and the disbursements-out subtract; member-paid bills
-  // never touch the hub. If it dips below 0 at any step, he's genuinely short there — real money
-  // needed before it has arrived. (This now equals balancesAfter[treasurerId] — one source of truth.)
-  let hub = treasurerId != null ? incomeByMember[treasurerId] ?? 0 : 0;
-  let hubShortfall = 0;
-  for (const s of steps) {
-    if (s.kind === "transfer-in") { hub += s.amount; s.hubAfter = hub; }
-    else if (s.kind === "transfer-out" || s.kind === "allowance") { hub -= s.amount; s.hubAfter = hub; }
-    // A fund bill is paid from its own sinking fund (net-neutral to the hub), so it never draws the
-    // treasurer's collected cash — exclude it, else dating it early would flag a phantom shortfall.
-    else if (s.kind === "bill" && s.payerId === treasurerId && !s.fund) { hub -= s.amount; s.hubAfter = hub; }
-    if (s.hubAfter != null && s.hubAfter < -0.005) { s.short = Math.round(-s.hubAfter); hubShortfall = Math.max(hubShortfall, -s.hubAfter); }
-  }
-
   // Per-actor "still to pay" for the member chip: a pure running sum of that person's own outgoing
   // steps (their transfer to the hub + the bills they pay), decremented as the plan proceeds. Since
   // it's derived only from the plan's own steps it can't drift from anything. The treasurer is shown
@@ -159,25 +143,47 @@ export function buildMoneyPlan(input: {
     s.actorLeft = after;
   }
 
-  // Every member's running cash position after each step, seeded from their OWN income this month
-  // (members hold their salary and spend it on their own bills; only the net settles with the hub).
-  // Money flowing TO someone adds, money they pay out subtracts; fund bills are paid from their own
-  // fund (no member cash moves). For each UNPAID step, the SENDER on the left must have enough cash
-  // in hand to do it — if not, it's flagged short (paid steps are done, so never flagged). Snapshotted
-  // per step so the UI can show "who holds what, when" and where a payment can't be funded yet.
-  const bal = new Map<number, number>(Object.entries(incomeByMember).map(([k, v]) => [Number(k), v]));
+  // Running cash position for EVERY member (treasurer included), walked in display order and made
+  // ARRIVAL-AWARE: each member's own income is credited to their cash ON the day it actually lands
+  // (undated income is treated as available up front, consistent with collecting before paying). We
+  // don't model prior savings, so a member's liquidity IS this month's income — which is exactly what
+  // lets the plan catch the real trap: someone asked to pay (or disburse) BEFORE their money arrives.
+  // For each UNPAID step the SENDER must have the cash in hand; if not, it's flagged — senderShort for
+  // a member, and s.short + hubShortfall when the sender is the treasurer. Fund bills draw the sinking
+  // fund, not cash, so they neither need cash nor move any. The treasurer's cash IS balancesAfter[his
+  // id], so hubAfter is just his running balance — one source of truth, no separate hub accumulator.
+  const arrivals = (incomeArrivals ?? Object.entries(incomeByMember).map(([k, v]) => ({ memberId: Number(k), day: null as number | null, amount: v })))
+    .slice()
+    .sort((a, b) => (a.day == null ? -1 : b.day == null ? 1 : a.day - b.day)); // undated first (available up front)
+  const bal = new Map<number, number>();
+  let ai = 0;
+  const creditUpTo = (upto: number) => {
+    while (ai < arrivals.length && (arrivals[ai].day == null || arrivals[ai].day! <= upto)) {
+      const a = arrivals[ai++];
+      bal.set(a.memberId, Math.round(((bal.get(a.memberId) ?? 0) + a.amount) * 100) / 100);
+    }
+  };
   const shift = (id: number | null | undefined, delta: number) => {
     if (id == null) return;
     bal.set(id, Math.round(((bal.get(id) ?? 0) + delta) * 100) / 100);
   };
   const senderOf = (s: PlanStep): number | null => (s.kind === "bill" ? s.payerId ?? null : s.fromId ?? null);
+  const touchesHub = (s: PlanStep): boolean =>
+    treasurerId != null &&
+    ((s.kind === "bill" && !s.fund && s.payerId === treasurerId) ||
+      ((s.kind === "transfer-in" || s.kind === "transfer-out" || s.kind === "allowance") && (s.fromId === treasurerId || s.toId === treasurerId)));
+  let hubShortfall = 0;
   for (const s of steps) {
-    // fund bills are paid from the sinking fund, not the payer's cash — they don't need cash in hand
+    creditUpTo(eff(s)); // credit every income that has landed by the time this step runs
     const usesCash = !(s.kind === "bill" && s.fund);
     const senderId = senderOf(s);
     if (!s.done && usesCash && senderId != null) {
       const before = bal.get(senderId) ?? 0;
-      if (before < s.amount - 0.005) s.senderShort = Math.round((s.amount - before) * 100) / 100;
+      if (before < s.amount - 0.005) {
+        const short = Math.round((s.amount - before) * 100) / 100;
+        if (senderId === treasurerId) { s.short = short; hubShortfall = Math.max(hubShortfall, short); }
+        else s.senderShort = short;
+      }
     }
     if (s.kind === "transfer-in" || s.kind === "transfer-out" || s.kind === "allowance" || s.kind === "piggy") {
       shift(s.fromId, -s.amount);
@@ -186,6 +192,7 @@ export function buildMoneyPlan(input: {
       shift(s.payerId, -s.amount); // paid to an external vendor — leaves the family
     }
     s.balancesAfter = Object.fromEntries(bal);
+    if (touchesHub(s)) s.hubAfter = bal.get(treasurerId!) ?? 0;
   }
 
   // Piggy returns are live projections (finalised at wind-down), so they don't count toward the

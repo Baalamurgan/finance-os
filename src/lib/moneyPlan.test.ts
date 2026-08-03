@@ -208,6 +208,49 @@ describe("buildMoneyPlan", () => {
     expect(disb.day).toBe(10); // stays at lastDay, not pulled to day 1
   });
 
+  it("flags a payer who must pay a bill before their income has arrived (arrival-aware)", () => {
+    const plan = buildMoneyPlan({
+      treasurerId: T,
+      transfers: [],
+      bills: [bill({ payerId: 5, payerName: "E", vendor: "Rent", amount: 100, day: 2 })],
+      incomeDayByMember: {},
+      incomeArrivals: [{ memberId: 5, day: 10, amount: 500 }], // cash lands day 10, bill due day 2
+    });
+    const b = plan.steps.find((s) => s.vendor === "Rent")!;
+    expect(b.senderShort).toBe(100); // has to pay on day 2, but nothing in hand until day 10
+  });
+
+  it("does NOT flag a payer once their income has landed by the due day", () => {
+    const plan = buildMoneyPlan({
+      treasurerId: T,
+      transfers: [],
+      bills: [bill({ payerId: 5, payerName: "E", vendor: "Rent", amount: 100, day: 15 })],
+      incomeDayByMember: {},
+      incomeArrivals: [{ memberId: 5, day: 10, amount: 500 }], // cash lands day 10, bill due day 15
+    });
+    const b = plan.steps.find((s) => s.vendor === "Rent")!;
+    expect(b.senderShort).toBeUndefined();
+  });
+
+  it("catches a treasurer disbursing before his own income arrives (real August case)", () => {
+    // Treasurer must send 120 on day 1 (to fund a member), but his own income lands day 5 and only
+    // 20 has been collected by day 1 → he's genuinely short 100, not a phantom.
+    const plan = buildMoneyPlan({
+      treasurerId: T,
+      transfers: [
+        xfer({ fromId: 2, from: "B", toId: T, amount: 20 }), // collected day 1
+        xfer({ fromId: T, from: "A", toId: 3, to: "H", amount: 120 }), // disbursement to H
+      ],
+      bills: [bill({ payerId: 3, payerName: "H", vendor: "Loan", amount: 120, day: 1 })], // H needs it day 1
+      incomeDayByMember: { 2: 1 },
+      incomeArrivals: [
+        { memberId: 2, day: 1, amount: 20 },
+        { memberId: T, day: 5, amount: 200 }, // treasurer's own cash only lands day 5
+      ],
+    });
+    expect(plan.hubShortfall).toBe(100); // 120 needed on day 1 − 20 collected
+  });
+
   it("flags a hub shortfall when an allowance is sent but nothing was collected", () => {
     const plan = buildMoneyPlan({
       treasurerId: T,

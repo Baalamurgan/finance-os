@@ -543,8 +543,12 @@ export async function getMoneyPlan(householdId: number, periodId: number, inhand
           .map((x) => ({ key: `piggy-${x.fromId}`, fromId: x.fromId, fromName: x.fromName, toId: piggyHolderId, toName: piggyHolderName, amount: x.amount }))
       : [];
 
+  // Every income event with the day it actually lands — powers the arrival-aware liquidity walk
+  // (a member's cash is credited on the day their income arrives, not assumed present all month).
+  const incomeArrivals = incomes.filter((i) => i.ownerId != null).map((i) => ({ memberId: i.ownerId as number, day: i.dueDay, amount: i.amount }));
+
   const { buildMoneyPlan } = await import("./moneyPlan");
-  return { ...buildMoneyPlan({ treasurerId: inhand.treasurerId, treasurerName: settlement.treasurer?.name, transfers, bills, allowances, piggyReturns, incomeDayByMember, incomeByMember }), treasurerId: inhand.treasurerId, periodId };
+  return { ...buildMoneyPlan({ treasurerId: inhand.treasurerId, treasurerName: settlement.treasurer?.name, transfers, bills, allowances, piggyReturns, incomeDayByMember, incomeByMember, incomeArrivals }), treasurerId: inhand.treasurerId, periodId };
 }
 
 export type SettlementHistory = Awaited<ReturnType<typeof getSettlementHistory>>;
