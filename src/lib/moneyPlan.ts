@@ -26,7 +26,9 @@ export type PlanStep = {
   done: boolean;
   // transfer
   fromId?: number; toId?: number; fromName?: string; toName?: string; recordId?: number | null; feedsBills?: boolean;
-  fundsMember?: boolean; // a disbursement pulled early to fund the recipient's own bills below
+  fundsMember?: boolean; // a disbursement piece timed to fund the recipient's own bills below
+  reroute?: boolean; // a disbursement paid DIRECT by a debtor (not via the hub) because the hub couldn't fund it in time
+  infeasibleFrom?: number | null; // this piece can't be funded by its due day; earliest day it becomes fundable (null = never this month)
   // bill
   payerId?: number | null; payerName?: string; vendor?: string; billId?: number; categoryId?: number; fund?: boolean; fundAvail?: number;
   status?: "overdue" | "soon" | "normal" | null;
@@ -54,26 +56,32 @@ export function buildMoneyPlan(input: {
   const { treasurerId, treasurerName, transfers, bills, allowances = [], piggyReturns = [], incomeDayByMember, incomeByMember = {}, incomeArrivals } = input;
 
   const inbound = transfers.filter((t) => t.toId === treasurerId);
+  const outbound = transfers.filter((t) => t.toId !== treasurerId && t.fromId === treasurerId); // hub → creditor
   // Disbursements happen only after everything has been collected AND the bills paid, so anchor
-  // outbound transfers to the latest inbound-income day OR bill due-day, whichever is later.
-  // Undated bills contribute 0 here — a bill with no due date shouldn't push the payout later.
+  // undated/residual outbound transfers to the latest inbound-income day OR bill due-day, whichever
+  // is later. Undated bills contribute 0 here — a bill with no due date shouldn't push the payout later.
   const lastDay = Math.max(1, ...inbound.map((t) => incomeDayByMember[t.fromId] ?? 1), ...bills.map((b) => b.day ?? 0));
   const hasHubBills = bills.some((b) => b.payerId === treasurerId && !b.done);
+  // Each income event with the day it lands (undated → up front). Shared by the scheduler AND the walk.
+  const arrivalList = incomeArrivals ?? Object.entries(incomeByMember).map(([k, v]) => ({ memberId: Number(k), day: null as number | null, amount: v }));
+  // A tiny chronological accumulator: cashBy(day) = Σ of events landing on/before `day` (undated = day 0).
+  const cashBy = (events: { day: number | null; amount: number }[]) => {
+    const ev = events.map((e) => ({ day: e.day ?? 0, amount: e.amount }));
+    return (upto: number) => ev.reduce((s, e) => (e.day <= upto ? s + e.amount : s), 0);
+  };
 
   const steps: PlanStep[] = [];
-  for (const t of transfers) {
-    const isIn = t.toId === treasurerId;
+  // Inbound collections: a debtor pays their net to the hub when THEIR income lands.
+  for (const t of inbound) {
     steps.push({
-      id: `xfer-${t.fromId}-${t.toId}`,
-      kind: isIn ? "transfer-in" : "transfer-out",
-      // inbound arrives when the payer's income lands; outbound (disbursement) after collection
-      day: isIn ? incomeDayByMember[t.fromId] ?? null : lastDay,
-      amount: t.amount, done: t.settled,
-      fromId: t.fromId, toId: t.toId, fromName: t.from, toName: t.to, recordId: t.recordId,
-      status: isIn ? t.status ?? null : null,
-      days: isIn ? t.days ?? null : null,
-      feedsBills: isIn && hasHubBills, // collected first → funds the treasurer's bills below
+      id: `xfer-${t.fromId}-${t.toId}`, kind: "transfer-in", day: incomeDayByMember[t.fromId] ?? null,
+      amount: t.amount, done: t.settled, fromId: t.fromId, toId: t.toId, fromName: t.from, toName: t.to,
+      recordId: t.recordId, status: t.status ?? null, days: t.days ?? null, feedsBills: hasHubBills,
     });
+  }
+  // Already-settled disbursements happened — show them as a single done step, don't re-schedule them.
+  for (const t of outbound.filter((o) => o.settled)) {
+    steps.push({ id: `xfer-${t.fromId}-${t.toId}`, kind: "transfer-out", day: lastDay, amount: t.amount, done: true, fromId: t.fromId, toId: t.toId, fromName: t.from, toName: t.to, recordId: t.recordId });
   }
   for (const b of bills) {
     steps.push({
@@ -99,21 +107,113 @@ export function buildMoneyPlan(input: {
     });
   }
 
-  // Fund members before they pay: a disbursement (hub → member) that has bills/outflows below it is
-  // pulled up to land right before that member's EARLIEST outflow, so they have the cash in hand to
-  // do it — instead of sitting at the end with all the disbursements. (If the hub hasn't collected
-  // enough by then, the hub-short flag below still catches it.) Only a DATED CASH bill counts as an
-  // outflow that needs funding: a fund bill is paid from its sinking fund (no cash), and an undated
-  // bill has no deadline to beat — neither should drag a disbursement early.
-  const outflowDay = new Map<number, number>();
-  for (const s of steps) {
-    if (!(s.kind === "bill" && !s.fund) || s.payerId == null || s.payerId === treasurerId || s.day == null) continue;
-    outflowDay.set(s.payerId, Math.min(outflowDay.get(s.payerId) ?? Infinity, s.day));
+  // ── Disbursement scheduler ────────────────────────────────────────────────────────────────────
+  // A creditor's net (hub → them) can't be handed over as one lump on day 1 — they need it as their
+  // OWN bills fall due, and the hub can only pay from cash it has actually collected by then. So we
+  // SPLIT each unsettled disbursement into timed pieces matched to (a) when the creditor needs it and
+  // (b) when the hub can fund it. If the hub can't cover a piece by its due day, we REROUTE it —
+  // paid directly by a debtor who's holding spare cash (that debtor then owes the hub that much less).
+  // If even that can't cover it in time, the piece is flagged infeasible with the earliest day it can.
+  const unsettledOut = outbound.filter((o) => !o.settled);
+  // ALL of a member's cash bills, with their paid flag — a DONE bill already consumed their cash (so it
+  // still counts against their liquidity), but only an UNPAID one can generate a funding need.
+  const cashBillsOf = (memberId: number) => bills.filter((b) => !b.fund && b.payerId === memberId).map((b) => ({ day: b.day ?? lastDay, amount: -b.amount, done: b.done }));
+  const incomeOf = (memberId: number) => arrivalList.filter((a) => a.memberId === memberId).map((a) => ({ day: a.day ?? 0, amount: a.amount }));
+
+  // The creditor's need schedule: walk their own income (in) and cash bills (out) chronologically; each
+  // time an UNPAID bill would push them below zero, that shortfall is a "need" the pool must cover by
+  // that day. A done bill that dips them negative was already covered (it's paid), so it resets to 0
+  // without generating a need — otherwise its cost would leak into the next bill and over-fund.
+  const needsOf = (creditorId: number): { day: number; amount: number }[] => {
+    const evs = [
+      ...incomeOf(creditorId).map((e) => ({ ...e, in: true, done: false })),
+      ...cashBillsOf(creditorId).map((e) => ({ ...e, in: false })),
+    ].sort((a, b) => a.day - b.day || (a.in === b.in ? 0 : a.in ? -1 : 1)); // income lands before you pay, same day
+    let self = 0;
+    const needs: { day: number; amount: number }[] = [];
+    for (const e of evs) {
+      self = Math.round((self + e.amount) * 100) / 100;
+      if (!e.in && self < -0.005) { if (!e.done) needs.push({ day: e.day, amount: Math.round(-self * 100) / 100 }); self = 0; }
+    }
+    return needs;
+  };
+
+  // Hub cash timeline (before any NEW disbursement): treasurer's own income + every collection in,
+  // minus the treasurer's own cash bills and any already-settled disbursements.
+  const hubCashBy = cashBy([
+    ...incomeOf(treasurerId ?? -1),
+    ...inbound.map((t) => ({ day: incomeDayByMember[t.fromId] ?? null, amount: t.amount })),
+    ...bills.filter((b) => !b.fund && b.payerId === treasurerId).map((b) => ({ day: b.day, amount: -b.amount })),
+    ...outbound.filter((o) => o.settled).map((o) => ({ day: 0 as number | null, amount: -o.amount })),
+  ]);
+  const hubCanCoverBy = (need: number, from: number, used: number): number | null => {
+    for (let d = from; d <= 31; d++) if (hubCashBy(d) - used >= need - 0.005) return d;
+    return null;
+  };
+
+  // Debtors who could front cash for a reroute: how much each can safely lend by a given day =
+  // cash in hand then − ALL their own cash bills (never leave them short) − what they've already lent,
+  // capped by the net they owe the hub anyway (lending replaces that payment).
+  const debtorState = inbound.map((t) => ({
+    id: t.fromId, name: t.from, netRemaining: t.amount,
+    cashBy: cashBy(incomeOf(t.fromId)), ownBills: cashBillsOf(t.fromId).filter((b) => !b.done).reduce((s, b) => s + b.amount, 0), // negative sum, unpaid only
+    lent: 0,
+  }));
+
+  const owed = new Map<number, number>(unsettledOut.map((o) => [o.toId!, o.amount]));
+  const recOf = new Map<number, { name: string; recordId: number | null }>(unsettledOut.map((o) => [o.toId!, { name: o.to, recordId: o.recordId }]));
+  const allNeeds = unsettledOut.flatMap((o) => needsOf(o.toId!).map((n) => ({ ...n, creditorId: o.toId! }))).sort((a, b) => a.day - b.day);
+  const pieces: PlanStep[] = [];
+  let hubUsed = 0;
+  const emit = (creditorId: number, day: number, amount: number, fromId: number, fromName: string, reroute: boolean, fundsMember: boolean, infeasibleFrom: number | null = null) => {
+    const r = recOf.get(creditorId)!;
+    pieces.push({
+      id: `disb-${creditorId}-${fromId}-${day}-${Math.round(amount)}`, kind: "transfer-out", day, amount: Math.round(amount * 100) / 100, done: false,
+      fromId, toId: creditorId, fromName, toName: r.name, recordId: reroute ? null : r.recordId, fundsMember, reroute, infeasibleFrom,
+    });
+  };
+  for (const need of allNeeds) {
+    let amt = Math.min(need.amount, owed.get(need.creditorId) ?? 0);
+    if (amt <= 0.005) continue;
+    const treasurerName2 = treasurerName ?? "Treasurer";
+    // 1. fund from the hub's collected cash by this day
+    const avail = hubCashBy(need.day) - hubUsed;
+    const fromHub = Math.min(amt, Math.max(0, avail));
+    if (fromHub > 0.005) { emit(need.creditorId, need.day, fromHub, treasurerId!, treasurerName2, false, true); hubUsed += fromHub; owed.set(need.creditorId, (owed.get(need.creditorId) ?? 0) - fromHub); amt -= fromHub; }
+    // 2. reroute the rest from any debtor holding spare cash by this day
+    if (amt > 0.005) {
+      for (const d of debtorState) {
+        if (d.id === need.creditorId) continue;
+        const spare = Math.min(d.netRemaining, d.cashBy(need.day) + d.ownBills - d.lent); // ownBills is negative
+        const lend = Math.min(amt, Math.max(0, spare), owed.get(need.creditorId) ?? 0);
+        if (lend > 0.005) { emit(need.creditorId, need.day, lend, d.id, d.name, true, true); d.lent += lend; d.netRemaining -= lend; owed.set(need.creditorId, (owed.get(need.creditorId) ?? 0) - lend); amt -= lend; }
+        if (amt <= 0.005) break;
+      }
+    }
+    // 3. genuinely unfundable by this day — still show it (from the hub) but flag the earliest feasible day
+    if (amt > 0.005) {
+      const feasible = hubCanCoverBy(amt, need.day, hubUsed);
+      emit(need.creditorId, need.day, amt, treasurerId!, treasurerName2, false, true, feasible);
+      hubUsed += amt; owed.set(need.creditorId, (owed.get(need.creditorId) ?? 0) - amt);
+    }
   }
-  for (const s of steps) {
-    if (s.kind !== "transfer-out" || s.toId == null) continue;
-    const need = outflowDay.get(s.toId);
-    if (need != null && need !== Infinity) { s.day = need; s.fundsMember = true; }
+  // Whatever a creditor is still owed beyond their dated needs → one final payout at month-end (this
+  // isn't funding a specific bill, so it's NOT a fundsMember piece — it sorts after bills, like a payout).
+  for (const [creditorId, left] of owed) {
+    if (left <= 0.005) continue;
+    emit(creditorId, lastDay, left, treasurerId!, treasurerName ?? "Treasurer", false, false);
+  }
+  steps.push(...pieces);
+
+  // A reroute means a debtor paid a creditor directly, so that debtor owes the hub that much LESS —
+  // shrink their inbound collection to match (drop it entirely if fully redirected). Keeps the books
+  // balanced: debtor→hub + hub→creditor collapses into the single debtor→creditor we just emitted.
+  for (const d of debtorState) {
+    if (d.lent <= 0.005) continue;
+    const inStep = steps.find((s) => s.kind === "transfer-in" && s.fromId === d.id && !s.done);
+    if (!inStep) continue;
+    inStep.amount = Math.round((inStep.amount - d.lent) * 100) / 100;
+    if (inStep.amount <= 0.005) steps.splice(steps.indexOf(inStep), 1);
   }
 
   // Display order: by due date (soonest first). Within a day: income in → funding disbursements →
@@ -152,9 +252,7 @@ export function buildMoneyPlan(input: {
   // a member, and s.short + hubShortfall when the sender is the treasurer. Fund bills draw the sinking
   // fund, not cash, so they neither need cash nor move any. The treasurer's cash IS balancesAfter[his
   // id], so hubAfter is just his running balance — one source of truth, no separate hub accumulator.
-  const arrivals = (incomeArrivals ?? Object.entries(incomeByMember).map(([k, v]) => ({ memberId: Number(k), day: null as number | null, amount: v })))
-    .slice()
-    .sort((a, b) => (a.day == null ? -1 : b.day == null ? 1 : a.day - b.day)); // undated first (available up front)
+  const arrivals = arrivalList.slice().sort((a, b) => (a.day == null ? -1 : b.day == null ? 1 : a.day - b.day)); // undated first (available up front)
   const bal = new Map<number, number>();
   let ai = 0;
   const creditUpTo = (upto: number) => {

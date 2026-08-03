@@ -148,25 +148,26 @@ describe("buildMoneyPlan", () => {
     expect(b.senderShort).toBe(100);
   });
 
-  it("pulls a member's disbursement up to fund their bills, clearing the shortfall", () => {
+  it("splits a disbursement to fund a member's bill before it's due, clearing the shortfall", () => {
     const plan = buildMoneyPlan({
       treasurerId: T,
       transfers: [
         xfer({ fromId: 2, from: "B", toId: T, amount: 200, settled: false }), // B → hub 200 on day 1
-        xfer({ fromId: T, from: "A", toId: 3, to: "H", amount: 120 }), // hub → Harish 120 (disbursement)
+        xfer({ fromId: T, from: "A", toId: 3, to: "H", amount: 120 }), // hub owes Harish 120 (net)
       ],
       bills: [bill({ payerId: 3, payerName: "H", vendor: "Loan", amount: 100, day: 5 })], // Harish pays 100 due day 5
       incomeDayByMember: { 2: 1 },
       incomeByMember: {}, // Harish has no own income — relies on the disbursement
     });
-    const kinds = plan.steps.map((s) => s.kind);
-    // income in → funding disbursement → the member's bill
-    expect(kinds).toEqual(["transfer-in", "transfer-out", "bill"]);
-    const disb = plan.steps.find((s) => s.kind === "transfer-out")!;
-    expect(disb.fundsMember).toBe(true);
+    // The 120 net splits: a 100 funding piece timed to Harish's day-5 loan, + a 20 residual payout at month-end.
+    const funding = plan.steps.find((s) => s.kind === "transfer-out" && s.fundsMember)!;
+    expect(funding.amount).toBe(100);
+    expect(funding.day).toBeLessThanOrEqual(5); // lands by the bill's due day
     const loan = plan.steps.find((s) => s.vendor === "Loan")!;
     expect(loan.senderShort).toBeUndefined(); // funded first → not short
-    expect(loan.balancesAfter?.[3]).toBe(20); // 120 received − 100 paid
+    expect(plan.hubShortfall).toBe(0); // hub collected 200 by day 1, covers everything
+    // funding piece precedes the loan it funds
+    expect(plan.steps.indexOf(funding)).toBeLessThan(plan.steps.indexOf(loan));
   });
 
   it("counts the treasurer's own income so his own bills don't phantom-flag a shortfall", () => {
@@ -249,6 +250,40 @@ describe("buildMoneyPlan", () => {
       ],
     });
     expect(plan.hubShortfall).toBe(100); // 120 needed on day 1 − 20 collected
+  });
+
+  it("reroutes through a debtor who holds cash the hub hasn't collected yet", () => {
+    // B is paid on day 1 but only settles with the hub on day 20. Creditor H needs 100 on day 2 —
+    // the hub has nothing by then, but B is holding cash, so B pays H directly (the two legs collapse).
+    const plan = buildMoneyPlan({
+      treasurerId: T,
+      transfers: [
+        xfer({ fromId: 2, from: "B", toId: T, amount: 100 }), // B owes the hub 100
+        xfer({ fromId: T, from: "A", toId: 3, to: "H", amount: 100 }), // hub owes H 100
+      ],
+      bills: [bill({ payerId: 3, payerName: "H", vendor: "Rent", amount: 100, day: 2 })],
+      incomeDayByMember: { 2: 20 }, // B settles with the hub late (day 20)
+      incomeArrivals: [{ memberId: 2, day: 1, amount: 100 }], // but B's cash is in hand from day 1
+    });
+    const reroute = plan.steps.find((s) => s.reroute);
+    expect(reroute?.fromId).toBe(2); // B pays…
+    expect(reroute?.toId).toBe(3); // …H directly
+    expect(reroute?.amount).toBe(100);
+    expect(plan.hubShortfall).toBe(0);
+    expect(plan.steps.some((s) => s.kind === "transfer-in" && s.fromId === 2)).toBe(false); // fully redirected → collection gone
+  });
+
+  it("flags a disbursement piece infeasible when nobody can fund it by its due day", () => {
+    // H needs 100 on day 2, but the hub's own cash only lands day 20 and there's no debtor holding cash.
+    const plan = buildMoneyPlan({
+      treasurerId: T,
+      transfers: [xfer({ fromId: T, from: "A", toId: 3, to: "H", amount: 100 })],
+      bills: [bill({ payerId: 3, payerName: "H", vendor: "Rent", amount: 100, day: 2 })],
+      incomeDayByMember: {},
+      incomeArrivals: [{ memberId: T, day: 20, amount: 500 }], // treasurer's cash only lands day 20
+    });
+    const piece = plan.steps.find((s) => s.kind === "transfer-out")!;
+    expect(piece.infeasibleFrom).toBe(20); // earliest day the hub can actually cover it
   });
 
   it("flags a hub shortfall when an allowance is sent but nothing was collected", () => {
