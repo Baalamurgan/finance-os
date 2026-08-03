@@ -265,6 +265,11 @@ async function doSaveExpense(formData: FormData): Promise<{ ok: boolean; error?:
     });
     await logActivity("expense", "updated", `Edited expense “${label}” to ${formatINR(amount)}`, periodId);
   } else {
+    // A new expense added while the month is in its wind-down overhang (calendar past it, not yet
+    // wound down) is DEFERRED: kept out of the frozen settlement so paid transfers don't shift, and
+    // settled at wind-down by its assignee. It's still a real expense of this month otherwise.
+    const per = await prisma.period.findUnique({ where: { id: periodId }, select: { year: true, month: true, status: true } });
+    const deferred = per ? inWindDownOverhang(per) : false;
     // Guard: a new expense can't exceed the month's current balance (income − expense).
     const [inc, exp] = await Promise.all([
       prisma.incomeEntry.aggregate({ where: { periodId }, _sum: { amount: true } }),
@@ -272,17 +277,20 @@ async function doSaveExpense(formData: FormData): Promise<{ ok: boolean; error?:
     ]);
     const bal = (inc._sum.amount ?? 0) - (exp._sum.amount ?? 0);
     if (amount > bal) return { ok: false, error: `That's more than the month's balance (${formatINR(bal)}).` };
-    // Timing gate: a DATED expense that can't actually be paid in order is hard-blocked with a reason.
-    const feas = await checkAddExpenseFeasible(periodId, { amount, dueDay, payerId: finalMemberId, label });
-    if (!feas.ok) return { ok: false, error: feas.reason };
-    // "Repeat every month" (checkbox) → also add to the recurring template so it's
-    // generated every month; unchecked → one-off (this month only)
-    const oneOff = formData.get("repeat") !== "on";
+    // Timing gate: a DATED expense that can't be paid in order is hard-blocked. Deferred lines skip
+    // it — they always settle at wind-down (end of plan), not against a due date this month.
+    if (!deferred) {
+      const feas = await checkAddExpenseFeasible(periodId, { amount, dueDay, payerId: finalMemberId, label });
+      if (!feas.ok) return { ok: false, error: feas.reason };
+    }
+    // "Repeat every month" (checkbox) → also add to the recurring template so it's generated every
+    // month; unchecked → one-off (this month only). A deferred line is always one-off.
+    const oneOff = deferred || formData.get("repeat") !== "on";
     await prisma.expenseEntry.create({
-      data: { periodId, categoryId, amount, label, memberId: finalMemberId, necessary, oneOff, dueDay },
+      data: { periodId, categoryId, amount, label, memberId: finalMemberId, necessary, oneOff, dueDay, ...(deferred ? { note: DEFERRED_NOTE } : {}) },
     });
     if (!oneOff) await promoteToTemplate(periodId, "expense", label, amount, categoryId, finalMemberId);
-    await logActivity("expense", "created", `Added expense “${label}” ${formatINR(amount)}`, periodId);
+    await logActivity("expense", "created", `Added ${deferred ? "deferred " : ""}expense “${label}” ${formatINR(amount)}`, periodId);
   }
   revalidatePath("/", "layout");
   return { ok: true };
@@ -1617,6 +1625,19 @@ async function addEstimatedSurplus(
 // Marks the auto-carried "over-budget excess + misc spends" one-off expense lines
 // (estimate on a draft → final at wind-down), so they can be replaced not doubled.
 const CARRY_NOTE = "__carry__";
+// A "deferred" expense: added to the working month DURING its wind-down overhang (the calendar has
+// rolled into the next month but this one isn't wound down yet). It's a real expense of THIS month
+// (shows on the Sheet, counts in totals + wind-down carry) but is kept OUT of the frozen settlement
+// so already-paid transfers never shift, and appears in the Money Plan as its own step that settles
+// at wind-down, paid by whoever it's assigned to. See checkAddExpenseFeasible / getMoneyPlan.
+const DEFERRED_NOTE = "__deferred__";
+// True when `period` is still open but the calendar month has already moved past it — the wind-down
+// overhang window, where new spend belongs to the NEXT cycle, not this month's executing plan.
+function inWindDownOverhang(period: { year: number; month: number; status: string }): boolean {
+  if (period.status !== "open") return false;
+  const now = new Date();
+  return now.getFullYear() * 12 + (now.getMonth() + 1) > period.year * 12 + period.month;
+}
 
 // Add ESTIMATED carry-to-next-month expense lines to a draft from the source month:
 // over-budget excess + misc spends (tracked, no-budget categories) — the same rule

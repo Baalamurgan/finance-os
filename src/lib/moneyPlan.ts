@@ -9,6 +9,7 @@ export type PlanTransfer = { fromId: number; from: string; toId: number; to: str
 export type PlanBill = {
   key: string; payerId: number | null; payerName: string; vendor: string; amount: number; done: boolean;
   day: number | null; status: "overdue" | "soon" | "normal" | null; days?: number | null; billId?: number; categoryId?: number; fund?: boolean; fundAvail?: number;
+  deferred?: boolean; // a wind-down-overhang expense: paid by its assignee at wind-down, out of the settlement
 };
 // An allowance = personal money the treasurer SENDS a member (not a bill they owe). Disbursed after
 // collection, never dated/overdue; completion writes through to the Sheet line's paid flag (billId).
@@ -30,7 +31,7 @@ export type PlanStep = {
   reroute?: boolean; // a disbursement paid DIRECT by a debtor (not via the hub) because the hub couldn't fund it in time
   infeasibleFrom?: number | null; // this piece can't be funded by its due day; earliest day it becomes fundable (null = never this month)
   // bill
-  payerId?: number | null; payerName?: string; vendor?: string; billId?: number; categoryId?: number; fund?: boolean; fundAvail?: number;
+  payerId?: number | null; payerName?: string; vendor?: string; billId?: number; categoryId?: number; fund?: boolean; fundAvail?: number; deferred?: boolean;
   status?: "overdue" | "soon" | "normal" | null;
   days?: number | null; // days until due (negative = overdue), for the urgency tag
   short?: number; // hub is short this much when this step runs (funds not in yet)
@@ -86,7 +87,7 @@ export function buildMoneyPlan(input: {
   for (const b of bills) {
     steps.push({
       id: b.key, kind: "bill", day: b.day, amount: b.amount, done: b.done,
-      payerId: b.payerId, payerName: b.payerName, vendor: b.vendor, billId: b.billId, categoryId: b.categoryId, fund: b.fund, fundAvail: b.fundAvail, status: b.status, days: b.days ?? null,
+      payerId: b.payerId, payerName: b.payerName, vendor: b.vendor, billId: b.billId, categoryId: b.categoryId, fund: b.fund, fundAvail: b.fundAvail, status: b.status, days: b.days ?? null, deferred: b.deferred,
     });
   }
   // Allowances: the treasurer disburses these AFTER collection (like a payout), never dated/overdue.
@@ -117,7 +118,9 @@ export function buildMoneyPlan(input: {
   const unsettledOut = outbound.filter((o) => !o.settled);
   // ALL of a member's cash bills, with their paid flag — a DONE bill already consumed their cash (so it
   // still counts against their liquidity), but only an UNPAID one can generate a funding need.
-  const cashBillsOf = (memberId: number) => bills.filter((b) => !b.fund && b.payerId === memberId).map((b) => ({ day: b.day ?? lastDay, amount: -b.amount, done: b.done }));
+  // Deferred (wind-down) bills are the assignee's own responsibility, NOT pool-funded — exclude them
+  // from need/spare math so they never pull a disbursement; the balance walk still flags them if short.
+  const cashBillsOf = (memberId: number) => bills.filter((b) => !b.fund && !b.deferred && b.payerId === memberId).map((b) => ({ day: b.day ?? lastDay, amount: -b.amount, done: b.done }));
   const incomeOf = (memberId: number) => arrivalList.filter((a) => a.memberId === memberId).map((a) => ({ day: a.day ?? 0, amount: a.amount }));
 
   // The creditor's need schedule: walk their own income (in) and cash bills (out) chronologically; each
@@ -221,7 +224,7 @@ export function buildMoneyPlan(input: {
   // bills → other disbursements/allowances out → piggy returns (money comes in, members get funded,
   // bills get paid, the remainder flows back). Anything with NO due date sinks to the very bottom.
   const rank = (s: PlanStep) =>
-    s.kind === "transfer-in" ? 0 : s.kind === "transfer-out" && s.fundsMember ? 1 : s.kind === "bill" ? 2 : s.kind === "piggy" ? 4 : 3;
+    s.kind === "transfer-in" ? 0 : s.kind === "transfer-out" && s.fundsMember ? 1 : s.kind === "bill" ? (s.deferred ? 3.5 : 2) : s.kind === "piggy" ? 4 : 3;
   // Undated INBOUND collections are gathered UP FRONT (money in before money out) — an unknown income
   // day must never sort a collection AFTER the disbursements/bills it funds, which would make the hub
   // look deeply negative when in truth the cash is simply collected first. Undated bills, disbursements

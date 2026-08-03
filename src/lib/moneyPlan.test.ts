@@ -286,6 +286,25 @@ describe("buildMoneyPlan", () => {
     expect(piece.infeasibleFrom).toBe(20); // earliest day the hub can actually cover it
   });
 
+  it("keeps a deferred bill out of pool funding — assignee pays it, sorted to the very end", () => {
+    const plan = buildMoneyPlan({
+      treasurerId: T,
+      transfers: [xfer({ fromId: 2, toId: T, amount: 50, settled: true })],
+      bills: [
+        bill({ payerId: 5, payerName: "E", vendor: "Rent", amount: 30, day: 2 }),
+        bill({ payerId: 5, payerName: "E", vendor: "Late groceries", amount: 20, day: null, deferred: true }),
+      ],
+      incomeDayByMember: { 2: 1 },
+      incomeByMember: { 5: 100 }, // E funds their own bills
+    });
+    const deferredStep = plan.steps.find((s) => s.vendor === "Late groceries")!;
+    expect(deferredStep.deferred).toBe(true);
+    expect(plan.steps[plan.steps.length - 1].vendor).toBe("Late groceries"); // dead last
+    expect(plan.steps.some((s) => s.kind === "transfer-out")).toBe(false); // never pulls a disbursement
+    expect(deferredStep.senderShort).toBeUndefined(); // E has cash → not short
+    expect(plan.hubShortfall).toBe(0);
+  });
+
   it("flags a hub shortfall when an allowance is sent but nothing was collected", () => {
     const plan = buildMoneyPlan({
       treasurerId: T,

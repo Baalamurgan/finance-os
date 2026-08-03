@@ -469,7 +469,9 @@ export async function getSettlement(
   // counting the carried expense too would double-credit.
   // Allowances (personal money the family sends a member) are shown as their own Money-Plan
   // disbursement, so keep them OUT of the settlement net or the member would be credited twice.
-  const expenses = allExpenses.filter((e) => e.note !== "__carry__" && !e.category.isAllowance);
+  // "__deferred__" lines (added in the wind-down overhang) are kept OUT of the settlement so already-
+  // paid transfers never shift — they settle separately at wind-down, paid by their assignee.
+  const expenses = allExpenses.filter((e) => e.note !== "__carry__" && e.note !== "__deferred__" && !e.category.isAllowance);
   const prevLabel = prevPeriod?.label ?? null;
 
   // pure math (unit-tested in settlement-core.test.ts)
@@ -520,6 +522,16 @@ export async function getMoneyPlan(householdId: number, periodId: number, inhand
   const treasurerName = settlement.treasurer?.name ?? "Treasurer";
   for (const b of inhand.shared.unpaidBills) bills.push({ key: `bill-${b.id}`, payerId: inhand.treasurerId, payerName: treasurerName, vendor: b.name, amount: b.amount, done: false, day: b.due?.day ?? null, status: b.due?.status ?? null, days: b.due?.days ?? null, billId: b.id });
   for (const b of inhand.shared.paidBills) bills.push({ key: `bill-${b.id}`, payerId: inhand.treasurerId, payerName: treasurerName, vendor: b.name, amount: b.amount, done: true, day: b.due?.day ?? null, status: b.due?.status ?? null, days: b.due?.days ?? null, billId: b.id });
+  // Deferred (wind-down-overhang) expenses: real THIS-month expenses kept out of the settlement, shown
+  // as their own steps that settle at wind-down, paid by their assignee. Query directly (getInHand's
+  // note:null filter drops them). Undated so they sort to the very end of the plan, above only Piggy.
+  const deferredExp = await prisma.expenseEntry.findMany({ where: { periodId, note: "__deferred__" }, select: { id: true, label: true, amount: true, memberId: true, paid: true } });
+  const nameOf = (mid: number | null) => settlement.rows.find((r) => r.id === mid)?.name ?? treasurerName;
+  for (const e of deferredExp) {
+    const payerId = e.memberId ?? inhand.treasurerId;
+    bills.push({ key: `defer-${e.id}`, payerId, payerName: nameOf(payerId), vendor: e.label, amount: e.amount, done: e.paid, day: null, status: null, days: null, billId: e.id, deferred: true });
+  }
+
   // Hypothetical bills (feasibility preview for the add-expense gate — not persisted).
   if (extraBills) for (const b of extraBills) bills.push(b);
 
