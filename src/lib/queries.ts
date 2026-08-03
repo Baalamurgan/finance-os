@@ -480,7 +480,7 @@ export async function getSettlement(
 // executable checklist. Pure ordering/feasibility lives in buildMoneyPlan (unit-tested); this
 // just gathers the inputs from the existing In-Hand + settlement computations (one source of truth).
 export type MoneyPlanResult = Awaited<ReturnType<typeof getMoneyPlan>>;
-export async function getMoneyPlan(householdId: number, periodId: number, inhandArg?: InHand) {
+export async function getMoneyPlan(householdId: number, periodId: number, inhandArg?: InHand, extraBills?: import("./moneyPlan").PlanBill[]) {
   const inhand = inhandArg ?? (await getInHand(householdId, periodId));
   const [settlement, incomes, period] = await Promise.all([
     getSettlement(householdId, periodId, inhand.treasurerId),
@@ -520,6 +520,8 @@ export async function getMoneyPlan(householdId: number, periodId: number, inhand
   const treasurerName = settlement.treasurer?.name ?? "Treasurer";
   for (const b of inhand.shared.unpaidBills) bills.push({ key: `bill-${b.id}`, payerId: inhand.treasurerId, payerName: treasurerName, vendor: b.name, amount: b.amount, done: false, day: b.due?.day ?? null, status: b.due?.status ?? null, days: b.due?.days ?? null, billId: b.id });
   for (const b of inhand.shared.paidBills) bills.push({ key: `bill-${b.id}`, payerId: inhand.treasurerId, payerName: treasurerName, vendor: b.name, amount: b.amount, done: true, day: b.due?.day ?? null, status: b.due?.status ?? null, days: b.due?.days ?? null, billId: b.id });
+  // Hypothetical bills (feasibility preview for the add-expense gate — not persisted).
+  if (extraBills) for (const b of extraBills) bills.push(b);
 
   const transfers = settlement.transfers.map((t) => {
     // inbound (to the treasurer): urgency from the payer's income arrival day

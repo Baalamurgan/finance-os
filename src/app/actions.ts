@@ -145,7 +145,7 @@ async function canEditNow(periodId: number) {
 }
 
 // Success signal for useActionState-driven modals (close + reset only on real success).
-export type SaveState = { ok: boolean; n: number };
+export type SaveState = { ok: boolean; n: number; error?: string };
 
 // "Repeat every month" promotion: when a line is added with repeat on, ensure a
 // matching RecurringItem exists in the template (source of truth) so it generates
@@ -181,10 +181,42 @@ async function promoteToTemplate(
   }
 }
 
+// Add-expense timing gate: would a NEW dated expense make the money plan unpayable? Simulates the
+// plan with the expense injected (not persisted) and blocks only if it introduces a shortfall that
+// wasn't already there — the payer can't cover it in time, the treasurer runs short, or a disbursement
+// gets pushed past its due day. Undated expenses have no timing deadline, so they're never gated here.
+async function checkAddExpenseFeasible(
+  periodId: number,
+  hyp: { amount: number; dueDay: number | null; payerId: number | null; label: string },
+): Promise<{ ok: true } | { ok: false; reason: string }> {
+  if (hyp.dueDay == null) return { ok: true };
+  const period = await prisma.period.findUnique({ where: { id: periodId }, select: { householdId: true } });
+  if (!period) return { ok: true };
+  const hh = period.householdId;
+  const members = await prisma.member.findMany({ where: { householdId: hh }, select: { id: true, name: true } });
+  const payerName = members.find((m) => m.id === hyp.payerId)?.name ?? "Shared";
+  const hypBill = { key: "__hyp__", payerId: hyp.payerId, payerName, vendor: hyp.label, amount: hyp.amount, done: false, day: hyp.dueDay, status: null, days: null };
+  const [base, withHyp] = await Promise.all([getMoneyPlan(hh, periodId), getMoneyPlan(hh, periodId, undefined, [hypBill])]);
+  const inr = (n: number) => formatINR(Math.round(n));
+  // 1. the expense's own payer can't cover it by its due day
+  const hypStep = withHyp.steps.find((s) => s.id === "__hyp__");
+  if (hypStep?.senderShort != null && hypStep.senderShort > 0.5)
+    return { ok: false, reason: `${payerName} would be short ${inr(hypStep.senderShort)} on day ${hyp.dueDay} — not enough cash in hand by then. Try a later due date or a different payer.` };
+  // 2. it makes the treasurer/hub short (money not collected in time)
+  if (withHyp.hubShortfall > base.hubShortfall + 0.5)
+    return { ok: false, reason: `This would leave the treasurer short ${inr(withHyp.hubShortfall)} — the money isn't collected by then. Try a later due date.` };
+  // 3. it pushes some disbursement past its due day (unfundable in time)
+  const baseInf = new Set(base.steps.filter((s) => s.infeasibleFrom !== undefined).map((s) => s.id));
+  const newInf = withHyp.steps.find((s) => s.infeasibleFrom !== undefined && !baseInf.has(s.id));
+  if (newInf)
+    return { ok: false, reason: newInf.infeasibleFrom == null ? `Adding this leaves a payment that can't be funded this month.` : `Adding this pushes a payment past its due day — it can't be funded until day ${newInf.infeasibleFrom}. Try a later due date.` };
+  return { ok: true };
+}
+
 // Create (no id) or update (id present). Head/Manager; head may edit closed months.
-// Returns true on success. Note (label) is REQUIRED.
-async function doSaveExpense(formData: FormData): Promise<boolean> {
-  if (!(await canEdit())) return false;
+// Returns {ok} on success, or {ok:false, error} with a reason the UI can show. Note (label) is REQUIRED.
+async function doSaveExpense(formData: FormData): Promise<{ ok: boolean; error?: string }> {
+  if (!(await canEdit())) return { ok: false };
 
   const id = formData.get("id") ? Number(formData.get("id")) : null;
   const periodId = Number(formData.get("periodId"));
@@ -200,14 +232,14 @@ async function doSaveExpense(formData: FormData): Promise<boolean> {
   const dueDay = dueNum != null && Number.isFinite(dueNum) && dueNum >= 1 && dueNum <= 31 ? Math.round(dueNum) : null;
   const hasDueField = formData.has("dueDay"); // only touch dueDay when the form actually sent it
 
-  if (!periodId || !amount || !label) return false; // note required
-  if (!(await canEditNow(periodId))) return false;
+  if (!periodId || !amount || !label) return { ok: false }; // note required
+  if (!(await canEditNow(periodId))) return { ok: false };
 
   // create-a-new-category-on-the-fly (e.g. "YouTube" under Monthly) when none is picked
   const newCatName = String(formData.get("newCategoryName") ?? "").trim();
   if (!categoryId && newCatName) {
     const period = await prisma.period.findUnique({ where: { id: periodId } });
-    if (!period) return false;
+    if (!period) return { ok: false };
     const section = String(formData.get("newCategorySection") ?? "Monthly");
     const existing = await prisma.category.findFirst({
       where: { householdId: period.householdId, name: newCatName },
@@ -218,7 +250,7 @@ async function doSaveExpense(formData: FormData): Promise<boolean> {
         data: { householdId: period.householdId, name: newCatName, section },
       })).id;
   }
-  if (!categoryId) return false;
+  if (!categoryId) return { ok: false };
 
   const category = await prisma.category.findUnique({ where: { id: categoryId } });
   const necessary =
@@ -239,7 +271,10 @@ async function doSaveExpense(formData: FormData): Promise<boolean> {
       prisma.expenseEntry.aggregate({ where: { periodId }, _sum: { amount: true } }),
     ]);
     const bal = (inc._sum.amount ?? 0) - (exp._sum.amount ?? 0);
-    if (amount > bal) return false; // blocked (UI also guards)
+    if (amount > bal) return { ok: false, error: `That's more than the month's balance (${formatINR(bal)}).` };
+    // Timing gate: a DATED expense that can't actually be paid in order is hard-blocked with a reason.
+    const feas = await checkAddExpenseFeasible(periodId, { amount, dueDay, payerId: finalMemberId, label });
+    if (!feas.ok) return { ok: false, error: feas.reason };
     // "Repeat every month" (checkbox) → also add to the recurring template so it's
     // generated every month; unchecked → one-off (this month only)
     const oneOff = formData.get("repeat") !== "on";
@@ -250,15 +285,15 @@ async function doSaveExpense(formData: FormData): Promise<boolean> {
     await logActivity("expense", "created", `Added expense “${label}” ${formatINR(amount)}`, periodId);
   }
   revalidatePath("/", "layout");
-  return true;
+  return { ok: true };
 }
 
 export async function saveExpense(formData: FormData) {
   await doSaveExpense(formData);
 }
 export async function saveExpenseAction(prev: SaveState, formData: FormData): Promise<SaveState> {
-  const ok = await doSaveExpense(formData);
-  return { ok, n: ok ? prev.n + 1 : prev.n };
+  const { ok, error } = await doSaveExpense(formData);
+  return { ok, n: ok ? prev.n + 1 : prev.n, error: ok ? undefined : error };
 }
 
 // Returns true on success. Source (the note/description) is REQUIRED.

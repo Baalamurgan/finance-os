@@ -330,6 +330,9 @@ export function ExpenseModal({
                   {pending ? "Saving…" : initial ? "Save" : "Add expense"}
                 </button>
               </div>
+              {!state.ok && state.error && (
+                <p className="mt-2 rounded-lg bg-red-50 px-3 py-2 text-xs font-medium text-red-700">⚠ {state.error}</p>
+              )}
             </form>
           </div>
         </div>
