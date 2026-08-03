@@ -165,11 +165,12 @@ export function buildMoneyPlan(input: {
   const allNeeds = unsettledOut.flatMap((o) => needsOf(o.toId!).map((n) => ({ ...n, creditorId: o.toId! }))).sort((a, b) => a.day - b.day);
   const pieces: PlanStep[] = [];
   let hubUsed = 0;
-  const emit = (creditorId: number, day: number, amount: number, fromId: number, fromName: string, reroute: boolean, fundsMember: boolean, infeasibleFrom: number | null = null) => {
+  const emit = (creditorId: number, day: number, amount: number, fromId: number, fromName: string, reroute: boolean, fundsMember: boolean, infeasibleFrom?: number | null) => {
     const r = recOf.get(creditorId)!;
     pieces.push({
       id: `disb-${creditorId}-${fromId}-${day}-${Math.round(amount)}`, kind: "transfer-out", day, amount: Math.round(amount * 100) / 100, done: false,
-      fromId, toId: creditorId, fromName, toName: r.name, recordId: reroute ? null : r.recordId, fundsMember, reroute, infeasibleFrom,
+      fromId, toId: creditorId, fromName, toName: r.name, recordId: reroute ? null : r.recordId, fundsMember, reroute,
+      ...(infeasibleFrom !== undefined ? { infeasibleFrom } : {}), // only flag pieces that genuinely can't be funded by their day
     });
   };
   for (const need of allNeeds) {

@@ -171,6 +171,7 @@ export function MoneyPlan({
                     {!s.done && !isPiggy && <DayTag kind={s.kind} day={s.day} status={s.status ?? null} days={s.days ?? null} />}
                     {s.feedsBills && !s.done && <span className="shrink-0 rounded-full bg-indigo-50 px-1.5 py-0.5 text-[9px] font-medium text-indigo-500">funds bills ↓</span>}
                     {s.fundsMember && !s.done && <span className="shrink-0 rounded-full bg-emerald-50 px-1.5 py-0.5 text-[9px] font-medium text-emerald-600">funds {s.toName} ↓</span>}
+                    {s.reroute && !s.done && <span className="shrink-0 rounded-full bg-amber-50 px-1.5 py-0.5 text-[9px] font-medium text-amber-600" title="Paid directly, skipping the treasurer, because the hub can't fund it in time">direct · skips hub</span>}
                   </div>
                   {!s.done && s.hubAfter != null && (
                     <div className={`text-[10px] ${s.hubAfter < -0.005 ? "font-semibold text-red-600" : "text-slate-400"}`}>
@@ -183,6 +184,13 @@ export function MoneyPlan({
                   {!s.done && s.senderShort != null && s.senderShort > 0.005 && (
                     <div className="text-[10px] font-semibold text-red-600">
                       ⚠ {isPiggy || isTransfer || isAllowance ? s.fromName : s.payerName} short {formatINR(s.senderShort)} here — needs money in first
+                    </div>
+                  )}
+                  {!s.done && s.infeasibleFrom !== undefined && (
+                    <div className="text-[10px] font-semibold text-red-600">
+                      {s.infeasibleFrom == null
+                        ? `⚠ can't be funded this month — not enough cash comes in`
+                        : `⚠ can't be funded until day ${s.infeasibleFrom} — this step will run late`}
                     </div>
                   )}
                 </div>
