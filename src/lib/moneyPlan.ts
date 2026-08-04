@@ -13,7 +13,7 @@ export type PlanBill = {
 };
 // An allowance = personal money the treasurer SENDS a member (not a bill they owe). Disbursed after
 // collection, never dated/overdue; completion writes through to the Sheet line's paid flag (billId).
-export type PlanAllowance = { key: string; recipientId: number; recipientName: string; amount: number; done: boolean; billId: number };
+export type PlanAllowance = { key: string; recipientId: number; recipientName: string; amount: number; done: boolean; billId: number; day?: number | null; status?: "overdue" | "soon" | "normal" | null; days?: number | null };
 // A piggy return = a budget holder handing their unspent budget (gross positive leftovers) to the
 // Piggy holder at wind-down, so the general Piggy ends up under one person. A live projection (not
 // final until wind-down), always LOWEST priority — the sender only pays it once they're flush.
@@ -95,9 +95,10 @@ export function buildMoneyPlan(input: {
   // Rendered as "Send → <member>"; ticking one writes through to the Sheet line's paid flag (billId).
   for (const a of allowances) {
     steps.push({
-      id: a.key, kind: "allowance", day: lastDay, amount: a.amount, done: a.done,
+      // dated → sent on that day (in order, liquidity-checked); undated → after collection (last day)
+      id: a.key, kind: "allowance", day: a.day ?? lastDay, amount: a.amount, done: a.done,
       fromId: treasurerId ?? undefined, toId: a.recipientId, fromName: treasurerName, toName: a.recipientName,
-      billId: a.billId, status: null, days: null,
+      billId: a.billId, status: a.status ?? null, days: a.days ?? null,
     });
   }
   // Piggy returns: the very last thing each month — a holder hands their unspent budget to the Piggy

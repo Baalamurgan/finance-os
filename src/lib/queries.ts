@@ -545,7 +545,12 @@ export async function getMoneyPlan(householdId: number, periodId: number, inhand
     return { fromId: t.fromId, from: t.from, toId: t.toId, to: t.to, amount, settled: t.settled, recordId: t.recordId, status: st?.status ?? null, days: st?.days ?? null };
   });
 
-  const allowances = inhand.allowances.map((a) => ({ key: `allow-${a.id}`, recipientId: a.recipientId, recipientName: a.recipientName, amount: a.amount, done: a.done, billId: a.id }));
+  // A personal expense with a due day is SENT on that day (scheduled + liquidity-checked like a bill);
+  // with no day it stays "after collection" (buildMoneyPlan pins it to the last day).
+  const allowances = inhand.allowances.map((a) => {
+    const st = a.dueDay != null ? dayStatus(a.dueDay) : null;
+    return { key: `allow-${a.id}`, recipientId: a.recipientId, recipientName: a.recipientName, amount: a.amount, done: a.done, billId: a.id, day: a.dueDay, status: st?.status ?? null, days: st?.days ?? null };
+  });
 
   // Piggy returns (open month only): each budget holder who isn't the Piggy holder hands their GROSS
   // positive budget leftovers (Σ max(0, remaining) — over-budget categories don't reduce it, matching
@@ -733,7 +738,7 @@ export async function getInHand(householdId: number, periodId: number) {
     // Allowances: fixed monthly personal money the family SENDS a member (category.isAllowance).
     // Not a bill they owe — surfaced separately as a "Send ₹X to <member>" disbursement in the
     // Money Plan, and taken OUT of the settlement blob so it isn't double-counted.
-    prisma.expenseEntry.findMany({ where: { periodId, note: null, category: { isAllowance: true } }, select: { id: true, label: true, amount: true, memberId: true, paid: true } }),
+    prisma.expenseEntry.findMany({ where: { periodId, note: null, category: { isAllowance: true } }, select: { id: true, label: true, amount: true, memberId: true, paid: true, dueDay: true } }),
     // Sinking-fund categories + their SAVER (responsible member), so each accrued fund hold is shown
     // under the person who actually holds it — separate from the general Piggy holder.
     prisma.category.findMany({ where: { householdId, OR: [{ sinking: true }, { fundingStyle: { not: null } }] }, select: { id: true, name: true, responsibleMemberId: true } }),
@@ -962,7 +967,7 @@ export async function getInHand(householdId: number, periodId: number) {
   const nameOf = (id: number | null) => members.find((m) => m.id === id)?.name ?? "member";
   const allowances = allowanceLines
     .filter((e) => e.memberId != null)
-    .map((e) => ({ id: e.id, recipientId: e.memberId as number, recipientName: nameOf(e.memberId), amount: e.amount, done: e.paid }));
+    .map((e) => ({ id: e.id, recipientId: e.memberId as number, recipientName: nameOf(e.memberId), amount: e.amount, done: e.paid, dueDay: e.dueDay }));
 
   return { byPerson, shared, allowances, piggyTotal, generalPiggy: piggy.generalTotal, treasurerId, piggyHolderId, monthBalance, treasurerPool };
 }
