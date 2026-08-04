@@ -57,7 +57,8 @@ export function ExpenseModal({
   );
   const [amount, setAmount] = useState(initial?.amount != null ? String(initial.amount) : "");
   const [newCat, setNewCat] = useState(false); // creating a brand-new category inline
-  const [fundFrom, setFundFrom] = useState<number | null>(null); // chosen source to cover a shortfall
+  const [picks, setPicks] = useState<Record<number, number>>({}); // funder memberId → amount they front
+  const [paybackOverride, setPaybackOverride] = useState(""); // blank = auto (earliest day borrower can repay)
   const noteRef = useRef<HTMLInputElement>(null);
   const prevN = useRef(0);
 
@@ -71,6 +72,21 @@ export function ExpenseModal({
   const amountNum = Number(amount) || 0;
   const overBalance = capped && amountNum > balance!;
   const hasSources = !state.ok && !!state.sources && state.sources.length > 0;
+  // Multi-funder split: the user can spread a shortfall across several people who hold spare cash.
+  const shortfallAmt = state.shortfall?.amount ?? 0;
+  const coveredTotal = Math.round(Object.values(picks).reduce((s, v) => s + (v || 0), 0) * 100) / 100;
+  const funding = Object.keys(picks).length > 0;
+  const fullyCovered = coveredTotal >= shortfallAmt - 0.5;
+  const toggleFunder = (memberId: number, spare: number) =>
+    setPicks((p) => {
+      const next = { ...p };
+      if (memberId in next) { delete next[memberId]; return next; }
+      const covered = Object.values(next).reduce((s, v) => s + (v || 0), 0);
+      next[memberId] = Math.round(Math.min(spare, Math.max(0, shortfallAmt - covered)) * 100) / 100; // prefill: cover the rest, up to their spare
+      return next;
+    });
+  const setFunderAmount = (memberId: number, spare: number, val: string) =>
+    setPicks((p) => ({ ...p, [memberId]: Math.max(0, Math.min(spare, Number(val) || 0)) }));
 
   const sections = SECTION_ORDER.filter((sec) => categories.some((c) => c.section === sec));
   const grouped = sections.length > 0;
@@ -90,7 +106,8 @@ export function ExpenseModal({
     if (state.n > prevN.current) {
       prevN.current = state.n;
       setOpen(false);
-      setFundFrom(null);
+      setPicks({});
+      setPaybackOverride("");
       if (!initial) {
         setAmount("");
         setCategoryId(null);
@@ -329,31 +346,54 @@ export function ExpenseModal({
                 >
                   Cancel
                 </button>
-                <button type="submit" disabled={(!categoryId && !newCat) || overBalance || pending || (hasSources && fundFrom == null)} className="btn disabled:opacity-40">
-                  {pending ? "Saving…" : fundFrom != null ? "Fund & add" : initial ? "Save" : "Add expense"}
+                <button type="submit" disabled={(!categoryId && !newCat) || overBalance || pending || (hasSources && !fullyCovered)} className="btn disabled:opacity-40">
+                  {pending ? "Saving…" : funding ? "Fund & add" : initial ? "Save" : "Add expense"}
                 </button>
               </div>
-              {/* When a save is blocked for a shortfall, offer to fund it from someone who holds spare cash. */}
+              {/* When a save is blocked for a shortfall, offer to fund it from people holding spare cash —
+                  one or several (split a big shortfall across funders). Each becomes a front + payback loan. */}
               {hasSources && state.shortfall && (
                 <div className="mt-2 rounded-lg bg-amber-50 px-3 py-2.5 text-xs text-amber-800">
                   <p className="font-medium">⚠ {state.shortfall.toName} would be short {formatINR(state.shortfall.amount)}{state.shortfall.day != null ? ` on day ${state.shortfall.day}` : ""}.</p>
-                  <p className="mt-1 text-amber-700">Front it from someone holding spare cash then — they’ll pay {state.shortfall.toName} just before this step:</p>
-                  <select
-                    value={fundFrom ?? ""}
-                    onChange={(e) => setFundFrom(e.target.value ? Number(e.target.value) : null)}
-                    className="input mt-1.5 w-full py-1.5 text-sm"
-                  >
-                    <option value="">Choose who fronts {formatINR(state.shortfall.amount)}…</option>
-                    {state.sources!.map((src) => (
-                      <option key={src.memberId} value={src.memberId} disabled={src.spare < state.shortfall!.amount}>
-                        {src.name} — {formatINR(src.spare)} spare{src.spare < state.shortfall!.amount ? " (not enough)" : ""}
-                      </option>
-                    ))}
-                  </select>
-                  {fundFrom != null && (
+                  <p className="mt-1 text-amber-700">Front it from people holding spare cash — pick one, or split across several. They pay {state.shortfall.toName} just before this step, and get repaid once {state.shortfall.toName}’s income lands.</p>
+                  <div className="mt-2 space-y-1.5">
+                    {state.sources!.map((src) => {
+                      const on = src.memberId in picks;
+                      return (
+                        <div key={src.memberId} className="flex items-center gap-2">
+                          <label className="flex flex-1 items-center gap-2 cursor-pointer">
+                            <input type="checkbox" checked={on} onChange={() => toggleFunder(src.memberId, src.spare)} className="accent-amber-600" />
+                            <span className={on ? "font-medium" : ""}>{src.name}</span>
+                            <span className="text-amber-600">— {formatINR(src.spare)} spare</span>
+                          </label>
+                          {on && (
+                            <input
+                              type="number" inputMode="numeric" min={0} max={src.spare} value={picks[src.memberId] ?? 0}
+                              onChange={(e) => setFunderAmount(src.memberId, src.spare, e.target.value)}
+                              className="input w-28 py-1 text-right text-sm"
+                            />
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                  <p className="mt-2 font-medium">
+                    Covered {formatINR(coveredTotal)} of {formatINR(shortfallAmt)}
+                    {fullyCovered ? " ✓" : ` — ${formatINR(Math.max(0, Math.round((shortfallAmt - coveredTotal) * 100) / 100))} still needed`}
+                  </p>
+                  <label className="mt-2 flex items-center gap-2 text-amber-700">
+                    <span>Repaid on day</span>
+                    <input
+                      type="number" inputMode="numeric" min={1} max={31} placeholder="auto" value={paybackOverride}
+                      onChange={(e) => setPaybackOverride(e.target.value)}
+                      className="input w-20 py-1 text-center text-sm"
+                    />
+                    <span className="text-amber-500">(blank = when their income lands)</span>
+                  </label>
+                  {funding && (
                     <>
-                      <input type="hidden" name="fundFrom" value={fundFrom} />
-                      <input type="hidden" name="fundAmount" value={state.shortfall.amount} />
+                      <input type="hidden" name="funders" value={JSON.stringify(Object.entries(picks).filter(([, a]) => a > 0).map(([m, a]) => ({ memberId: Number(m), amount: a })))} />
+                      {paybackOverride && <input type="hidden" name="paybackDayOverride" value={paybackOverride} />}
                     </>
                   )}
                 </div>

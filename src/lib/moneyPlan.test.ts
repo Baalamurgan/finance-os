@@ -323,17 +323,43 @@ describe("buildMoneyPlan", () => {
       treasurerId: T,
       transfers: [],
       bills: [bill({ payerId: 3, payerName: "H", vendor: "Loan", amount: 100, day: 5 })],
-      advances: [{ id: 1, fromId: 4, fromName: "A", toId: 3, toName: "H", amount: 100, day: 5, done: false }],
+      advances: [{ id: 1, fromId: 4, fromName: "A", toId: 3, toName: "H", amount: 100, day: 5, done: false, paybackDay: null, paybackDone: false }],
       incomeDayByMember: {},
       incomeByMember: { 4: 500 }, // A holds cash to front; H has none of their own
     });
-    expect(plan.steps.map((s) => s.kind)).toEqual(["advance", "bill"]); // advance lands before the bill
-    const adv = plan.steps.find((s) => s.kind === "advance")!;
-    expect(adv.advanceId).toBe(1);
-    expect(adv.balancesAfter?.[3]).toBe(100); // H now funded
+    const front = plan.steps.find((s) => s.kind === "advance" && !s.payback)!;
+    const bIdx = plan.steps.indexOf(plan.steps.find((s) => s.vendor === "Loan")!);
+    expect(plan.steps.indexOf(front)).toBeLessThan(bIdx); // front lands before the bill it covers
+    expect(front.advanceId).toBe(1);
+    expect(front.balancesAfter?.[3]).toBe(100); // H now funded
     const loan = plan.steps.find((s) => s.vendor === "Loan")!;
     expect(loan.senderShort).toBeUndefined(); // funded first → not short
     expect(loan.balancesAfter?.[3]).toBe(0);
+  });
+
+  it("round-trips a funding advance: front funds the step, payback returns it when income lands", () => {
+    const plan = buildMoneyPlan({
+      treasurerId: T,
+      transfers: [],
+      bills: [bill({ payerId: 3, payerName: "H", vendor: "Loan", amount: 100, day: 5 })],
+      advances: [{ id: 1, fromId: 4, fromName: "A", toId: 3, toName: "H", amount: 100, day: 5, done: false, paybackDay: 10, paybackDone: false }],
+      incomeDayByMember: { 3: 10 },
+      incomeArrivals: [
+        { memberId: 4, day: null, amount: 500 }, // A holds cash up front to front the advance
+        { memberId: 3, day: 10, amount: 200 }, // H's own income lands day 10 — after the bill
+      ],
+    });
+    const front = plan.steps.find((s) => s.kind === "advance" && !s.payback)!;
+    const payback = plan.steps.find((s) => s.kind === "advance" && s.payback)!;
+    expect(front.fromId).toBe(4); // A → H
+    expect(payback.fromId).toBe(3); // H → A (reversed)
+    expect(payback.toId).toBe(4);
+    expect(payback.day).toBe(10);
+    expect(plan.steps.indexOf(payback)).toBeGreaterThan(plan.steps.indexOf(front)); // payback comes after
+    // End state: A whole again (500), H left with income − loan (200 − 100 = 100).
+    expect(payback.balancesAfter?.[4]).toBe(500);
+    expect(payback.balancesAfter?.[3]).toBe(100);
+    expect(payback.senderShort).toBeUndefined(); // H can afford to repay once income lands
   });
 
   it("flags a hub shortfall when an allowance is sent but nothing was collected", () => {

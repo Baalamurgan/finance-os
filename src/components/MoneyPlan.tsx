@@ -184,7 +184,8 @@ export function MoneyPlan({
                     {s.fundsMember && !s.done && <span className="shrink-0 rounded-full bg-emerald-50 px-1.5 py-0.5 text-[9px] font-medium text-emerald-600">funds {s.toName} ↓</span>}
                     {s.reroute && !s.done && <span className="shrink-0 rounded-full bg-amber-50 px-1.5 py-0.5 text-[9px] font-medium text-amber-600" title="Paid directly, skipping the treasurer, because the hub can't fund it in time">direct · skips hub</span>}
                     {s.deferred && <span className="shrink-0 rounded-full bg-sky-50 px-1.5 py-0.5 text-[9px] font-medium text-sky-600" title="Added during the wind-down window — paid by the assignee at wind-down, kept out of this month's settlement">settles at wind-down</span>}
-                    {isAdvance && <span className="shrink-0 rounded-full bg-teal-50 px-1.5 py-0.5 text-[9px] font-medium text-teal-600" title={`${s.fromName} fronts this so ${s.toName} can pay the next step`}>advance · funds {s.toName}</span>}
+                    {isAdvance && !s.payback && <span className="shrink-0 rounded-full bg-teal-50 px-1.5 py-0.5 text-[9px] font-medium text-teal-600" title={`${s.fromName} fronts this so ${s.toName} can pay the next step`}>advance · funds {s.toName}</span>}
+                    {isAdvance && s.payback && <span className="shrink-0 rounded-full bg-teal-50 px-1.5 py-0.5 text-[9px] font-medium text-teal-600" title={`${s.fromName} repays ${s.toName} the advance, now that their income has landed`}>payback → {s.toName}</span>}
                   </div>
                   {!s.done && cashParties.length > 0 && (
                     <div className="mt-0.5 flex flex-wrap gap-x-2.5 gap-y-0.5 text-[10px] text-slate-500">
@@ -201,7 +202,7 @@ export function MoneyPlan({
                   )}
                   {!s.done && short != null && short > 0.005 && (
                     <div className="text-[10px] font-semibold text-red-600">
-                      ⚠ {isPiggy || isTransfer || isAllowance ? s.fromName : s.payerName} needs {formatINR(short)} more in hand first
+                      ⚠ {isPiggy || isTransfer || isAllowance || isAdvance ? s.fromName : s.payerName} needs {formatINR(short)} more in hand first
                     </div>
                   )}
                   {!s.done && s.infeasibleFrom !== undefined && (
@@ -221,7 +222,11 @@ export function MoneyPlan({
                     <span className="text-[9px] text-slate-300">est.</span>
                   ) : isAdvance ? (
                     s.advanceId != null && canActTransfer ? (
-                      <form action={s.done ? unsettleAdvance : markAdvanceSettled}><input type="hidden" name="id" value={s.advanceId} /><MiniBtn primary={!s.done}>{s.done ? "undo" : "✓ sent"}</MiniBtn></form>
+                      <form action={s.done ? unsettleAdvance : markAdvanceSettled}>
+                        <input type="hidden" name="id" value={s.advanceId} />
+                        {s.payback && <input type="hidden" name="leg" value="payback" />}
+                        <MiniBtn primary={!s.done}>{s.done ? "undo" : s.payback ? "✓ repaid" : "✓ sent"}</MiniBtn>
+                      </form>
                     ) : null
                   ) : isAllowance ? (
                     s.billId != null && canActAllowance ? (

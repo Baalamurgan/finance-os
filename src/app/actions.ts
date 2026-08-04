@@ -294,12 +294,30 @@ async function doSaveExpense(formData: FormData): Promise<{ ok: boolean; error?:
     ]);
     const bal = (inc._sum.amount ?? 0) - (exp._sum.amount ?? 0);
     if (amount > bal) return { ok: false, error: `That's more than the month's balance (${formatINR(bal)}).` };
-    // A confirmed funding choice: the user picked who fronts the shortfall (from the sources dropdown).
-    const fundFrom = formData.get("fundFrom") ? Number(formData.get("fundFrom")) : null;
-    const fundAmount = formData.get("fundAmount") ? parseAmount(formData.get("fundAmount")) : 0;
+    // A confirmed funding choice: the user picked who fronts the shortfall — one OR MORE people (a big
+    // shortfall can be split across funders). The form sends `funders` = JSON [{memberId, amount}];
+    // legacy single-source falls back to fundFrom/fundAmount. An optional paybackDayOverride pins the
+    // return day for every advance created here (blank = auto, computed live from income arrivals).
+    let funders: { memberId: number; amount: number }[] = [];
+    const fundersRaw = String(formData.get("funders") ?? "").trim();
+    if (fundersRaw) {
+      try {
+        funders = (JSON.parse(fundersRaw) as { memberId: number; amount: number }[])
+          .filter((f) => f && Number(f.memberId) > 0 && Number(f.amount) > 0)
+          .map((f) => ({ memberId: Number(f.memberId), amount: Math.round(Number(f.amount) * 100) / 100 }));
+      } catch { funders = []; }
+    } else {
+      const fundFrom = formData.get("fundFrom") ? Number(formData.get("fundFrom")) : null;
+      const fundAmount = formData.get("fundAmount") ? parseAmount(formData.get("fundAmount")) : 0;
+      if (fundFrom && fundAmount > 0) funders = [{ memberId: fundFrom, amount: fundAmount }];
+    }
+    const funding = funders.length > 0;
+    const pbRaw = String(formData.get("paybackDayOverride") ?? "").trim();
+    const pbNum = pbRaw === "" ? null : Number(pbRaw);
+    const paybackOverride = pbNum != null && Number.isFinite(pbNum) && pbNum >= 1 && pbNum <= 31 ? Math.round(pbNum) : null;
     // Timing gate: a DATED expense that can't be paid in order is blocked — UNLESS the user is funding
     // it. Deferred lines skip the gate (they always settle at wind-down, not against a due date).
-    if (!deferred && !fundFrom) {
+    if (!deferred && !funding) {
       const feas = await checkAddExpenseFeasible(periodId, { amount, dueDay, payerId: finalMemberId, label });
       if (!feas.ok) return { ok: false, error: feas.reason, shortfall: feas.shortfall, sources: feas.sources };
     }
@@ -310,10 +328,15 @@ async function doSaveExpense(formData: FormData): Promise<{ ok: boolean; error?:
       data: { periodId, categoryId, amount, label, memberId: finalMemberId, necessary, oneOff, dueDay, ...(deferred ? { note: DEFERRED_NOTE } : {}) },
     });
     if (!oneOff) await promoteToTemplate(periodId, "expense", label, amount, categoryId, finalMemberId);
-    // Record the funding advance so it appears in the plan just before the step it covers.
-    if (fundFrom && fundAmount > 0 && finalMemberId != null && fundFrom !== finalMemberId) {
-      await prisma.advance.create({ data: { periodId, fromMemberId: fundFrom, toMemberId: finalMemberId, amount: fundAmount, day: dueDay, note: `Funds ${label}` } });
-      await logActivity("settlement", "created", `Advance to cover “${label}” (${formatINR(fundAmount)})`, periodId);
+    // Record the funding advances (one per funder) so each front + payback appears in the plan.
+    if (funding && finalMemberId != null) {
+      let total = 0;
+      for (const f of funders) {
+        if (f.memberId === finalMemberId) continue; // a member can't fund themselves
+        await prisma.advance.create({ data: { periodId, fromMemberId: f.memberId, toMemberId: finalMemberId, amount: f.amount, day: dueDay, paybackDay: paybackOverride, note: `Funds ${label}` } });
+        total += f.amount;
+      }
+      if (total > 0) await logActivity("settlement", "created", `Advance${funders.length > 1 ? "s" : ""} to cover “${label}” (${formatINR(total)})`, periodId);
     }
     await logActivity("expense", "created", `Added ${deferred ? "deferred " : ""}expense “${label}” ${formatINR(amount)}`, periodId);
   }
@@ -1329,7 +1352,8 @@ export async function unsettle(formData: FormData) {
   revalidatePath("/", "layout");
 }
 
-// Mark a funding advance (someone fronted cash to a short member) paid. Head, or either party.
+// Mark a funding advance leg paid. leg="payback" ticks the return (borrower → funder); otherwise the
+// front (funder → borrower). Head, or either party.
 export async function markAdvanceSettled(formData: FormData) {
   const session = await auth();
   const id = Number(formData.get("id"));
@@ -1340,11 +1364,13 @@ export async function markAdvanceSettled(formData: FormData) {
   const me = session?.user?.memberId;
   const allowed = session?.user?.role === "head" || me === adv.fromMemberId || me === adv.toMemberId;
   if (!allowed) return;
-  await prisma.advance.update({ where: { id }, data: { settled: true, settledAt: new Date() } });
-  await logActivity("settlement", "created", `Marked an advance paid (${formatINR(adv.amount)})`, adv.periodId);
+  const payback = formData.get("leg") === "payback";
+  await prisma.advance.update({ where: { id }, data: payback ? { paybackSettled: true, paybackSettledAt: new Date() } : { settled: true, settledAt: new Date() } });
+  await logActivity("settlement", "created", `Marked an advance ${payback ? "repaid" : "paid"} (${formatINR(adv.amount)})`, adv.periodId);
   revalidatePath("/", "layout");
 }
-// Undo a funding advance's paid mark, or delete it entirely (delete=1) — e.g. it's no longer needed.
+// Undo a funding advance leg's paid mark (leg="payback" → the return), or delete the whole advance
+// (delete=1) — e.g. it's no longer needed.
 export async function unsettleAdvance(formData: FormData) {
   const session = await auth();
   const id = Number(formData.get("id"));
@@ -1356,6 +1382,7 @@ export async function unsettleAdvance(formData: FormData) {
   const allowed = session?.user?.role === "head" || me === adv.fromMemberId || me === adv.toMemberId;
   if (!allowed) return;
   if (formData.get("delete") === "1") await prisma.advance.delete({ where: { id } });
+  else if (formData.get("leg") === "payback") await prisma.advance.update({ where: { id }, data: { paybackSettled: false, paybackSettledAt: null } });
   else await prisma.advance.update({ where: { id }, data: { settled: false, settledAt: null } });
   revalidatePath("/", "layout");
 }

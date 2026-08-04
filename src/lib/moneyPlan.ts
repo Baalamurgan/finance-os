@@ -19,7 +19,9 @@ export type PlanAllowance = { key: string; recipientId: number; recipientName: s
 // final until wind-down), always LOWEST priority — the sender only pays it once they're flush.
 export type PlanPiggyReturn = { key: string; fromId: number; fromName: string; toId: number; toName: string; amount: number };
 // A funding advance: a member fronts cash to a short member, scheduled just before the step it funds.
-export type PlanAdvance = { id: number; fromId: number; fromName: string; toId: number; toName: string; amount: number; day: number | null; done: boolean };
+// It's a round-trip LOAN — the FRONT (funder → borrower, day/done) plus a PAYBACK leg (borrower →
+// funder) that returns the same amount once the borrower's income has landed (paybackDay/paybackDone).
+export type PlanAdvance = { id: number; fromId: number; fromName: string; toId: number; toName: string; amount: number; day: number | null; done: boolean; paybackDay: number | null; paybackDone: boolean };
 
 export type PlanStep = {
   id: string;
@@ -31,6 +33,7 @@ export type PlanStep = {
   fromId?: number; toId?: number; fromName?: string; toName?: string; recordId?: number | null; feedsBills?: boolean;
   fundsMember?: boolean; // a disbursement piece timed to fund the recipient's own bills below
   advanceId?: number; // this step is a funding advance (write-through to the Advance record)
+  payback?: boolean; // this advance step is the PAYBACK leg (borrower → funder), not the front
   reroute?: boolean; // a disbursement paid DIRECT by a debtor (not via the hub) because the hub couldn't fund it in time
   infeasibleFrom?: number | null; // this piece can't be funded by its due day; earliest day it becomes fundable (null = never this month)
   // bill
@@ -105,12 +108,19 @@ export function buildMoneyPlan(input: {
       billId: a.billId, status: a.status ?? null, days: a.days ?? null,
     });
   }
-  // Funding advances: a member fronts cash to a short member, scheduled just before the step it funds
-  // (same day, ranked ahead of bills). It's a real cash move (from → to), tickable via the Advance id.
+  // Funding advances: a round-trip loan. The FRONT (funder → borrower) is scheduled just before the
+  // step it funds (same day, ranked ahead of bills). The PAYBACK (borrower → funder) returns the same
+  // amount once the borrower's income has landed — it funds nothing, so it sorts like a normal payout.
+  // Both legs are real cash moves, each tickable via the Advance record (front = settled, payback =
+  // paybackSettled). The payback closes the loop so end-of-month cash matches the settlement books.
   for (const a of advances) {
     steps.push({
       id: `adv-${a.id}`, kind: "advance", day: a.day, amount: a.amount, done: a.done,
       fromId: a.fromId, toId: a.toId, fromName: a.fromName, toName: a.toName, advanceId: a.id, fundsMember: true, status: null, days: null,
+    });
+    steps.push({
+      id: `advpay-${a.id}`, kind: "advance", day: a.paybackDay, amount: a.amount, done: a.paybackDone,
+      fromId: a.toId, toId: a.fromId, fromName: a.toName, toName: a.fromName, advanceId: a.id, payback: true, fundsMember: false, status: null, days: null,
     });
   }
   // Piggy returns: the very last thing each month — a holder hands their unspent budget to the Piggy
@@ -238,7 +248,7 @@ export function buildMoneyPlan(input: {
   // bills → other disbursements/allowances out → piggy returns (money comes in, members get funded,
   // bills get paid, the remainder flows back). Anything with NO due date sinks to the very bottom.
   const rank = (s: PlanStep) =>
-    s.kind === "transfer-in" ? 0 : s.kind === "advance" || (s.kind === "transfer-out" && s.fundsMember) ? 1 : s.kind === "bill" ? (s.deferred ? 3.5 : 2) : s.kind === "piggy" ? 4 : 3;
+    s.kind === "transfer-in" ? 0 : ((s.kind === "advance" && s.fundsMember) || (s.kind === "transfer-out" && s.fundsMember)) ? 1 : s.kind === "bill" ? (s.deferred ? 3.5 : 2) : s.kind === "piggy" ? 4 : 3;
   // Undated INBOUND collections are gathered UP FRONT (money in before money out) — an unknown income
   // day must never sort a collection AFTER the disbursements/bills it funds, which would make the hub
   // look deeply negative when in truth the cash is simply collected first. Undated bills, disbursements

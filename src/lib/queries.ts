@@ -532,13 +532,30 @@ export async function getMoneyPlan(householdId: number, periodId: number, inhand
     bills.push({ key: `defer-${e.id}`, payerId, payerName: nameOf(payerId), vendor: e.label, amount: e.amount, done: e.paid, day: null, status: null, days: null, billId: e.id, deferred: true });
   }
 
-  // Funding advances: someone fronts cash to a short member. Rendered as their own step just before
-  // what they fund; balance-walked as a real cash move; tickable via the Advance record.
-  const advanceRows = await prisma.advance.findMany({ where: { periodId }, select: { id: true, fromMemberId: true, toMemberId: true, amount: true, day: true, settled: true } });
+  // Funding advances: someone fronts cash to a short member (round-trip loan). Rendered as their own
+  // steps — the front just before what it funds, the payback once the borrower can cover it; both
+  // balance-walked as real cash moves; each leg tickable via the Advance record.
+  const advanceRows = await prisma.advance.findMany({ where: { periodId }, select: { id: true, fromMemberId: true, toMemberId: true, amount: true, day: true, settled: true, paybackDay: true, paybackSettled: true } });
   const memberName = (id: number | null) => settlement.rows.find((r) => r.id === id)?.name ?? treasurerName;
+  // Auto payback day = the earliest day the borrower's OWN income has cumulatively landed to cover the
+  // fronted amount (never before the front day). A manual override (stored paybackDay) always wins.
+  const autoPaybackDay = (borrowerId: number, amount: number, frontDay: number | null): number | null => {
+    const arr = incomes.filter((i) => i.ownerId === borrowerId).map((i) => ({ day: i.dueDay ?? 0, amount: i.amount })).sort((a, b) => a.day - b.day);
+    let cum = 0;
+    for (const e of arr) {
+      cum += e.amount;
+      if (cum >= amount - 0.005) return Math.max(e.day || 1, frontDay ?? 1);
+    }
+    const last = arr.length ? arr[arr.length - 1].day || null : null; // income never covers it → last arrival (or undated)
+    return last == null ? null : Math.max(last, frontDay ?? 1);
+  };
   const advances = advanceRows
     .filter((a) => a.fromMemberId != null)
-    .map((a) => ({ id: a.id, fromId: a.fromMemberId as number, fromName: memberName(a.fromMemberId), toId: a.toMemberId, toName: memberName(a.toMemberId), amount: a.amount, day: a.day, done: a.settled }));
+    .map((a) => ({
+      id: a.id, fromId: a.fromMemberId as number, fromName: memberName(a.fromMemberId), toId: a.toMemberId, toName: memberName(a.toMemberId),
+      amount: a.amount, day: a.day, done: a.settled,
+      paybackDay: a.paybackDay ?? autoPaybackDay(a.toMemberId, a.amount, a.day), paybackDone: a.paybackSettled,
+    }));
 
   // Hypothetical bills (feasibility preview for the add-expense gate — not persisted).
   if (extraBills) for (const b of extraBills) bills.push(b);

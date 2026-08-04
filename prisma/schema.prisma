@@ -483,8 +483,13 @@ model Advance {
   amount         Float
   day            Int? // scheduled day-of-month (before the step it funds); null = as needed
   note           String?
-  settled        Boolean   @default(false)
+  settled        Boolean   @default(false) // the FRONT leg (funder → borrower) has been handed over
   settledAt      DateTime?
+  // The PAYBACK leg: borrower → funder, once the borrower's income has landed to cover it. paybackDay
+  // null = auto (computed live from income arrivals); a value = a manual override the plan respects.
+  paybackDay       Int?
+  paybackSettled   Boolean   @default(false)
+  paybackSettledAt DateTime?
   createdAt      DateTime  @default(now())
 }
 
