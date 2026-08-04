@@ -1,7 +1,39 @@
 import { prisma } from "@/lib/prisma";
 import { generateMonth } from "@/lib/periodClone";
+import { windDownPeriod } from "@/lib/windDown";
 
 const MONTHS = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"];
+
+// The family's month boundary is IST (UTC+5:30), not the server's UTC — a spend at 11pm IST
+// on the 31st is still that month. Same helper as actions.ts::istYearMonth.
+function istYearMonth(now: Date) {
+  const ist = new Date(now.getTime() + 330 * 60000);
+  return { year: ist.getUTCFullYear(), month: ist.getUTCMonth() + 1 };
+}
+
+// Auto month-end CLOSE: wind down any month still OPEN whose IST calendar month has fully
+// elapsed (on Aug 1 IST, close July). This automates the manual "press Wind Down" step — the
+// head still gets a countdown reminder and can close early via the button. Oldest-first so
+// carry-forward chains correctly if several months were left open. leftoversToIncome = false
+// parks under-budget leftovers in Piggy (the household default; no human ticks the box here).
+// windDownPeriod is idempotent (bails unless status === "open"), so re-runs are safe.
+export async function autoCloseElapsedMonths(now = new Date()) {
+  const { year, month } = istYearMonth(now);
+  const cutoff = year * 12 + month; // periods strictly before this are elapsed
+  const openPeriods = await prisma.period.findMany({
+    where: { status: "open" },
+    select: { id: true, year: true, month: true, label: true },
+  });
+  const toClose = openPeriods
+    .filter((p) => p.year * 12 + p.month < cutoff)
+    .sort((a, b) => a.year * 12 + a.month - (b.year * 12 + b.month));
+  const closed: string[] = [];
+  for (const p of toClose) {
+    await windDownPeriod(p.id, { leftoversToIncome: false });
+    closed.push(p.label);
+  }
+  return closed;
+}
 
 
 // Non-destructive: ensures the current calendar month exists for every household,

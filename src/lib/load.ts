@@ -97,18 +97,23 @@ export async function loadCommon(params?: { y?: string; m?: string }) {
     actualIsHead && (await cookies()).get("view-as")?.value === "member";
   const role = viewingAsMember ? "member" : actualRole;
 
-  // In-app wind-down reminder: if the head set a close day, surface a banner
-  // in the 5 days leading up to it (counts to this month's day, else next month's).
-  let windDownReminder: { daysUntil: number; day: number } | null = null;
-  const wd = household.windDownDay;
-  if (wd && wd >= 1 && wd <= 31) {
-    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-    let close = new Date(today.getFullYear(), today.getMonth(), wd);
-    if (close.getTime() < today.getTime()) {
-      close = new Date(today.getFullYear(), today.getMonth() + 1, wd);
+  // In-app MONTH-END reminder: surface a banner + once-a-day popup in the 5 days before the
+  // current calendar month ends (IST). The month now auto-closes on the 1st
+  // (autoCloseElapsedMonths), so this is a heads-up to log pending spends and add any
+  // remaining-balance expenses — NOT a manual close step (though the head can still wind down
+  // early via the button). Counts to the real last day (28–31), in IST.
+  let windDownReminder: { daysUntil: number; day: number; monthLabel: string } | null = null;
+  {
+    const ist = new Date(Date.now() + 330 * 60000); // IST = UTC+5:30
+    const iy = ist.getUTCFullYear();
+    const im = ist.getUTCMonth(); // 0-indexed
+    const day = ist.getUTCDate();
+    const lastDay = new Date(Date.UTC(iy, im + 1, 0)).getUTCDate(); // days in this month
+    const daysUntil = lastDay - day;
+    if (daysUntil <= 5) {
+      const monthLabel = ist.toLocaleString("en-US", { month: "long", timeZone: "UTC" });
+      windDownReminder = { daysUntil, day: lastDay, monthLabel };
     }
-    const daysUntil = Math.round((close.getTime() - today.getTime()) / 86400000);
-    if (daysUntil <= 5) windDownReminder = { daysUntil, day: wd };
   }
 
   // Next-month preview draft, if one exists — surfaced in the month dropdown so ANY

@@ -4,13 +4,13 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 
 /**
- * A once-a-day modal nudge during the 5-day wind-down window. Shows on the first
- * app open of the day (i.e. right after the family passcode unlock lands you in
- * the app), so the head can't miss the month-end close. Separate per-day key from
- * the banner's dismiss, so dismissing the banner doesn't suppress the popup and
- * vice-versa. Push notifications are a later layer; this is the in-app cue.
+ * A once-a-day modal nudge in the 5 days before the calendar month ends. Shows on the
+ * first app open of the day (right after the family passcode unlock), so the family logs
+ * any pending spends + adds remaining-balance expenses before the month auto-closes on the
+ * 1st. Separate per-day key from the banner's dismiss, so dismissing one doesn't suppress
+ * the other. Push notifications are a later layer; this is the in-app cue.
  */
-export function WindDownPopup({ daysUntil, day, q }: { daysUntil: number; day: number; q: string }) {
+export function WindDownPopup({ daysUntil, day, monthLabel, q }: { daysUntil: number; day: number; monthLabel: string; q: string }) {
   const [show, setShow] = useState(false);
 
   useEffect(() => {
@@ -25,17 +25,16 @@ export function WindDownPopup({ daysUntil, day, q }: { daysUntil: number; day: n
 
   if (!show) return null;
 
-  // Expected wind-down date = the close `day` on the nearest upcoming month (this month if
-  // it hasn't passed, else next month) — a concrete date to show alongside the countdown.
+  // Month-end date = the last `day` (28–31) of the current month — a concrete date shown
+  // alongside the countdown (e.g. "on 31 Aug").
   const now = new Date();
-  let wdDate = new Date(now.getFullYear(), now.getMonth(), day);
-  if (wdDate < new Date(now.getFullYear(), now.getMonth(), now.getDate())) wdDate = new Date(now.getFullYear(), now.getMonth() + 1, day);
-  const dateStr = wdDate.toLocaleDateString("en-IN", { day: "numeric", month: "short" });
+  const endDate = new Date(now.getFullYear(), now.getMonth(), day);
+  const dateStr = endDate.toLocaleDateString("en-IN", { day: "numeric", month: "short" });
 
   const due = daysUntil <= 0;
   const headline = due
-    ? `Month-end wind-down is due today (${dateStr})`
-    : `Month-end wind-down in ${daysUntil} day${daysUntil === 1 ? "" : "s"} (on ${dateStr})`;
+    ? `${monthLabel} ends today (${dateStr})`
+    : `${monthLabel} ends in ${daysUntil} day${daysUntil === 1 ? "" : "s"} (on ${dateStr})`;
 
   return (
     <div className="fixed inset-0 z-[90] flex items-end justify-center overflow-y-auto bg-black/40 sm:items-center sm:p-4" onClick={close}>
@@ -64,7 +63,7 @@ export function WindDownPopup({ daysUntil, day, q }: { daysUntil: number; day: n
             onClick={close}
             className="w-full rounded-xl bg-amber-600 px-4 py-3 text-center text-base font-semibold text-white hover:bg-amber-700"
           >
-            Review wind-down →
+            Wind down early →
           </Link>
           <button
             type="button"

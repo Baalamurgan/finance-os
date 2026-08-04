@@ -4,11 +4,12 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 
 /**
- * Dismissible in-app reminder shown in the 5 days before the head's monthly
- * close day. Dismissal is per-day (re-appears the next day) so nobody misses
- * the wind-down. Push notifications are a later layer; this is the in-app cue.
+ * Dismissible in-app reminder shown in the 5 days before the calendar month ends.
+ * The month auto-closes on the 1st, so this is a heads-up to log pending spends and
+ * add any remaining-balance expenses. Dismissal is per-day (re-appears the next day)
+ * so nobody misses it. Push notifications are a later layer; this is the in-app cue.
  */
-export function WindDownBanner({ daysUntil }: { daysUntil: number }) {
+export function WindDownBanner({ daysUntil, monthLabel }: { daysUntil: number; monthLabel: string }) {
   const [show, setShow] = useState(false);
 
   useEffect(() => {
@@ -25,8 +26,8 @@ export function WindDownBanner({ daysUntil }: { daysUntil: number }) {
 
   const msg =
     daysUntil <= 0
-      ? "Month-end wind-down is due today."
-      : `Month-end wind-down in ${daysUntil} day${daysUntil === 1 ? "" : "s"}.`;
+      ? `${monthLabel} ends today.`
+      : `${monthLabel} ends in ${daysUntil} day${daysUntil === 1 ? "" : "s"}.`;
 
   return (
     <div className="border-b border-amber-200 bg-amber-50 text-amber-900">
