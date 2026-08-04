@@ -362,6 +362,32 @@ describe("buildMoneyPlan", () => {
     expect(payback.senderShort).toBeUndefined(); // H can afford to repay once income lands
   });
 
+  it("pays a net-receiver's prior-month reimbursement early (day after wind-down), only for those the hub owes", () => {
+    const plan = buildMoneyPlan({
+      treasurerId: T,
+      transfers: [xfer({ fromId: T, from: "A", toId: 3, to: "H", amount: 150 })], // hub owes H 150
+      bills: [bill({ payerId: 3, payerName: "H", vendor: "Loan", amount: 100, day: 10 })],
+      incomeByMember: { 1: 1000 }, // hub holds cash to disburse
+      incomeDayByMember: {},
+      reimburseByMember: { 3: 50, 2: 30 }, // 3 is a net-receiver; 2 is NOT owed by the hub → ignored
+      reimburseDay: 6,
+    });
+    const reimbs = plan.steps.filter((s) => s.reimbursement);
+    expect(reimbs.length).toBe(1); // only the net-receiver (3), never member 2
+    const reimb = reimbs[0];
+    expect(reimb.kind).toBe("transfer-out");
+    expect(reimb.day).toBe(6); // day after wind-down, not the month-end payout
+    expect(reimb.amount).toBe(50);
+    expect(reimb.fromId).toBe(T);
+    expect(reimb.toId).toBe(3);
+    // the remaining 100 funds H's day-10 bill — kept separate, scheduled at the bill's due day
+    const billFund = plan.steps.find((s) => s.kind === "transfer-out" && !s.reimbursement && s.fundsMember);
+    expect(billFund?.day).toBe(10);
+    expect(billFund?.amount).toBe(100);
+    expect(plan.steps.indexOf(reimb)).toBeLessThan(plan.steps.indexOf(billFund!)); // reimbursement leads
+    expect(plan.steps.find((s) => s.vendor === "Loan")?.senderShort).toBeUndefined(); // bill still funded in time
+  });
+
   it("flags a hub shortfall when an allowance is sent but nothing was collected", () => {
     const plan = buildMoneyPlan({
       treasurerId: T,

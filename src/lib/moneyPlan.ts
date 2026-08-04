@@ -34,6 +34,7 @@ export type PlanStep = {
   fundsMember?: boolean; // a disbursement piece timed to fund the recipient's own bills below
   advanceId?: number; // this step is a funding advance (write-through to the Advance record)
   payback?: boolean; // this advance step is the PAYBACK leg (borrower → funder), not the front
+  reimbursement?: boolean; // a disbursement that pays a member back for prior-month out-of-pocket spends (scheduled early)
   reroute?: boolean; // a disbursement paid DIRECT by a debtor (not via the hub) because the hub couldn't fund it in time
   infeasibleFrom?: number | null; // this piece can't be funded by its due day; earliest day it becomes fundable (null = never this month)
   // bill
@@ -61,8 +62,10 @@ export function buildMoneyPlan(input: {
   incomeDayByMember: Record<number, number>; // earliest arrival day per member
   incomeByMember?: Record<number, number>; // total income each member owns this month (their own cash)
   incomeArrivals?: { memberId: number; day: number | null; amount: number }[]; // each income event + the day it lands
+  reimburseByMember?: Record<number, number>; // prior-month out-of-pocket spend each member is owed back
+  reimburseDay?: number; // target day to hand back those reimbursements (e.g. the day after wind-down)
 }): MoneyPlan {
-  const { treasurerId, treasurerName, transfers, bills, allowances = [], piggyReturns = [], advances = [], incomeDayByMember, incomeByMember = {}, incomeArrivals } = input;
+  const { treasurerId, treasurerName, transfers, bills, allowances = [], piggyReturns = [], advances = [], incomeDayByMember, incomeByMember = {}, incomeArrivals, reimburseByMember = {}, reimburseDay } = input;
 
   const inbound = transfers.filter((t) => t.toId === treasurerId);
   const outbound = transfers.filter((t) => t.toId !== treasurerId && t.fromId === treasurerId); // hub → creditor
@@ -189,15 +192,27 @@ export function buildMoneyPlan(input: {
 
   const owed = new Map<number, number>(unsettledOut.map((o) => [o.toId!, o.amount]));
   const recOf = new Map<number, { name: string; recordId: number | null }>(unsettledOut.map((o) => [o.toId!, { name: o.to, recordId: o.recordId }]));
-  const allNeeds = unsettledOut.flatMap((o) => needsOf(o.toId!).map((n) => ({ ...n, creditorId: o.toId! }))).sort((a, b) => a.day - b.day);
+  // Dated needs are bill-driven. Then — for each net-receiver — their prior-month spend reimbursement is
+  // injected as a need on `reimburseDay` (e.g. the day after wind-down): pay people back for what they
+  // fronted EARLY, so the family plans August around the true remainder. It funds nothing specific, so
+  // it yields to real bills (funded from whatever the hub holds by then; any shortfall just slides to the
+  // month-end payout — never rerouted onto a debtor or flagged infeasible).
+  const billNeeds = unsettledOut.flatMap((o) => needsOf(o.toId!).map((n) => ({ ...n, creditorId: o.toId!, reimbursement: false })));
+  const reimburseNeeds =
+    reimburseDay == null ? [] :
+    Object.entries(reimburseByMember)
+      .map(([id, amount]) => ({ creditorId: Number(id), day: reimburseDay, amount: Math.round(amount * 100) / 100, reimbursement: true }))
+      .filter((n) => owed.has(n.creditorId) && n.amount > 0.005); // only net-receivers (the hub actually owes them)
+  const allNeeds = [...billNeeds, ...reimburseNeeds].sort((a, b) => a.day - b.day);
   const pieces: PlanStep[] = [];
   let hubUsed = 0;
-  const emit = (creditorId: number, day: number, amount: number, fromId: number, fromName: string, reroute: boolean, fundsMember: boolean, infeasibleFrom?: number | null) => {
+  const emit = (creditorId: number, day: number, amount: number, fromId: number, fromName: string, reroute: boolean, fundsMember: boolean, infeasibleFrom?: number | null, reimbursement?: boolean) => {
     const r = recOf.get(creditorId)!;
     pieces.push({
-      id: `disb-${creditorId}-${fromId}-${day}-${Math.round(amount)}`, kind: "transfer-out", day, amount: Math.round(amount * 100) / 100, done: false,
+      id: `${reimbursement ? "reimb" : "disb"}-${creditorId}-${fromId}-${day}-${Math.round(amount)}`, kind: "transfer-out", day, amount: Math.round(amount * 100) / 100, done: false,
       fromId, toId: creditorId, fromName, toName: r.name, recordId: reroute ? null : r.recordId, fundsMember, reroute,
       ...(infeasibleFrom !== undefined ? { infeasibleFrom } : {}), // only flag pieces that genuinely can't be funded by their day
+      ...(reimbursement ? { reimbursement: true } : {}),
     });
   };
   for (const need of allNeeds) {
@@ -207,7 +222,10 @@ export function buildMoneyPlan(input: {
     // 1. fund from the hub's collected cash by this day
     const avail = hubCashBy(need.day) - hubUsed;
     const fromHub = Math.min(amt, Math.max(0, avail));
-    if (fromHub > 0.005) { emit(need.creditorId, need.day, fromHub, treasurerId!, treasurerName2, false, true); hubUsed += fromHub; owed.set(need.creditorId, (owed.get(need.creditorId) ?? 0) - fromHub); amt -= fromHub; }
+    if (fromHub > 0.005) { emit(need.creditorId, need.day, fromHub, treasurerId!, treasurerName2, false, !need.reimbursement, undefined, need.reimbursement); hubUsed += fromHub; owed.set(need.creditorId, (owed.get(need.creditorId) ?? 0) - fromHub); amt -= fromHub; }
+    // A reimbursement is soft: whatever the hub can't cover by its day just falls through to the month-end
+    // payout below — never rerouted onto a debtor, never flagged infeasible.
+    if (need.reimbursement) continue;
     // 2. reroute the rest from any debtor holding spare cash by this day
     if (amt > 0.005) {
       for (const d of debtorState) {

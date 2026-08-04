@@ -484,11 +484,21 @@ export async function getSettlement(
 export type MoneyPlanResult = Awaited<ReturnType<typeof getMoneyPlan>>;
 export async function getMoneyPlan(householdId: number, periodId: number, inhandArg?: InHand, extraBills?: import("./moneyPlan").PlanBill[]) {
   const inhand = inhandArg ?? (await getInHand(householdId, periodId));
-  const [settlement, incomes, period] = await Promise.all([
+  const [settlement, incomes, period, household] = await Promise.all([
     getSettlement(householdId, periodId, inhand.treasurerId),
     prisma.incomeEntry.findMany({ where: { periodId }, select: { ownerId: true, dueDay: true, amount: true } }),
     prisma.period.findUnique({ where: { id: periodId }, select: { year: true, month: true, status: true } }),
+    prisma.household.findUnique({ where: { id: householdId }, select: { windDownDay: true } }),
   ]);
+  // Early reimbursement: each member's prior-month out-of-pocket spend (the "spend" lines in their
+  // settlement breakdown) is handed back EARLY — the day AFTER wind-down — for net-receivers, so the
+  // family plans the month around the true remainder. buildMoneyPlan only pays it to those the hub owes.
+  const reimburseByMember: Record<number, number> = {};
+  for (const r of settlement.rows) {
+    const spend = r.paidItems.filter((it) => it.kind === "spend").reduce((s, it) => s + it.amount, 0);
+    if (spend > 0.005) reimburseByMember[r.id] = Math.round(spend * 100) / 100;
+  }
+  const reimburseDay = (household?.windDownDay ?? 5) + 1;
 
   const incomeDayByMember: Record<number, number> = {};
   const incomeByMember: Record<number, number> = {};
@@ -596,7 +606,7 @@ export async function getMoneyPlan(householdId: number, periodId: number, inhand
   const incomeArrivals = incomes.filter((i) => i.ownerId != null).map((i) => ({ memberId: i.ownerId as number, day: i.dueDay, amount: i.amount }));
 
   const { buildMoneyPlan } = await import("./moneyPlan");
-  return { ...buildMoneyPlan({ treasurerId: inhand.treasurerId, treasurerName: settlement.treasurer?.name, transfers, bills, allowances, piggyReturns, advances, incomeDayByMember, incomeByMember, incomeArrivals }), treasurerId: inhand.treasurerId, periodId };
+  return { ...buildMoneyPlan({ treasurerId: inhand.treasurerId, treasurerName: settlement.treasurer?.name, transfers, bills, allowances, piggyReturns, advances, incomeDayByMember, incomeByMember, incomeArrivals, reimburseByMember, reimburseDay }), treasurerId: inhand.treasurerId, periodId };
 }
 
 export type SettlementHistory = Awaited<ReturnType<typeof getSettlementHistory>>;
