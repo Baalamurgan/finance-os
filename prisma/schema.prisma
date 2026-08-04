@@ -464,8 +464,28 @@ model Period {
   piggyEntries PiggyEntry[]
   spends       Spend[]
   settlements  SettlementRecord[]
+  advances     Advance[]
 
   @@unique([householdId, year, month])
+}
+
+// A funding ADVANCE: someone (a member, or later a budget category) fronts cash to a member who'd
+// otherwise be short for a step, scheduled just before it. Chosen by the user from a dropdown of
+// sources that actually hold spare cash on that day. A member advance is a plain loan between people;
+// a budget advance (Phase 2) is a temporary loan the budget gets repaid by wind-down.
+model Advance {
+  id             Int       @id @default(autoincrement())
+  period         Period    @relation(fields: [periodId], references: [id])
+  periodId       Int
+  fromMemberId   Int? // who fronts it (a member); null when the source is a budget
+  fromCategoryId Int? // Phase 2: a budget category source
+  toMemberId     Int // the short member who receives it
+  amount         Float
+  day            Int? // scheduled day-of-month (before the step it funds); null = as needed
+  note           String?
+  settled        Boolean   @default(false)
+  settledAt      DateTime?
+  createdAt      DateTime  @default(now())
 }
 
 // Savings ledger. kind="piggy" = general Piggy (variable-category remainders);

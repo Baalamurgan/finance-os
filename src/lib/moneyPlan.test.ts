@@ -318,6 +318,24 @@ describe("buildMoneyPlan", () => {
     expect(rent.balancesAfter?.[5]).toBe(60); // 100 − 40 after
   });
 
+  it("schedules a funding advance right before the step it covers, clearing the shortfall", () => {
+    const plan = buildMoneyPlan({
+      treasurerId: T,
+      transfers: [],
+      bills: [bill({ payerId: 3, payerName: "H", vendor: "Loan", amount: 100, day: 5 })],
+      advances: [{ id: 1, fromId: 4, fromName: "A", toId: 3, toName: "H", amount: 100, day: 5, done: false }],
+      incomeDayByMember: {},
+      incomeByMember: { 4: 500 }, // A holds cash to front; H has none of their own
+    });
+    expect(plan.steps.map((s) => s.kind)).toEqual(["advance", "bill"]); // advance lands before the bill
+    const adv = plan.steps.find((s) => s.kind === "advance")!;
+    expect(adv.advanceId).toBe(1);
+    expect(adv.balancesAfter?.[3]).toBe(100); // H now funded
+    const loan = plan.steps.find((s) => s.vendor === "Loan")!;
+    expect(loan.senderShort).toBeUndefined(); // funded first → not short
+    expect(loan.balancesAfter?.[3]).toBe(0);
+  });
+
   it("flags a hub shortfall when an allowance is sent but nothing was collected", () => {
     const plan = buildMoneyPlan({
       treasurerId: T,

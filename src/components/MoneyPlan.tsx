@@ -3,7 +3,7 @@
 import { useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { formatINR } from "@/lib/format";
-import { markSettled, unsettle, toggleBillPaid, syncMonthFromSetup } from "@/app/actions";
+import { markSettled, unsettle, toggleBillPaid, syncMonthFromSetup, markAdvanceSettled, unsettleAdvance } from "@/app/actions";
 import { PayBillModal } from "@/components/PayBillModal";
 import { ExpenseModal } from "@/components/ExpenseModal";
 import { useToast } from "@/components/Toast";
@@ -144,11 +144,12 @@ export function MoneyPlan({
           {shown.map(({ s, n }) => {
             const isAllowance = s.kind === "allowance";
             const isPiggy = s.kind === "piggy";
-            const isTransfer = s.kind !== "bill" && !isAllowance && !isPiggy;
+            const isAdvance = s.kind === "advance";
+            const isTransfer = s.kind === "transfer-in" || s.kind === "transfer-out";
             const canActTransfer = open && (isHead || currentMemberId === s.fromId || currentMemberId === s.toId);
             const canActBill = open && (canEdit || currentMemberId === s.payerId);
             const canActAllowance = open && (canEdit || currentMemberId === s.fromId || currentMemberId === s.toId);
-            const title = isAllowance ? `Personal expense → ${s.toName}` : isPiggy ? `${s.fromName} → ${s.toName} · Piggy` : isTransfer ? `${s.fromName} → ${s.toName}` : `${s.payerName} → ${s.vendor}`;
+            const title = isAllowance ? `Personal expense → ${s.toName}` : isPiggy ? `${s.fromName} → ${s.toName} · Piggy` : isAdvance || isTransfer ? `${s.fromName} → ${s.toName}` : `${s.payerName} → ${s.vendor}`;
             // Urgency (only while unpaid — a done step is never "overdue"): RED for overdue OR due
             // today (needs action now), AMBER for due in 1–2 days, plain otherwise.
             const urgent = !s.done && (s.status === "overdue" || (s.status === "soon" && (s.days ?? 1) <= 0));
@@ -183,6 +184,7 @@ export function MoneyPlan({
                     {s.fundsMember && !s.done && <span className="shrink-0 rounded-full bg-emerald-50 px-1.5 py-0.5 text-[9px] font-medium text-emerald-600">funds {s.toName} ↓</span>}
                     {s.reroute && !s.done && <span className="shrink-0 rounded-full bg-amber-50 px-1.5 py-0.5 text-[9px] font-medium text-amber-600" title="Paid directly, skipping the treasurer, because the hub can't fund it in time">direct · skips hub</span>}
                     {s.deferred && <span className="shrink-0 rounded-full bg-sky-50 px-1.5 py-0.5 text-[9px] font-medium text-sky-600" title="Added during the wind-down window — paid by the assignee at wind-down, kept out of this month's settlement">settles at wind-down</span>}
+                    {isAdvance && <span className="shrink-0 rounded-full bg-teal-50 px-1.5 py-0.5 text-[9px] font-medium text-teal-600" title={`${s.fromName} fronts this so ${s.toName} can pay the next step`}>advance · funds {s.toName}</span>}
                   </div>
                   {!s.done && cashParties.length > 0 && (
                     <div className="mt-0.5 flex flex-wrap gap-x-2.5 gap-y-0.5 text-[10px] text-slate-500">
@@ -217,6 +219,10 @@ export function MoneyPlan({
                 <span className="flex w-16 shrink-0 justify-end">
                   {isPiggy ? (
                     <span className="text-[9px] text-slate-300">est.</span>
+                  ) : isAdvance ? (
+                    s.advanceId != null && canActTransfer ? (
+                      <form action={s.done ? unsettleAdvance : markAdvanceSettled}><input type="hidden" name="id" value={s.advanceId} /><MiniBtn primary={!s.done}>{s.done ? "undo" : "✓ sent"}</MiniBtn></form>
+                    ) : null
                   ) : isAllowance ? (
                     s.billId != null && canActAllowance ? (
                       <form action={toggleBillPaid}><input type="hidden" name="id" value={s.billId} /><MiniBtn primary={!s.done}>{s.done ? "undo" : "✓ sent"}</MiniBtn></form>

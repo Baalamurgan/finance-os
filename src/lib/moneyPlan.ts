@@ -18,16 +18,19 @@ export type PlanAllowance = { key: string; recipientId: number; recipientName: s
 // Piggy holder at wind-down, so the general Piggy ends up under one person. A live projection (not
 // final until wind-down), always LOWEST priority — the sender only pays it once they're flush.
 export type PlanPiggyReturn = { key: string; fromId: number; fromName: string; toId: number; toName: string; amount: number };
+// A funding advance: a member fronts cash to a short member, scheduled just before the step it funds.
+export type PlanAdvance = { id: number; fromId: number; fromName: string; toId: number; toName: string; amount: number; day: number | null; done: boolean };
 
 export type PlanStep = {
   id: string;
-  kind: "transfer-in" | "transfer-out" | "bill" | "allowance" | "piggy";
+  kind: "transfer-in" | "transfer-out" | "bill" | "allowance" | "piggy" | "advance";
   day: number | null; // effective day-of-month for ordering/display (null = undated)
   amount: number;
   done: boolean;
   // transfer
   fromId?: number; toId?: number; fromName?: string; toName?: string; recordId?: number | null; feedsBills?: boolean;
   fundsMember?: boolean; // a disbursement piece timed to fund the recipient's own bills below
+  advanceId?: number; // this step is a funding advance (write-through to the Advance record)
   reroute?: boolean; // a disbursement paid DIRECT by a debtor (not via the hub) because the hub couldn't fund it in time
   infeasibleFrom?: number | null; // this piece can't be funded by its due day; earliest day it becomes fundable (null = never this month)
   // bill
@@ -51,11 +54,12 @@ export function buildMoneyPlan(input: {
   bills: PlanBill[];
   allowances?: PlanAllowance[];
   piggyReturns?: PlanPiggyReturn[];
+  advances?: PlanAdvance[];
   incomeDayByMember: Record<number, number>; // earliest arrival day per member
   incomeByMember?: Record<number, number>; // total income each member owns this month (their own cash)
   incomeArrivals?: { memberId: number; day: number | null; amount: number }[]; // each income event + the day it lands
 }): MoneyPlan {
-  const { treasurerId, treasurerName, transfers, bills, allowances = [], piggyReturns = [], incomeDayByMember, incomeByMember = {}, incomeArrivals } = input;
+  const { treasurerId, treasurerName, transfers, bills, allowances = [], piggyReturns = [], advances = [], incomeDayByMember, incomeByMember = {}, incomeArrivals } = input;
 
   const inbound = transfers.filter((t) => t.toId === treasurerId);
   const outbound = transfers.filter((t) => t.toId !== treasurerId && t.fromId === treasurerId); // hub → creditor
@@ -99,6 +103,14 @@ export function buildMoneyPlan(input: {
       id: a.key, kind: "allowance", day: a.day ?? lastDay, amount: a.amount, done: a.done,
       fromId: treasurerId ?? undefined, toId: a.recipientId, fromName: treasurerName, toName: a.recipientName,
       billId: a.billId, status: a.status ?? null, days: a.days ?? null,
+    });
+  }
+  // Funding advances: a member fronts cash to a short member, scheduled just before the step it funds
+  // (same day, ranked ahead of bills). It's a real cash move (from → to), tickable via the Advance id.
+  for (const a of advances) {
+    steps.push({
+      id: `adv-${a.id}`, kind: "advance", day: a.day, amount: a.amount, done: a.done,
+      fromId: a.fromId, toId: a.toId, fromName: a.fromName, toName: a.toName, advanceId: a.id, fundsMember: true, status: null, days: null,
     });
   }
   // Piggy returns: the very last thing each month — a holder hands their unspent budget to the Piggy
@@ -226,7 +238,7 @@ export function buildMoneyPlan(input: {
   // bills → other disbursements/allowances out → piggy returns (money comes in, members get funded,
   // bills get paid, the remainder flows back). Anything with NO due date sinks to the very bottom.
   const rank = (s: PlanStep) =>
-    s.kind === "transfer-in" ? 0 : s.kind === "transfer-out" && s.fundsMember ? 1 : s.kind === "bill" ? (s.deferred ? 3.5 : 2) : s.kind === "piggy" ? 4 : 3;
+    s.kind === "transfer-in" ? 0 : s.kind === "advance" || (s.kind === "transfer-out" && s.fundsMember) ? 1 : s.kind === "bill" ? (s.deferred ? 3.5 : 2) : s.kind === "piggy" ? 4 : 3;
   // Undated INBOUND collections are gathered UP FRONT (money in before money out) — an unknown income
   // day must never sort a collection AFTER the disbursements/bills it funds, which would make the hub
   // look deeply negative when in truth the cash is simply collected first. Undated bills, disbursements
@@ -275,7 +287,7 @@ export function buildMoneyPlan(input: {
   const touchesHub = (s: PlanStep): boolean =>
     treasurerId != null &&
     ((s.kind === "bill" && !s.fund && s.payerId === treasurerId) ||
-      ((s.kind === "transfer-in" || s.kind === "transfer-out" || s.kind === "allowance") && (s.fromId === treasurerId || s.toId === treasurerId)));
+      ((s.kind === "transfer-in" || s.kind === "transfer-out" || s.kind === "allowance" || s.kind === "advance") && (s.fromId === treasurerId || s.toId === treasurerId)));
   let hubShortfall = 0;
   for (const s of steps) {
     creditUpTo(eff(s)); // credit every income that has landed by the time this step runs
@@ -290,7 +302,7 @@ export function buildMoneyPlan(input: {
         else s.senderShort = short;
       }
     }
-    if (s.kind === "transfer-in" || s.kind === "transfer-out" || s.kind === "allowance" || s.kind === "piggy") {
+    if (s.kind === "transfer-in" || s.kind === "transfer-out" || s.kind === "allowance" || s.kind === "piggy" || s.kind === "advance") {
       shift(s.fromId, -s.amount);
       shift(s.toId, s.amount);
     } else if (s.kind === "bill" && !s.fund) {

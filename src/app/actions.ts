@@ -145,7 +145,9 @@ async function canEditNow(periodId: number) {
 }
 
 // Success signal for useActionState-driven modals (close + reset only on real success).
-export type SaveState = { ok: boolean; n: number; error?: string };
+export type FundSource = { memberId: number; name: string; spare: number };
+export type SaveShortfall = { toMemberId: number; toName: string; amount: number; day: number | null };
+export type SaveState = { ok: boolean; n: number; error?: string; shortfall?: SaveShortfall; sources?: FundSource[] };
 
 // "Repeat every month" promotion: when a line is added with repeat on, ensure a
 // matching RecurringItem exists in the template (source of truth) so it generates
@@ -188,7 +190,7 @@ async function promoteToTemplate(
 async function checkAddExpenseFeasible(
   periodId: number,
   hyp: { amount: number; dueDay: number | null; payerId: number | null; label: string },
-): Promise<{ ok: true } | { ok: false; reason: string }> {
+): Promise<{ ok: true } | { ok: false; reason: string; shortfall?: SaveShortfall; sources?: FundSource[] }> {
   if (hyp.dueDay == null) return { ok: true };
   const period = await prisma.period.findUnique({ where: { id: periodId }, select: { householdId: true } });
   if (!period) return { ok: true };
@@ -198,10 +200,25 @@ async function checkAddExpenseFeasible(
   const hypBill = { key: "__hyp__", payerId: hyp.payerId, payerName, vendor: hyp.label, amount: hyp.amount, done: false, day: hyp.dueDay, status: null, days: null };
   const [base, withHyp] = await Promise.all([getMoneyPlan(hh, periodId), getMoneyPlan(hh, periodId, undefined, [hypBill])]);
   const inr = (n: number) => formatINR(Math.round(n));
-  // 1. the expense's own payer can't cover it by its due day
+  // 1. the expense's own payer can't cover it by its due day → offer to fund it from whoever holds
+  //    spare cash right before that step (the dropdown of sources the user picks from).
   const hypStep = withHyp.steps.find((s) => s.id === "__hyp__");
-  if (hypStep?.senderShort != null && hypStep.senderShort > 0.5)
-    return { ok: false, reason: `${payerName} would be short ${inr(hypStep.senderShort)} on day ${hyp.dueDay} — not enough cash in hand by then. Try a later due date or a different payer.` };
+  if (hypStep?.senderShort != null && hypStep.senderShort > 0.5) {
+    const sources: FundSource[] =
+      hyp.payerId == null
+        ? []
+        : members
+            .filter((m) => m.id !== hyp.payerId)
+            .map((m) => ({ memberId: m.id, name: m.name, spare: Math.round(hypStep.balancesBefore?.[m.id] ?? 0) }))
+            .filter((s) => s.spare > 0.5)
+            .sort((a, b) => b.spare - a.spare);
+    return {
+      ok: false,
+      reason: `${payerName} would be short ${inr(hypStep.senderShort)} on day ${hyp.dueDay}.`,
+      shortfall: hyp.payerId == null ? undefined : { toMemberId: hyp.payerId, toName: payerName, amount: Math.round(hypStep.senderShort), day: hyp.dueDay },
+      sources,
+    };
+  }
   // 2. it makes the treasurer/hub short (money not collected in time)
   if (withHyp.hubShortfall > base.hubShortfall + 0.5)
     return { ok: false, reason: `This would leave the treasurer short ${inr(withHyp.hubShortfall)} — the money isn't collected by then. Try a later due date.` };
@@ -215,7 +232,7 @@ async function checkAddExpenseFeasible(
 
 // Create (no id) or update (id present). Head/Manager; head may edit closed months.
 // Returns {ok} on success, or {ok:false, error} with a reason the UI can show. Note (label) is REQUIRED.
-async function doSaveExpense(formData: FormData): Promise<{ ok: boolean; error?: string }> {
+async function doSaveExpense(formData: FormData): Promise<{ ok: boolean; error?: string; shortfall?: SaveShortfall; sources?: FundSource[] }> {
   if (!(await canEdit())) return { ok: false };
 
   const id = formData.get("id") ? Number(formData.get("id")) : null;
@@ -277,11 +294,14 @@ async function doSaveExpense(formData: FormData): Promise<{ ok: boolean; error?:
     ]);
     const bal = (inc._sum.amount ?? 0) - (exp._sum.amount ?? 0);
     if (amount > bal) return { ok: false, error: `That's more than the month's balance (${formatINR(bal)}).` };
-    // Timing gate: a DATED expense that can't be paid in order is hard-blocked. Deferred lines skip
-    // it — they always settle at wind-down (end of plan), not against a due date this month.
-    if (!deferred) {
+    // A confirmed funding choice: the user picked who fronts the shortfall (from the sources dropdown).
+    const fundFrom = formData.get("fundFrom") ? Number(formData.get("fundFrom")) : null;
+    const fundAmount = formData.get("fundAmount") ? parseAmount(formData.get("fundAmount")) : 0;
+    // Timing gate: a DATED expense that can't be paid in order is blocked — UNLESS the user is funding
+    // it. Deferred lines skip the gate (they always settle at wind-down, not against a due date).
+    if (!deferred && !fundFrom) {
       const feas = await checkAddExpenseFeasible(periodId, { amount, dueDay, payerId: finalMemberId, label });
-      if (!feas.ok) return { ok: false, error: feas.reason };
+      if (!feas.ok) return { ok: false, error: feas.reason, shortfall: feas.shortfall, sources: feas.sources };
     }
     // "Repeat every month" (checkbox) → also add to the recurring template so it's generated every
     // month; unchecked → one-off (this month only). A deferred line is always one-off.
@@ -290,6 +310,11 @@ async function doSaveExpense(formData: FormData): Promise<{ ok: boolean; error?:
       data: { periodId, categoryId, amount, label, memberId: finalMemberId, necessary, oneOff, dueDay, ...(deferred ? { note: DEFERRED_NOTE } : {}) },
     });
     if (!oneOff) await promoteToTemplate(periodId, "expense", label, amount, categoryId, finalMemberId);
+    // Record the funding advance so it appears in the plan just before the step it covers.
+    if (fundFrom && fundAmount > 0 && finalMemberId != null && fundFrom !== finalMemberId) {
+      await prisma.advance.create({ data: { periodId, fromMemberId: fundFrom, toMemberId: finalMemberId, amount: fundAmount, day: dueDay, note: `Funds ${label}` } });
+      await logActivity("settlement", "created", `Advance to cover “${label}” (${formatINR(fundAmount)})`, periodId);
+    }
     await logActivity("expense", "created", `Added ${deferred ? "deferred " : ""}expense “${label}” ${formatINR(amount)}`, periodId);
   }
   revalidatePath("/", "layout");
@@ -300,8 +325,8 @@ export async function saveExpense(formData: FormData) {
   await doSaveExpense(formData);
 }
 export async function saveExpenseAction(prev: SaveState, formData: FormData): Promise<SaveState> {
-  const { ok, error } = await doSaveExpense(formData);
-  return { ok, n: ok ? prev.n + 1 : prev.n, error: ok ? undefined : error };
+  const { ok, error, shortfall, sources } = await doSaveExpense(formData);
+  return { ok, n: ok ? prev.n + 1 : prev.n, error: ok ? undefined : error, shortfall: ok ? undefined : shortfall, sources: ok ? undefined : sources };
 }
 
 // Returns true on success. Source (the note/description) is REQUIRED.
@@ -1301,6 +1326,37 @@ export async function unsettle(formData: FormData) {
   if (!allowed) return;
   await prisma.settlementRecord.delete({ where: { id } });
   await logActivity("settlement", "deleted", `Undid a settlement (${formatINR(rec.amount)})`, rec.periodId);
+  revalidatePath("/", "layout");
+}
+
+// Mark a funding advance (someone fronted cash to a short member) paid. Head, or either party.
+export async function markAdvanceSettled(formData: FormData) {
+  const session = await auth();
+  const id = Number(formData.get("id"));
+  if (!id) return;
+  await requireUnlocked("markAdvanceSettled");
+  const adv = await prisma.advance.findUnique({ where: { id } });
+  if (!adv) return;
+  const me = session?.user?.memberId;
+  const allowed = session?.user?.role === "head" || me === adv.fromMemberId || me === adv.toMemberId;
+  if (!allowed) return;
+  await prisma.advance.update({ where: { id }, data: { settled: true, settledAt: new Date() } });
+  await logActivity("settlement", "created", `Marked an advance paid (${formatINR(adv.amount)})`, adv.periodId);
+  revalidatePath("/", "layout");
+}
+// Undo a funding advance's paid mark, or delete it entirely (delete=1) — e.g. it's no longer needed.
+export async function unsettleAdvance(formData: FormData) {
+  const session = await auth();
+  const id = Number(formData.get("id"));
+  if (!id) return;
+  await requireUnlocked("unsettleAdvance");
+  const adv = await prisma.advance.findUnique({ where: { id } });
+  if (!adv) return;
+  const me = session?.user?.memberId;
+  const allowed = session?.user?.role === "head" || me === adv.fromMemberId || me === adv.toMemberId;
+  if (!allowed) return;
+  if (formData.get("delete") === "1") await prisma.advance.delete({ where: { id } });
+  else await prisma.advance.update({ where: { id }, data: { settled: false, settledAt: null } });
   revalidatePath("/", "layout");
 }
 

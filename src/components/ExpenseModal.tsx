@@ -57,6 +57,7 @@ export function ExpenseModal({
   );
   const [amount, setAmount] = useState(initial?.amount != null ? String(initial.amount) : "");
   const [newCat, setNewCat] = useState(false); // creating a brand-new category inline
+  const [fundFrom, setFundFrom] = useState<number | null>(null); // chosen source to cover a shortfall
   const noteRef = useRef<HTMLInputElement>(null);
   const prevN = useRef(0);
 
@@ -69,6 +70,7 @@ export function ExpenseModal({
   const capped = !initial && typeof balance === "number";
   const amountNum = Number(amount) || 0;
   const overBalance = capped && amountNum > balance!;
+  const hasSources = !state.ok && !!state.sources && state.sources.length > 0;
 
   const sections = SECTION_ORDER.filter((sec) => categories.some((c) => c.section === sec));
   const grouped = sections.length > 0;
@@ -88,6 +90,7 @@ export function ExpenseModal({
     if (state.n > prevN.current) {
       prevN.current = state.n;
       setOpen(false);
+      setFundFrom(null);
       if (!initial) {
         setAmount("");
         setCategoryId(null);
@@ -326,11 +329,36 @@ export function ExpenseModal({
                 >
                   Cancel
                 </button>
-                <button type="submit" disabled={(!categoryId && !newCat) || overBalance || pending} className="btn disabled:opacity-40">
-                  {pending ? "Saving…" : initial ? "Save" : "Add expense"}
+                <button type="submit" disabled={(!categoryId && !newCat) || overBalance || pending || (hasSources && fundFrom == null)} className="btn disabled:opacity-40">
+                  {pending ? "Saving…" : fundFrom != null ? "Fund & add" : initial ? "Save" : "Add expense"}
                 </button>
               </div>
-              {!state.ok && state.error && (
+              {/* When a save is blocked for a shortfall, offer to fund it from someone who holds spare cash. */}
+              {hasSources && state.shortfall && (
+                <div className="mt-2 rounded-lg bg-amber-50 px-3 py-2.5 text-xs text-amber-800">
+                  <p className="font-medium">⚠ {state.shortfall.toName} would be short {formatINR(state.shortfall.amount)}{state.shortfall.day != null ? ` on day ${state.shortfall.day}` : ""}.</p>
+                  <p className="mt-1 text-amber-700">Front it from someone holding spare cash then — they’ll pay {state.shortfall.toName} just before this step:</p>
+                  <select
+                    value={fundFrom ?? ""}
+                    onChange={(e) => setFundFrom(e.target.value ? Number(e.target.value) : null)}
+                    className="input mt-1.5 w-full py-1.5 text-sm"
+                  >
+                    <option value="">Choose who fronts {formatINR(state.shortfall.amount)}…</option>
+                    {state.sources!.map((src) => (
+                      <option key={src.memberId} value={src.memberId} disabled={src.spare < state.shortfall!.amount}>
+                        {src.name} — {formatINR(src.spare)} spare{src.spare < state.shortfall!.amount ? " (not enough)" : ""}
+                      </option>
+                    ))}
+                  </select>
+                  {fundFrom != null && (
+                    <>
+                      <input type="hidden" name="fundFrom" value={fundFrom} />
+                      <input type="hidden" name="fundAmount" value={state.shortfall.amount} />
+                    </>
+                  )}
+                </div>
+              )}
+              {!state.ok && state.error && !hasSources && (
                 <p className="mt-2 rounded-lg bg-red-50 px-3 py-2 text-xs font-medium text-red-700">⚠ {state.error}</p>
               )}
             </form>

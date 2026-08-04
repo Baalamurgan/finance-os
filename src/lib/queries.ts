@@ -532,6 +532,14 @@ export async function getMoneyPlan(householdId: number, periodId: number, inhand
     bills.push({ key: `defer-${e.id}`, payerId, payerName: nameOf(payerId), vendor: e.label, amount: e.amount, done: e.paid, day: null, status: null, days: null, billId: e.id, deferred: true });
   }
 
+  // Funding advances: someone fronts cash to a short member. Rendered as their own step just before
+  // what they fund; balance-walked as a real cash move; tickable via the Advance record.
+  const advanceRows = await prisma.advance.findMany({ where: { periodId }, select: { id: true, fromMemberId: true, toMemberId: true, amount: true, day: true, settled: true } });
+  const memberName = (id: number | null) => settlement.rows.find((r) => r.id === id)?.name ?? treasurerName;
+  const advances = advanceRows
+    .filter((a) => a.fromMemberId != null)
+    .map((a) => ({ id: a.id, fromId: a.fromMemberId as number, fromName: memberName(a.fromMemberId), toId: a.toMemberId, toName: memberName(a.toMemberId), amount: a.amount, day: a.day, done: a.settled }));
+
   // Hypothetical bills (feasibility preview for the add-expense gate — not persisted).
   if (extraBills) for (const b of extraBills) bills.push(b);
 
@@ -571,7 +579,7 @@ export async function getMoneyPlan(householdId: number, periodId: number, inhand
   const incomeArrivals = incomes.filter((i) => i.ownerId != null).map((i) => ({ memberId: i.ownerId as number, day: i.dueDay, amount: i.amount }));
 
   const { buildMoneyPlan } = await import("./moneyPlan");
-  return { ...buildMoneyPlan({ treasurerId: inhand.treasurerId, treasurerName: settlement.treasurer?.name, transfers, bills, allowances, piggyReturns, incomeDayByMember, incomeByMember, incomeArrivals }), treasurerId: inhand.treasurerId, periodId };
+  return { ...buildMoneyPlan({ treasurerId: inhand.treasurerId, treasurerName: settlement.treasurer?.name, transfers, bills, allowances, piggyReturns, advances, incomeDayByMember, incomeByMember, incomeArrivals }), treasurerId: inhand.treasurerId, periodId };
 }
 
 export type SettlementHistory = Awaited<ReturnType<typeof getSettlementHistory>>;
