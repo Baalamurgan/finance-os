@@ -150,7 +150,9 @@ export function MoneyPlan({
             const canActTransfer = open && (isHead || currentMemberId === s.fromId || currentMemberId === s.toId);
             const canActBill = open && (canEdit || currentMemberId === s.payerId);
             const canActAllowance = open && (canEdit || currentMemberId === s.fromId || currentMemberId === s.toId);
-            const title = isAllowance ? `Personal expense → ${s.toName}` : isPiggy ? `${s.fromName} → ${s.toName} · Piggy` : isAdvance || isTransfer ? `${s.fromName} → ${s.toName}` : `${s.payerName} → ${s.vendor}`;
+            // Allowance = hub → member; the "personal · from hub" tag beside the title conveys the
+            // kind, so the title just shows the money flow (sender → recipient) like every other step.
+            const title = isAllowance ? `${s.fromName} → ${s.toName}` : isPiggy ? `${s.fromName} → ${s.toName} · Piggy` : isAdvance || isTransfer ? `${s.fromName} → ${s.toName}` : `${s.payerName} → ${s.vendor}`;
             // Urgency (only while unpaid — a done step is never "overdue"): RED for overdue OR due
             // today (needs action now), AMBER for due in 1–2 days, plain otherwise.
             const urgent = !s.done && (s.status === "overdue" || (s.status === "soon" && (s.days ?? 1) <= 0));
@@ -317,7 +319,7 @@ export function MoneyPlan({
 
 // Human label for a step (shared by the row + the balances sheet).
 function stepTitle(s: MoneyPlanResult["steps"][number]): string {
-  if (s.kind === "allowance") return `Personal expense → ${s.toName}`;
+  if (s.kind === "allowance") return `${s.fromName} → ${s.toName}`;
   if (s.kind === "piggy") return `${s.fromName} → ${s.toName} · Piggy`;
   if (s.kind === "bill") return `${s.payerName} → ${s.vendor}`;
   return `${s.fromName} → ${s.toName}`;
