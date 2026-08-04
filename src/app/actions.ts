@@ -429,6 +429,13 @@ async function saveUpload(_file: FormDataEntryValue | null): Promise<string | nu
   return null;
 }
 
+// The family's calendar month is IST (UTC+5:30): a spend logged just after midnight on the 1st belongs
+// to the NEW month, not the prior UTC day. Returns today's { year, month } in IST.
+function istYearMonth(now = new Date()): { year: number; month: number } {
+  const ist = new Date(now.getTime() + 330 * 60000);
+  return { year: ist.getUTCFullYear(), month: ist.getUTCMonth() + 1 };
+}
+
 // Log an actual spend in a tracked category (Expenses tab).
 // ANY signed-in member can log — auto-attributed to themselves (like the WhatsApp groups).
 async function doAddSpend(formData: FormData): Promise<boolean> {
@@ -457,15 +464,29 @@ async function doAddSpend(formData: FormData): Promise<boolean> {
   const overrideId = Number(formData.get("memberId")) || 0;
   const memberId = overrideId && session?.user?.role === "head" ? overrideId : selfId;
 
+  // Phase 2: a spend belongs to the CALENDAR month it happened in (IST), not whichever month is still
+  // "working". Route it to today's month so a spend logged in the new month can never backfill a month
+  // being wound down. Falls back to the submitted period during the brief boundary before the new
+  // month's period is live (or when it already matches).
+  let targetPeriodId = periodId;
+  if (cat) {
+    const { year, month } = istYearMonth();
+    const current = await prisma.period.findUnique({
+      where: { householdId_year_month: { householdId: cat.householdId, year, month } },
+      select: { id: true, status: true },
+    });
+    if (current && current.status === "open" && current.id !== periodId) targetPeriodId = current.id;
+  }
+
   const imagePath = await saveUpload(formData.get("image"));
   await prisma.spend.create({
-    data: { periodId, categoryId, memberId, label, amount, subCategory, imagePath },
+    data: { periodId: targetPeriodId, categoryId, memberId, label, amount, subCategory, imagePath },
   });
   // Learn the item→category so future entries of the same thing get suggested. Only
   // deliberate tracked (non-misc) categorisations teach the app — misc is ambiguous
   // (the same item can be "for someone else"), so we never learn from it.
   if (cat && cat.tracked && !misc) await learnSpendItem(cat.householdId, label, categoryId);
-  await logActivity("spend", "created", `Logged spend “${label}” ${formatINR(amount)}`, periodId);
+  await logActivity("spend", "created", `Logged spend “${label}” ${formatINR(amount)}`, targetPeriodId);
   revalidatePath("/", "layout");
   return true;
 }
