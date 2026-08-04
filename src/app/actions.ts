@@ -276,6 +276,10 @@ async function doSaveExpense(formData: FormData): Promise<{ ok: boolean; error?:
   const finalMemberId = memberId ?? category?.responsibleMemberId ?? null;
 
   if (id) {
+    // A line already paid in the money plan is frozen — the head can edit anything else all month, but
+    // a paid step is paid (editing it would silently redraw a payment that already happened).
+    const existing = await prisma.expenseEntry.findUnique({ where: { id }, select: { paid: true } });
+    if (existing?.paid) return { ok: false, error: "This is already paid in the money plan — it can’t be changed." };
     await prisma.expenseEntry.update({
       where: { id },
       data: { categoryId, amount, label, memberId: finalMemberId, necessary, ...(hasDueField ? { dueDay } : {}) },
@@ -286,6 +290,14 @@ async function doSaveExpense(formData: FormData): Promise<{ ok: boolean; error?:
     // wound down) is DEFERRED: kept out of the frozen settlement so paid transfers don't shift, and
     // settled at wind-down by its assignee. It's still a real expense of this month otherwise.
     const per = await prisma.period.findUnique({ where: { id: periodId }, select: { year: true, month: true, status: true } });
+    // Phase 2 sheet-lock: once a month's OWN calendar month has ended, no NEW expenses may be added to
+    // it (settlement/finalisation still runs until wind-down). Grandfathered — months whose month-end
+    // passed before Phase 2 shipped (≤ Jul 2026) stay finishable the old way through their wind-down.
+    const ord = (y: number, m: number) => y * 12 + m;
+    const nowIST = istYearMonth();
+    if (per && ord(per.year, per.month) < ord(nowIST.year, nowIST.month) && ord(per.year, per.month) >= ord(2026, 8)) {
+      return { ok: false, error: "That month has ended — add this to the current month instead." };
+    }
     const deferred = per ? inWindDownOverhang(per) : false;
     // Guard: a new expense can't exceed the month's current balance (income − expense).
     const [inc, exp] = await Promise.all([
@@ -405,6 +417,7 @@ export async function deleteExpense(formData: FormData) {
   if (!id) return;
   const e = await prisma.expenseEntry.findUnique({ where: { id } });
   if (e && !(await canEditNow(e.periodId))) return;
+  if (e?.paid) return; // a line already paid in the money plan is frozen — paid is paid
   await prisma.expenseEntry.delete({ where: { id } });
   if (e) await logActivity("expense", "deleted", `Removed expense “${e.label}” ${formatINR(e.amount)}`, e.periodId);
   revalidatePath("/", "layout");
