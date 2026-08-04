@@ -55,18 +55,18 @@ export async function loadCommon(params?: { y?: string; m?: string }) {
   if (y && m) {
     selected = periods.find((p) => p.year === y && p.month === m) ?? null;
   } else {
-    // Land on the WORKING month — the EARLIEST still-open month (wind-down closes the oldest open
-    // month first, so that's the one the family is still living in and logging into). During the
-    // wind-down window the calendar rolls to Aug 1 but July stays the working month until it winds
-    // down on the 5th, so daily spends/bills default to July — NOT the August calendar month, even
-    // if August is (prematurely) open. The next-month PREVIEW draft is the default only when
-    // nothing is open, and is always reachable via the month picker.
-    const t = new Date();
-    const cy = t.getFullYear();
-    const cm = t.getMonth() + 1;
+    // Phase 2: land on the CURRENT calendar month (IST) when it's live. Spends route here by date, so
+    // this is where daily life happens; the prior month becomes a finalize-and-close task, reachable
+    // via the wind-down reminder + the month picker. Fall back to the earliest still-open month (the
+    // pre-Phase-2 "working month", and the brief month-boundary case), then the preview draft.
+    const t = new Date(Date.now() + 330 * 60000); // IST = UTC+5:30 — matches spend date-routing
+    const cy = t.getUTCFullYear();
+    const cm = t.getUTCMonth() + 1;
     const openPeriods = periods.filter((p) => p.status === "open"); // getPeriods is year/month desc
+    const currentOpen = periods.find((p) => p.year === cy && p.month === cm && p.status === "open") ?? null;
     const workingOpen = openPeriods[openPeriods.length - 1] ?? null; // last = earliest open
     selected =
+      currentOpen ??
       workingOpen ??
       periods.find((p) => p.year === cy && p.month === cm && p.status === "draft") ??
       periods[0] ??
