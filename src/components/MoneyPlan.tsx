@@ -2,6 +2,7 @@
 
 import { useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { formatINR } from "@/lib/format";
 import { markSettled, unsettle, toggleBillPaid, syncMonthFromSetup, markAdvanceSettled, unsettleAdvance } from "@/app/actions";
 import { PayBillModal } from "@/components/PayBillModal";
@@ -298,6 +299,15 @@ export function MoneyPlan({
                 );
               })}
             </ul>
+            {/* Jump to the full who-owes-whom breakdown — where each person's net (and the spends folding
+                into it, e.g. a net-payer's reimbursement) is itemised line by line. */}
+            <Link
+              href="/settlement"
+              onClick={() => setBalances(null)}
+              className="mt-3 flex items-center justify-center gap-1 rounded-md border border-slate-200 py-2 text-xs font-medium text-slate-600 hover:bg-slate-50"
+            >
+              See the full breakdown in Settlement →
+            </Link>
           </div>
         </div>
       )}
