@@ -590,16 +590,13 @@ export async function getMoneyPlan(householdId: number, periodId: number, inhand
   // Piggy returns (open month only): each budget holder who isn't the Piggy holder hands their GROSS
   // positive budget leftovers (Σ max(0, remaining) — over-budget categories don't reduce it, matching
   // how the Piggy is booked) to the Piggy holder, so the general Piggy ends up under one person.
-  const piggyHolderId = inhand.piggyHolderId;
-  const piggyHolderName = inhand.byPerson.find((g) => g.memberId === piggyHolderId)?.name ?? "Piggy holder";
-  const piggyReturns =
-    period?.status === "open" && piggyHolderId != null
-      ? inhand.byPerson
-          .filter((g) => g.memberId != null && g.memberId !== piggyHolderId)
-          .map((g) => ({ fromId: g.memberId as number, fromName: g.name, amount: Math.round(g.cats.reduce((s, c) => s + Math.max(0, c.remaining), 0) * 100) / 100 }))
-          .filter((x) => x.amount > 0.005)
-          .map((x) => ({ key: `piggy-${x.fromId}`, fromId: x.fromId, fromName: x.fromName, toId: piggyHolderId, toName: piggyHolderName, amount: x.amount }))
-      : [];
+  // The Piggy sweep (unspent budget → Piggy holder) is a WIND-DOWN action — it executes when THIS
+  // month closes (at the START of next month), so it belongs to next month's day-1, not this month's
+  // live plan. Projecting this month's own sweep here was premature and confusing (it double-shows a
+  // move that only happens at wind-down), so the live plan no longer includes it. The Piggy total is
+  // surfaced in the Piggy tab + the holder's In-Hand and finalised at wind-down; a wound-down prior
+  // month's leftovers already sit in the accrued Piggy.
+  const piggyReturns: import("./moneyPlan").PlanPiggyReturn[] = [];
 
   // Every income event with the day it actually lands — powers the arrival-aware liquidity walk
   // (a member's cash is credited on the day their income arrives, not assumed present all month) AND
