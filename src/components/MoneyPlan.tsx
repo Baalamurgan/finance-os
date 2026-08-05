@@ -53,11 +53,11 @@ export function MoneyPlan({
   const pct = plan.total ? Math.round((plan.done / plan.total) * 100) : 0;
 
   // Keep each step's REAL number (its position in the full plan); when a member is picked, show
-  // only their remaining to-dos.
+  // every step they're part of — done ones too, so the filter is a full picture, not just to-dos.
   const rows = plan.steps.map((s, i) => ({ s, n: i + 1 }));
   const shown = who == null
     ? rows
-    : rows.filter(({ s }) => !s.done && (s.fromId === who || s.toId === who || s.payerId === who));
+    : rows.filter(({ s }) => s.fromId === who || s.toId === who || s.payerId === who);
   const whoName = people.find((p) => p.id === who)?.name;
 
   const refresh = () =>
