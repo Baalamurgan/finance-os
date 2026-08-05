@@ -486,7 +486,7 @@ export async function getMoneyPlan(householdId: number, periodId: number, inhand
   const inhand = inhandArg ?? (await getInHand(householdId, periodId));
   const [settlement, incomes, period, household] = await Promise.all([
     getSettlement(householdId, periodId, inhand.treasurerId),
-    prisma.incomeEntry.findMany({ where: { periodId }, select: { ownerId: true, dueDay: true, amount: true } }),
+    prisma.incomeEntry.findMany({ where: { periodId }, select: { ownerId: true, dueDay: true, amount: true, source: true } }),
     prisma.period.findUnique({ where: { id: periodId }, select: { year: true, month: true, status: true } }),
     prisma.household.findUnique({ where: { id: householdId }, select: { windDownDay: true } }),
   ]);
@@ -602,8 +602,14 @@ export async function getMoneyPlan(householdId: number, periodId: number, inhand
       : [];
 
   // Every income event with the day it actually lands — powers the arrival-aware liquidity walk
-  // (a member's cash is credited on the day their income arrives, not assumed present all month).
-  const incomeArrivals = incomes.filter((i) => i.ownerId != null).map((i) => ({ memberId: i.ownerId as number, day: i.dueDay, amount: i.amount }));
+  // (a member's cash is credited on the day their income arrives, not assumed present all month) AND
+  // the informational "income" rows (source label + owner name shown on the day the money comes in).
+  const nameById = new Map<number, string>();
+  for (const r of settlement.rows) nameById.set(r.id, r.name);
+  if (inhand.treasurerId != null && settlement.treasurer) nameById.set(inhand.treasurerId, settlement.treasurer.name);
+  const incomeArrivals = incomes
+    .filter((i) => i.ownerId != null)
+    .map((i) => ({ memberId: i.ownerId as number, day: i.dueDay, amount: i.amount, source: i.source, name: nameById.get(i.ownerId as number) }));
 
   const { buildMoneyPlan } = await import("./moneyPlan");
   return { ...buildMoneyPlan({ treasurerId: inhand.treasurerId, treasurerName: settlement.treasurer?.name, transfers, bills, allowances, piggyReturns, advances, incomeDayByMember, incomeByMember, incomeArrivals, reimburseByMember, reimburseDay }), treasurerId: inhand.treasurerId, periodId };

@@ -233,6 +233,26 @@ describe("buildMoneyPlan", () => {
     expect(b.senderShort).toBeUndefined();
   });
 
+  it("shows each income arrival as its own informational row that credits the recipient", () => {
+    const plan = buildMoneyPlan({
+      treasurerId: T,
+      transfers: [],
+      bills: [bill({ payerId: 5, payerName: "E", vendor: "Rent", amount: 400, day: 10 })],
+      incomeDayByMember: {},
+      incomeArrivals: [
+        { memberId: 5, day: 3, amount: 300, source: "Salary", name: "E" },
+        { memberId: 5, day: 3, amount: 200, source: "Rent", name: "E" },
+      ],
+    });
+    const incomes = plan.steps.filter((s) => s.kind === "income");
+    expect(incomes.map((s) => s.source)).toEqual(["Salary", "Rent"]); // one row per source
+    expect(incomes.every((s) => s.toId === 5)).toBe(true);
+    expect(plan.total).toBe(1); // informational — only the bill is a tickable/counted step
+    expect(plan.steps.map((s) => s.kind)).toEqual(["income", "income", "bill"]); // income sorts first
+    expect(incomes.map((s) => s.balancesAfter![5])).toEqual([300, 500]); // cash jumps as each lands
+    expect(plan.steps.find((s) => s.kind === "bill")!.senderShort).toBeUndefined(); // 500 covers the 400 bill
+  });
+
   it("catches a treasurer disbursing before his own income arrives (real August case)", () => {
     // Treasurer must send 120 on day 1 (to fund a member), but his own income lands day 5 and only
     // 20 has been collected by day 1 → he's genuinely short 100, not a phantom.

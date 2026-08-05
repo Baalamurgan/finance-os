@@ -147,12 +147,14 @@ export function MoneyPlan({
             const isPiggy = s.kind === "piggy";
             const isAdvance = s.kind === "advance";
             const isTransfer = s.kind === "transfer-in" || s.kind === "transfer-out";
+            const isIncome = s.kind === "income";
             const canActTransfer = open && (isHead || currentMemberId === s.fromId || currentMemberId === s.toId);
             const canActBill = open && (canEdit || currentMemberId === s.payerId);
             const canActAllowance = open && (canEdit || currentMemberId === s.fromId || currentMemberId === s.toId);
             // Allowance = hub → member; the "personal · from hub" tag beside the title conveys the
             // kind, so the title just shows the money flow (sender → recipient) like every other step.
-            const title = isAllowance ? `${s.fromName} → ${s.toName}` : isPiggy ? `${s.fromName} → ${s.toName} · Piggy` : isAdvance || isTransfer ? `${s.fromName} → ${s.toName}` : `${s.payerName} → ${s.vendor}`;
+            // Income = a member's own money landing (recipient · source), an inflow row.
+            const title = isIncome ? `${s.toName ?? "?"} · ${s.source ?? "income"}` : isAllowance ? `${s.fromName} → ${s.toName}` : isPiggy ? `${s.fromName} → ${s.toName} · Piggy` : isAdvance || isTransfer ? `${s.fromName} → ${s.toName}` : `${s.payerName} → ${s.vendor}`;
             // Urgency (only while unpaid — a done step is never "overdue"): RED for overdue OR due
             // today (needs action now), AMBER for due in 1–2 days, plain otherwise.
             const urgent = !s.done && (s.status === "overdue" || (s.status === "soon" && (s.days ?? 1) <= 0));
@@ -167,7 +169,7 @@ export function MoneyPlan({
             const short = s.senderShort ?? s.short; // member shortfall OR treasurer(hub) shortfall
 
             return (
-              <li key={s.id} className={`flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-xs ${s.done ? "bg-emerald-50/50" : urgent ? "bg-red-50" : soon ? "bg-amber-50" : "bg-slate-50"}`}>
+              <li key={s.id} className={`flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-xs ${s.done ? "bg-emerald-50/50" : isIncome ? "bg-emerald-50/40" : urgent ? "bg-red-50" : soon ? "bg-amber-50" : "bg-slate-50"}`}>
                 <button
                   type="button"
                   onClick={() => setBalances({ s, n })}
@@ -180,6 +182,7 @@ export function MoneyPlan({
                 <div className="min-w-0 flex-1">
                   <div className={`flex flex-wrap items-center gap-1.5 ${s.done ? "text-slate-400 line-through" : "text-slate-800"}`}>
                     <span className="truncate font-medium">{title}</span>
+                    {isIncome && <span className="shrink-0 rounded-full bg-emerald-50 px-1.5 py-0.5 text-[9px] font-medium text-emerald-600">↓ income in hand</span>}
                     {isAllowance && <span className="shrink-0 rounded-full bg-violet-50 px-1.5 py-0.5 text-[9px] font-medium text-violet-500">personal · from hub</span>}
                     {isPiggy && <span className="shrink-0 rounded-full bg-pink-50 px-1.5 py-0.5 text-[9px] font-medium text-pink-500">🐷 to piggy · at wind-down</span>}
                     {!s.done && !isPiggy && <DayTag kind={s.kind} day={s.day} status={s.status ?? null} days={s.days ?? null} />}
@@ -218,7 +221,7 @@ export function MoneyPlan({
                   )}
                 </div>
 
-                <span className={`shrink-0 tabular-nums ${s.done ? "text-slate-400 line-through" : urgent ? "font-semibold text-red-700" : "text-slate-700"}`}>{formatINR(s.amount)}</span>
+                <span className={`shrink-0 tabular-nums ${s.done ? "text-slate-400 line-through" : isIncome ? "font-medium text-emerald-600" : urgent ? "font-semibold text-red-700" : "text-slate-700"}`}>{isIncome ? "+" : ""}{formatINR(s.amount)}</span>
 
                 {/* action */}
                 <span className="flex w-16 shrink-0 justify-end">
@@ -319,6 +322,7 @@ export function MoneyPlan({
 
 // Human label for a step (shared by the row + the balances sheet).
 function stepTitle(s: MoneyPlanResult["steps"][number]): string {
+  if (s.kind === "income") return `${s.toName ?? "?"} · ${s.source ?? "income"}`;
   if (s.kind === "allowance") return `${s.fromName} → ${s.toName}`;
   if (s.kind === "piggy") return `${s.fromName} → ${s.toName} · Piggy`;
   if (s.kind === "bill") return `${s.payerName} → ${s.vendor}`;
@@ -346,10 +350,15 @@ function MiniBtn({ children, primary }: { children: React.ReactNode; primary?: b
 }
 
 function DayTag({ kind, day, status, days }: { kind: string; day: number | null; status: "overdue" | "soon" | "normal" | null; days: number | null }) {
-  if (kind === "transfer-out" || kind === "allowance") return <span className="shrink-0 rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-400">after collection</span>;
+  const ord = day == null ? null : `${day}${["th", "st", "nd", "rd"][((day % 100) - 20) % 10] ?? ["th", "st", "nd", "rd"][day % 100] ?? "th"}`;
+  // Income lands ON a day (or "up front" if undated) — it's an arrival, not a deadline.
+  if (kind === "income") return <span className="shrink-0 rounded-full bg-emerald-50 px-1.5 py-0.5 text-[10px] text-emerald-600">{ord ? `on ${ord}` : "up front"}</span>;
+  // Disbursements (hub → member) go out once the hub has collected enough. They're scheduled to a
+  // real target day (reimburse-day, or the day a funded bill falls due) — show it as "by <day>", and
+  // only fall back to "after collection" when there's genuinely no date (the month-end residual).
+  if (kind === "transfer-out" || kind === "allowance") return <span className="shrink-0 rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-400">{ord ? `by ${ord}` : "after collection"}</span>;
   // No due date set = lowest priority (shown last). Make that explicit rather than blank.
   if (day == null) return <span className="shrink-0 rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-400">no date</span>;
-  const ord = `${day}${["th", "st", "nd", "rd"][((day % 100) - 20) % 10] ?? ["th", "st", "nd", "rd"][day % 100] ?? "th"}`;
   if (status === "overdue") {
     const late = days != null ? Math.abs(days) : 0;
     return <span className="shrink-0 rounded-full bg-red-100 px-1.5 py-0.5 text-[10px] font-semibold text-red-700">overdue{late > 0 ? ` ${late}d` : ""} · was {ord}</span>;
