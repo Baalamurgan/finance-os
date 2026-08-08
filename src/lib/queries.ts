@@ -607,10 +607,11 @@ export async function getMoneyPlan(householdId: number, periodId: number, inhand
     .filter((i) => i.ownerId != null)
     .map((i) => ({ memberId: i.ownerId as number, day: i.dueDay, amount: i.amount, source: i.source, name: nameById.get(i.ownerId as number) }));
 
-  // Prior wound-down month's Piggy hand-over (owners → Piggy holder), as one tickable lump on day 1.
+  // Prior wound-down month's Piggy hand-over (owners → Piggy holder), as one tickable lump. The day
+  // is day 1 normally, or a few days after a late (mid-month) wind-down — see getInHand::handoverDay.
   const piggyHandover =
     inhand.pendingPiggyHandover && inhand.piggyHolderId != null
-      ? { toId: inhand.piggyHolderId, toName: nameById.get(inhand.piggyHolderId) ?? "Piggy holder", amount: inhand.pendingPiggyHandover.lump, day: 1, handoverPeriodId: inhand.pendingPiggyHandover.priorPeriodId }
+      ? { toId: inhand.piggyHolderId, toName: nameById.get(inhand.piggyHolderId) ?? "Piggy holder", amount: inhand.pendingPiggyHandover.lump, day: inhand.pendingPiggyHandover.day, handoverPeriodId: inhand.pendingPiggyHandover.priorPeriodId }
       : undefined;
 
   const { buildMoneyPlan } = await import("./moneyPlan");
@@ -1008,7 +1009,7 @@ export async function getInHand(householdId: number, periodId: number) {
     ? await prisma.period.findFirst({
         where: { householdId, status: "closed", OR: [{ year: { lt: period.year } }, { year: period.year, month: { lt: period.month } }] },
         orderBy: [{ year: "desc" }, { month: "desc" }],
-        select: { id: true, piggyHandedOverAt: true },
+        select: { id: true, piggyHandedOverAt: true, closedAt: true },
       })
     : null;
   const priorPiggyEntries =
@@ -1047,9 +1048,22 @@ export async function getInHand(householdId: number, periodId: number) {
   // The Piggy holder's ACTUALLY-received general Piggy = accrued total minus what's still pending
   // hand-over (held by the owners). The pending lump is surfaced so the Money Plan can add the
   // tickable hand-over step and the Piggy tab / balance sheet can show "yet to receive".
+  // Hand-over day: normally day 1 of the current month (owners hand last month's leftovers to the
+  // Piggy holder at the start of the new month). But when the prior month was wound down LATE — i.e.
+  // mid-way through the current month (e.g. July closed on Aug 9) — day 1 has already passed, so
+  // schedule the hand-over a few days after the wind-down instead. Derived from the wind-down date
+  // (closedAt) so it self-corrects: a normal end-of-month auto-close lands in the PRIOR month → day 1.
+  const handoverDay = (() => {
+    if (!priorPeriod?.closedAt || !period) return 1;
+    const ist = new Date(priorPeriod.closedAt.getTime() + 330 * 60000); // UTC+5:30
+    const cy = ist.getUTCFullYear(), cm = ist.getUTCMonth() + 1, cd = ist.getUTCDate();
+    if (cy < period.year || (cy === period.year && cm < period.month)) return 1; // closed before this month began
+    if (cy === period.year && cm === period.month) return Math.min(cd + 3, 28); // closed mid-month → +3 days grace
+    return 1;
+  })();
   const pendingPiggyHandover =
     priorPeriod && priorPeriod.piggyHandedOverAt == null && pendingPiggyLump > 0.005
-      ? { priorPeriodId: priorPeriod.id, lump: pendingPiggyLump }
+      ? { priorPeriodId: priorPeriod.id, lump: pendingPiggyLump, day: handoverDay }
       : null;
   return { byPerson, shared, allowances, piggyTotal, generalPiggy: piggy.generalTotal, treasurerId, piggyHolderId, monthBalance, treasurerPool, pendingPiggyHandover };
 }
