@@ -107,6 +107,10 @@ export default async function SetupPage({
             items. Add, edit amounts, pause or delete here; <b>changes apply from next month</b> and the
             current sheet stays frozen.
           </p>
+          <p className="mt-1 text-xs text-slate-400">
+            📌 A value you edit directly on a month&apos;s Sheet is <b>kept</b> for that month — a
+            &ldquo;Sync from Setup&rdquo; leaves it alone (use the ↻ on the line to re-pull it here).
+          </p>
           {readOnly && (
             <p className="mt-2 rounded-md bg-slate-100 px-3 py-2 text-xs text-slate-600">
               View-only access. Only the head can change these settings.

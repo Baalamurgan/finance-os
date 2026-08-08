@@ -189,6 +189,10 @@ export function MoneyPlan({
                     {isAllowance && <span className="shrink-0 rounded-full bg-violet-50 px-1.5 py-0.5 text-[9px] font-medium text-violet-500">personal · from hub</span>}
                     {isPiggy && <span className="shrink-0 rounded-full bg-pink-50 px-1.5 py-0.5 text-[9px] font-medium text-pink-500">{isHandover ? "🐷 last month’s leftovers → holder" : "🐷 to piggy · at wind-down"}</span>}
                     {!s.done && (!isPiggy || isHandover) && <DayTag kind={s.kind} day={s.day} status={s.status ?? null} days={s.days ?? null} />}
+                    {/* A done step keeps its date visible — when it was scheduled / due — as a muted tag. */}
+                    {s.done && s.day != null && (!isPiggy || isHandover) && (
+                      <span className="shrink-0 rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] font-normal text-slate-400 no-underline">{isIncome ? "on" : "was due"} {ordinal(s.day)}</span>
+                    )}
                     {s.feedsBills && !s.done && <span className="shrink-0 rounded-full bg-indigo-50 px-1.5 py-0.5 text-[9px] font-medium text-indigo-500">funds bills ↓</span>}
                     {s.fundsMember && !s.done && !s.reimbursement && <span className="shrink-0 rounded-full bg-emerald-50 px-1.5 py-0.5 text-[9px] font-medium text-emerald-600">funds {s.toName} ↓</span>}
                     {s.reimbursement && <span className="shrink-0 rounded-full bg-emerald-50 px-1.5 py-0.5 text-[9px] font-medium text-emerald-600" title={`${s.toName} is paid back early for what they spent out of pocket last month`}>reimbursement · last month’s spends</span>}
@@ -356,8 +360,12 @@ function MiniBtn({ children, primary }: { children: React.ReactNode; primary?: b
   );
 }
 
+function ordinal(day: number) {
+  return `${day}${["th", "st", "nd", "rd"][((day % 100) - 20) % 10] ?? ["th", "st", "nd", "rd"][day % 100] ?? "th"}`;
+}
+
 function DayTag({ kind, day, status, days }: { kind: string; day: number | null; status: "overdue" | "soon" | "normal" | null; days: number | null }) {
-  const ord = day == null ? null : `${day}${["th", "st", "nd", "rd"][((day % 100) - 20) % 10] ?? ["th", "st", "nd", "rd"][day % 100] ?? "th"}`;
+  const ord = day == null ? null : ordinal(day);
   // Income lands ON a day (or "up front" if undated) — it's an arrival, not a deadline.
   if (kind === "income") return <span className="shrink-0 rounded-full bg-emerald-50 px-1.5 py-0.5 text-[10px] text-emerald-600">{ord ? `on ${ord}` : "up front"}</span>;
   // Disbursements (hub → member) go out once the hub has collected enough. They're scheduled to a

@@ -557,6 +557,7 @@ export default async function SheetPage({
                         balance={rollup.balance}
                         sheetLabel="+ Add fixed expense"
                         newCategoryDefaultSection="Monthly"
+                        showDueDay
                       />
                     </div>
                   )}
