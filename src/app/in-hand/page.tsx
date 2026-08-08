@@ -103,6 +103,7 @@ export default async function InHandPage({
                 monthBalance={inHand.monthBalance}
                 isPiggyHolder={g.memberId === inHand.piggyHolderId}
                 piggy={inHand.generalPiggy}
+                pendingPiggyLump={inHand.pendingPiggyHandover?.lump ?? 0}
                 canToggle={canToggle}
                 periodId={periodId}
                 generalPiggy={inHand.generalPiggy}

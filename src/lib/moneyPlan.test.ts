@@ -253,6 +253,24 @@ describe("buildMoneyPlan", () => {
     expect(plan.steps.find((s) => s.kind === "bill")!.senderShort).toBeUndefined(); // 500 covers the 400 bill
   });
 
+  it("adds a tickable piggy hand-over lump that doesn't move this month's cash walk", () => {
+    const plan = buildMoneyPlan({
+      treasurerId: T,
+      transfers: [],
+      bills: [bill({ payerId: 5, payerName: "E", vendor: "Rent", amount: 100, day: 3 })],
+      incomeDayByMember: {},
+      incomeArrivals: [{ memberId: 5, day: 1, amount: 500 }],
+      piggyHandover: { toId: 3, toName: "Baala", amount: 7805, day: 1, handoverPeriodId: 6 },
+    });
+    const ho = plan.steps.find((s) => s.kind === "piggy")!;
+    expect(ho.handoverPeriodId).toBe(6); // tickable → marks period 6 handed over
+    expect(ho.amount).toBe(7805);
+    expect(ho.day).toBe(1);
+    expect(plan.total).toBe(1); // informational — only the bill is counted, not the hand-over
+    // prior-month cash: the hand-over must NOT shift anyone's running balance this month
+    expect(ho.balancesBefore).toEqual(ho.balancesAfter);
+  });
+
   it("catches a treasurer disbursing before his own income arrives (real August case)", () => {
     // Treasurer must send 120 on day 1 (to fund a member), but his own income lands day 5 and only
     // 20 has been collected by day 1 → he's genuinely short 100, not a phantom.

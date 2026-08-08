@@ -458,6 +458,10 @@ model Period {
   carryForward Float          @default(0) // opening balance carried in from previous month
   movedToPiggy Float          @default(0) // amount sent to piggy at wind-down
   closedAt     DateTime?
+  // When the wound-down month's general-Piggy leftover was physically handed from the category
+  // owners to the Piggy holder. null after wind-down = still pending (shows as a tickable hand-over
+  // step in the NEXT month's Money Plan; the pending lump sits in the owners' In-Hand meanwhile).
+  piggyHandedOverAt DateTime?
   incomes      IncomeEntry[]
   expenses     ExpenseEntry[]
   budgets      Budget[]

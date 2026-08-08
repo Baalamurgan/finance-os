@@ -608,8 +608,14 @@ export async function getMoneyPlan(householdId: number, periodId: number, inhand
     .filter((i) => i.ownerId != null)
     .map((i) => ({ memberId: i.ownerId as number, day: i.dueDay, amount: i.amount, source: i.source, name: nameById.get(i.ownerId as number) }));
 
+  // Prior wound-down month's Piggy hand-over (owners → Piggy holder), as one tickable lump on day 1.
+  const piggyHandover =
+    inhand.pendingPiggyHandover && inhand.piggyHolderId != null
+      ? { toId: inhand.piggyHolderId, toName: nameById.get(inhand.piggyHolderId) ?? "Piggy holder", amount: inhand.pendingPiggyHandover.lump, day: 1, handoverPeriodId: inhand.pendingPiggyHandover.priorPeriodId }
+      : undefined;
+
   const { buildMoneyPlan } = await import("./moneyPlan");
-  return { ...buildMoneyPlan({ treasurerId: inhand.treasurerId, treasurerName: settlement.treasurer?.name, transfers, bills, allowances, piggyReturns, advances, incomeDayByMember, incomeByMember, incomeArrivals, reimburseByMember, reimburseDay }), treasurerId: inhand.treasurerId, periodId };
+  return { ...buildMoneyPlan({ treasurerId: inhand.treasurerId, treasurerName: settlement.treasurer?.name, transfers, bills, allowances, piggyReturns, advances, incomeDayByMember, incomeByMember, incomeArrivals, reimburseByMember, reimburseDay, piggyHandover }), treasurerId: inhand.treasurerId, periodId };
 }
 
 export type SettlementHistory = Awaited<ReturnType<typeof getSettlementHistory>>;
@@ -977,18 +983,50 @@ export async function getInHand(householdId: number, periodId: number) {
     const unpaidTotal = unpaidBills.reduce((s, b) => s + b.amount, 0);
     const earmarkedTotal = earmarked.reduce((s, e) => s + e.amount, 0);
     const miscSpent = miscByMember.get(key) ?? 0;
+    // Last month's Piggy leftover this owner is still HOLDING (until they hand it to the Piggy holder).
+    const pendingPiggyHeld = key != null ? Math.round((pendingByOwner.get(key) ?? 0) * 100) / 100 : 0;
     return {
       memberId: key, name, cats, unpaidBills, paidBills, earmarked, unpaidPeriodic, paidPeriodic, carried, carriedDue,
-      sinkingFunds, sinkingHeld,
+      sinkingFunds, sinkingHeld, pendingPiggyHeld,
       budgetRemaining, unpaidTotal, earmarkedTotal, miscSpent,
-      // carried bills are NOT in `net` — they were already settled in their own month.
-      net: budgetRemaining + unpaidTotal + earmarkedTotal - miscSpent,
+      // carried bills are NOT in `net` — they were already settled in their own month. The pending
+      // Piggy leftover IS in `net` (it's cash the owner physically holds until hand-over).
+      net: budgetRemaining + unpaidTotal + earmarkedTotal - miscSpent + pendingPiggyHeld,
     };
   };
 
   const headId = members.find((m) => m.role === "head")?.id ?? null;
   const treasurerId = period?.treasurerMemberId ?? household?.treasurerMemberId ?? headId;
   const piggyHolderId = household?.piggyHolderMemberId ?? headId;
+
+  // Prior month's PENDING Piggy hand-over: if the immediately-preceding month is CLOSED but its
+  // general-Piggy leftover hasn't been handed to the Piggy holder yet (piggyHandedOverAt null), that
+  // cash is still HELD BY THE CATEGORY OWNERS — each holds their own categories' leftover. So it
+  // counts in the OWNERS' In-Hand (via `build` below) and the holder shows it as "yet to receive",
+  // until the tickable Money-Plan hand-over step is ticked. (The holder's own leftover is already
+  // theirs, so it's excluded.) `build` reads pendingByOwner as a closure, like it does piggyHolderId.
+  const priorPeriod = period
+    ? await prisma.period.findFirst({
+        where: { householdId, status: "closed", OR: [{ year: { lt: period.year } }, { year: period.year, month: { lt: period.month } }] },
+        orderBy: [{ year: "desc" }, { month: "desc" }],
+        select: { id: true, piggyHandedOverAt: true },
+      })
+    : null;
+  const priorPiggyEntries =
+    priorPeriod && priorPeriod.piggyHandedOverAt == null
+      ? await prisma.piggyEntry.findMany({ where: { periodId: priorPeriod.id, kind: "piggy" }, select: { categoryId: true, amount: true } })
+      : [];
+  const catOwner = new Map(categories.map((c) => [c.id, c.responsibleMemberId ?? null]));
+  const pendingByOwner = new Map<number, number>();
+  for (const e of priorPiggyEntries) {
+    // Only a category's POSITIVE leftover is held cash the owner hands over. Skip pool-level
+    // adjustments (no category, e.g. "excess expense adjustment") and any non-positive entries.
+    if (e.categoryId == null || e.amount <= 0.005) continue;
+    const owner = catOwner.get(e.categoryId) ?? treasurerId;
+    if (owner == null || owner === piggyHolderId) continue; // the holder's own leftover is already theirs
+    pendingByOwner.set(owner, Math.round(((pendingByOwner.get(owner) ?? 0) + e.amount) * 100) / 100);
+  }
+  const pendingPiggyLump = Math.round([...pendingByOwner.values()].reduce((s, v) => s + v, 0) * 100) / 100;
 
   // keep a member if they hold anything — OR they're the treasurer/piggy-holder (so their
   // pool/piggy row always shows, even with no personal in-hand).
@@ -1007,7 +1045,14 @@ export async function getInHand(householdId: number, periodId: number) {
     .filter((e) => e.memberId != null)
     .map((e) => ({ id: e.id, recipientId: e.memberId as number, recipientName: nameOf(e.memberId), amount: e.amount, done: e.paid, dueDay: e.dueDay }));
 
-  return { byPerson, shared, allowances, piggyTotal, generalPiggy: piggy.generalTotal, treasurerId, piggyHolderId, monthBalance, treasurerPool };
+  // The Piggy holder's ACTUALLY-received general Piggy = accrued total minus what's still pending
+  // hand-over (held by the owners). The pending lump is surfaced so the Money Plan can add the
+  // tickable hand-over step and the Piggy tab / balance sheet can show "yet to receive".
+  const pendingPiggyHandover =
+    priorPeriod && priorPeriod.piggyHandedOverAt == null && pendingPiggyLump > 0.005
+      ? { priorPeriodId: priorPeriod.id, lump: pendingPiggyLump }
+      : null;
+  return { byPerson, shared, allowances, piggyTotal, generalPiggy: piggy.generalTotal, treasurerId, piggyHolderId, monthBalance, treasurerPool, pendingPiggyHandover };
 }
 
 /**

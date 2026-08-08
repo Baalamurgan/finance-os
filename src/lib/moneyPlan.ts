@@ -31,6 +31,7 @@ export type PlanStep = {
   done: boolean;
   // income (informational: a member's own income landing — credits their cash in the walk, not tickable)
   source?: string; // the income line's label (e.g. "Salary", "Rent")
+  handoverPeriodId?: number; // piggy hand-over step: the wound-down period whose leftover is being handed over (ticking marks it handed over)
   // transfer
   fromId?: number; toId?: number; fromName?: string; toName?: string; recordId?: number | null; feedsBills?: boolean;
   fundsMember?: boolean; // a disbursement piece timed to fund the recipient's own bills below
@@ -66,8 +67,9 @@ export function buildMoneyPlan(input: {
   incomeArrivals?: { memberId: number; day: number | null; amount: number; source?: string; name?: string }[]; // each income event + the day it lands
   reimburseByMember?: Record<number, number>; // prior-month out-of-pocket spend each member is owed back
   reimburseDay?: number; // target day to hand back those reimbursements (e.g. the day after wind-down)
+  piggyHandover?: { toId: number; toName: string; amount: number; day: number; handoverPeriodId: number }; // prior wound-down month's leftover, handed from owners to the Piggy holder (one tickable lump)
 }): MoneyPlan {
-  const { treasurerId, treasurerName, transfers, bills, allowances = [], piggyReturns = [], advances = [], incomeDayByMember, incomeByMember = {}, incomeArrivals, reimburseByMember = {}, reimburseDay } = input;
+  const { treasurerId, treasurerName, transfers, bills, allowances = [], piggyReturns = [], advances = [], incomeDayByMember, incomeByMember = {}, incomeArrivals, reimburseByMember = {}, reimburseDay, piggyHandover } = input;
 
   const inbound = transfers.filter((t) => t.toId === treasurerId);
   const outbound = transfers.filter((t) => t.toId !== treasurerId && t.fromId === treasurerId); // hub → creditor
@@ -145,6 +147,15 @@ export function buildMoneyPlan(input: {
     steps.push({
       id: p.key, kind: "piggy", day: null, amount: p.amount, done: false,
       fromId: p.fromId, toId: p.toId, fromName: p.fromName, toName: p.toName, status: null, days: null,
+    });
+  }
+  // Prior wound-down month's Piggy hand-over: one tickable combined lump (owners → Piggy holder),
+  // dated to the given day (day 1 by default). It's PRIOR-month cash tracked in In-Hand, so it does
+  // NOT move this month's cash walk — it's a to-do that, when ticked, marks the month handed over.
+  if (piggyHandover && piggyHandover.amount > 0.005) {
+    steps.push({
+      id: `piggyho-${piggyHandover.handoverPeriodId}`, kind: "piggy", day: piggyHandover.day, amount: piggyHandover.amount, done: false,
+      toId: piggyHandover.toId, toName: piggyHandover.toName, handoverPeriodId: piggyHandover.handoverPeriodId, status: null, days: null,
     });
   }
 
@@ -337,7 +348,10 @@ export function buildMoneyPlan(input: {
     }
     if (s.kind === "income") {
       shift(s.toId, s.amount); // income lands in the recipient's hand (always — not gated by a done flag)
-    } else if (s.kind === "transfer-in" || s.kind === "transfer-out" || s.kind === "allowance" || s.kind === "piggy" || s.kind === "advance") {
+    } else if (s.kind === "piggy") {
+      // Piggy hand-over = PRIOR-month cash (tracked in In-Hand), not this month's income — so it's
+      // informational in the cash walk and doesn't move any running balance here.
+    } else if (s.kind === "transfer-in" || s.kind === "transfer-out" || s.kind === "allowance" || s.kind === "advance") {
       shift(s.fromId, -s.amount);
       shift(s.toId, s.amount);
     } else if (s.kind === "bill" && !s.fund) {

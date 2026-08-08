@@ -1,6 +1,6 @@
 import { formatINR } from "@/lib/format";
 import { loadCommon } from "@/lib/load";
-import { getPiggyOverview, getSinkingBalances, getPiggyHistory, getProjectedPiggy } from "@/lib/queries";
+import { getPiggyOverview, getSinkingBalances, getPiggyHistory, getProjectedPiggy, getInHand } from "@/lib/queries";
 import { NavHeader } from "@/components/NavHeader";
 import { WithdrawPiggyModal } from "@/components/WithdrawPiggyModal";
 import { DepositPiggyModal } from "@/components/DepositPiggyModal";
@@ -31,6 +31,9 @@ export default async function PiggyPage({
     : null;
   const projected = previewSource ? await getProjectedPiggy(c.household.id, previewSource.id) : null;
   const { generalTotal, generalByCategory, sinking } = projected ?? (await getPiggyOverview(c.household.id));
+  // Prior month's leftover still with the owners (not yet handed to the Piggy holder).
+  const pendingHandover =
+    c.selected?.status === "open" ? (await getInHand(c.household.id, c.selected.id)).pendingPiggyHandover : null;
   const sinkingTotal = sinking.reduce((s, x) => s + x.hold, 0);
   const sinkingBalances = projected ? projected.sinkingBalances : await getSinkingBalances(c.household.id);
   const history = await getPiggyHistory(c.household.id);
@@ -150,6 +153,11 @@ export default async function PiggyPage({
             <div className="mt-1 text-xs text-amber-700/70">
               Unspent remainders from variable categories
             </div>
+            {pendingHandover && pendingHandover.lump > 0.005 && (
+              <div className="mt-2 rounded-lg bg-amber-100/70 px-2.5 py-1.5 text-[11px] font-medium text-amber-800">
+                🐷 {formatINR(pendingHandover.lump)} yet to receive — last month’s leftovers are still with the category owners until they hand it over.
+              </div>
+            )}
           </div>
           <div className="rounded-xl border border-indigo-200 bg-indigo-50 p-5">
             <div className="text-xs font-medium uppercase tracking-wide text-indigo-700">

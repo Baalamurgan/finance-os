@@ -2290,3 +2290,15 @@ export async function windDownMonth(formData: FormData) {
   await windDownPeriod(periodId, { leftoversToIncome });
   revalidatePath("/", "layout");
 }
+
+// Mark a wound-down month's Piggy leftover as physically handed from the category owners to the
+// Piggy holder (the tickable hand-over step in the next month's Money Plan). `undo` clears it back
+// to pending. Head/manager only. Flips whether that lump sits in the owners' In-Hand vs the holder's.
+export async function markPiggyHandedOver(formData: FormData) {
+  if (!(await canEdit())) return;
+  const periodId = Number(formData.get("periodId"));
+  if (!periodId) return;
+  const undo = formData.get("undo") === "1";
+  await prisma.period.update({ where: { id: periodId }, data: { piggyHandedOverAt: undo ? null : new Date() } });
+  revalidatePath("/", "layout");
+}

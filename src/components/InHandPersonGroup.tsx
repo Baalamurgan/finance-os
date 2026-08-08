@@ -14,6 +14,7 @@ export function InHandPersonGroup({
   monthBalance,
   isPiggyHolder,
   piggy,
+  pendingPiggyLump,
   canToggle,
   periodId,
   generalPiggy,
@@ -29,6 +30,7 @@ export function InHandPersonGroup({
   monthBalance: number;
   isPiggyHolder: boolean;
   piggy: number;
+  pendingPiggyLump: number;
   canToggle: boolean;
   periodId: number;
   generalPiggy: number;
@@ -37,7 +39,7 @@ export function InHandPersonGroup({
   selYear: number;
   selMonth: number;
 }) {
-  const { name, cats, unpaidBills, paidBills, earmarked, sinkingFunds, sinkingHeld, unpaidPeriodic, paidPeriodic, carried, carriedDue, miscSpent, net } = group;
+  const { name, cats, unpaidBills, paidBills, earmarked, sinkingFunds, sinkingHeld, unpaidPeriodic, paidPeriodic, carried, carriedDue, miscSpent, net, pendingPiggyHeld } = group;
   // Per-card toggle: include or exclude this member's own misc/out-of-pocket in their total.
   // Default = include (the true position). Excluding shows "budget + bills + savings" only, so
   // someone can see where they'd stand without their discretionary spending counted.
@@ -49,7 +51,10 @@ export function InHandPersonGroup({
   const selfPayer = !canToggle && open && group.memberId === currentMemberId;
   const canPay = canToggle || selfPayer;
   const poolAmt = isTreasurer ? pool : 0;
-  const piggyAmt = isPiggyHolder ? piggy : 0;
+  // The holder has RECEIVED the general Piggy minus whatever's still pending hand-over from the
+  // owners (that lump sits in the owners' `net` until they hand it over). `net` already includes
+  // this person's own pendingPiggyHeld, so it isn't re-added here.
+  const piggyAmt = isPiggyHolder ? piggy - pendingPiggyLump : 0;
   const total = shownNet + poolAmt + piggyAmt + sinkingHeld;
   const paidCount = paidBills.length + paidPeriodic.length;
   return (
@@ -188,10 +193,22 @@ export function InHandPersonGroup({
             <span className="shrink-0 tabular-nums font-medium text-indigo-700">{formatINR(pool)}</span>
           </li>
         )}
-        {isPiggyHolder && piggy !== 0 && (
+        {isPiggyHolder && piggyAmt !== 0 && (
           <li className="flex items-center justify-between gap-2 text-xs">
             <span className="truncate text-pink-600">🐷 General Piggy held <span className="text-[10px] text-slate-400">excl. sinking</span></span>
-            <span className="shrink-0 tabular-nums font-medium text-pink-700">{formatINR(piggy)}</span>
+            <span className="shrink-0 tabular-nums font-medium text-pink-700">{formatINR(piggyAmt)}</span>
+          </li>
+        )}
+        {isPiggyHolder && pendingPiggyLump > 0.005 && (
+          <li className="flex items-center justify-between gap-2 text-xs">
+            <span className="truncate text-amber-600">🐷 yet to receive <span className="text-[10px] text-slate-400">last month’s leftovers, still with owners</span></span>
+            <span className="shrink-0 tabular-nums font-medium text-amber-700">{formatINR(pendingPiggyLump)}</span>
+          </li>
+        )}
+        {pendingPiggyHeld > 0.005 && (
+          <li className="flex items-center justify-between gap-2 text-xs">
+            <span className="truncate text-amber-600">🐷 holding for Piggy <span className="text-[10px] text-slate-400">hand to the holder</span></span>
+            <span className="shrink-0 tabular-nums font-medium text-amber-700">{formatINR(pendingPiggyHeld)}</span>
           </li>
         )}
 

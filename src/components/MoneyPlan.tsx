@@ -4,7 +4,7 @@ import { useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { formatINR } from "@/lib/format";
-import { markSettled, unsettle, toggleBillPaid, syncMonthFromSetup, markAdvanceSettled, unsettleAdvance } from "@/app/actions";
+import { markSettled, unsettle, toggleBillPaid, syncMonthFromSetup, markAdvanceSettled, unsettleAdvance, markPiggyHandedOver } from "@/app/actions";
 import { PayBillModal } from "@/components/PayBillModal";
 import { ExpenseModal } from "@/components/ExpenseModal";
 import { useToast } from "@/components/Toast";
@@ -154,7 +154,8 @@ export function MoneyPlan({
             // Allowance = hub → member; the "personal · from hub" tag beside the title conveys the
             // kind, so the title just shows the money flow (sender → recipient) like every other step.
             // Income = a member's own money landing (recipient · source), an inflow row.
-            const title = isIncome ? `${s.toName ?? "?"} · ${s.source ?? "income"}` : isAllowance ? `${s.fromName} → ${s.toName}` : isPiggy ? `${s.fromName} → ${s.toName} · Piggy` : isAdvance || isTransfer ? `${s.fromName} → ${s.toName}` : `${s.payerName} → ${s.vendor}`;
+            const isHandover = isPiggy && s.handoverPeriodId != null;
+            const title = isIncome ? `${s.toName ?? "?"} · ${s.source ?? "income"}` : isAllowance ? `${s.fromName} → ${s.toName}` : isHandover ? `Piggy hand-over → ${s.toName}` : isPiggy ? `${s.fromName} → ${s.toName} · Piggy` : isAdvance || isTransfer ? `${s.fromName} → ${s.toName}` : `${s.payerName} → ${s.vendor}`;
             // Urgency (only while unpaid — a done step is never "overdue"): RED for overdue OR due
             // today (needs action now), AMBER for due in 1–2 days, plain otherwise.
             const urgent = !s.done && (s.status === "overdue" || (s.status === "soon" && (s.days ?? 1) <= 0));
@@ -184,8 +185,8 @@ export function MoneyPlan({
                     <span className="truncate font-medium">{title}</span>
                     {isIncome && <span className="shrink-0 rounded-full bg-emerald-50 px-1.5 py-0.5 text-[9px] font-medium text-emerald-600">↓ income in hand</span>}
                     {isAllowance && <span className="shrink-0 rounded-full bg-violet-50 px-1.5 py-0.5 text-[9px] font-medium text-violet-500">personal · from hub</span>}
-                    {isPiggy && <span className="shrink-0 rounded-full bg-pink-50 px-1.5 py-0.5 text-[9px] font-medium text-pink-500">🐷 to piggy · at wind-down</span>}
-                    {!s.done && !isPiggy && <DayTag kind={s.kind} day={s.day} status={s.status ?? null} days={s.days ?? null} />}
+                    {isPiggy && <span className="shrink-0 rounded-full bg-pink-50 px-1.5 py-0.5 text-[9px] font-medium text-pink-500">{isHandover ? "🐷 last month’s leftovers → holder" : "🐷 to piggy · at wind-down"}</span>}
+                    {!s.done && (!isPiggy || isHandover) && <DayTag kind={s.kind} day={s.day} status={s.status ?? null} days={s.days ?? null} />}
                     {s.feedsBills && !s.done && <span className="shrink-0 rounded-full bg-indigo-50 px-1.5 py-0.5 text-[9px] font-medium text-indigo-500">funds bills ↓</span>}
                     {s.fundsMember && !s.done && !s.reimbursement && <span className="shrink-0 rounded-full bg-emerald-50 px-1.5 py-0.5 text-[9px] font-medium text-emerald-600">funds {s.toName} ↓</span>}
                     {s.reimbursement && <span className="shrink-0 rounded-full bg-emerald-50 px-1.5 py-0.5 text-[9px] font-medium text-emerald-600" title={`${s.toName} is paid back early for what they spent out of pocket last month`}>reimbursement · last month’s spends</span>}
@@ -225,7 +226,11 @@ export function MoneyPlan({
 
                 {/* action */}
                 <span className="flex w-16 shrink-0 justify-end">
-                  {isPiggy ? (
+                  {isHandover ? (
+                    canEdit ? (
+                      <form action={markPiggyHandedOver}><input type="hidden" name="periodId" value={s.handoverPeriodId} /><MiniBtn primary>✓ handed over</MiniBtn></form>
+                    ) : null
+                  ) : isPiggy ? (
                     <span className="text-[9px] text-slate-300">est.</span>
                   ) : isAdvance ? (
                     s.advanceId != null && canActTransfer ? (

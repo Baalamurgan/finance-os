@@ -2,7 +2,7 @@ import { redirect } from "next/navigation";
 import { formatINR } from "@/lib/format";
 import { categoryEmoji } from "@/lib/categoryEmoji";
 import { loadCommon } from "@/lib/load";
-import { getRollup, getWindDownPreview, getSkippedSetAsides, getProjectedPiggy } from "@/lib/queries";
+import { getRollup, getWindDownPreview, getSkippedSetAsides, getProjectedPiggy, getInHand } from "@/lib/queries";
 import { NavHeader } from "@/components/NavHeader";
 import { RowActions } from "@/components/RowActions";
 import { ExpenseRowActions } from "@/components/ExpenseRowActions";
@@ -266,6 +266,9 @@ export default async function SheetPage({
     : null;
   const projectedPiggy = piggySource ? await getProjectedPiggy(c.household.id, piggySource.id) : null;
   const shownPiggy = projectedPiggy ? projectedPiggy.generalTotal : c.piggyBalance;
+  // Part of the Piggy figure may be last month's leftover still sitting with the category owners
+  // (not yet handed to the holder). Surface it so the piggy number isn't mistaken for fully received.
+  const pendingHandover = open ? (await getInHand(c.household.id, c.selected.id)).pendingPiggyHandover : null;
 
   // Safeguard: if the current calendar month has no period yet (e.g. the monthly
   // auto-create didn't run), nudge the head to start it so the family always has
@@ -722,6 +725,11 @@ export default async function SheetPage({
             <span className="text-xs font-medium uppercase tracking-wide text-slate-400">Balance + Piggy</span>
             <span className="text-lg font-bold tabular-nums text-slate-900">{formatINR(rollup.balance + shownPiggy)}</span>
           </div>
+          {pendingHandover && pendingHandover.lump > 0.005 && (
+            <div className="mt-2 text-[11px] text-amber-700">
+              🐷 {formatINR(pendingHandover.lump)} of the Piggy is last month’s leftover still with the category owners — not yet handed to the holder.
+            </div>
+          )}
         </div>
 
         {/* where did the income go — quick visual breakdown */}
