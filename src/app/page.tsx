@@ -10,10 +10,12 @@ import { ExpenseModal } from "@/components/ExpenseModal";
 import { DetailsPersist } from "@/components/DetailsPersist";
 import { IncomeModal } from "@/components/IncomeModal";
 import { IncomeRowActions } from "@/components/IncomeRowActions";
+import { PinnedBadge } from "@/components/PinnedBadge";
 import { MoneyFlowDonut } from "@/components/Charts";
 import { ConfirmForm } from "@/components/ConfirmForm";
 import { SheetLockNotice } from "@/components/SheetLockNotice";
 import { RebuildDraftButton } from "@/components/RebuildDraftButton";
+import { SheetRefreshButton } from "@/components/SheetRefreshButton";
 import { monthsUntilNextDue } from "@/lib/schedule";
 import { createPeriod, deleteIncome, createNextMonthDraft, discardDraft, skipSetAside, restoreSetAside } from "./actions";
 
@@ -111,7 +113,7 @@ function ExpenseRow({
         : `This was the last set-aside before the bill — the shortfall will be paid out-of-pocket on the due month.`) +
       `\n\nIt won't come back on a rebuild; Setup stays the template.`;
   return (
-    <Row label={e.label} sub={e.category.name} emoji={categoryEmoji(e.category.name)} tag={e.member?.name} amount={e.amount}>
+    <Row label={e.label} sub={e.category.name} emoji={categoryEmoji(e.category.name)} tag={e.member?.name} amount={e.amount} pinnedControl={e.pinned ? <PinnedBadge kind="expense" id={e.id} canEdit={canEditHere} /> : null}>
       {canEditHere && isSetAside && (
         <ConfirmForm action={skipSetAside} message={removeMsg}>
           <input type="hidden" name="categoryId" value={e.categoryId} />
@@ -440,6 +442,9 @@ export default async function SheetPage({
               ↓ Export CSV
             </a>
             {c.canEdit && open && !isDraft && !c.provisional && (
+              <SheetRefreshButton periodId={c.selected.id} />
+            )}
+            {c.canEdit && open && !isDraft && !c.provisional && (
               <form action={createNextMonthDraft}>
                 <input type="hidden" name="householdId" value={c.household.id} />
                 <button className="rounded-full border border-violet-300 bg-violet-50 px-3 py-1 text-xs font-medium text-violet-700 hover:bg-violet-100">
@@ -481,7 +486,7 @@ export default async function SheetPage({
             </summary>
             <div className="divide-y divide-slate-100 px-4 py-1">
               {rollup.incomes.map((i) => (
-                <Row key={i.id} label={i.source} tag={i.owner?.name} amount={i.amount}>
+                <Row key={i.id} label={i.source} tag={i.owner?.name} amount={i.amount} pinnedControl={i.pinned ? <PinnedBadge kind="income" id={i.id} canEdit={canEditHere} /> : null}>
                   {c.isHead ? (
                     <IncomeRowActions
                       members={c.members}
@@ -777,6 +782,7 @@ function Row({
   tag,
   amount,
   emoji,
+  pinnedControl,
   children,
 }: {
   label: string;
@@ -784,6 +790,7 @@ function Row({
   tag?: string | null;
   amount: number;
   emoji?: string | null;
+  pinnedControl?: React.ReactNode;
   children?: React.ReactNode;
 }) {
   // pull a trailing installment marker ("Chimney EMI 2/6") out into a tag
@@ -801,6 +808,7 @@ function Row({
               {installment}
             </span>
           )}
+          {pinnedControl}
         </div>
         {(sub || tag) && (
           <div className="text-xs text-slate-400">

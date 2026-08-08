@@ -279,11 +279,15 @@ async function doSaveExpense(formData: FormData): Promise<{ ok: boolean; error?:
   if (id) {
     // A line already paid in the money plan is frozen — the head can edit anything else all month, but
     // a paid step is paid (editing it would silently redraw a payment that already happened).
-    const existing = await prisma.expenseEntry.findUnique({ where: { id }, select: { paid: true } });
+    const existing = await prisma.expenseEntry.findUnique({ where: { id }, select: { paid: true, amount: true, dueDay: true } });
     if (existing?.paid) return { ok: false, error: "This is already paid in the money plan — it can’t be changed." };
+    // Editing the VALUE (amount / due-day) on the Sheet pins this line for the month: a later
+    // refresh-from-Setup leaves the intentional override alone (until it's un-pinned). Editing only
+    // the label / member / necessary flag doesn't pin — those aren't touched by the Setup sync.
+    const valueChanged = existing != null && (existing.amount !== amount || (hasDueField && existing.dueDay !== dueDay));
     await prisma.expenseEntry.update({
       where: { id },
-      data: { categoryId, amount, label, memberId: finalMemberId, necessary, ...(hasDueField ? { dueDay } : {}) },
+      data: { categoryId, amount, label, memberId: finalMemberId, necessary, ...(hasDueField ? { dueDay } : {}), ...(valueChanged ? { pinned: true } : {}) },
     });
     await logActivity("expense", "updated", `Edited expense “${label}” to ${formatINR(amount)}`, periodId);
   } else {
@@ -406,7 +410,9 @@ export async function updateIncome(prev: SaveState, formData: FormData): Promise
   if (!id || !source || !amount) return { ok: false, n: prev.n };
   const i = await prisma.incomeEntry.findUnique({ where: { id } });
   if (!i || !(await canEditNow(i.periodId))) return { ok: false, n: prev.n };
-  await prisma.incomeEntry.update({ where: { id }, data: { source, amount, ownerId } });
+  // A month-specific amount edit pins the line so a refresh-from-Setup won't revert it (until un-pinned).
+  const pin = i.amount !== amount ? { pinned: true } : {};
+  await prisma.incomeEntry.update({ where: { id }, data: { source, amount, ownerId, ...pin } });
   await logActivity("income", "updated", `Edited income “${source}” to ${formatINR(amount)}`, i.periodId);
   revalidatePath("/", "layout");
   return { ok: true, n: prev.n + 1 };
@@ -2066,6 +2072,7 @@ export async function syncMonthFromSetup(
       const match = cands.length === 1 ? cands[0] : cands.find((e) => stripInstNumber(e.source) === stripInstNumber(it.name));
       if (!match) continue;
       usedInc.add(match.id);
+      if (match.pinned) continue; // month-pinned (edited on the Sheet) — don't revert to the Setup value
       if (match.dueDay !== it.dueDay || match.amount !== it.amount)
         updates.push(prisma.incomeEntry.update({ where: { id: match.id }, data: { dueDay: it.dueDay, amount: it.amount } }));
     } else {
@@ -2074,6 +2081,7 @@ export async function syncMonthFromSetup(
       const match = cands.length === 1 ? cands[0] : cands.find((e) => stripInstNumber(e.label) === stripInstNumber(it.name));
       if (!match) continue;
       usedExp.add(match.id);
+      if (match.pinned) continue; // month-pinned (edited on the Sheet) — don't revert to the Setup value
       if (match.dueDay !== it.dueDay || match.amount !== it.amount)
         updates.push(prisma.expenseEntry.update({ where: { id: match.id }, data: { dueDay: it.dueDay, amount: it.amount } }));
     }
@@ -2088,11 +2096,14 @@ export async function syncMonthFromSetup(
     const isFullBill = cat.fundingStyle == null && cat.billEveryMonths != null && cat.billAmount != null && cat.billAmount > 0;
     if (isBudget) {
       usedExp.add(line?.id ?? -1);
+      // A pinned envelope holds BOTH its numbers for the month — skip the Sheet line AND Budget.planned.
+      if (line?.pinned) continue;
       if (line && line.amount !== cat.monthlyBudget) updates.push(prisma.expenseEntry.update({ where: { id: line.id }, data: { amount: cat.monthlyBudget! } }));
       const b = budgets.find((x) => x.categoryId === cat.id);
       if (b && b.planned !== cat.monthlyBudget) updates.push(prisma.budget.update({ where: { id: b.id }, data: { planned: cat.monthlyBudget! } }));
     } else if (isFullBill && line) {
       usedExp.add(line.id);
+      if (line.pinned) continue; // month-pinned bill — keep the Sheet's amount / due-day
       if (line.amount !== cat.billAmount || line.dueDay !== cat.billDay) updates.push(prisma.expenseEntry.update({ where: { id: line.id }, data: { amount: cat.billAmount!, dueDay: cat.billDay } }));
     }
   }
@@ -2117,6 +2128,55 @@ export async function syncMonthFromSetup(
   log.info("syncMonthFromSetup", "ok", { householdId, periodId, updated: updates.length, hadSource: !!source });
   revalidatePath("/", "layout");
   return { ok: true, updated: updates.length };
+}
+
+// Un-pin a single Sheet line and re-pull its value from Setup — the inverse of a month-specific edit.
+// Clears `pinned` and, in the same write, restores the amount/due-day the Setup template would give
+// this line (budget → monthlyBudget, bill → billAmount/day, else the matching RecurringItem). Only
+// THIS line is touched — other lines are left exactly as they are. HEAD/manager, open month only.
+export async function unpinLine(formData: FormData) {
+  if (!(await canEdit())) return { ok: false, error: "Not allowed." };
+  const kind = String(formData.get("kind") ?? ""); // "income" | "expense"
+  const id = Number(formData.get("id"));
+  if (!id || (kind !== "income" && kind !== "expense")) return { ok: false, error: "Bad request." };
+
+  if (kind === "income") {
+    const inc = await prisma.incomeEntry.findUnique({ where: { id }, select: { ownerId: true, source: true, period: { select: { id: true, householdId: true, status: true } } } });
+    if (!inc || inc.period.status !== "open") return { ok: false, error: "This month is closed." };
+    const items = await prisma.recurringItem.findMany({ where: { householdId: inc.period.householdId, active: true, kind: "income" } });
+    const cands = items.filter((it) => it.memberId === inc.ownerId);
+    const it = cands.length === 1 ? cands[0] : cands.find((x) => stripInstNumber(x.name) === stripInstNumber(inc.source));
+    await prisma.incomeEntry.update({ where: { id }, data: { pinned: false, ...(it ? { amount: it.amount, dueDay: it.dueDay } : {}) } });
+    revalidatePath("/", "layout");
+    return { ok: true };
+  }
+
+  const exp = await prisma.expenseEntry.findUnique({
+    where: { id },
+    select: { categoryId: true, memberId: true, label: true, paid: true, period: { select: { id: true, householdId: true, status: true } },
+      category: { select: { fundingStyle: true, billEveryMonths: true, billDay: true, billAmount: true, monthlyBudget: true, onHold: true } } },
+  });
+  if (!exp || exp.period.status !== "open") return { ok: false, error: "This month is closed." };
+  if (exp.paid) return { ok: false, error: "This is already paid — it can’t be re-synced." };
+  const cat = exp.category;
+  const isBudget = cat.fundingStyle == null && cat.billEveryMonths == null && cat.monthlyBudget != null && cat.monthlyBudget > 0;
+  const isFullBill = cat.fundingStyle == null && cat.billEveryMonths != null && cat.billAmount != null && cat.billAmount > 0;
+  if (isBudget) {
+    await prisma.$transaction([
+      prisma.expenseEntry.update({ where: { id }, data: { pinned: false, amount: cat.monthlyBudget! } }),
+      prisma.budget.updateMany({ where: { periodId: exp.period.id, categoryId: exp.categoryId }, data: { planned: cat.monthlyBudget! } }),
+    ]);
+  } else if (isFullBill) {
+    await prisma.expenseEntry.update({ where: { id }, data: { pinned: false, amount: cat.billAmount!, dueDay: cat.billDay } });
+  } else {
+    // non-budget recurring line (loan/chit/cook/misc): match the template by category + payer + name
+    const items = await prisma.recurringItem.findMany({ where: { householdId: exp.period.householdId, active: true, kind: "expense", categoryId: exp.categoryId } });
+    const cands = items.filter((x) => x.memberId === exp.memberId);
+    const it = cands.length === 1 ? cands[0] : cands.find((x) => stripInstNumber(x.name) === stripInstNumber(exp.label));
+    await prisma.expenseEntry.update({ where: { id }, data: { pinned: false, ...(it ? { amount: it.amount, dueDay: it.dueDay } : {}) } });
+  }
+  revalidatePath("/", "layout");
+  return { ok: true };
 }
 
 // Batch-save the recurring template rows edited in Setup (one floating "N changes → Save" bar).

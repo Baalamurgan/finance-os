@@ -10,7 +10,8 @@ import { useToast } from "@/components/Toast";
  * real, editable month — but its carry-forward from the working month is only an ESTIMATE until
  * that month closes, so we badge it as a preview and (for head/manager) offer a one-tap refresh.
  * The refresh re-pulls the whole month from Setup (amounts, due days, budgets & bills) AND
- * recomputes the carry estimate — the same comprehensive refresh as the Money-plan button.
+ * recomputes the carry estimate — the same Setup sync as the Sheet's "Sync from Setup" button
+ * (pinned month-edits are kept). The Money-plan refresh is separate: it only re-derives the steps.
  */
 export function ProvisionalBanner({ workingLabel, periodId, canEdit }: { workingLabel: string; periodId: number; canEdit: boolean }) {
   const [pending, start] = useTransition();

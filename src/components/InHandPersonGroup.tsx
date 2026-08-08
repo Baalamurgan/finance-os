@@ -200,10 +200,19 @@ export function InHandPersonGroup({
           </li>
         )}
         {isPiggyHolder && pendingPiggyLump > 0.005 && (
-          <li className="flex items-center justify-between gap-2 text-xs">
-            <span className="truncate text-amber-600">🐷 yet to receive <span className="text-[10px] text-slate-400">last month’s leftovers, still with owners</span></span>
-            <span className="shrink-0 tabular-nums font-medium text-amber-700">{formatINR(pendingPiggyLump)}</span>
-          </li>
+          <>
+            <li className="pt-2">
+              <div className="border-t border-slate-200" />
+              <div className="mt-1.5 flex items-center justify-between gap-2">
+                <span className="text-[10px] font-semibold uppercase tracking-wide text-amber-600">Pending hand-over</span>
+                <span className="text-[9px] text-slate-400">reminder · not in your in-hand yet</span>
+              </div>
+            </li>
+            <li className="flex items-center justify-between gap-2 text-xs">
+              <span className="truncate text-amber-600">🐷 yet to receive <span className="text-[10px] text-slate-400">last month’s leftovers, still with owners</span></span>
+              <span className="shrink-0 tabular-nums font-medium text-amber-700">{formatINR(pendingPiggyLump)}</span>
+            </li>
+          </>
         )}
         {pendingPiggyHeld > 0.005 && (
           <li className="flex items-center justify-between gap-2 text-xs">

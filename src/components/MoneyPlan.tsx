@@ -4,7 +4,7 @@ import { useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { formatINR } from "@/lib/format";
-import { markSettled, unsettle, toggleBillPaid, syncMonthFromSetup, markAdvanceSettled, unsettleAdvance, markPiggyHandedOver } from "@/app/actions";
+import { markSettled, unsettle, toggleBillPaid, markAdvanceSettled, unsettleAdvance, markPiggyHandedOver } from "@/app/actions";
 import { PayBillModal } from "@/components/PayBillModal";
 import { ExpenseModal } from "@/components/ExpenseModal";
 import { useToast } from "@/components/Toast";
@@ -60,11 +60,13 @@ export function MoneyPlan({
     : rows.filter(({ s }) => s.fromId === who || s.toId === who || s.payerId === who);
   const whoName = people.find((p) => p.id === who)?.name;
 
+  // Money-plan refresh re-derives the STEPS from the current Sheet — it does NOT pull from Setup or
+  // touch Sheet lines (that's the Sheet's own refresh). Done steps stay done (their state is persisted);
+  // only the not-yet-done steps re-arrange to match the Sheet. So it's just a server re-render.
   const refresh = () =>
     startTransition(async () => {
-      const r = await syncMonthFromSetup(periodId);
       router.refresh();
-      toast(r.ok ? (r.updated > 0 ? `Refreshed — ${r.updated} line${r.updated > 1 ? "s" : ""} updated from Setup` : "Refreshed from Setup") : (r.error ?? "Couldn't refresh"), r.ok ? "success" : "error");
+      toast("Plan refreshed from the Sheet", "success");
     });
 
   return (
