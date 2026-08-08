@@ -5,7 +5,7 @@
 // family can execute it step by step. Completion is written through to the underlying records
 // (SettlementRecord / bill paid) elsewhere, so this stays a projection, never a second ledger.
 
-export type PlanTransfer = { fromId: number; from: string; toId: number; to: string; amount: number; settled: boolean; recordId: number | null; status?: "overdue" | "soon" | "normal" | null; days?: number | null };
+export type PlanTransfer = { fromId: number; from: string; toId: number; to: string; amount: number; paidAmount?: number | null; settled: boolean; recordId: number | null; status?: "overdue" | "soon" | "normal" | null; days?: number | null };
 export type PlanBill = {
   key: string; payerId: number | null; payerName: string; vendor: string; amount: number; done: boolean;
   day: number | null; status: "overdue" | "soon" | "normal" | null; days?: number | null; billId?: number; categoryId?: number; fund?: boolean; fundAvail?: number;
@@ -32,6 +32,7 @@ export type PlanStep = {
   // income (informational: a member's own income landing — credits their cash in the walk, not tickable)
   source?: string; // the income line's label (e.g. "Salary", "Rent")
   handoverPeriodId?: number; // piggy hand-over step: the wound-down period whose leftover is being handed over (ticking marks it handed over)
+  settleAmount?: number; // amount to record when THIS step is ticked (a funding remainder settles the creditor's FULL net, not just this slice)
   // transfer
   fromId?: number; toId?: number; fromName?: string; toName?: string; recordId?: number | null; feedsBills?: boolean;
   fundsMember?: boolean; // a disbursement piece timed to fund the recipient's own bills below
@@ -73,6 +74,17 @@ export function buildMoneyPlan(input: {
 
   const inbound = transfers.filter((t) => t.toId === treasurerId);
   const outbound = transfers.filter((t) => t.toId !== treasurerId && t.fromId === treasurerId); // hub → creditor
+  // Paid-so-far on a (possibly PARTIALLY) settled disbursement. An early reimbursement can settle just
+  // a SLICE of what the hub owes a creditor (the settlement record holds one amount); the unpaid rest
+  // must still be scheduled below, or the creditor's later bills would show unfunded. paidOf clamps to net.
+  const paidOf = (o: PlanTransfer) => Math.min(o.paidAmount ?? o.amount, o.amount);
+  // Full net owed to each creditor, so ticking a remainder funding piece settles them FULLY (records the
+  // whole net), rather than overwriting the record with just that slice.
+  const netOwedByCreditor = new Map<number, number>(outbound.map((o) => [o.toId, o.amount]));
+  // What's already been paid to each creditor (a partial early settlement). The early REIMBURSEMENT is
+  // normally the first thing paid, so this reduces the reimbursement need below — otherwise it would be
+  // scheduled again on top of the already-paid slice (double-counting it).
+  const paidByCreditor = new Map<number, number>(outbound.filter((o) => o.settled).map((o) => [o.toId, paidOf(o)]));
   // Disbursements happen only after everything has been collected AND the bills paid, so anchor
   // undated/residual outbound transfers to the latest inbound-income day OR bill due-day, whichever
   // is later. Undated bills contribute 0 here — a bill with no due date shouldn't push the payout later.
@@ -96,9 +108,11 @@ export function buildMoneyPlan(input: {
       recordId: t.recordId, status: t.status ?? null, days: t.days ?? null, feedsBills: hasHubBills,
     });
   }
-  // Already-settled disbursements happened — show them as a single done step, don't re-schedule them.
+  // Already-PAID disbursement portion → one done step for the amount actually handed over (paidOf).
+  // A partial payment (paid < net) leaves a remainder that's re-scheduled via unsettledOut below.
   for (const t of outbound.filter((o) => o.settled)) {
-    steps.push({ id: `xfer-${t.fromId}-${t.toId}`, kind: "transfer-out", day: lastDay, amount: t.amount, done: true, fromId: t.fromId, toId: t.toId, fromName: t.from, toName: t.to, recordId: t.recordId });
+    const paid = Math.round(paidOf(t) * 100) / 100;
+    if (paid > 0.005) steps.push({ id: `xfer-${t.fromId}-${t.toId}`, kind: "transfer-out", day: lastDay, amount: paid, done: true, fromId: t.fromId, toId: t.toId, fromName: t.from, toName: t.to, recordId: t.recordId });
   }
   for (const b of bills) {
     steps.push({
@@ -166,7 +180,15 @@ export function buildMoneyPlan(input: {
   // (b) when the hub can fund it. If the hub can't cover a piece by its due day, we REROUTE it —
   // paid directly by a debtor who's holding spare cash (that debtor then owes the hub that much less).
   // If even that can't cover it in time, the piece is flagged infeasible with the earliest day it can.
-  const unsettledOut = outbound.filter((o) => !o.settled);
+  // Unsettled = never-settled disbursements PLUS the unpaid REMAINDER of partially-settled ones (net −
+  // paid). The remainder keeps the creditor's record id so ticking it settles the same member.
+  const unsettledOut = [
+    ...outbound.filter((o) => !o.settled),
+    ...outbound
+      .filter((o) => o.settled)
+      .map((o) => ({ ...o, settled: false, amount: Math.round((o.amount - paidOf(o)) * 100) / 100 }))
+      .filter((o) => o.amount > 0.005),
+  ];
   // ALL of a member's cash bills, with their paid flag — a DONE bill already consumed their cash (so it
   // still counts against their liquidity), but only an UNPAID one can generate a funding need.
   // Deferred (wind-down) bills are the assignee's own responsibility, NOT pool-funded — exclude them
@@ -198,7 +220,7 @@ export function buildMoneyPlan(input: {
     ...incomeOf(treasurerId ?? -1),
     ...inbound.map((t) => ({ day: incomeDayByMember[t.fromId] ?? null, amount: t.amount })),
     ...bills.filter((b) => !b.fund && b.payerId === treasurerId).map((b) => ({ day: b.day, amount: -b.amount })),
-    ...outbound.filter((o) => o.settled).map((o) => ({ day: 0 as number | null, amount: -o.amount })),
+    ...outbound.filter((o) => o.settled).map((o) => ({ day: 0 as number | null, amount: -paidOf(o) })), // only what actually left the hub
   ]);
   const hubCanCoverBy = (need: number, from: number, used: number): number | null => {
     for (let d = from; d <= 31; d++) if (hubCashBy(d) - used >= need - 0.005) return d;
@@ -225,8 +247,8 @@ export function buildMoneyPlan(input: {
   const reimburseNeeds =
     reimburseDay == null ? [] :
     Object.entries(reimburseByMember)
-      .map(([id, amount]) => ({ creditorId: Number(id), day: reimburseDay, amount: Math.round(amount * 100) / 100, reimbursement: true }))
-      .filter((n) => owed.has(n.creditorId) && n.amount > 0.005); // only net-receivers (the hub actually owes them)
+      .map(([id, amount]) => ({ creditorId: Number(id), day: reimburseDay, amount: Math.round((amount - (paidByCreditor.get(Number(id)) ?? 0)) * 100) / 100, reimbursement: true }))
+      .filter((n) => owed.has(n.creditorId) && n.amount > 0.005); // net-receivers only, less any already-paid slice
   const allNeeds = [...billNeeds, ...reimburseNeeds].sort((a, b) => a.day - b.day);
   const pieces: PlanStep[] = [];
   let hubUsed = 0;
@@ -237,6 +259,9 @@ export function buildMoneyPlan(input: {
       fromId, toId: creditorId, fromName, toName: r.name, recordId: reroute ? null : r.recordId, fundsMember, reroute,
       ...(infeasibleFrom !== undefined ? { infeasibleFrom } : {}), // only flag pieces that genuinely can't be funded by their day
       ...(reimbursement ? { reimbursement: true } : {}),
+      // A hub-funded remainder piece settles the creditor's FULL net when ticked (one record per member);
+      // the reimbursement slice and rerouted pieces settle their own amount instead.
+      ...(!reimbursement && !reroute && netOwedByCreditor.has(creditorId) ? { settleAmount: Math.round((netOwedByCreditor.get(creditorId) ?? 0) * 100) / 100 } : {}),
     });
   };
   for (const need of allNeeds) {

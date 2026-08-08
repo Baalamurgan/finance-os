@@ -255,7 +255,7 @@ export function MoneyPlan({
                         <input type="hidden" name="periodId" value={periodId} />
                         <input type="hidden" name="fromMemberId" value={s.fromId} />
                         <input type="hidden" name="toMemberId" value={s.toId} />
-                        <input type="hidden" name="amount" value={s.amount} />
+                        <input type="hidden" name="amount" value={s.settleAmount ?? s.amount} />
                         <MiniBtn primary>mark done</MiniBtn>
                       </form>
                     ) : null

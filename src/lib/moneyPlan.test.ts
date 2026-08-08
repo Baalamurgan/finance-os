@@ -253,6 +253,25 @@ describe("buildMoneyPlan", () => {
     expect(plan.steps.find((s) => s.kind === "bill")!.senderShort).toBeUndefined(); // 500 covers the 400 bill
   });
 
+  it("schedules the unpaid remainder of a partially-settled disbursement (early reimbursement)", () => {
+    // Hub owes creditor 3 a net of 100, but only 30 has been paid so far (an early reimbursement slice).
+    // The 30 shows as done; the remaining 70 must still be scheduled to fund creditor 3's day-2 bill.
+    const plan = buildMoneyPlan({
+      treasurerId: T,
+      transfers: [xfer({ fromId: T, from: "A", toId: 3, to: "C", amount: 100, paidAmount: 30, settled: true, recordId: 9 })],
+      bills: [bill({ payerId: 3, payerName: "C", vendor: "Loan", amount: 100, day: 2 })],
+      incomeDayByMember: {},
+      incomeArrivals: [{ memberId: 3, day: 1, amount: 30 }], // C has 30 income → needs 70 from the pool
+    });
+    const toC = plan.steps.filter((s) => s.kind === "transfer-out" && s.toId === 3);
+    const paid = toC.filter((s) => s.done).reduce((a, s) => a + s.amount, 0);
+    const scheduled = toC.filter((s) => !s.done).reduce((a, s) => a + s.amount, 0);
+    expect(paid).toBe(30); // the already-paid slice shows done
+    expect(scheduled).toBe(70); // the remainder is still funded, not dropped
+    expect(toC.find((s) => !s.done)!.settleAmount).toBe(100); // ticking it settles C's FULL net
+    expect(plan.steps.find((s) => s.vendor === "Loan")!.senderShort).toBeUndefined(); // 30 + 70 covers the 100 bill
+  });
+
   it("adds a tickable piggy hand-over lump that doesn't move this month's cash walk", () => {
     const plan = buildMoneyPlan({
       treasurerId: T,
