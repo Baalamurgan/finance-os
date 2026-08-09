@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { formatINR } from "@/lib/format";
+import { formatINR, pctLabel } from "@/lib/format";
 import { loadPersonal } from "@/lib/loadPersonal";
 import { getAccountDetail } from "@/lib/finance/queries";
 import { getCardDues } from "@/lib/personal/cash";
@@ -52,7 +52,7 @@ export default async function CreditCardDetail({
           <div className="grid grid-cols-3 gap-3">
             <Stat label="Outstanding" value={formatINR(d.outstanding)} big />
             <Stat label="Available" value={formatINR(Math.max(0, d.available ?? 0))} />
-            <Stat label="Utilisation" value={`${Math.round(d.utilPct ?? 0)}%`} danger={(d.utilPct ?? 0) >= 30} />
+            <Stat label="Utilisation" value={pctLabel(d.utilPct ?? 0)} danger={(d.utilPct ?? 0) >= 30} />
           </div>
         ) : (
           <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">

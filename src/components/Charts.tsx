@@ -15,6 +15,7 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
+import { pctLabel } from "@/lib/format";
 
 const inr = (n: number) => `₹${n.toLocaleString("en-IN")}`;
 
@@ -219,7 +220,7 @@ export function MoneyFlowDonut({
             <span className="flex-1 truncate text-slate-600">{s.name}</span>
             <span className="tabular-nums font-medium text-slate-800">{inr(s.value)}</span>
             <span className="w-9 text-right text-xs text-slate-400">
-              {Math.round((s.value / total) * 100)}%
+              {pctLabel((s.value / total) * 100)}
             </span>
           </li>
         ))}

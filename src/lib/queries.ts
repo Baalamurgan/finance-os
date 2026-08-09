@@ -1052,11 +1052,9 @@ export async function getInHand(householdId: number, periodId: number) {
   }
   const pendingPiggyLump = Math.round([...pendingByOwner.values()].reduce((s, v) => s + v, 0) * 100) / 100;
 
-  // keep a member if they hold anything — OR they're the treasurer/piggy-holder (so their
-  // pool/piggy row always shows, even with no personal in-hand).
-  const byPerson = members
-    .map((m) => build(m.id, m.name))
-    .filter((g) => g.cats.length > 0 || g.miscSpent > 0 || g.unpaidBills.length > 0 || g.paidBills.length > 0 || g.earmarked.length > 0 || g.sinkingFunds.length > 0 || g.unpaidPeriodic.length > 0 || g.paidPeriodic.length > 0 || g.carried.length > 0 || g.carriedDue.length > 0 || g.memberId === treasurerId || g.memberId === piggyHolderId);
+  // Show EVERY member's In-Hand card — even at ₹0 — so the family sees a complete picture (the
+  // total is "what they hold right now", and 0 is a real, meaningful answer).
+  const byPerson = members.map((m) => build(m.id, m.name));
   const shared = build(null, "Shared / pool");
   const piggyTotal = piggy.generalTotal + piggy.sinking.reduce((s, x) => s + x.hold, 0);
   const monthBalance = (incomeAgg._sum.amount ?? 0) - (expenseAgg._sum.amount ?? 0);

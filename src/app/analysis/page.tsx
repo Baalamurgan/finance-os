@@ -1,4 +1,4 @@
-import { formatINR } from "@/lib/format";
+import { formatINR, pctLabel } from "@/lib/format";
 import { loadCommon } from "@/lib/load";
 import { getRollup, getRollupRange, getTrends, getCategoryTrendRange } from "@/lib/queries";
 import { NavHeader } from "@/components/NavHeader";
@@ -216,7 +216,7 @@ function BudgetVsSpent({
                     {formatINR(r.actual)}{" "}
                     <span className="text-slate-400">/ {formatINR(r.planned)}</span>
                     <span className={`ml-2 font-medium ${over ? "text-red-600" : "text-green-600"}`}>
-                      {over ? "over" : `${Math.round((r.actual / r.planned) * 100)}%`}
+                      {over ? "over" : pctLabel((r.actual / r.planned) * 100)}
                     </span>
                   </span>
                 </div>
@@ -252,7 +252,7 @@ function BudgetVsSpent({
                     <span className="flex items-baseline gap-2">
                       <span className="tabular-nums text-slate-700">{formatINR(r.actual)}</span>
                       <span className="w-10 shrink-0 text-right text-xs text-slate-400">
-                        {pct < 1 ? "<1%" : `${Math.round(pct)}%`}
+                        {pctLabel(pct)}
                       </span>
                     </span>
                   </li>
