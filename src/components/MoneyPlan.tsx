@@ -254,6 +254,17 @@ export function MoneyPlan({
                       🐷 {s.fromName} hands {formatINR(s.amount)} of last month’s Piggy to {s.toName}. It’s separate from this month’s cash (tracked in In-Hand / Piggy), so the running balances don’t move here — {s.toName}’s Piggy goes up by {formatINR(s.amount)} once ticked.
                     </div>
                   )}
+                  {/* Hand-over CTA/badge lives here in the (wrapping) content column — its label is too wide
+                      for the cramped w-16 action slot, where it would overlap the amount. */}
+                  {isHandover && s.done && (
+                    <span className="mt-1 inline-flex items-center rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-medium text-emerald-700 no-underline">✓ handed over</span>
+                  )}
+                  {isHandover && !s.done && canEdit && (
+                    <form action={markPiggyHandedOver} className="mt-1">
+                      <input type="hidden" name="periodId" value={s.handoverPeriodId} />
+                      <MiniBtn primary>✓ mark handed over</MiniBtn>
+                    </form>
+                  )}
                   {!s.done && short != null && short > 0.005 && (
                     <div className="text-[10px] font-semibold text-red-600">
                       ⚠ {isPiggy || isTransfer || isAllowance || isAdvance ? s.fromName : s.payerName} needs {formatINR(short)} more in hand first
@@ -272,11 +283,7 @@ export function MoneyPlan({
 
                 {/* action */}
                 <span className="flex w-16 shrink-0 justify-end">
-                  {isHandover ? (
-                    canEdit ? (
-                      <form action={markPiggyHandedOver}><input type="hidden" name="periodId" value={s.handoverPeriodId} /><MiniBtn primary>✓ handed over</MiniBtn></form>
-                    ) : null
-                  ) : isPiggy ? (
+                  {isHandover ? null /* rendered inline in the content column above */ : isPiggy ? (
                     <span className="text-[9px] text-slate-300">est.</span>
                   ) : isAdvance ? (
                     s.advanceId != null && canActTransfer ? (
