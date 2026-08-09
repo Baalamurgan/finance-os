@@ -270,7 +270,17 @@ export default async function SheetPage({
   const shownPiggy = projectedPiggy ? projectedPiggy.generalTotal : c.piggyBalance;
   // Part of the Piggy figure may be last month's leftover still sitting with the category owners
   // (not yet handed to the holder). Surface it so the piggy number isn't mistaken for fully received.
-  const pendingHandover = open ? (await getInHand(c.household.id, c.selected.id)).pendingPiggyHandover : null;
+  const inHand = open ? await getInHand(c.household.id, c.selected.id) : null;
+  const pendingHandover = inHand?.pendingPiggyHandover ?? null;
+  // Periodic/fund bills actually DUE this month (EB, insurance…) — synthesized in getInHand, not real
+  // Sheet lines, so surface them here to show under "Yearly / periodic bills" when they land. Paid from
+  // the fund (not the month's balance), so they're informational and NOT added to the section subtotal.
+  const duePeriodicBills = inHand
+    ? [inHand.shared, ...inHand.byPerson].flatMap((g) => [
+        ...g.unpaidPeriodic.map((b) => ({ ...b, paid: false })),
+        ...g.paidPeriodic.map((b) => ({ ...b, paid: true })),
+      ])
+    : [];
 
   // Safeguard: if the current calendar month has no period yet (e.g. the monthly
   // auto-create didn't run), nudge the head to start it so the family always has
@@ -582,7 +592,7 @@ export default async function SheetPage({
                 </summary>
                 <div className="pl-3">
                   <div className="divide-y divide-slate-100 px-2 pb-1">
-                    {yearlyRows.length === 0 ? (
+                    {yearlyRows.length === 0 && duePeriodicBills.length === 0 ? (
                       <p className="py-2 text-xs text-slate-400">No annual / periodic bills due this month.</p>
                     ) : (
                       yearlyRows.map((e) => (
@@ -597,6 +607,25 @@ export default async function SheetPage({
                         />
                       ))
                     )}
+                    {/* The actual bill(s) DUE this month for these funds — paid from the fund, so shown
+                        as a reminder (not added to the section subtotal, which tracks the shares). */}
+                    {duePeriodicBills.map((b) => (
+                      <div key={`due-${b.categoryId}`} className="flex items-center justify-between gap-2 py-2.5 text-[15px]">
+                        <div className="flex min-w-0 items-center gap-1.5">
+                          <span aria-hidden>{categoryEmoji(b.name)}</span>
+                          <span className="truncate font-medium text-slate-800">{b.name}</span>
+                          <span className={`shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-medium ${b.paid ? "bg-emerald-50 text-emerald-600" : "bg-teal-50 text-teal-600"}`}>
+                            {b.paid ? "✓ bill paid" : "bill due"}
+                          </span>
+                          {!b.paid && b.due && (
+                            <span className={`shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-medium ${b.due.status === "overdue" ? "bg-red-100 text-red-700" : b.due.status === "soon" ? "bg-amber-100 text-amber-700" : "bg-slate-100 text-slate-400"}`}>
+                              due {b.due.day}{["th", "st", "nd", "rd"][((b.due.day % 100) - 20) % 10] ?? ["th", "st", "nd", "rd"][b.due.day % 100] ?? "th"}
+                            </span>
+                          )}
+                        </div>
+                        <span className={`shrink-0 tabular-nums ${b.paid ? "text-slate-400 line-through" : "text-slate-700"}`}>{formatINR(b.bill)}</span>
+                      </div>
+                    ))}
                   </div>
                   {canEditHere && (
                     <div className="px-2 py-2">
