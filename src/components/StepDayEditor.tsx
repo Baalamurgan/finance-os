@@ -12,7 +12,7 @@ function ordinal(day: number) {
 // Wraps a step's date tag in a head-only "click → pick a day" dropdown. Picking a day writes through
 // to the step's underlying row (bill/allowance/income → dueDay + pin; advance → the leg's day) so it
 // holds through a refresh. Only for dated SOURCE steps — transfers/collections derive their timing.
-export function StepDayEditor({ kind, id, day, children }: { kind: string; id: number; day: number | null; children: React.ReactNode }) {
+export function StepDayEditor({ kind, id, day, stepKey, children }: { kind: string; id: number; day: number | null; stepKey?: string; children: React.ReactNode }) {
   const [open, setOpen] = useState(false);
   const [pending, start] = useTransition();
   const router = useRouter();
@@ -24,6 +24,7 @@ export function StepDayEditor({ kind, id, day, children }: { kind: string; id: n
       const fd = new FormData();
       fd.set("kind", kind);
       fd.set("id", String(id));
+      if (stepKey) fd.set("stepKey", stepKey);
       if (d != null) fd.set("day", String(d));
       const r = await setStepDay(fd);
       router.refresh();

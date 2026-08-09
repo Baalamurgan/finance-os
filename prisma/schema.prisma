@@ -469,6 +469,7 @@ model Period {
   spends       Spend[]
   settlements  SettlementRecord[]
   advances     Advance[]
+  stepDayOverrides StepDayOverride[]
 
   @@unique([householdId, year, month])
 }
@@ -614,6 +615,19 @@ model ExpenseEntry {
   dueDay     Int?     // day-of-month this bill is due (from the template) — powers overdue/near-due In-Hand highlighting
   pinned     Boolean  @default(false) // value edited on the Sheet for THIS month — refresh-from-Setup leaves it alone
   createdAt  DateTime @default(now())
+}
+
+// A head-set day override for a Money-plan step that has no row of its own to hold a date — a
+// periodic/fund bill (its date otherwise comes from the category config) or the Piggy hand-over
+// (otherwise derived from the wind-down date). Keyed by a stable stepKey so it survives a rebuild;
+// day null is never stored (the override is deleted to fall back to the derived date).
+model StepDayOverride {
+  id       Int    @id @default(autoincrement())
+  period   Period @relation(fields: [periodId], references: [id])
+  periodId Int
+  stepKey  String // e.g. "fund-<categoryId>", "piggyho-<priorPeriodId>-<ownerId>"
+  day      Int
+  @@unique([periodId, stepKey])
 }
 
 // Actual logged spend within a tracked category (the daily WhatsApp-group entries).

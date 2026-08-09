@@ -279,12 +279,14 @@ describe("buildMoneyPlan", () => {
       bills: [bill({ payerId: 5, payerName: "E", vendor: "Rent", amount: 100, day: 3 })],
       incomeDayByMember: {},
       incomeArrivals: [{ memberId: 5, day: 1, amount: 500 }],
-      piggyHandover: { toId: 3, toName: "Baala", amount: 7805, day: 1, handoverPeriodId: 6 },
+      piggyHandover: { toId: 3, toName: "Baala", handoverPeriodId: 6, owners: [{ fromId: 2, fromName: "Arumugam", amount: 7805, day: 1 }] },
     });
     const ho = plan.steps.find((s) => s.kind === "piggy")!;
     expect(ho.handoverPeriodId).toBe(6); // tickable → marks period 6 handed over
     expect(ho.amount).toBe(7805);
     expect(ho.day).toBe(1);
+    expect(ho.fromId).toBe(2); // shows "<owner> → <holder>" (Arumugam → Baala)
+    expect(ho.toId).toBe(3);
     expect(plan.total).toBe(1); // informational — only the bill is counted, not the hand-over
     // prior-month cash: the hand-over must NOT shift anyone's running balance this month
     expect(ho.balancesBefore).toEqual(ho.balancesAfter);

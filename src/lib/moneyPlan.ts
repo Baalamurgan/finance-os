@@ -69,7 +69,7 @@ export function buildMoneyPlan(input: {
   incomeArrivals?: { memberId: number; day: number | null; amount: number; source?: string; name?: string; id?: number }[]; // each income event + the day it lands
   reimburseByMember?: Record<number, number>; // prior-month out-of-pocket spend each member is owed back
   reimburseDay?: number; // target day to hand back those reimbursements (e.g. the day after wind-down)
-  piggyHandover?: { toId: number; toName: string; amount: number; day: number; handoverPeriodId: number }; // prior wound-down month's leftover, handed from owners to the Piggy holder (one tickable lump)
+  piggyHandover?: { toId: number; toName: string; handoverPeriodId: number; owners: { fromId: number; fromName: string; amount: number; day: number }[] }; // prior wound-down month's leftover — one tickable step per owner who hands their slice to the Piggy holder
 }): MoneyPlan {
   const { treasurerId, treasurerName, transfers, bills, allowances = [], piggyReturns = [], advances = [], incomeDayByMember, incomeByMember = {}, incomeArrivals, reimburseByMember = {}, reimburseDay, piggyHandover } = input;
 
@@ -167,11 +167,15 @@ export function buildMoneyPlan(input: {
   // Prior wound-down month's Piggy hand-over: one tickable combined lump (owners → Piggy holder),
   // dated to the given day (day 1 by default). It's PRIOR-month cash tracked in In-Hand, so it does
   // NOT move this month's cash walk — it's a to-do that, when ticked, marks the month handed over.
-  if (piggyHandover && piggyHandover.amount > 0.005) {
-    steps.push({
-      id: `piggyho-${piggyHandover.handoverPeriodId}`, kind: "piggy", day: piggyHandover.day, amount: piggyHandover.amount, done: false,
-      toId: piggyHandover.toId, toName: piggyHandover.toName, handoverPeriodId: piggyHandover.handoverPeriodId, status: null, days: null,
-    });
+  if (piggyHandover) {
+    for (const o of piggyHandover.owners) {
+      if (o.amount <= 0.005) continue;
+      steps.push({
+        id: `piggyho-${piggyHandover.handoverPeriodId}-${o.fromId}`, kind: "piggy", day: o.day, amount: Math.round(o.amount * 100) / 100, done: false,
+        fromId: o.fromId, fromName: o.fromName, toId: piggyHandover.toId, toName: piggyHandover.toName,
+        handoverPeriodId: piggyHandover.handoverPeriodId, status: null, days: null,
+      });
+    }
   }
 
   // ── Disbursement scheduler ────────────────────────────────────────────────────────────────────

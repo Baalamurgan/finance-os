@@ -158,7 +158,7 @@ export function MoneyPlan({
             // kind, so the title just shows the money flow (sender → recipient) like every other step.
             // Income = a member's own money landing (recipient · source), an inflow row.
             const isHandover = isPiggy && s.handoverPeriodId != null;
-            const title = isIncome ? `${s.toName ?? "?"} · ${s.source ?? "income"}` : isAllowance ? `${s.fromName} → ${s.toName}` : isHandover ? `Piggy hand-over → ${s.toName}` : isPiggy ? `${s.fromName} → ${s.toName} · Piggy` : isAdvance || isTransfer ? `${s.fromName} → ${s.toName}` : `${s.payerName} → ${s.vendor}`;
+            const title = isIncome ? `${s.toName ?? "?"} · ${s.source ?? "income"}` : isAllowance ? `${s.fromName} → ${s.toName}` : isHandover ? `${s.fromName ?? "Owner"} → ${s.toName}` : isPiggy ? `${s.fromName} → ${s.toName} · Piggy` : isAdvance || isTransfer ? `${s.fromName} → ${s.toName}` : `${s.payerName} → ${s.vendor}`;
             // Urgency (only while unpaid — a done step is never "overdue"): RED for overdue OR due
             // today (needs action now), AMBER for due in 1–2 days, plain otherwise.
             const urgent = !s.done && (s.status === "overdue" || (s.status === "soon" && (s.days ?? 1) <= 0));
@@ -191,13 +191,23 @@ export function MoneyPlan({
                     {isPiggy && <span className="shrink-0 rounded-full bg-pink-50 px-1.5 py-0.5 text-[9px] font-medium text-pink-500">{isHandover ? "🐷 last month’s leftovers → holder" : "🐷 to piggy · at wind-down"}</span>}
                     {!s.done && (!isPiggy || isHandover) && (() => {
                       const tag = <DayTag kind={s.kind} day={s.day} status={s.status ?? null} days={s.days ?? null} />;
-                      // Head-only date edit — only for dated SOURCE steps backed by a row (bill /
-                      // allowance → its expense line, income → its entry, advance → its record).
-                      // Transfers/collections derive their timing, so they show the tag read-only.
-                      const editId = s.kind === "income" ? s.incomeId : (s.kind === "bill" || s.kind === "allowance") ? s.billId : isAdvance ? s.advanceId : undefined;
-                      if (!isHead || !open || editId == null) return tag;
-                      const editKind = isAdvance ? (s.payback ? "advance-payback" : "advance") : s.kind;
-                      return <StepDayEditor kind={editKind} id={editId} day={s.day}>{tag}</StepDayEditor>;
+                      if (!isHead || !open) return tag;
+                      // Row-backed steps → edit the row's day (+ pin): bill/allowance line, income entry, advance.
+                      const rowId = s.kind === "income" ? s.incomeId : (s.kind === "bill" && !s.fund) || isAllowance ? s.billId : isAdvance ? s.advanceId : undefined;
+                      if (rowId != null) {
+                        const editKind = isAdvance ? (s.payback ? "advance-payback" : "advance") : s.kind;
+                        return <StepDayEditor kind={editKind} id={rowId} day={s.day}>{tag}</StepDayEditor>;
+                      }
+                      // Rowless steps → a per-month override keyed by a stable step key: a fund/periodic
+                      // bill (no line of its own) and the Piggy hand-over (date otherwise derived).
+                      const stepKey = isHandover && s.handoverPeriodId != null && s.fromId != null
+                        ? `piggyho-${s.handoverPeriodId}-${s.fromId}`
+                        : s.kind === "bill" && s.fund && s.categoryId != null
+                          ? `fund-${s.categoryId}`
+                          : undefined;
+                      if (stepKey) return <StepDayEditor kind="override" id={periodId} stepKey={stepKey} day={s.day}>{tag}</StepDayEditor>;
+                      // Everything else (collections / disbursements) derives its date — read-only.
+                      return tag;
                     })()}
                     {/* A done step keeps its date visible — when it was scheduled / due — as a muted tag. */}
                     {s.done && s.day != null && (!isPiggy || isHandover) && (

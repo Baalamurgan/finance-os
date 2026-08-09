@@ -484,12 +484,15 @@ export async function getSettlement(
 export type MoneyPlanResult = Awaited<ReturnType<typeof getMoneyPlan>>;
 export async function getMoneyPlan(householdId: number, periodId: number, inhandArg?: InHand, extraBills?: import("./moneyPlan").PlanBill[]) {
   const inhand = inhandArg ?? (await getInHand(householdId, periodId));
-  const [settlement, incomes, period, household] = await Promise.all([
+  const [settlement, incomes, period, household, dayOverrideRows] = await Promise.all([
     getSettlement(householdId, periodId, inhand.treasurerId),
     prisma.incomeEntry.findMany({ where: { periodId }, select: { id: true, ownerId: true, dueDay: true, amount: true, source: true } }),
     prisma.period.findUnique({ where: { id: periodId }, select: { year: true, month: true, status: true } }),
     prisma.household.findUnique({ where: { id: householdId }, select: { windDownDay: true } }),
+    prisma.stepDayOverride.findMany({ where: { periodId }, select: { stepKey: true, day: true } }),
   ]);
+  // Head-set day overrides for steps with no row of their own (fund/periodic bills, Piggy hand-over).
+  const dayOverride = new Map(dayOverrideRows.map((o) => [o.stepKey, o.day]));
   // Early reimbursement: each member's prior-month out-of-pocket spend (the "spend" lines in their
   // settlement breakdown) is handed back EARLY — the day AFTER wind-down — for net-receivers, so the
   // family plans the month around the true remainder. buildMoneyPlan only pays it to those the hub owes.
@@ -540,6 +543,16 @@ export async function getMoneyPlan(householdId: number, periodId: number, inhand
   for (const e of deferredExp) {
     const payerId = e.memberId ?? inhand.treasurerId;
     bills.push({ key: `defer-${e.id}`, payerId, payerName: nameOf(payerId), vendor: e.label, amount: e.amount, done: e.paid, day: null, status: null, days: null, billId: e.id, deferred: true });
+  }
+  // Apply the head's per-month day override to fund/periodic bills (which have no line of their own —
+  // their date otherwise comes from the category config). Recompute the overdue/soon tag from the new
+  // day so the urgency stays truthful. Real bills carry their date on the Sheet line (edited there).
+  for (const b of bills) {
+    if (!b.fund || b.categoryId == null) continue;
+    const ov = dayOverride.get(`fund-${b.categoryId}`);
+    if (ov == null) continue;
+    const st = dayStatus(ov);
+    b.day = ov; b.status = st?.status ?? null; b.days = st?.days ?? null;
   }
 
   // Funding advances: someone fronts cash to a short member (round-trip loan). Rendered as their own
@@ -607,11 +620,22 @@ export async function getMoneyPlan(householdId: number, periodId: number, inhand
     .filter((i) => i.ownerId != null)
     .map((i) => ({ memberId: i.ownerId as number, day: i.dueDay, amount: i.amount, source: i.source, name: nameById.get(i.ownerId as number), id: i.id }));
 
-  // Prior wound-down month's Piggy hand-over (owners → Piggy holder), as one tickable lump. The day
-  // is day 1 normally, or a few days after a late (mid-month) wind-down — see getInHand::handoverDay.
+  // Prior wound-down month's Piggy hand-over — one tickable step PER OWNER who still holds a slice of
+  // last month's leftover ("<owner> → <holder>"). Each owner's day defaults to the derived hand-over
+  // day (see getInHand::handoverDay) unless the head overrode it (stepKey piggyho-<priorPeriod>-<owner>).
   const piggyHandover =
     inhand.pendingPiggyHandover && inhand.piggyHolderId != null
-      ? { toId: inhand.piggyHolderId, toName: nameById.get(inhand.piggyHolderId) ?? "Piggy holder", amount: inhand.pendingPiggyHandover.lump, day: inhand.pendingPiggyHandover.day, handoverPeriodId: inhand.pendingPiggyHandover.priorPeriodId }
+      ? {
+          toId: inhand.piggyHolderId,
+          toName: nameById.get(inhand.piggyHolderId) ?? "Piggy holder",
+          handoverPeriodId: inhand.pendingPiggyHandover.priorPeriodId,
+          owners: inhand.pendingPiggyHandover.owners.map((o) => ({
+            fromId: o.id,
+            fromName: o.name,
+            amount: o.amount,
+            day: dayOverride.get(`piggyho-${inhand.pendingPiggyHandover!.priorPeriodId}-${o.id}`) ?? inhand.pendingPiggyHandover!.day,
+          })),
+        }
       : undefined;
 
   const { buildMoneyPlan } = await import("./moneyPlan");
@@ -1061,9 +1085,12 @@ export async function getInHand(householdId: number, periodId: number) {
     if (cy === period.year && cm === period.month) return Math.min(cd + 3, 28); // closed mid-month → +3 days grace
     return 1;
   })();
+  // Owners still holding a slice of last month's leftover — each hands their bit to the Piggy holder.
+  // Exposed so the Money-plan hand-over step can read "<owner> → <holder>" (not just the holder).
+  const pendingOwners = [...pendingByOwner.entries()].map(([id, amount]) => ({ id, name: nameOf(id), amount }));
   const pendingPiggyHandover =
     priorPeriod && priorPeriod.piggyHandedOverAt == null && pendingPiggyLump > 0.005
-      ? { priorPeriodId: priorPeriod.id, lump: pendingPiggyLump, day: handoverDay }
+      ? { priorPeriodId: priorPeriod.id, lump: pendingPiggyLump, day: handoverDay, owners: pendingOwners }
       : null;
   return { byPerson, shared, allowances, piggyTotal, generalPiggy: piggy.generalTotal, treasurerId, piggyHolderId, monthBalance, treasurerPool, pendingPiggyHandover };
 }

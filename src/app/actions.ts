@@ -2208,6 +2208,16 @@ export async function setStepDay(formData: FormData) {
     const payback = kind === "advance-payback";
     if (payback ? a.paybackSettled : a.settled) return { ok: false, error: "This is already done — its date can’t be changed." };
     await prisma.advance.update({ where: { id }, data: payback ? { paybackDay: day } : { day } });
+  } else if (kind === "override") {
+    // A step with no row of its own (fund/periodic bill, Piggy hand-over): store the day in the
+    // StepDayOverride table keyed by the step's stable key. Clearing it (no day) deletes the row so
+    // the step falls back to its derived date. `id` here is the periodId the override belongs to.
+    const stepKey = String(formData.get("stepKey") ?? "");
+    if (!stepKey) return { ok: false, error: "Bad request." };
+    const period = await prisma.period.findUnique({ where: { id }, select: { status: true } });
+    if (!period || period.status !== "open") return { ok: false, error: "This month is closed." };
+    if (day == null) await prisma.stepDayOverride.deleteMany({ where: { periodId: id, stepKey } });
+    else await prisma.stepDayOverride.upsert({ where: { periodId_stepKey: { periodId: id, stepKey } }, create: { periodId: id, stepKey, day }, update: { day } });
   } else {
     return { ok: false, error: "This step's date can’t be edited." };
   }
