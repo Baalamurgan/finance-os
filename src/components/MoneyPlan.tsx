@@ -233,7 +233,10 @@ export function MoneyPlan({
                     {isAdvance && !s.payback && <span className="shrink-0 rounded-full bg-teal-50 px-1.5 py-0.5 text-[9px] font-medium text-teal-600" title={`${s.fromName} fronts this so ${s.toName} can pay the next step`}>advance · funds {s.toName}</span>}
                     {isAdvance && s.payback && <span className="shrink-0 rounded-full bg-teal-50 px-1.5 py-0.5 text-[9px] font-medium text-teal-600" title={`${s.fromName} repays ${s.toName} the advance, now that their income has landed`}>payback → {s.toName}</span>}
                   </div>
-                  {!s.done && cashParties.length > 0 && (
+                  {/* Cash before → after — but NOT for the Piggy hand-over: it moves LAST month's leftover
+                      (a separate bucket tracked in In-Hand), not this month's cash, so those running
+                      balances legitimately don't change. Showing them would read as "nothing moved". */}
+                  {!s.done && cashParties.length > 0 && !isPiggy && (
                     <div className="mt-0.5 flex flex-wrap gap-x-2.5 gap-y-0.5 text-[10px] text-slate-500">
                       {cashParties.map((p) => {
                         const before = s.balancesBefore?.[p.id] ?? 0;
@@ -244,6 +247,11 @@ export function MoneyPlan({
                           </span>
                         );
                       })}
+                    </div>
+                  )}
+                  {!s.done && isHandover && (
+                    <div className="mt-0.5 text-[10px] text-amber-600">
+                      🐷 {s.fromName} hands {formatINR(s.amount)} of last month’s Piggy to {s.toName}. It’s separate from this month’s cash (tracked in In-Hand / Piggy), so the running balances don’t move here — {s.toName}’s Piggy goes up by {formatINR(s.amount)} once ticked.
                     </div>
                   )}
                   {!s.done && short != null && short > 0.005 && (
