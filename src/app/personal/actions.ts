@@ -517,3 +517,19 @@ export async function deletePersonalLoan(formData: FormData) {
   await prisma.personalLoan.delete({ where: { id } });
   rev();
 }
+
+// Rename a whole person group — every lend/borrow (open OR settled) filed under the old
+// name in this direction gets recorded against the new name, so the group stays merged.
+export async function renamePersonalLoanParty(formData: FormData) {
+  const member = await me();
+  if (!member) return;
+  const oldName = String(formData.get("oldName") ?? "").trim();
+  const newName = String(formData.get("newName") ?? "").trim();
+  const direction = String(formData.get("direction")) === "borrowed" ? "borrowed" : "lent";
+  if (!oldName || !newName || oldName === newName) return;
+  await prisma.personalLoan.updateMany({
+    where: { memberId: member.id, direction, counterparty: oldName },
+    data: { counterparty: newName },
+  });
+  rev();
+}

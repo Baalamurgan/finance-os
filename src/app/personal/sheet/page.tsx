@@ -46,14 +46,13 @@ export default async function PersonalSheet({
     getPersonalLending(c.member.id),
   ]);
   const monthlyExpenses = expenses.reduce((s, e) => s + e.amount, 0); // all fixed lines (display subtotal)
-  // Every spend counts at spend time. Three figures (see the money model):
-  //  Can spend  = personalExpense − your NET spend (splits net out others' shares)
-  //  In hand    = can spend + money lent out (comes back). Card spends aren't added back — already
-  //              counted in can-spend and committed to the card bill, so not "in hand". Cards shown apart.
-  //  Spent      = net spend (your share only)
+  // Every spend counts at spend time. Key figures (see the money model in lib/personal/cash.ts):
+  //  Can spend      = personalExpense − your NET spend (splits net out others' shares)
+  //  In account now = actual bank balance: can-spend + card cash still there (dues) − money lent out
+  //  Spent          = net spend (your share only)
   const { totalIn, personalExpense, netSpent, canSpend } = cash;
   const owed = lending.owed;
-  const inHand = canSpend + owed;
+  const inAccount = canSpend + unpaidCardDues - owed;
   const spentPct = personalExpense > 0 ? Math.min(100, (netSpent / personalExpense) * 100) : 0;
 
   // group monthly expenses by category (collapsible)
@@ -183,8 +182,8 @@ export default async function PersonalSheet({
           </div>
           <div className="mt-2 grid grid-cols-2 gap-3 border-t border-slate-100 pt-2 text-sm">
             <div>
-              <div className="text-[11px] uppercase tracking-wide text-slate-400">In hand</div>
-              <div className={`font-bold tabular-nums ${inHand < 0 ? "text-red-600" : "text-slate-800"}`}>{formatINR(inHand)}</div>
+              <div className="text-[11px] uppercase tracking-wide text-slate-400">In account now</div>
+              <div className={`font-bold tabular-nums ${inAccount < 0 ? "text-red-600" : "text-slate-800"}`}>{formatINR(inAccount)}</div>
             </div>
             <div>
               <div className="text-[11px] uppercase tracking-wide text-slate-400">Spent (your share)</div>
@@ -193,9 +192,9 @@ export default async function PersonalSheet({
           </div>
           {(unpaidCardDues > 0 || owed > 0) && (
             <div className="mt-1.5 text-[11px] text-slate-400">
-              {owed > 0 && <>incl. {formatINR(owed)} lent out</>}
-              {owed > 0 && unpaidCardDues > 0 && " · "}
-              {unpaidCardDues > 0 && <>{formatINR(unpaidCardDues)} on cards (owed)</>}
+              {unpaidCardDues > 0 && <>{formatINR(unpaidCardDues)} held for cards</>}
+              {unpaidCardDues > 0 && owed > 0 && " · "}
+              {owed > 0 && <>{formatINR(owed)} out on loan</>}
             </div>
           )}
         </div>

@@ -45,10 +45,15 @@ export default async function PersonalExpenses({
   const { personalExpense, netSpent, canSpend } = cash;
   const unpaidCardDues = cardDues.reduce((s, d) => s + d.unpaidTotal, 0);
   const owed = lending.owed;
-  // In hand = what's yours going forward: what you can still spend PLUS money lent out (it comes back).
-  // Card spends are NOT added back — they're already accounted for in canSpend (counted at spend time)
-  // and that cash is committed to the card bill, so it isn't "in hand". Card dues are shown separately.
-  const inHand = canSpend + owed;
+  // Three honest figures (see the money model in lib/personal/cash.ts):
+  //  canSpend    = budget headroom left this month. Splits already net out others' shares, so it's
+  //                purely what YOU can still spend.
+  //  inAccount   = actual cash in your bank RIGHT NOW. Card spends haven't left yet, so that money is
+  //                still there (+ card dues); money you've lent out has left (− owed).
+  //  afterSettle = what you keep once every card is paid AND every due/lend is collected. The card cash
+  //                and the receivables both reverse out, so it lands exactly back on canSpend.
+  const inAccount = canSpend + unpaidCardDues - owed;
+  const afterSettle = canSpend;
 
   // The category donut reflects your NET spend (your share of splits) — the exact spend you did.
   const byCat = new Map<number, number>();
@@ -78,25 +83,28 @@ export default async function PersonalExpenses({
         <CardBillReminderBanner reminders={c.cardReminders} />
 
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+          {/* 1 — what you can still spend against this month's budget (Spent folded into the sub-line) */}
           <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4">
             <div className="text-[11px] font-medium uppercase tracking-wide text-emerald-700">Can spend</div>
             <div className={`mt-1 text-xl font-bold ${canSpend >= 0 ? "text-emerald-800" : "text-red-600"}`}>{formatINR(canSpend)}</div>
-            <div className="text-[10px] text-slate-500">of {formatINR(Math.max(0, personalExpense))} this month</div>
+            <div className="text-[10px] text-slate-500">of {formatINR(Math.max(0, personalExpense))} · spent {formatINR(netSpent)}</div>
           </div>
+          {/* 2 — money actually in your account now: card cash hasn't left (+), lends have (−) */}
           <div className="rounded-xl border border-slate-200 bg-white p-4">
-            <div className="text-[11px] font-medium uppercase tracking-wide text-slate-400">In hand</div>
-            <div className={`mt-1 text-xl font-bold ${inHand >= 0 ? "text-slate-800" : "text-red-600"}`}>{formatINR(inHand)}</div>
+            <div className="text-[11px] font-medium uppercase tracking-wide text-slate-400">In account now</div>
+            <div className={`mt-1 text-xl font-bold ${inAccount >= 0 ? "text-slate-800" : "text-red-600"}`}>{formatINR(inAccount)}</div>
             <div className="text-[10px] text-slate-400">
-              {owed > 0 && <>incl. {formatINR(owed)} lent out</>}
-              {owed > 0 && unpaidCardDues > 0 && " · "}
-              {unpaidCardDues > 0 && <>{formatINR(unpaidCardDues)} on cards (owed)</>}
-              {owed === 0 && unpaidCardDues === 0 && "cash you can use"}
+              {unpaidCardDues > 0 && <>{formatINR(unpaidCardDues)} held for cards</>}
+              {unpaidCardDues > 0 && owed > 0 && " · "}
+              {owed > 0 && <>{formatINR(owed)} out on loan</>}
+              {unpaidCardDues === 0 && owed === 0 && "cash in hand"}
             </div>
           </div>
+          {/* 3 — after paying every card and collecting every due/lend; nets back to your budget headroom */}
           <div className="rounded-xl border border-slate-200 bg-white p-4">
-            <div className="text-[11px] font-medium uppercase tracking-wide text-slate-400">Spent</div>
-            <div className="mt-1 text-xl font-bold text-slate-800">{formatINR(netSpent)}</div>
-            <div className="text-[10px] text-slate-400">your share this month</div>
+            <div className="text-[11px] font-medium uppercase tracking-wide text-slate-400">After settling</div>
+            <div className={`mt-1 text-xl font-bold ${afterSettle >= 0 ? "text-slate-800" : "text-red-600"}`}>{formatINR(afterSettle)}</div>
+            <div className="text-[10px] text-slate-400">cards paid · dues collected</div>
           </div>
         </div>
 

@@ -7,6 +7,7 @@ import {
   recordPersonalLoanPayment,
   settlePersonalLoan,
   deletePersonalLoan,
+  renamePersonalLoanParty,
 } from "@/app/personal/actions";
 
 export default async function PersonalLoans({
@@ -60,8 +61,8 @@ export default async function PersonalLoans({
         </section>
 
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-          <LoanList title="You lent" loans={lent} accent="emerald" />
-          <LoanList title="You borrowed" loans={borrowed} accent="amber" />
+          <LoanList title="You lent" loans={lent} accent="emerald" direction="lent" />
+          <LoanList title="You borrowed" loans={borrowed} accent="amber" direction="borrowed" />
         </div>
       </main>
     </>
@@ -72,14 +73,17 @@ function LoanList({
   title,
   loans,
   accent,
+  direction,
 }: {
   title: string;
   loans: { id: number; counterparty: string; amount: number; outstanding: number; note: string | null; status: string; sharedPaid: number | null; sharedShare: number | null }[];
   accent: "emerald" | "amber";
+  direction: "lent" | "borrowed";
 }) {
   const amountColor = accent === "emerald" ? "text-emerald-700" : "text-amber-700";
-  // Group by counterparty so multiple lends/borrows with the SAME person roll up under one header
-  // showing their combined open total — while each individual entry keeps its own record/settle/delete.
+  // Group by counterparty so multiple lends/borrows with the SAME person roll up under one person —
+  // collapsed by default. Header shows the still-open total; a fully-settled person shows their gross
+  // total struck through so the history never disappears. Each entry keeps record/settle/delete.
   const groups = new Map<string, typeof loans>();
   for (const l of loans) {
     const key = l.counterparty.trim();
@@ -88,60 +92,91 @@ function LoanList({
     else groups.set(key, [l]);
   }
   const groupList = [...groups.entries()]
-    .map(([name, items]) => ({ name, items, openTotal: items.filter((l) => l.status === "open").reduce((s, l) => s + l.outstanding, 0) }))
-    .sort((a, b) => b.openTotal - a.openTotal || a.name.localeCompare(b.name));
+    .map(([name, items]) => ({
+      name,
+      items,
+      openTotal: items.filter((l) => l.status === "open").reduce((s, l) => s + l.outstanding, 0),
+      grossTotal: items.reduce((s, l) => s + l.amount, 0),
+    }))
+    .sort((a, b) => b.openTotal - a.openTotal || b.grossTotal - a.grossTotal || a.name.localeCompare(b.name));
   return (
     <section className="rounded-xl border border-slate-200 bg-white p-4">
       <h2 className="mb-3 text-sm font-semibold text-slate-900">{title}</h2>
       {loans.length === 0 ? (
         <p className="text-sm text-slate-400">Nothing here.</p>
       ) : (
-        <ul className="space-y-3">
-          {groupList.map((g) => (
-            <li key={g.name}>
-              <div className="flex items-center justify-between border-b border-slate-100 pb-1">
-                <span className="font-semibold text-slate-800">
-                  {g.name}
-                  {g.items.length > 1 && <span className="ml-1 text-[10px] font-normal text-slate-400">({g.items.length} entries)</span>}
-                </span>
-                <span className={`tabular-nums font-bold ${g.openTotal <= 0.005 ? "text-slate-400" : amountColor}`}>{formatINR(g.openTotal)}</span>
-              </div>
-              <ul className="divide-y divide-slate-100">
-                {g.items.map((l) => (
-                  <li key={l.id} className="py-2">
-                    <div className="flex items-center justify-between">
-                      <span className="text-xs text-slate-400">{l.note || (l.sharedPaid != null ? "Shared spend" : "—")}</span>
-                      <span className={`tabular-nums text-sm font-medium ${l.status === "settled" ? "text-slate-400 line-through" : amountColor}`}>
-                        {formatINR(l.outstanding)}
+        <ul className="space-y-2">
+          {groupList.map((g) => {
+            const settledUp = g.openTotal <= 0.005;
+            return (
+              <li key={g.name}>
+                <details className="rounded-lg border border-slate-100">
+                  <summary className="flex cursor-pointer list-none items-center justify-between gap-2 px-3 py-2 hover:bg-slate-50 [&::-webkit-details-marker]:hidden">
+                    <span className="flex items-center gap-1.5 font-semibold text-slate-800">
+                      <span className="text-[10px] text-slate-300">▸</span>
+                      {g.name}
+                      {g.items.length > 1 && <span className="text-[10px] font-normal text-slate-400">({g.items.length})</span>}
+                    </span>
+                    {settledUp ? (
+                      <span className="tabular-nums text-sm font-medium text-slate-400">
+                        <span className="mr-1 text-[10px] font-medium uppercase tracking-wide text-emerald-600">✓ settled</span>
+                        <span className="line-through">{formatINR(g.grossTotal)}</span>
                       </span>
-                    </div>
-                    {l.sharedPaid != null && (
-                      <div className="mt-0.5 inline-flex flex-wrap items-center gap-1.5 rounded-md bg-emerald-50 px-2 py-0.5 text-[11px] text-emerald-700">
-                        🤝 Shared spend · you paid {formatINR(l.sharedPaid)} · your share {formatINR(l.sharedShare ?? 0)}
-                      </div>
+                    ) : (
+                      <span className={`tabular-nums font-bold ${amountColor}`}>{formatINR(g.openTotal)}</span>
                     )}
-                    {l.status === "open" && (
-                      <div className="mt-1.5 flex items-center gap-2">
-                        <form action={recordPersonalLoanPayment} className="flex items-center gap-1">
-                          <input type="hidden" name="id" value={l.id} />
-                          <input name="amount" type="number" step="0.01" placeholder="₹ recd" className="input w-24 py-1 text-xs" />
-                          <button className="rounded-md bg-slate-100 px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-200">Record</button>
-                        </form>
-                        <form action={settlePersonalLoan}>
-                          <input type="hidden" name="id" value={l.id} />
-                          <button className="text-xs font-medium text-emerald-700">{l.sharedPaid != null ? "Mark received" : "Settle"}</button>
-                        </form>
-                        <form action={deletePersonalLoan}>
-                          <input type="hidden" name="id" value={l.id} />
-                          <button className="text-xs text-slate-400 hover:text-red-600">Delete</button>
-                        </form>
-                      </div>
-                    )}
-                  </li>
-                ))}
-              </ul>
-            </li>
-          ))}
+                  </summary>
+                  <div className="space-y-2 px-3 pb-3">
+                    {/* rename the whole person (applies to every entry, open or settled) */}
+                    <form action={renamePersonalLoanParty} className="flex items-center gap-1 pt-1">
+                      <input type="hidden" name="oldName" value={g.name} />
+                      <input type="hidden" name="direction" value={direction} />
+                      <input name="newName" defaultValue={g.name} aria-label="Rename person" className="input flex-1 py-1 text-xs" />
+                      <button className="rounded-md bg-slate-100 px-2 py-1 text-xs font-medium text-slate-600 hover:bg-slate-200">Rename</button>
+                    </form>
+                    <ul className="divide-y divide-slate-100">
+                      {g.items.map((l) => (
+                        <li key={l.id} className="py-2">
+                          <div className="flex items-center justify-between">
+                            <span className="text-xs text-slate-400">{l.note || (l.sharedPaid != null ? "Shared spend" : "—")}</span>
+                            <span className={`tabular-nums text-sm font-medium ${l.status === "settled" ? "text-slate-400 line-through" : amountColor}`}>
+                              {formatINR(l.status === "settled" ? l.amount : l.outstanding)}
+                            </span>
+                          </div>
+                          {l.sharedPaid != null && (
+                            <div className="mt-0.5 inline-flex flex-wrap items-center gap-1.5 rounded-md bg-emerald-50 px-2 py-0.5 text-[11px] text-emerald-700">
+                              🤝 Shared spend · you paid {formatINR(l.sharedPaid)} · your share {formatINR(l.sharedShare ?? 0)}
+                            </div>
+                          )}
+                          <div className="mt-1.5 flex items-center gap-2">
+                            {l.status === "open" ? (
+                              <>
+                                <form action={recordPersonalLoanPayment} className="flex items-center gap-1">
+                                  <input type="hidden" name="id" value={l.id} />
+                                  <input name="amount" type="number" step="0.01" placeholder="₹ recd" className="input w-24 py-1 text-xs" />
+                                  <button className="rounded-md bg-slate-100 px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-200">Record</button>
+                                </form>
+                                <form action={settlePersonalLoan}>
+                                  <input type="hidden" name="id" value={l.id} />
+                                  <button className="text-xs font-medium text-emerald-700">{l.sharedPaid != null ? "Mark received" : "Settle"}</button>
+                                </form>
+                              </>
+                            ) : (
+                              <span className="text-[11px] font-medium text-emerald-600">✓ settled</span>
+                            )}
+                            <form action={deletePersonalLoan}>
+                              <input type="hidden" name="id" value={l.id} />
+                              <button className="text-xs text-slate-400 hover:text-red-600">Delete</button>
+                            </form>
+                          </div>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                </details>
+              </li>
+            );
+          })}
         </ul>
       )}
     </section>

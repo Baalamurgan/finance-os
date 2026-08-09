@@ -14,14 +14,14 @@ const TABS = [
   { key: "today", label: "Today", href: "/personal/today", icon: "🌤️" },
   { key: "expenses", label: "Expenses", href: "/personal/expenses", icon: "🧾" },
   { key: "sheet", label: "Sheet", href: "/personal/sheet", icon: "📋" },
+  { key: "loans", label: "Lending", href: "/personal/loans", icon: "🤝" },
   { key: "finance", label: "Finance", href: "/personal/finance", icon: "💳" },
   { key: "analysis", label: "Analysis", href: "/personal/analysis", icon: "📊" },
   { key: "setup", label: "Setup", href: "/personal/setup", icon: "⚙️" },
-  { key: "loans", label: "Lending", href: "/personal/loans", icon: "🤝" },
 ] as const;
 
-const PRIMARY = TABS.slice(0, 4); // Today · Expenses · Sheet · Finance (bottom bar)
-const MORE = TABS.slice(4); // Analysis · Setup · Lending (overflow)
+const PRIMARY = TABS.slice(0, 4); // Today · Expenses · Sheet · Lending (bottom bar)
+const MORE = TABS.slice(4); // Finance · Analysis · Setup (overflow)
 
 export function PersonalNav({
   active,
@@ -157,6 +157,7 @@ function PersonalBottomNav({ active, q, financeDue }: { active: string; q: strin
         <button type="button" onClick={() => setOpen((v) => !v)} className={cell(moreActive || open)}>
           <span className="text-xl leading-none">⋯</span>
           More
+          {financeDue && <span className="absolute right-1/4 top-1 h-1.5 w-1.5 rounded-full bg-red-500" />}
         </button>
       </nav>
     </>
