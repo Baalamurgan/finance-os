@@ -2,7 +2,6 @@
 
 import { useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import Link from "next/link";
 import { formatINR } from "@/lib/format";
 import { markSettled, unsettle, toggleBillPaid, markAdvanceSettled, unsettleAdvance, markPiggyHandedOver } from "@/app/actions";
 import { PayBillModal } from "@/components/PayBillModal";
@@ -37,7 +36,6 @@ export function MoneyPlan({
   const [pending, startTransition] = useTransition();
   const [who, setWho] = useState<number | null>(null);
   const [addOpen, setAddOpen] = useState(false);
-  const [balances, setBalances] = useState<{ s: MoneyPlanResult["steps"][number]; n: number } | null>(null);
 
   // Everyone involved in a step (payer / from / to) → the filter's member list.
   const people = useMemo(() => {
@@ -163,13 +161,6 @@ export function MoneyPlan({
             // today (needs action now), AMBER for due in 1–2 days, plain otherwise.
             const urgent = !s.done && (s.status === "overdue" || (s.status === "soon" && (s.days ?? 1) <= 0));
             const soon = !s.done && s.status === "soon" && (s.days ?? 0) > 0;
-            // Who moves cash in this step (before → after): a bill's payer; a transfer's both sides.
-            // Fund bills draw the sinking fund (no cash), so nobody's balance moves — nothing to show.
-            const cashParties: { id: number; name: string }[] = (
-              s.kind === "bill"
-                ? (s.fund ? [] : [{ id: s.payerId, name: s.payerName }])
-                : [{ id: s.fromId, name: s.fromName }, { id: s.toId, name: s.toName }]
-            ).filter((p): p is { id: number; name: string } => p.id != null && p.name != null);
             const short = s.senderShort ?? s.short; // member shortfall OR treasurer(hub) shortfall
             // Fronting: marking a step paid while its sender is short (earlier steps not done) means they
             // pay from their own pocket. That's allowed — they're already owed it back (their funding step
@@ -182,14 +173,9 @@ export function MoneyPlan({
 
             return (
               <li key={s.id} className={`flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-xs ${s.done ? "bg-emerald-50/50" : isIncome ? "bg-emerald-50/40" : urgent ? "bg-red-50" : soon ? "bg-amber-50" : "bg-slate-50"}`}>
-                <button
-                  type="button"
-                  onClick={() => setBalances({ s, n })}
-                  title="Tap to see everyone's cash before & after this step"
-                  className="grid h-5 w-5 shrink-0 place-items-center rounded-full text-[11px] font-semibold text-slate-500 ring-1 ring-slate-300 hover:bg-slate-200 hover:text-slate-800"
-                >
+                <span className="grid h-5 w-5 shrink-0 place-items-center rounded-full text-[11px] font-semibold text-slate-500 ring-1 ring-slate-300">
                   {s.done ? <span className="text-emerald-600">✓</span> : n}
-                </button>
+                </span>
 
                 <div className="min-w-0 flex-1">
                   <div className={`flex flex-wrap items-center gap-1.5 ${s.done ? "text-slate-400 line-through" : "text-slate-800"}`}>
@@ -233,27 +219,8 @@ export function MoneyPlan({
                     {isAdvance && !s.payback && <span className="shrink-0 rounded-full bg-teal-50 px-1.5 py-0.5 text-[9px] font-medium text-teal-600" title={`${s.fromName} fronts this so ${s.toName} can pay the next step`}>advance · funds {s.toName}</span>}
                     {isAdvance && s.payback && <span className="shrink-0 rounded-full bg-teal-50 px-1.5 py-0.5 text-[9px] font-medium text-teal-600" title={`${s.fromName} repays ${s.toName} the advance, now that their income has landed`}>payback → {s.toName}</span>}
                   </div>
-                  {/* Cash before → after — but NOT for the Piggy hand-over: it moves LAST month's leftover
-                      (a separate bucket tracked in In-Hand), not this month's cash, so those running
-                      balances legitimately don't change. Showing them would read as "nothing moved". */}
-                  {!s.done && cashParties.length > 0 && !isPiggy && (
-                    <div className="mt-0.5 flex flex-wrap gap-x-2.5 gap-y-0.5 text-[10px] text-slate-500">
-                      {cashParties.map((p) => {
-                        const before = s.balancesBefore?.[p.id] ?? 0;
-                        const after = s.balancesAfter?.[p.id] ?? 0;
-                        return (
-                          <span key={p.id} className="tabular-nums">
-                            <span className="font-medium text-slate-600">{p.name}</span> {formatINR(before)} → <span className={after < -0.005 ? "font-semibold text-red-600" : "text-slate-700"}>{formatINR(after)}</span>
-                          </span>
-                        );
-                      })}
-                    </div>
-                  )}
-                  {!s.done && isHandover && (
-                    <div className="mt-0.5 text-[10px] text-amber-600">
-                      🐷 {s.fromName} hands {formatINR(s.amount)} of last month’s Piggy to {s.toName}. It’s separate from this month’s cash (tracked in In-Hand / Piggy), so the running balances don’t move here — {s.toName}’s Piggy goes up by {formatINR(s.amount)} once ticked.
-                    </div>
-                  )}
+                  {/* Per-step running balances are intentionally NOT shown here — the true position lives
+                      in the In-Hand section. We keep only the actionable shortfall warnings below. */}
                   {!s.done && short != null && short > 0.005 && (
                     <div className="text-[10px] font-semibold text-red-600">
                       ⚠ {isPiggy || isTransfer || isAllowance || isAdvance ? s.fromName : s.payerName} needs {formatINR(short)} more in hand first
@@ -317,67 +284,8 @@ export function MoneyPlan({
         </ol>
         </>
       )}
-
-      {/* Per-step balances — a mobile-friendly bottom sheet: everyone's running cash right after the
-          tapped step, so you can see who's holding money and could pay elsewhere. */}
-      {balances && (
-        <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 sm:items-center sm:p-4" onClick={() => setBalances(null)}>
-          <div
-            className="w-full max-w-sm rounded-t-2xl bg-white p-4 shadow-xl sm:rounded-2xl"
-            onClick={(e) => e.stopPropagation()}
-            style={{ paddingBottom: "max(1rem, env(safe-area-inset-bottom))" }}
-          >
-            <div className="flex items-start justify-between gap-2">
-              <div className="min-w-0">
-                <h3 className="text-sm font-semibold text-slate-800">Cash after step {balances.n}</h3>
-                <p className="truncate text-[11px] text-slate-400">{stepTitle(balances.s)}</p>
-              </div>
-              <button type="button" onClick={() => setBalances(null)} className="shrink-0 rounded-md px-1.5 text-slate-400 hover:bg-slate-100" aria-label="Close">✕</button>
-            </div>
-            <p className="mt-2 text-[10px] text-slate-400">Everyone&apos;s cash in hand, from each person&apos;s own income as the plan runs to here — <b>before → after</b> this step. The people moving money are highlighted. − = short / already fronted.</p>
-            <div className="mt-2 flex items-center justify-end gap-6 px-2 text-[9px] uppercase tracking-wide text-slate-300">
-              <span>before</span><span>after</span>
-            </div>
-            <ul className="mt-0.5 space-y-1">
-              {members.map((m) => {
-                const before = balances.s.balancesBefore?.[m.id] ?? 0;
-                const after = balances.s.balancesAfter?.[m.id] ?? 0;
-                const acting = m.id === balances.s.fromId || m.id === balances.s.payerId || m.id === balances.s.toId;
-                return (
-                  <li key={m.id} className={`flex items-center justify-between rounded-md px-2 py-1.5 text-sm ${acting ? "bg-slate-50" : ""}`}>
-                    <span className={acting ? "font-semibold text-slate-800" : "text-slate-600"}>{m.name}</span>
-                    <span className="flex items-center gap-2 tabular-nums text-xs">
-                      <span className="text-slate-400">{formatINR(before)}</span>
-                      <span className="text-slate-300">→</span>
-                      <span className={`w-20 text-right ${after < -0.005 ? "font-semibold text-red-600" : after > 0.005 ? "font-medium text-emerald-700" : "text-slate-400"}`}>{formatINR(after)}</span>
-                    </span>
-                  </li>
-                );
-              })}
-            </ul>
-            {/* Jump to the full who-owes-whom breakdown — where each person's net (and the spends folding
-                into it, e.g. a net-payer's reimbursement) is itemised line by line. */}
-            <Link
-              href="/settlement"
-              onClick={() => setBalances(null)}
-              className="mt-3 flex items-center justify-center gap-1 rounded-md border border-slate-200 py-2 text-xs font-medium text-slate-600 hover:bg-slate-50"
-            >
-              See the full breakdown in Settlement →
-            </Link>
-          </div>
-        </div>
-      )}
     </section>
   );
-}
-
-// Human label for a step (shared by the row + the balances sheet).
-function stepTitle(s: MoneyPlanResult["steps"][number]): string {
-  if (s.kind === "income") return `${s.toName ?? "?"} · ${s.source ?? "income"}`;
-  if (s.kind === "allowance") return `${s.fromName} → ${s.toName}`;
-  if (s.kind === "piggy") return `${s.fromName} → ${s.toName} · Piggy`;
-  if (s.kind === "bill") return `${s.payerName} → ${s.vendor}`;
-  return `${s.fromName} → ${s.toName}`;
 }
 
 function FilterPill({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
