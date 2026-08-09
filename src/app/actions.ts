@@ -1197,7 +1197,8 @@ export async function toggleBillPaid(formData: FormData) {
   const isPayer = memberId != null && memberId === e.memberId;
   if (!isEditor && !isPayer) { log.warn("toggleBillPaid", "blocked", { outcome: "blocked", reason: "not-allowed", memberId, id, periodId: e.periodId }); return; }
   if (!(await isHead()) && !(await periodOpen(e.periodId))) { log.warn("toggleBillPaid", "blocked", { outcome: "blocked", reason: "period-closed", memberId, id, periodId: e.periodId }); return; }
-  await prisma.expenseEntry.update({ where: { id }, data: { paid: !e.paid } });
+  // Stamp the paid time when marking paid (cleared on un-mark) so the plan can show "paid <day>".
+  await prisma.expenseEntry.update({ where: { id }, data: { paid: !e.paid, paidAt: e.paid ? null : new Date() } });
   log.info("toggleBillPaid", "ok", { outcome: "ok", memberId, id, paid: !e.paid, periodId: e.periodId });
   revalidatePath("/", "layout");
 }

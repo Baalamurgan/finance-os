@@ -27,6 +27,7 @@ export type PlanStep = {
   id: string;
   kind: "transfer-in" | "transfer-out" | "bill" | "allowance" | "piggy" | "advance" | "income";
   day: number | null; // effective day-of-month for ordering/display (null = undated)
+  paidDay?: number | null; // day-of-month it was ACTUALLY marked paid (done steps only), for a "paid <day>" tag
   amount: number;
   done: boolean;
   // income (informational: a member's own income landing — credits their cash in the walk, not tickable)

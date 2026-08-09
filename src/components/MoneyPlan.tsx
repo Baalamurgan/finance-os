@@ -209,9 +209,13 @@ export function MoneyPlan({
                       // Everything else (collections / disbursements) derives its date — read-only.
                       return tag;
                     })()}
-                    {/* A done step keeps its date visible — when it was scheduled / due — as a muted tag. */}
+                    {/* A done step keeps its date visible — when it was scheduled / due — as a muted tag,
+                        plus a "paid <day>" tag when it was actually paid on a DIFFERENT day than due. */}
                     {s.done && s.day != null && (!isPiggy || isHandover) && (
                       <span className="shrink-0 rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] font-normal text-slate-400 no-underline">{isIncome ? "on" : "was due"} {ordinal(s.day)}</span>
+                    )}
+                    {s.done && s.paidDay != null && s.paidDay !== s.day && (
+                      <span className="shrink-0 rounded-full bg-emerald-50 px-1.5 py-0.5 text-[10px] font-medium text-emerald-600 no-underline">paid {ordinal(s.paidDay)}</span>
                     )}
                     {s.feedsBills && !s.done && <span className="shrink-0 rounded-full bg-indigo-50 px-1.5 py-0.5 text-[9px] font-medium text-indigo-500">funds bills ↓</span>}
                     {s.fundsMember && !s.done && !s.reimbursement && <span className="shrink-0 rounded-full bg-emerald-50 px-1.5 py-0.5 text-[9px] font-medium text-emerald-600">funds {s.toName} ↓</span>}

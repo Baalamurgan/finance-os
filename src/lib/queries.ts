@@ -558,7 +558,7 @@ export async function getMoneyPlan(householdId: number, periodId: number, inhand
   // Funding advances: someone fronts cash to a short member (round-trip loan). Rendered as their own
   // steps — the front just before what it funds, the payback once the borrower can cover it; both
   // balance-walked as real cash moves; each leg tickable via the Advance record.
-  const advanceRows = await prisma.advance.findMany({ where: { periodId }, select: { id: true, fromMemberId: true, toMemberId: true, amount: true, day: true, settled: true, paybackDay: true, paybackSettled: true } });
+  const advanceRows = await prisma.advance.findMany({ where: { periodId }, select: { id: true, fromMemberId: true, toMemberId: true, amount: true, day: true, settled: true, settledAt: true, paybackDay: true, paybackSettled: true, paybackSettledAt: true } });
   const memberName = (id: number | null) => settlement.rows.find((r) => r.id === id)?.name ?? treasurerName;
   // Auto payback day = the earliest day the borrower's OWN income has cumulatively landed to cover the
   // fronted amount (never before the front day). A manual override (stored paybackDay) always wins.
@@ -639,7 +639,30 @@ export async function getMoneyPlan(householdId: number, periodId: number, inhand
       : undefined;
 
   const { buildMoneyPlan } = await import("./moneyPlan");
-  return { ...buildMoneyPlan({ treasurerId: inhand.treasurerId, treasurerName: settlement.treasurer?.name, transfers, bills, allowances, piggyReturns, advances, incomeDayByMember, incomeByMember, incomeArrivals, reimburseByMember, reimburseDay, piggyHandover }), treasurerId: inhand.treasurerId, periodId };
+  const plan = buildMoneyPlan({ treasurerId: inhand.treasurerId, treasurerName: settlement.treasurer?.name, transfers, bills, allowances, piggyReturns, advances, incomeDayByMember, incomeByMember, incomeArrivals, reimburseByMember, reimburseDay, piggyHandover });
+
+  // Enrich done steps with the day they were ACTUALLY marked paid (IST), so the plan can show
+  // "paid <day>" when it differs from the scheduled/due day. Timestamps live on the underlying record:
+  // a bill/allowance line (ExpenseEntry.paidAt), a periodic fund bill (BillPayment.paidAt), a transfer
+  // (SettlementRecord.settledAt), or an advance leg (Advance.settledAt / paybackSettledAt).
+  const [expensePaid, settlementPaid, periodicPaid] = await Promise.all([
+    prisma.expenseEntry.findMany({ where: { periodId, paid: true }, select: { id: true, paidAt: true } }),
+    prisma.settlementRecord.findMany({ where: { periodId }, select: { id: true, settledAt: true } }),
+    prisma.billPayment.findMany({ where: { periodId }, select: { categoryId: true, paidAt: true } }),
+  ]);
+  const istDay = (d: Date | null | undefined) => (d ? new Date(d.getTime() + 330 * 60000).getUTCDate() : null);
+  const expensePaidDay = new Map(expensePaid.map((e) => [e.id, istDay(e.paidAt)]));
+  const settlementPaidDay = new Map(settlementPaid.map((r) => [r.id, istDay(r.settledAt)]));
+  const periodicPaidDay = new Map(periodicPaid.map((p) => [p.categoryId, istDay(p.paidAt)]));
+  const advancePaidDay = new Map(advanceRows.map((a) => [a.id, { front: istDay(a.settledAt), payback: istDay(a.paybackSettledAt) }]));
+  for (const s of plan.steps) {
+    if (!s.done) continue;
+    if (s.kind === "bill" && s.fund && s.categoryId != null) s.paidDay = periodicPaidDay.get(s.categoryId) ?? null;
+    else if ((s.kind === "bill" || s.kind === "allowance") && s.billId != null) s.paidDay = expensePaidDay.get(s.billId) ?? null;
+    else if ((s.kind === "transfer-in" || s.kind === "transfer-out") && s.recordId != null) s.paidDay = settlementPaidDay.get(s.recordId) ?? null;
+    else if (s.kind === "advance" && s.advanceId != null) { const a = advancePaidDay.get(s.advanceId); s.paidDay = (s.payback ? a?.payback : a?.front) ?? null; }
+  }
+  return { ...plan, treasurerId: inhand.treasurerId, periodId };
 }
 
 export type SettlementHistory = Awaited<ReturnType<typeof getSettlementHistory>>;
