@@ -48,11 +48,12 @@ export default async function PersonalSheet({
   const monthlyExpenses = expenses.reduce((s, e) => s + e.amount, 0); // all fixed lines (display subtotal)
   // Every spend counts at spend time. Three figures (see the money model):
   //  Can spend  = personalExpense − your NET spend (splits net out others' shares)
-  //  In hand    = can spend + card dues − money owed to you (physical cash you hold)
+  //  In hand    = can spend + money lent out (comes back). Card spends aren't added back — already
+  //              counted in can-spend and committed to the card bill, so not "in hand". Cards shown apart.
   //  Spent      = net spend (your share only)
   const { totalIn, personalExpense, netSpent, canSpend } = cash;
   const owed = lending.owed;
-  const inHand = canSpend + unpaidCardDues - owed;
+  const inHand = canSpend + owed;
   const spentPct = personalExpense > 0 ? Math.min(100, (netSpent / personalExpense) * 100) : 0;
 
   // group monthly expenses by category (collapsible)
@@ -192,9 +193,9 @@ export default async function PersonalSheet({
           </div>
           {(unpaidCardDues > 0 || owed > 0) && (
             <div className="mt-1.5 text-[11px] text-slate-400">
-              {unpaidCardDues > 0 && <>{formatINR(unpaidCardDues)} owed on cards</>}
-              {unpaidCardDues > 0 && owed > 0 && " · "}
-              {owed > 0 && <>{formatINR(owed)} owed to you (lent)</>}
+              {owed > 0 && <>incl. {formatINR(owed)} lent out</>}
+              {owed > 0 && unpaidCardDues > 0 && " · "}
+              {unpaidCardDues > 0 && <>{formatINR(unpaidCardDues)} on cards (owed)</>}
             </div>
           )}
         </div>

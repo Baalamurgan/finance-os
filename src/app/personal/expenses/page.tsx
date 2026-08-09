@@ -45,7 +45,10 @@ export default async function PersonalExpenses({
   const { personalExpense, netSpent, canSpend } = cash;
   const unpaidCardDues = cardDues.reduce((s, d) => s + d.unpaidTotal, 0);
   const owed = lending.owed;
-  const inHand = canSpend + unpaidCardDues - owed; // physical cash: what's yours minus what you're owed
+  // In hand = what's yours going forward: what you can still spend PLUS money lent out (it comes back).
+  // Card spends are NOT added back — they're already accounted for in canSpend (counted at spend time)
+  // and that cash is committed to the card bill, so it isn't "in hand". Card dues are shown separately.
+  const inHand = canSpend + owed;
 
   // The category donut reflects your NET spend (your share of splits) — the exact spend you did.
   const byCat = new Map<number, number>();
@@ -84,9 +87,10 @@ export default async function PersonalExpenses({
             <div className="text-[11px] font-medium uppercase tracking-wide text-slate-400">In hand</div>
             <div className={`mt-1 text-xl font-bold ${inHand >= 0 ? "text-slate-800" : "text-red-600"}`}>{formatINR(inHand)}</div>
             <div className="text-[10px] text-slate-400">
-              {unpaidCardDues > 0 || owed > 0
-                ? [unpaidCardDues > 0 ? `${formatINR(unpaidCardDues)} on cards` : null, owed > 0 ? `${formatINR(owed)} lent` : null].filter(Boolean).join(" · ")
-                : "cash you hold now"}
+              {owed > 0 && <>incl. {formatINR(owed)} lent out</>}
+              {owed > 0 && unpaidCardDues > 0 && " · "}
+              {unpaidCardDues > 0 && <>{formatINR(unpaidCardDues)} on cards (owed)</>}
+              {owed === 0 && unpaidCardDues === 0 && "cash you can use"}
             </div>
           </div>
           <div className="rounded-xl border border-slate-200 bg-white p-4">

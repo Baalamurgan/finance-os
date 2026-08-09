@@ -78,44 +78,68 @@ function LoanList({
   accent: "emerald" | "amber";
 }) {
   const amountColor = accent === "emerald" ? "text-emerald-700" : "text-amber-700";
+  // Group by counterparty so multiple lends/borrows with the SAME person roll up under one header
+  // showing their combined open total — while each individual entry keeps its own record/settle/delete.
+  const groups = new Map<string, typeof loans>();
+  for (const l of loans) {
+    const key = l.counterparty.trim();
+    const arr = groups.get(key);
+    if (arr) arr.push(l);
+    else groups.set(key, [l]);
+  }
+  const groupList = [...groups.entries()]
+    .map(([name, items]) => ({ name, items, openTotal: items.filter((l) => l.status === "open").reduce((s, l) => s + l.outstanding, 0) }))
+    .sort((a, b) => b.openTotal - a.openTotal || a.name.localeCompare(b.name));
   return (
     <section className="rounded-xl border border-slate-200 bg-white p-4">
       <h2 className="mb-3 text-sm font-semibold text-slate-900">{title}</h2>
       {loans.length === 0 ? (
         <p className="text-sm text-slate-400">Nothing here.</p>
       ) : (
-        <ul className="divide-y divide-slate-100">
-          {loans.map((l) => (
-            <li key={l.id} className="py-2.5">
-              <div className="flex items-center justify-between">
-                <span className="font-medium text-slate-800">{l.counterparty}</span>
-                <span className={`tabular-nums font-semibold ${l.status === "settled" ? "text-slate-400 line-through" : amountColor}`}>
-                  {formatINR(l.outstanding)}
+        <ul className="space-y-3">
+          {groupList.map((g) => (
+            <li key={g.name}>
+              <div className="flex items-center justify-between border-b border-slate-100 pb-1">
+                <span className="font-semibold text-slate-800">
+                  {g.name}
+                  {g.items.length > 1 && <span className="ml-1 text-[10px] font-normal text-slate-400">({g.items.length} entries)</span>}
                 </span>
+                <span className={`tabular-nums font-bold ${g.openTotal <= 0.005 ? "text-slate-400" : amountColor}`}>{formatINR(g.openTotal)}</span>
               </div>
-              {l.note && <div className="text-xs text-slate-400">{l.note}</div>}
-              {l.sharedPaid != null && (
-                <div className="mt-0.5 inline-flex flex-wrap items-center gap-1.5 rounded-md bg-emerald-50 px-2 py-0.5 text-[11px] text-emerald-700">
-                  🤝 Shared spend · you paid {formatINR(l.sharedPaid)} · your share {formatINR(l.sharedShare ?? 0)}
-                </div>
-              )}
-              {l.status === "open" && (
-                <div className="mt-1.5 flex items-center gap-2">
-                  <form action={recordPersonalLoanPayment} className="flex items-center gap-1">
-                    <input type="hidden" name="id" value={l.id} />
-                    <input name="amount" type="number" step="0.01" placeholder="₹ recd" className="input w-24 py-1 text-xs" />
-                    <button className="rounded-md bg-slate-100 px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-200">Record</button>
-                  </form>
-                  <form action={settlePersonalLoan}>
-                    <input type="hidden" name="id" value={l.id} />
-                    <button className="text-xs font-medium text-emerald-700">{l.sharedPaid != null ? "Mark received" : "Settle"}</button>
-                  </form>
-                  <form action={deletePersonalLoan}>
-                    <input type="hidden" name="id" value={l.id} />
-                    <button className="text-xs text-slate-400 hover:text-red-600">Delete</button>
-                  </form>
-                </div>
-              )}
+              <ul className="divide-y divide-slate-100">
+                {g.items.map((l) => (
+                  <li key={l.id} className="py-2">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs text-slate-400">{l.note || (l.sharedPaid != null ? "Shared spend" : "—")}</span>
+                      <span className={`tabular-nums text-sm font-medium ${l.status === "settled" ? "text-slate-400 line-through" : amountColor}`}>
+                        {formatINR(l.outstanding)}
+                      </span>
+                    </div>
+                    {l.sharedPaid != null && (
+                      <div className="mt-0.5 inline-flex flex-wrap items-center gap-1.5 rounded-md bg-emerald-50 px-2 py-0.5 text-[11px] text-emerald-700">
+                        🤝 Shared spend · you paid {formatINR(l.sharedPaid)} · your share {formatINR(l.sharedShare ?? 0)}
+                      </div>
+                    )}
+                    {l.status === "open" && (
+                      <div className="mt-1.5 flex items-center gap-2">
+                        <form action={recordPersonalLoanPayment} className="flex items-center gap-1">
+                          <input type="hidden" name="id" value={l.id} />
+                          <input name="amount" type="number" step="0.01" placeholder="₹ recd" className="input w-24 py-1 text-xs" />
+                          <button className="rounded-md bg-slate-100 px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-200">Record</button>
+                        </form>
+                        <form action={settlePersonalLoan}>
+                          <input type="hidden" name="id" value={l.id} />
+                          <button className="text-xs font-medium text-emerald-700">{l.sharedPaid != null ? "Mark received" : "Settle"}</button>
+                        </form>
+                        <form action={deletePersonalLoan}>
+                          <input type="hidden" name="id" value={l.id} />
+                          <button className="text-xs text-slate-400 hover:text-red-600">Delete</button>
+                        </form>
+                      </div>
+                    )}
+                  </li>
+                ))}
+              </ul>
             </li>
           ))}
         </ul>
