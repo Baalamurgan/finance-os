@@ -272,6 +272,24 @@ describe("buildMoneyPlan", () => {
     expect(plan.steps.find((s) => s.vendor === "Loan")!.senderShort).toBeUndefined(); // 30 + 70 covers the 100 bill
   });
 
+  it("dates a PAID reimbursement slice to reimburseDay (not month-end), keeping its tag", () => {
+    // Creditor 3 is owed net 100; the early reimbursement of 50 has been paid. A later day-20 bill
+    // pushes lastDay to 20, but the DONE slice must still read as day 6 (when it was scheduled), tagged.
+    const plan = buildMoneyPlan({
+      treasurerId: T,
+      transfers: [xfer({ fromId: T, from: "A", toId: 3, to: "C", amount: 100, paidAmount: 50, settled: true, recordId: 9 })],
+      bills: [bill({ payerId: 3, payerName: "C", vendor: "Loan", amount: 100, day: 20 })],
+      incomeDayByMember: {},
+      incomeArrivals: [{ memberId: 3, day: 1, amount: 50 }],
+      reimburseByMember: { 3: 50 },
+      reimburseDay: 6,
+    });
+    const donePaid = plan.steps.find((s) => s.kind === "transfer-out" && s.done && s.toId === 3)!;
+    expect(donePaid.amount).toBe(50);
+    expect(donePaid.day).toBe(6); // scheduled for day 6 → stays day 6 when done (not lastDay=20)
+    expect(donePaid.reimbursement).toBe(true);
+  });
+
   it("adds a tickable piggy hand-over lump that doesn't move this month's cash walk", () => {
     const plan = buildMoneyPlan({
       treasurerId: T,

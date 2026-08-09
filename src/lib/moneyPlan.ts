@@ -111,9 +111,18 @@ export function buildMoneyPlan(input: {
   }
   // Already-PAID disbursement portion → one done step for the amount actually handed over (paidOf).
   // A partial payment (paid < net) leaves a remainder that's re-scheduled via unsettledOut below.
+  // The early reimbursement is normally the first (and only) slice paid, so when the paid amount is
+  // no more than the creditor's reimbursement, date the done step to reimburseDay (the day it was
+  // scheduled for) and keep the reimbursement tag — otherwise it'd wrongly read as due at month-end.
   for (const t of outbound.filter((o) => o.settled)) {
     const paid = Math.round(paidOf(t) * 100) / 100;
-    if (paid > 0.005) steps.push({ id: `xfer-${t.fromId}-${t.toId}`, kind: "transfer-out", day: lastDay, amount: paid, done: true, fromId: t.fromId, toId: t.toId, fromName: t.from, toName: t.to, recordId: t.recordId });
+    if (paid <= 0.005) continue;
+    const reimbAmt = reimburseDay != null ? reimburseByMember[t.toId] ?? 0 : 0;
+    const isReimbSlice = reimbAmt > 0.005 && paid <= reimbAmt + 0.5;
+    steps.push({
+      id: `xfer-${t.fromId}-${t.toId}`, kind: "transfer-out", day: isReimbSlice ? reimburseDay! : lastDay, amount: paid, done: true,
+      fromId: t.fromId, toId: t.toId, fromName: t.from, toName: t.to, recordId: t.recordId, ...(isReimbSlice ? { reimbursement: true } : {}),
+    });
   }
   for (const b of bills) {
     steps.push({
