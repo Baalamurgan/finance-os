@@ -101,6 +101,7 @@ export default async function InHandPage({
                 pool={inHand.treasurerPool}
                 sharedNet={inHand.shared.net}
                 monthBalance={inHand.monthBalance}
+                billsHeldForMembers={inHand.poolHoldsForMembers}
                 isPiggyHolder={g.memberId === inHand.piggyHolderId}
                 piggy={inHand.generalPiggy}
                 pendingPiggyLump={inHand.pendingPiggyHandover?.lump ?? 0}

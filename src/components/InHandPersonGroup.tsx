@@ -12,6 +12,7 @@ export function InHandPersonGroup({
   pool,
   sharedNet,
   monthBalance,
+  billsHeldForMembers = 0,
   isPiggyHolder,
   piggy,
   pendingPiggyLump,
@@ -28,6 +29,7 @@ export function InHandPersonGroup({
   pool: number;
   sharedNet: number;
   monthBalance: number;
+  billsHeldForMembers?: number;
   isPiggyHolder: boolean;
   piggy: number;
   pendingPiggyLump: number;
@@ -39,7 +41,7 @@ export function InHandPersonGroup({
   selYear: number;
   selMonth: number;
 }) {
-  const { name, cats, unpaidBills, paidBills, earmarked, sinkingFunds, sinkingHeld, unpaidPeriodic, paidPeriodic, carried, carriedDue, miscSpent, net, pendingPiggyHeld } = group;
+  const { name, cats, unpaidBills, paidBills, earmarked, sinkingFunds, sinkingHeld, unpaidPeriodic, paidPeriodic, carried, carriedDue, miscSpent, net, pendingPiggyHeld, yetToReceive } = group;
   // Per-card toggle: include or exclude this member's own misc/out-of-pocket in their total.
   // Default = include (the true position). Excluding shows "budget + bills + savings" only, so
   // someone can see where they'd stand without their discretionary spending counted.
@@ -122,22 +124,6 @@ export function InHandPersonGroup({
             </span>
           </li>
         ))}
-        {unpaidBills.map((b) => {
-          const st = b.due?.status;
-          return (
-            <li key={b.id} className={`flex items-center justify-between gap-2 rounded-md text-xs ${st === "overdue" ? "bg-red-50 px-1.5 py-0.5" : st === "soon" ? "bg-amber-50 px-1.5 py-0.5" : ""}`}>
-              <span className={`truncate ${st === "overdue" ? "text-red-700" : "text-slate-500"}`}>
-                {b.name} <span className="text-[10px] text-indigo-400">bill</span>
-                {b.due && <DueChip due={b.due} />}
-              </span>
-              <span className="flex shrink-0 items-center gap-1.5">
-                <span className={`tabular-nums ${st === "overdue" ? "font-medium text-red-700" : "text-slate-600"}`}>{formatINR(b.amount)}</span>
-                {!b.due && <span className="rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-400">to pay</span>}
-                {canPay && <PaidToggle id={b.id} title="Mark this bill paid" label="✓ paid" />}
-              </span>
-            </li>
-          );
-        })}
         {/* Savings this person is holding toward a periodic bill (moves to the fund at wind-down) */}
         {earmarked.map((e) => (
           <li key={`sv${e.id}`} className="flex items-center justify-between gap-2 text-xs">
@@ -188,6 +174,7 @@ export function InHandPersonGroup({
               Family pool{" "}
               <span className="text-[10px] text-slate-400">
                 shared {formatINR(sharedNet)} + month bal {formatINR(monthBalance)}
+                {billsHeldForMembers > 0.005 && <> + bills to disburse {formatINR(billsHeldForMembers)}</>}
               </span>
             </span>
             <span className="shrink-0 tabular-nums font-medium text-indigo-700">{formatINR(pool)}</span>
@@ -199,6 +186,14 @@ export function InHandPersonGroup({
             <span className="shrink-0 tabular-nums font-medium text-pink-700">{formatINR(piggyAmt)}</span>
           </li>
         )}
+        {/* Owner still holding last month's Piggy leftover, to hand to the holder (this IS in their total). */}
+        {pendingPiggyHeld > 0.005 && (
+          <li className="flex items-center justify-between gap-2 text-xs">
+            <span className="truncate text-amber-600">🐷 holding for Piggy <span className="text-[10px] text-slate-400">hand to the holder</span></span>
+            <span className="shrink-0 tabular-nums font-medium text-amber-700">{formatINR(pendingPiggyHeld)}</span>
+          </li>
+        )}
+        {/* Piggy holder still waiting on the owners' leftover (NOT in their total). */}
         {isPiggyHolder && pendingPiggyLump > 0.005 && (
           <>
             <li className="pt-2">
@@ -214,16 +209,11 @@ export function InHandPersonGroup({
             </li>
           </>
         )}
-        {pendingPiggyHeld > 0.005 && (
-          <li className="flex items-center justify-between gap-2 text-xs">
-            <span className="truncate text-amber-600">🐷 holding for Piggy <span className="text-[10px] text-slate-400">hand to the holder</span></span>
-            <span className="shrink-0 tabular-nums font-medium text-amber-700">{formatINR(pendingPiggyHeld)}</span>
-          </li>
-        )}
 
-        {/* Bills due THIS month — separated below the ruler because they DON'T change the
-            in-hand total (paid from the fund/Piggy). Just a reminder of what to pay. */}
-        {unpaidPeriodic.length > 0 && (
+        {/* Bills to pay THIS month — assigned bills (loans / EMIs / interest / fixed) AND periodic
+            fund bills. NOT in the in-hand total: they're pool/fund-funded, so the cash arrives via the
+            Money plan. `yetToReceive` (assigned bills) is the money still coming from the pool. */}
+        {(unpaidBills.length > 0 || unpaidPeriodic.length > 0) && (
           <>
             <li className="pt-2">
               <div className="border-t border-slate-200" />
@@ -231,9 +221,29 @@ export function InHandPersonGroup({
                 <span className="text-[10px] font-semibold uppercase tracking-wide text-teal-600">
                   Bills to pay this month
                 </span>
-                <span className="text-[9px] text-slate-400">reminder · paid from the fund, not your in-hand</span>
+                <span className="text-[9px] text-slate-400">
+                  {yetToReceive > 0.005
+                    ? `yet to receive ${formatINR(yetToReceive)} from the pool · not in your in-hand`
+                    : "reminder · paid from the fund, not your in-hand"}
+                </span>
               </div>
             </li>
+            {unpaidBills.map((b) => {
+              const st = b.due?.status;
+              return (
+                <li key={`ub${b.id}`} className={`flex items-center justify-between gap-2 rounded-md text-xs ${st === "overdue" ? "bg-red-50 px-1.5 py-0.5" : st === "soon" ? "bg-amber-50 px-1.5 py-0.5" : ""}`}>
+                  <span className={`truncate ${st === "overdue" ? "text-red-700" : "text-slate-500"}`}>
+                    {b.name} <span className="text-[10px] text-indigo-400">bill</span>
+                    {b.due && <DueChip due={b.due} />}
+                  </span>
+                  <span className="flex shrink-0 items-center gap-1.5">
+                    <span className={`tabular-nums ${st === "overdue" ? "font-medium text-red-700" : "text-slate-600"}`}>{formatINR(b.amount)}</span>
+                    {!b.due && <span className="rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-400">to pay</span>}
+                    {canPay && <PaidToggle id={b.id} title="Mark this bill paid" label="✓ paid" />}
+                  </span>
+                </li>
+              );
+            })}
             {unpaidPeriodic.map((b) => (
               <li key={`pb${b.categoryId}`} className="flex items-center justify-between gap-2 text-xs">
                 <span className="truncate text-slate-500">

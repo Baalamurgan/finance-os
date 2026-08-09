@@ -1013,9 +1013,16 @@ export async function getInHand(householdId: number, periodId: number) {
       memberId: key, name, cats, unpaidBills, paidBills, earmarked, unpaidPeriodic, paidPeriodic, carried, carriedDue,
       sinkingFunds, sinkingHeld, pendingPiggyHeld,
       budgetRemaining, unpaidTotal, earmarkedTotal, miscSpent,
-      // carried bills are NOT in `net` — they were already settled in their own month. The pending
-      // Piggy leftover IS in `net` (it's cash the owner physically holds until hand-over).
-      net: budgetRemaining + unpaidTotal + earmarkedTotal - miscSpent + pendingPiggyHeld,
+      // Money still owed TO this member from the pool: their assigned bills are pool-funded — the cash
+      // comes via the Money-plan disbursement, so until the bill is paid it's "yet to receive", NOT
+      // held. (Once ticked paid it drops out entirely.) Surfaced so the card can show it out of total.
+      yetToReceive: unpaidTotal,
+      // In-hand = what this member PHYSICALLY holds right now: budget cash left + set-asides they hold
+      // + last month's Piggy leftover they still hold, minus their own out-of-pocket. A member's assigned
+      // bills are NOT here (pool-funded → "yet to receive"); carried bills aren't either (settled in their
+      // month). The SHARED/pool bucket (key null) DOES keep its unpaid bills — the treasurer holds that
+      // cash in the pool until it's paid, so it must stay counted (else the family total wouldn't balance).
+      net: budgetRemaining + earmarkedTotal - miscSpent + pendingPiggyHeld + (key == null ? unpaidTotal : 0),
     };
   };
 
@@ -1058,8 +1065,11 @@ export async function getInHand(householdId: number, periodId: number) {
   const shared = build(null, "Shared / pool");
   const piggyTotal = piggy.generalTotal + piggy.sinking.reduce((s, x) => s + x.hold, 0);
   const monthBalance = (incomeAgg._sum.amount ?? 0) - (expenseAgg._sum.amount ?? 0);
-  // the treasurer additionally holds the family pool: shared in-hand + the month's balance
-  const treasurerPool = shared.net + monthBalance;
+  // The treasurer additionally holds the family pool: shared in-hand + the month's balance + the cash
+  // for every member's assigned bills (their `yetToReceive`) — that money sits in the pool until it's
+  // disbursed to the payer via the Money plan, so it belongs to the pool, not the payer's in-hand yet.
+  const poolHoldsForMembers = byPerson.reduce((s, g) => s + g.yetToReceive, 0);
+  const treasurerPool = shared.net + monthBalance + poolHoldsForMembers;
 
   // Allowances to send this month (treasurer → member). `done` = the Sheet line's paid flag.
   const nameOf = (id: number | null) => members.find((m) => m.id === id)?.name ?? "member";
@@ -1090,7 +1100,7 @@ export async function getInHand(householdId: number, periodId: number) {
     priorPeriod && priorPeriod.piggyHandedOverAt == null && pendingPiggyLump > 0.005
       ? { priorPeriodId: priorPeriod.id, lump: pendingPiggyLump, day: handoverDay, owners: pendingOwners }
       : null;
-  return { byPerson, shared, allowances, piggyTotal, generalPiggy: piggy.generalTotal, treasurerId, piggyHolderId, monthBalance, treasurerPool, pendingPiggyHandover };
+  return { byPerson, shared, allowances, piggyTotal, generalPiggy: piggy.generalTotal, treasurerId, piggyHolderId, monthBalance, treasurerPool, poolHoldsForMembers, pendingPiggyHandover };
 }
 
 /**
