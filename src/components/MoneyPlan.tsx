@@ -171,6 +171,14 @@ export function MoneyPlan({
                 : [{ id: s.fromId, name: s.fromName }, { id: s.toId, name: s.toName }]
             ).filter((p): p is { id: number; name: string } => p.id != null && p.name != null);
             const short = s.senderShort ?? s.short; // member shortfall OR treasurer(hub) shortfall
+            // Fronting: marking a step paid while its sender is short (earlier steps not done) means they
+            // pay from their own pocket. That's allowed — they're already owed it back (their funding step
+            // / settlement covers it, so the books stay balanced); we just confirm it so it's deliberate.
+            const frontName = isPiggy || isTransfer || isAllowance || isAdvance ? s.fromName : s.payerName;
+            const frontMsg = !s.done && short != null && short > 0.005
+              ? `⚠ ${frontName ?? "This person"} is short ${formatINR(short)} right now — earlier steps aren't done yet.\n\nMarking this paid means ${frontName ?? "they"} front ${formatINR(short)} from their own pocket. That's fine — they're already owed it back (their funding step / settlement covers it, so the books stay balanced). It'll come back once that funding step is done.\n\nProceed?`
+              : null;
+            const confirmFront = (e: React.FormEvent) => { if (frontMsg && !confirm(frontMsg)) e.preventDefault(); };
 
             return (
               <li key={s.id} className={`flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-xs ${s.done ? "bg-emerald-50/50" : isIncome ? "bg-emerald-50/40" : urgent ? "bg-red-50" : soon ? "bg-amber-50" : "bg-slate-50"}`}>
@@ -264,7 +272,7 @@ export function MoneyPlan({
                     <span className="text-[9px] text-slate-300">est.</span>
                   ) : isAdvance ? (
                     s.advanceId != null && canActTransfer ? (
-                      <form action={s.done ? unsettleAdvance : markAdvanceSettled}>
+                      <form action={s.done ? unsettleAdvance : markAdvanceSettled} onSubmit={confirmFront}>
                         <input type="hidden" name="id" value={s.advanceId} />
                         {s.payback && <input type="hidden" name="leg" value="payback" />}
                         <MiniBtn primary={!s.done}>{s.done ? "undo" : s.payback ? "✓ repaid" : "✓ sent"}</MiniBtn>
@@ -272,7 +280,7 @@ export function MoneyPlan({
                     ) : null
                   ) : isAllowance ? (
                     s.billId != null && canActAllowance ? (
-                      <form action={toggleBillPaid}><input type="hidden" name="id" value={s.billId} /><MiniBtn primary={!s.done}>{s.done ? "undo" : "✓ sent"}</MiniBtn></form>
+                      <form action={toggleBillPaid} onSubmit={confirmFront}><input type="hidden" name="id" value={s.billId} /><MiniBtn primary={!s.done}>{s.done ? "undo" : "✓ sent"}</MiniBtn></form>
                     ) : null
                   ) : isTransfer ? (
                     s.done ? (
@@ -280,7 +288,7 @@ export function MoneyPlan({
                         <form action={unsettle}><input type="hidden" name="id" value={s.recordId} /><MiniBtn>undo</MiniBtn></form>
                       ) : null
                     ) : canActTransfer ? (
-                      <form action={markSettled}>
+                      <form action={markSettled} onSubmit={confirmFront}>
                         <input type="hidden" name="householdId" value={householdId} />
                         <input type="hidden" name="periodId" value={periodId} />
                         <input type="hidden" name="fromMemberId" value={s.fromId} />
@@ -292,7 +300,7 @@ export function MoneyPlan({
                   ) : s.fund && !s.done ? (
                     <PayBillModal categoryId={s.categoryId!} periodId={periodId} name={s.vendor!} bill={s.amount} fund={s.fundAvail ?? 0} generalPiggy={generalPiggy} />
                   ) : s.billId != null && canActBill ? (
-                    <form action={toggleBillPaid}><input type="hidden" name="id" value={s.billId} /><MiniBtn primary={!s.done}>{s.done ? "undo" : "✓ paid"}</MiniBtn></form>
+                    <form action={toggleBillPaid} onSubmit={confirmFront}><input type="hidden" name="id" value={s.billId} /><MiniBtn primary={!s.done}>{s.done ? "undo" : "✓ paid"}</MiniBtn></form>
                   ) : null}
                 </span>
               </li>
