@@ -31,6 +31,7 @@ export type PlanStep = {
   done: boolean;
   // income (informational: a member's own income landing — credits their cash in the walk, not tickable)
   source?: string; // the income line's label (e.g. "Salary", "Rent")
+  incomeId?: number; // the IncomeEntry id — lets the head edit the arrival day from the plan
   handoverPeriodId?: number; // piggy hand-over step: the wound-down period whose leftover is being handed over (ticking marks it handed over)
   settleAmount?: number; // amount to record when THIS step is ticked (a funding remainder settles the creditor's FULL net, not just this slice)
   // transfer
@@ -65,7 +66,7 @@ export function buildMoneyPlan(input: {
   advances?: PlanAdvance[];
   incomeDayByMember: Record<number, number>; // earliest arrival day per member
   incomeByMember?: Record<number, number>; // total income each member owns this month (their own cash)
-  incomeArrivals?: { memberId: number; day: number | null; amount: number; source?: string; name?: string }[]; // each income event + the day it lands
+  incomeArrivals?: { memberId: number; day: number | null; amount: number; source?: string; name?: string; id?: number }[]; // each income event + the day it lands
   reimburseByMember?: Record<number, number>; // prior-month out-of-pocket spend each member is owed back
   reimburseDay?: number; // target day to hand back those reimbursements (e.g. the day after wind-down)
   piggyHandover?: { toId: number; toName: string; amount: number; day: number; handoverPeriodId: number }; // prior wound-down month's leftover, handed from owners to the Piggy holder (one tickable lump)
@@ -91,7 +92,7 @@ export function buildMoneyPlan(input: {
   const lastDay = Math.max(1, ...inbound.map((t) => incomeDayByMember[t.fromId] ?? 1), ...bills.map((b) => b.day ?? 0));
   const hasHubBills = bills.some((b) => b.payerId === treasurerId && !b.done);
   // Each income event with the day it lands (undated → up front). Shared by the scheduler AND the walk.
-  const arrivalList: { memberId: number; day: number | null; amount: number; source?: string; name?: string }[] =
+  const arrivalList: { memberId: number; day: number | null; amount: number; source?: string; name?: string; id?: number }[] =
     incomeArrivals ?? Object.entries(incomeByMember).map(([k, v]) => ({ memberId: Number(k), day: null, amount: v }));
   // A tiny chronological accumulator: cashBy(day) = Σ of events landing on/before `day` (undated = day 0).
   const cashBy = (events: { day: number | null; amount: number }[]) => {
@@ -152,7 +153,7 @@ export function buildMoneyPlan(input: {
     if (a.amount <= 0.005) return;
     steps.push({
       id: `income-${a.memberId}-${i}`, kind: "income", day: a.day, amount: Math.round(a.amount * 100) / 100, done: false,
-      toId: a.memberId, toName: a.name, source: a.source, status: null, days: null,
+      toId: a.memberId, toName: a.name, source: a.source, incomeId: a.id, status: null, days: null,
     });
   });
   // Piggy returns: the very last thing each month — a holder hands their unspent budget to the Piggy

@@ -2179,6 +2179,42 @@ export async function unpinLine(formData: FormData) {
   return { ok: true };
 }
 
+// Set the DAY of a dated Money-plan step from the plan itself (head-only) — the "click the date →
+// pick a day" dropdown. Writes to the step's underlying row so it survives a refresh: a bill /
+// allowance / income line's day is set AND pinned (a Setup sync won't revert it); an advance leg's
+// day is set on the Advance record. `day` empty/0 clears it (undated → sorts last). Not the derived
+// transfer/collection steps — those have no stored day of their own (they follow bills + liquidity).
+export async function setStepDay(formData: FormData) {
+  if (!(await isHead())) return { ok: false, error: "Only the head can change a step's date." };
+  const kind = String(formData.get("kind") ?? "");
+  const id = Number(formData.get("id"));
+  const raw = formData.get("day");
+  const n = raw == null || String(raw) === "" ? null : Number(raw);
+  const day = n == null || !Number.isFinite(n) ? null : Math.min(31, Math.max(1, Math.round(n)));
+  if (!id) return { ok: false, error: "Bad request." };
+
+  if (kind === "bill" || kind === "allowance") {
+    const e = await prisma.expenseEntry.findUnique({ where: { id }, select: { paid: true, period: { select: { status: true } } } });
+    if (!e || e.period.status !== "open") return { ok: false, error: "This month is closed." };
+    if (e.paid) return { ok: false, error: "This is already paid — its date can’t be changed." };
+    await prisma.expenseEntry.update({ where: { id }, data: { dueDay: day, pinned: true } });
+  } else if (kind === "income") {
+    const i = await prisma.incomeEntry.findUnique({ where: { id }, select: { period: { select: { status: true } } } });
+    if (!i || i.period.status !== "open") return { ok: false, error: "This month is closed." };
+    await prisma.incomeEntry.update({ where: { id }, data: { dueDay: day, pinned: true } });
+  } else if (kind === "advance" || kind === "advance-payback") {
+    const a = await prisma.advance.findUnique({ where: { id }, select: { settled: true, paybackSettled: true } });
+    if (!a) return { ok: false, error: "Not found." };
+    const payback = kind === "advance-payback";
+    if (payback ? a.paybackSettled : a.settled) return { ok: false, error: "This is already done — its date can’t be changed." };
+    await prisma.advance.update({ where: { id }, data: payback ? { paybackDay: day } : { day } });
+  } else {
+    return { ok: false, error: "This step's date can’t be edited." };
+  }
+  revalidatePath("/", "layout");
+  return { ok: true };
+}
+
 // Batch-save the recurring template rows edited in Setup (one floating "N changes → Save" bar).
 export async function saveAllRecurringItems(
   prev: SaveRecurringState,

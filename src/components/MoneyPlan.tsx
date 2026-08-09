@@ -7,6 +7,7 @@ import { formatINR } from "@/lib/format";
 import { markSettled, unsettle, toggleBillPaid, markAdvanceSettled, unsettleAdvance, markPiggyHandedOver } from "@/app/actions";
 import { PayBillModal } from "@/components/PayBillModal";
 import { ExpenseModal } from "@/components/ExpenseModal";
+import { StepDayEditor } from "@/components/StepDayEditor";
 import { useToast } from "@/components/Toast";
 import type { MoneyPlanResult } from "@/lib/queries";
 
@@ -188,7 +189,16 @@ export function MoneyPlan({
                     {isIncome && <span className="shrink-0 rounded-full bg-emerald-50 px-1.5 py-0.5 text-[9px] font-medium text-emerald-600">↓ income in hand</span>}
                     {isAllowance && <span className="shrink-0 rounded-full bg-violet-50 px-1.5 py-0.5 text-[9px] font-medium text-violet-500">personal · from hub</span>}
                     {isPiggy && <span className="shrink-0 rounded-full bg-pink-50 px-1.5 py-0.5 text-[9px] font-medium text-pink-500">{isHandover ? "🐷 last month’s leftovers → holder" : "🐷 to piggy · at wind-down"}</span>}
-                    {!s.done && (!isPiggy || isHandover) && <DayTag kind={s.kind} day={s.day} status={s.status ?? null} days={s.days ?? null} />}
+                    {!s.done && (!isPiggy || isHandover) && (() => {
+                      const tag = <DayTag kind={s.kind} day={s.day} status={s.status ?? null} days={s.days ?? null} />;
+                      // Head-only date edit — only for dated SOURCE steps backed by a row (bill /
+                      // allowance → its expense line, income → its entry, advance → its record).
+                      // Transfers/collections derive their timing, so they show the tag read-only.
+                      const editId = s.kind === "income" ? s.incomeId : (s.kind === "bill" || s.kind === "allowance") ? s.billId : isAdvance ? s.advanceId : undefined;
+                      if (!isHead || !open || editId == null) return tag;
+                      const editKind = isAdvance ? (s.payback ? "advance-payback" : "advance") : s.kind;
+                      return <StepDayEditor kind={editKind} id={editId} day={s.day}>{tag}</StepDayEditor>;
+                    })()}
                     {/* A done step keeps its date visible — when it was scheduled / due — as a muted tag. */}
                     {s.done && s.day != null && (!isPiggy || isHandover) && (
                       <span className="shrink-0 rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] font-normal text-slate-400 no-underline">{isIncome ? "on" : "was due"} {ordinal(s.day)}</span>

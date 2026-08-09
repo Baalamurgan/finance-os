@@ -486,7 +486,7 @@ export async function getMoneyPlan(householdId: number, periodId: number, inhand
   const inhand = inhandArg ?? (await getInHand(householdId, periodId));
   const [settlement, incomes, period, household] = await Promise.all([
     getSettlement(householdId, periodId, inhand.treasurerId),
-    prisma.incomeEntry.findMany({ where: { periodId }, select: { ownerId: true, dueDay: true, amount: true, source: true } }),
+    prisma.incomeEntry.findMany({ where: { periodId }, select: { id: true, ownerId: true, dueDay: true, amount: true, source: true } }),
     prisma.period.findUnique({ where: { id: periodId }, select: { year: true, month: true, status: true } }),
     prisma.household.findUnique({ where: { id: householdId }, select: { windDownDay: true } }),
   ]);
@@ -605,7 +605,7 @@ export async function getMoneyPlan(householdId: number, periodId: number, inhand
   if (inhand.treasurerId != null && settlement.treasurer) nameById.set(inhand.treasurerId, settlement.treasurer.name);
   const incomeArrivals = incomes
     .filter((i) => i.ownerId != null)
-    .map((i) => ({ memberId: i.ownerId as number, day: i.dueDay, amount: i.amount, source: i.source, name: nameById.get(i.ownerId as number) }));
+    .map((i) => ({ memberId: i.ownerId as number, day: i.dueDay, amount: i.amount, source: i.source, name: nameById.get(i.ownerId as number), id: i.id }));
 
   // Prior wound-down month's Piggy hand-over (owners → Piggy holder), as one tickable lump. The day
   // is day 1 normally, or a few days after a late (mid-month) wind-down — see getInHand::handoverDay.
