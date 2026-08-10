@@ -1203,6 +1203,25 @@ export async function toggleBillPaid(formData: FormData) {
   revalidatePath("/", "layout");
 }
 
+// Tick an income arrival "received" in the Money Plan — strikes the row through (display only; it
+// does NOT move cash or count toward plan progress). Head/manager, or the income's own owner, and
+// (unless head) only while the month is still open — same permission shape as toggleBillPaid.
+export async function toggleIncomeReceived(formData: FormData) {
+  const session = await auth();
+  const memberId = session?.user?.memberId ?? null;
+  if (!(await unlocked())) await relock("toggleIncomeReceived");
+  const id = Number(formData.get("id"));
+  const e = await prisma.incomeEntry.findUnique({ where: { id } });
+  if (!e) { log.warn("toggleIncomeReceived", "blocked", { outcome: "blocked", reason: "not-found", memberId, id }); return; }
+  const isEditor = await canEdit();
+  const isOwner = memberId != null && memberId === e.ownerId;
+  if (!isEditor && !isOwner) { log.warn("toggleIncomeReceived", "blocked", { outcome: "blocked", reason: "not-allowed", memberId, id, periodId: e.periodId }); return; }
+  if (!(await isHead()) && !(await periodOpen(e.periodId))) { log.warn("toggleIncomeReceived", "blocked", { outcome: "blocked", reason: "period-closed", memberId, id, periodId: e.periodId }); return; }
+  await prisma.incomeEntry.update({ where: { id }, data: { receivedAt: e.receivedAt ? null : new Date() } });
+  log.info("toggleIncomeReceived", "ok", { outcome: "ok", memberId, id, received: !e.receivedAt, periodId: e.periodId });
+  revalidatePath("/", "layout");
+}
+
 // Pay a due-month "save the share" bill from the In Hand tab (head/manager, open month).
 // The bill's own fund is used FIRST and fully; any remainder comes from the general Piggy or
 // out-of-pocket (recorded as the payer's Misc spend). Idempotent via BillPayment (one per

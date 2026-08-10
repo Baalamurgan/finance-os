@@ -4,7 +4,7 @@ import { useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { formatINR } from "@/lib/format";
-import { markSettled, unsettle, toggleBillPaid, markAdvanceSettled, unsettleAdvance, markPiggyHandedOver } from "@/app/actions";
+import { markSettled, unsettle, toggleBillPaid, markAdvanceSettled, unsettleAdvance, markPiggyHandedOver, toggleIncomeReceived } from "@/app/actions";
 import { PayBillModal } from "@/components/PayBillModal";
 import { ExpenseModal } from "@/components/ExpenseModal";
 import { StepDayEditor } from "@/components/StepDayEditor";
@@ -154,6 +154,7 @@ export function MoneyPlan({
             const canActTransfer = open && (isHead || currentMemberId === s.fromId || currentMemberId === s.toId);
             const canActBill = open && (canEdit || currentMemberId === s.payerId);
             const canActAllowance = open && (canEdit || currentMemberId === s.fromId || currentMemberId === s.toId);
+            const canActIncome = open && (isHead || currentMemberId === s.toId); // owner of the income (or head) ticks it received
             // Allowance = hub → member; the "personal · from hub" tag beside the title conveys the
             // kind, so the title just shows the money flow (sender → recipient) like every other step.
             // Income = a member's own money landing (recipient · source), an inflow row.
@@ -311,6 +312,10 @@ export function MoneyPlan({
                         <input type="hidden" name="amount" value={s.settleAmount ?? s.amount} />
                         <MiniBtn primary>mark done</MiniBtn>
                       </form>
+                    ) : null
+                  ) : isIncome ? (
+                    s.incomeId != null && canActIncome ? (
+                      <form action={toggleIncomeReceived}><input type="hidden" name="id" value={s.incomeId} /><MiniBtn primary={!s.done}>{s.done ? "undo" : "✓ received"}</MiniBtn></form>
                     ) : null
                   ) : s.fund && !s.done ? (
                     <PayBillModal categoryId={s.categoryId!} periodId={periodId} name={s.vendor!} bill={s.amount} fund={s.fundAvail ?? 0} generalPiggy={generalPiggy} />

@@ -93,7 +93,7 @@ export function buildMoneyPlan(input: {
   const lastDay = Math.max(1, ...inbound.map((t) => incomeDayByMember[t.fromId] ?? 1), ...bills.map((b) => b.day ?? 0));
   const hasHubBills = bills.some((b) => b.payerId === treasurerId && !b.done);
   // Each income event with the day it lands (undated → up front). Shared by the scheduler AND the walk.
-  const arrivalList: { memberId: number; day: number | null; amount: number; source?: string; name?: string; id?: number }[] =
+  const arrivalList: { memberId: number; day: number | null; amount: number; source?: string; name?: string; id?: number; received?: boolean }[] =
     incomeArrivals ?? Object.entries(incomeByMember).map(([k, v]) => ({ memberId: Number(k), day: null, amount: v }));
   // A tiny chronological accumulator: cashBy(day) = Σ of events landing on/before `day` (undated = day 0).
   const cashBy = (events: { day: number | null; amount: number }[]) => {
@@ -156,13 +156,14 @@ export function buildMoneyPlan(input: {
       fromId: a.toId, toId: a.fromId, fromName: a.toName, toName: a.fromName, advanceId: a.id, payback: true, fundsMember: false, status: null, days: null,
     });
   }
-  // Income arrivals: each income event shown as its own informational row on the day it lands, so the
-  // plan reads "money in → money out" (income first, expense next). NOT tickable and NOT counted in
-  // progress — it exists to explain the balance walk (the recipient's cash visibly jumps at this row).
+  // Income arrivals: each income event shown as its own row on the day it lands, so the plan reads
+  // "money in → money out" (income first, expense next). It explains the balance walk (the recipient's
+  // cash visibly jumps here) and is tickable "received" purely for visual closure (strike-through) —
+  // still NOT counted in progress (excluded below), since income isn't a task the family performs.
   arrivalList.forEach((a, i) => {
     if (a.amount <= 0.005) return;
     steps.push({
-      id: `income-${a.memberId}-${i}`, kind: "income", day: a.day, amount: Math.round(a.amount * 100) / 100, done: false,
+      id: `income-${a.memberId}-${i}`, kind: "income", day: a.day, amount: Math.round(a.amount * 100) / 100, done: a.received ?? false,
       toId: a.memberId, toName: a.name, source: a.source, incomeId: a.id, status: null, days: null,
     });
   });

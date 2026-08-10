@@ -595,6 +595,7 @@ model IncomeEntry {
   note      String?
   dueDay    Int?     // day-of-month this income arrives (from the template) — for the Money Plan ordering
   pinned    Boolean  @default(false) // value edited on the Sheet for THIS month — refresh-from-Setup leaves it alone
+  receivedAt DateTime? // ticked "received" in the Money Plan → strikes the income row (display only)
   createdAt DateTime @default(now())
 }
 
