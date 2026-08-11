@@ -77,6 +77,84 @@ async function main() {
       console.log(`\n── unpaid SHARED/pool bills (in 'month balance', NOT in the number above) — ${inr(sharedSum)} ──`);
       for (const b of sharedUnpaid) console.log(`    ${d(b.createdAt)}  ${inr(b.amount).padStart(9)}  ${b.label}  [${b.category.section}]`);
     }
+
+    // ── POOL DERIVATION: build 'Family pool' from raw rows the way getInHand does ──
+    //   month balance = Σ IncomeEntry − Σ ExpenseEntry (this month, EVERY expense incl. envelopes)
+    //   Family pool   = shared.net + month balance + bills to disburse
+    const [incAll, expAll] = await Promise.all([
+      prisma.incomeEntry.findMany({ where: { periodId: open.id }, select: { amount: true } }),
+      prisma.expenseEntry.findMany({
+        where: { periodId: open.id },
+        select: { amount: true, memberId: true, category: { select: { tracked: true, fundingStyle: true, isAllowance: true } } },
+      }),
+    ]);
+    const incomeTotal = incAll.reduce((s, i) => s + i.amount, 0);
+    const expenseTotal = expAll.reduce((s, e) => s + e.amount, 0);
+    const monthBal = incomeTotal - expenseTotal;
+    // bucket the expenses so the total is legible (they sum to expenseTotal)
+    const B = (label: string, pred: (e: (typeof expAll)[number]) => boolean) => {
+      const items = expAll.filter(pred);
+      return { label, sum: items.reduce((s, e) => s + e.amount, 0), n: items.length };
+    };
+    const plain = (e: (typeof expAll)[number]) => !e.category.tracked && e.category.fundingStyle == null && !e.category.isAllowance;
+    const buckets = [
+      B("budget envelopes (tracked)", (e) => e.category.tracked),
+      B("bill-with-fund lines", (e) => !e.category.tracked && e.category.fundingStyle != null),
+      B("allowances", (e) => !e.category.tracked && e.category.isAllowance && e.category.fundingStyle == null),
+      B("assigned member bills", (e) => plain(e) && e.memberId != null),
+      B("shared / pool bills", (e) => plain(e) && e.memberId == null),
+    ];
+    console.log(`\n══ POOL DERIVATION ══`);
+    console.log(`  income (Σ IncomeEntry)   = ${inr(incomeTotal)}`);
+    console.log(`  expenses (Σ ExpenseEntry) = ${inr(expenseTotal)}`);
+    for (const b of buckets) console.log(`      − ${b.label.padEnd(26)} ${inr(b.sum).padStart(11)}  (${b.n})`);
+    console.log(`  ─────────────────────────────`);
+    console.log(`  month balance            = ${inr(monthBal)}   ← this should equal the card's 'month bal'`);
+    console.log(`  + bills to disburse      = ${inr(grand)}`);
+    console.log(`  = Family pool (excl. shared.net) = ${inr(monthBal + grand)}   ← compare to the card's Family pool`);
+    console.log(`  (shared.net — unpaid shared bills + shared budget remaining − shared misc — is added on top by the app; usually ~0)`);
+
+    // ── BUDGET ENVELOPES by owner — proves each member's budget (incl. the treasurer's) is INSIDE the
+    //    envelope total that month balance already subtracts, so the pool is the after-budget number. ──
+    const envRows = await prisma.expenseEntry.findMany({
+      where: { periodId: open.id, category: { tracked: true } },
+      select: { amount: true, label: true, category: { select: { name: true, responsibleMemberId: true } } },
+    });
+    const envByOwner = new Map<number | null, { sum: number; items: { name: string; amount: number }[] }>();
+    for (const e of envRows) {
+      const k = e.category.responsibleMemberId ?? null;
+      const g = envByOwner.get(k) ?? { sum: 0, items: [] };
+      g.sum += e.amount;
+      g.items.push({ name: e.category.name || e.label, amount: e.amount });
+      envByOwner.set(k, g);
+    }
+    console.log(`\n══ BUDGET ENVELOPES by owner (this whole pile is ALREADY subtracted inside month balance) ══`);
+    for (const [mid, g] of [...envByOwner.entries()].sort((a, b) => b[1].sum - a[1].sum)) {
+      console.log(`  ${(mid == null ? "— unassigned —" : nameOf(mid)).padEnd(12)} ${inr(g.sum).padStart(11)}`);
+      for (const it of g.items.sort((a, b) => b.amount - a.amount)) console.log(`      ${inr(it.amount).padStart(9)}  ${it.name}`);
+    }
+
+    // ── PREV-MONTH REIMBURSEMENTS: credited in THIS month's settlement (they reduce each member's
+    //    transfer to the hub, so the pool physically receives less) but NOT subtracted anywhere in the
+    //    in-hand pool. Replicates settlement-core.ts:46-50 — a prev-month spend credits the spender ONLY
+    //    for categories that aren't theirs. Their TOTAL is the amount the pool over-states. ──
+    const prevMonth = open.month === 1 ? 12 : open.month - 1;
+    const prevYear = open.month === 1 ? open.year - 1 : open.year;
+    const prevPeriod = await prisma.period.findUnique({ where: { householdId_year_month: { householdId: h.id, year: prevYear, month: prevMonth } } });
+    if (!prevPeriod) { console.log(`\n(no previous month — no reimbursements to credit)`); continue; }
+    const prevSpends = await prisma.spend.findMany({ where: { periodId: prevPeriod.id }, include: { category: { select: { name: true, responsibleMemberId: true } } } });
+    const reimbByMember = new Map<number, number>();
+    for (const sp of prevSpends) {
+      if (sp.memberId == null) continue;
+      if ((sp.category.responsibleMemberId ?? null) === sp.memberId) continue; // own-category spend already credited via its share line
+      reimbByMember.set(sp.memberId, (reimbByMember.get(sp.memberId) ?? 0) + sp.amount);
+    }
+    let reimbTot = 0;
+    console.log(`\n══ PREV-MONTH REIMBURSEMENTS (credited in ${open.label} settlement, NOT subtracted from the pool) ══`);
+    for (const [mid, sum] of [...reimbByMember.entries()].sort((a, b) => b[1] - a[1])) { reimbTot += sum; console.log(`  ${nameOf(mid).padEnd(12)} ${inr(sum).padStart(11)}`); }
+    console.log(`  ─────────────────────────`);
+    console.log(`  TOTAL reimbursements     = ${inr(reimbTot)}   ← the pool likely OVER-states held cash by this`);
+    console.log(`  pool ${inr(monthBal + grand)} − ${inr(reimbTot)} = ${inr(monthBal + grand - reimbTot)}   ← should match your money-plan figure (~61,322)`);
   }
 }
 

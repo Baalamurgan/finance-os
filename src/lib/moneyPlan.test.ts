@@ -18,6 +18,34 @@ describe("buildMoneyPlan", () => {
     expect(plan.done).toBe(1); // the settled inbound transfer
   });
 
+  it("inserts a manual step right after its anchor, moves the balances, and counts it", () => {
+    const plan = buildMoneyPlan({
+      treasurerId: T,
+      transfers: [xfer({ fromId: 2, toId: T, amount: 100, settled: true })], // id "xfer-2-1"
+      bills: [],
+      incomeDayByMember: { 2: 1 },
+      manualSteps: [{ id: 7, fromId: 2, toId: 3, fromName: "B", toName: "C", amount: 40, day: null, done: false, afterStepKey: "xfer-2-1" }],
+    });
+    const idx = plan.steps.findIndex((s) => s.kind === "manual");
+    expect(plan.steps[idx - 1].id).toBe("xfer-2-1"); // sits right after its anchor
+    expect(plan.steps[idx].balancesAfter?.[3]).toBe(40); // receiver 3 gains 40 in the walk
+    expect(plan.total).toBe(2); // real move → counts in progress (transfer + manual)
+  });
+
+  it("hides a derived step: kept for un-hiding, but moves no cash and drops from progress", () => {
+    const plan = buildMoneyPlan({
+      treasurerId: T,
+      transfers: [xfer({ fromId: 2, toId: T, amount: 100 })], // id "xfer-2-1"
+      bills: [bill({ payerId: T, vendor: "Rent", amount: 40, day: 2 })],
+      incomeDayByMember: { 2: 1 },
+      hiddenKeys: ["xfer-2-1"],
+    });
+    const t = plan.steps.find((s) => s.id === "xfer-2-1")!;
+    expect(t.hidden).toBe(true);
+    expect(t.balancesAfter?.[T] ?? 0).toBe(0); // hidden transfer never credits the hub
+    expect(plan.total).toBe(1); // only the bill counts
+  });
+
   it("flags a hub shortfall when an outflow runs before enough has arrived", () => {
     // treasurer must pay a 50 bill on the 1st, but only 30 arrives (on the 1st)
     const plan = buildMoneyPlan({

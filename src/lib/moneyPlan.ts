@@ -25,7 +25,10 @@ export type PlanAdvance = { id: number; fromId: number; fromName: string; toId: 
 
 export type PlanStep = {
   id: string;
-  kind: "transfer-in" | "transfer-out" | "bill" | "allowance" | "piggy" | "advance" | "income";
+  kind: "transfer-in" | "transfer-out" | "bill" | "allowance" | "piggy" | "advance" | "income" | "manual";
+  manualId?: number; // this step is a head-added manual move (write-through to the ManualPlanStep record)
+  afterStepKey?: string; // a manual step: the step id it's anchored right after (for stable positioning)
+  hidden?: boolean; // a head-hidden derived step — kept for the "un-hide" list but out of the walk/progress
   day: number | null; // effective day-of-month for ordering/display (null = undated)
   paidDay?: number | null; // day-of-month it was ACTUALLY marked paid (done steps only), for a "paid <day>" tag
   amount: number;
@@ -71,8 +74,10 @@ export function buildMoneyPlan(input: {
   reimburseByMember?: Record<number, number>; // prior-month out-of-pocket spend each member is owed back
   reimburseDay?: number; // target day to hand back those reimbursements (e.g. the day after wind-down)
   piggyHandover?: { toId: number; toName: string; handoverPeriodId: number; owners: { fromId: number; fromName: string; amount: number; day: number }[] }; // prior wound-down month's leftover — one tickable step per owner who hands their slice to the Piggy holder
+  manualSteps?: { id: number; fromId: number; toId: number; fromName?: string; toName?: string; amount: number; day?: number | null; done: boolean; afterStepKey?: string | null }[]; // head-added ad-hoc moves
+  hiddenKeys?: string[]; // step ids the head has hidden from the plan view
 }): MoneyPlan {
-  const { treasurerId, treasurerName, transfers, bills, allowances = [], piggyReturns = [], advances = [], incomeDayByMember, incomeByMember = {}, incomeArrivals, reimburseByMember = {}, reimburseDay, piggyHandover } = input;
+  const { treasurerId, treasurerName, transfers, bills, allowances = [], piggyReturns = [], advances = [], incomeDayByMember, incomeByMember = {}, incomeArrivals, reimburseByMember = {}, reimburseDay, piggyHandover, manualSteps = [], hiddenKeys = [] } = input;
 
   const inbound = transfers.filter((t) => t.toId === treasurerId);
   const outbound = transfers.filter((t) => t.toId !== treasurerId && t.fromId === treasurerId); // hub → creditor
@@ -339,11 +344,40 @@ export function buildMoneyPlan(input: {
   const eff = (s: PlanStep) => (s.day == null ? (s.kind === "transfer-in" || s.kind === "income" ? 0 : Infinity) : s.day);
   steps.sort((a, b) => eff(a) - eff(b) || rank(a) - rank(b) || b.amount - a.amount);
 
+  // Head edits, persisted so a refresh keeps them. HIDDEN: mark the derived step in place — it's skipped
+  // by the balance walk & progress below, and surfaced separately in the UI so it can be un-hidden.
+  const hiddenSet = new Set(hiddenKeys);
+  for (const s of steps) if (hiddenSet.has(s.id)) s.hidden = true;
+  // MANUAL: real member↔member (or ↔ hub) moves. Splice each in right AFTER its anchor step so it holds
+  // its slot across refreshes; chain-resolve so a manual can sit after another manual. If the anchor is
+  // gone (its bill was removed, say) fall back to the manual's own day. afterStepKey null → top.
+  const manualObjs: PlanStep[] = manualSteps.map((m) => ({
+    id: `manual-${m.id}`, kind: "manual", day: m.day ?? null, amount: Math.round(m.amount * 100) / 100, done: m.done,
+    fromId: m.fromId, toId: m.toId, fromName: m.fromName, toName: m.toName, manualId: m.id, afterStepKey: m.afterStepKey ?? undefined, status: null, days: null,
+  }));
+  const pendingManual = manualObjs.slice();
+  let manualGuard = 0;
+  while (pendingManual.length && manualGuard++ < 2000) {
+    let moved = false;
+    for (let i = pendingManual.length - 1; i >= 0; i--) {
+      const m = pendingManual[i];
+      if (m.afterStepKey == null) { steps.unshift(m); pendingManual.splice(i, 1); moved = true; continue; }
+      const idx = steps.findIndex((s) => s.id === m.afterStepKey);
+      if (idx >= 0) { steps.splice(idx + 1, 0, m); pendingManual.splice(i, 1); moved = true; }
+    }
+    if (!moved) break;
+  }
+  for (const m of pendingManual) { // anchor missing → place by day
+    let pos = steps.length;
+    for (let i = 0; i < steps.length; i++) if ((steps[i].day ?? 0) <= (m.day ?? 0)) pos = i + 1;
+    steps.splice(pos, 0, m);
+  }
+
   // Per-actor "still to pay" for the member chip: a pure running sum of that person's own outgoing
   // steps (their transfer to the hub + the bills they pay), decremented as the plan proceeds. Since
   // it's derived only from the plan's own steps it can't drift from anything. The treasurer is shown
   // via the hub balance above, so they're excluded here.
-  const actorOf = (s: PlanStep): number | null => (s.kind === "bill" ? s.payerId ?? null : s.fromId ?? null);
+  const actorOf = (s: PlanStep): number | null => (s.hidden ? null : s.kind === "bill" ? s.payerId ?? null : s.fromId ?? null);
   const remaining = new Map<number, number>();
   for (const s of steps) { const a = actorOf(s); if (a != null && a !== treasurerId && !s.done) remaining.set(a, (remaining.get(a) ?? 0) + s.amount); }
   for (const s of steps) {
@@ -373,10 +407,11 @@ export function buildMoneyPlan(input: {
     treasurerId != null &&
     ((s.kind === "bill" && !s.fund && s.payerId === treasurerId) ||
       (s.kind === "income" && s.toId === treasurerId) ||
-      ((s.kind === "transfer-in" || s.kind === "transfer-out" || s.kind === "allowance" || s.kind === "advance") && (s.fromId === treasurerId || s.toId === treasurerId)));
+      ((s.kind === "transfer-in" || s.kind === "transfer-out" || s.kind === "allowance" || s.kind === "advance" || s.kind === "manual") && (s.fromId === treasurerId || s.toId === treasurerId)));
   let hubShortfall = 0;
   for (const s of steps) {
     s.balancesBefore = Object.fromEntries(bal); // snapshot each person's cash BEFORE this step moves any
+    if (s.hidden) { s.balancesAfter = Object.fromEntries(bal); continue; } // removed from the plan → moves nothing
     const usesCash = !(s.kind === "bill" && s.fund);
     const senderId = senderOf(s);
     if (!s.done && usesCash && senderId != null) {
@@ -392,7 +427,7 @@ export function buildMoneyPlan(input: {
     } else if (s.kind === "piggy") {
       // Piggy hand-over = PRIOR-month cash (tracked in In-Hand), not this month's income — so it's
       // informational in the cash walk and doesn't move any running balance here.
-    } else if (s.kind === "transfer-in" || s.kind === "transfer-out" || s.kind === "allowance" || s.kind === "advance") {
+    } else if (s.kind === "transfer-in" || s.kind === "transfer-out" || s.kind === "allowance" || s.kind === "advance" || s.kind === "manual") {
       shift(s.fromId, -s.amount);
       shift(s.toId, s.amount);
     } else if (s.kind === "bill" && !s.fund) {
@@ -404,7 +439,7 @@ export function buildMoneyPlan(input: {
 
   // Income rows are informational and Piggy returns are live projections (finalised at wind-down), so
   // neither counts toward the "N/total done" progress — they're context, not tickable settlement steps.
-  const counted = steps.filter((s) => s.kind !== "piggy" && s.kind !== "income");
+  const counted = steps.filter((s) => s.kind !== "piggy" && s.kind !== "income" && !s.hidden);
   const done = counted.filter((s) => s.done).length;
   return { steps, done, total: counted.length, hubShortfall: Math.round(hubShortfall) };
 }

@@ -484,12 +484,14 @@ export async function getSettlement(
 export type MoneyPlanResult = Awaited<ReturnType<typeof getMoneyPlan>>;
 export async function getMoneyPlan(householdId: number, periodId: number, inhandArg?: InHand, extraBills?: import("./moneyPlan").PlanBill[]) {
   const inhand = inhandArg ?? (await getInHand(householdId, periodId));
-  const [settlement, incomes, period, household, dayOverrideRows] = await Promise.all([
+  const [settlement, incomes, period, household, dayOverrideRows, manualStepRows, hiddenRows] = await Promise.all([
     getSettlement(householdId, periodId, inhand.treasurerId),
     prisma.incomeEntry.findMany({ where: { periodId }, select: { id: true, ownerId: true, dueDay: true, amount: true, source: true, receivedAt: true } }),
     prisma.period.findUnique({ where: { id: periodId }, select: { year: true, month: true, status: true } }),
     prisma.household.findUnique({ where: { id: householdId }, select: { windDownDay: true } }),
     prisma.stepDayOverride.findMany({ where: { periodId }, select: { stepKey: true, day: true } }),
+    prisma.manualPlanStep.findMany({ where: { periodId }, orderBy: { createdAt: "asc" } }),
+    prisma.hiddenPlanStep.findMany({ where: { periodId }, select: { stepKey: true } }),
   ]);
   // Head-set day overrides for steps with no row of their own (fund/periodic bills, Piggy hand-over).
   const dayOverride = new Map(dayOverrideRows.map((o) => [o.stepKey, o.day]));
@@ -638,8 +640,15 @@ export async function getMoneyPlan(householdId: number, periodId: number, inhand
         }
       : undefined;
 
+  // Head edits to the plan (persisted, so a refresh keeps them): ad-hoc manual moves + hidden steps.
+  const manualSteps = manualStepRows.map((m) => ({
+    id: m.id, fromId: m.fromMemberId, toId: m.toMemberId, fromName: nameById.get(m.fromMemberId), toName: nameById.get(m.toMemberId),
+    amount: m.amount, day: m.day, done: m.done, afterStepKey: m.afterStepKey,
+  }));
+  const hiddenKeys = hiddenRows.map((r) => r.stepKey);
+
   const { buildMoneyPlan } = await import("./moneyPlan");
-  const plan = buildMoneyPlan({ treasurerId: inhand.treasurerId, treasurerName: settlement.treasurer?.name, transfers, bills, allowances, piggyReturns, advances, incomeDayByMember, incomeByMember, incomeArrivals, reimburseByMember, reimburseDay, piggyHandover });
+  const plan = buildMoneyPlan({ treasurerId: inhand.treasurerId, treasurerName: settlement.treasurer?.name, transfers, bills, allowances, piggyReturns, advances, incomeDayByMember, incomeByMember, incomeArrivals, reimburseByMember, reimburseDay, piggyHandover, manualSteps, hiddenKeys });
 
   // Enrich done steps with the day they were ACTUALLY marked paid (IST), so the plan can show
   // "paid <day>" when it differs from the scheduled/due day. Timestamps live on the underlying record:

@@ -1,10 +1,10 @@
 "use client";
 
-import { useMemo, useState, useTransition } from "react";
+import { Fragment, useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { formatINR } from "@/lib/format";
-import { markSettled, unsettle, toggleBillPaid, markAdvanceSettled, unsettleAdvance, markPiggyHandedOver, toggleIncomeReceived } from "@/app/actions";
+import { markSettled, unsettle, toggleBillPaid, markAdvanceSettled, unsettleAdvance, markPiggyHandedOver, toggleIncomeReceived, addManualStep, deleteManualStep, toggleManualStepDone, hideStep, unhideStep } from "@/app/actions";
 import { PayBillModal } from "@/components/PayBillModal";
 import { ExpenseModal } from "@/components/ExpenseModal";
 import { StepDayEditor } from "@/components/StepDayEditor";
@@ -38,6 +38,9 @@ export function MoneyPlan({
   const [who, setWho] = useState<number | null>(null);
   const [addOpen, setAddOpen] = useState(false);
   const [balances, setBalances] = useState<{ s: MoneyPlanResult["steps"][number]; n: number } | null>(null);
+  // Add-a-step modal: open with the anchor (the step id it goes AFTER; null = top of the list).
+  const [insert, setInsert] = useState<{ anchor: string | null } | null>(null);
+  const treasurerId = plan.treasurerId;
 
   // Everyone involved in a step (payer / from / to) → the filter's member list.
   const people = useMemo(() => {
@@ -145,12 +148,15 @@ export function MoneyPlan({
         <>
         <p className="mb-1.5 text-[10px] text-slate-400">Tap any step&apos;s number <span className="mx-0.5 inline-grid h-3.5 w-3.5 place-items-center rounded-full ring-1 ring-slate-300 align-middle text-[8px]">1</span> to see everyone&apos;s cash before &amp; after it.</p>
         <ol className="space-y-1.5">
-          {shown.map(({ s, n }) => {
+          {canEdit && open && who == null && <InsertHere onClick={() => setInsert({ anchor: null })} />}
+          {shown.filter(({ s }) => !s.hidden).map(({ s, n }) => {
             const isAllowance = s.kind === "allowance";
             const isPiggy = s.kind === "piggy";
             const isAdvance = s.kind === "advance";
             const isTransfer = s.kind === "transfer-in" || s.kind === "transfer-out";
             const isIncome = s.kind === "income";
+            const isManual = s.kind === "manual";
+            const canActManual = open && (canEdit || currentMemberId === s.fromId || currentMemberId === s.toId);
             const canActTransfer = open && (isHead || currentMemberId === s.fromId || currentMemberId === s.toId);
             const canActBill = open && (canEdit || currentMemberId === s.payerId);
             const canActAllowance = open && (canEdit || currentMemberId === s.fromId || currentMemberId === s.toId);
@@ -159,7 +165,7 @@ export function MoneyPlan({
             // kind, so the title just shows the money flow (sender → recipient) like every other step.
             // Income = a member's own money landing (recipient · source), an inflow row.
             const isHandover = isPiggy && s.handoverPeriodId != null;
-            const title = isIncome ? `${s.toName ?? "?"} · ${s.source ?? "income"}` : isAllowance ? `${s.fromName} → ${s.toName}` : isHandover ? `${s.fromName ?? "Owner"} → ${s.toName}` : isPiggy ? `${s.fromName} → ${s.toName} · Piggy` : isAdvance || isTransfer ? `${s.fromName} → ${s.toName}` : `${s.payerName} → ${s.vendor}`;
+            const title = isIncome ? `${s.toName ?? "?"} · ${s.source ?? "income"}` : isAllowance ? `${s.fromName} → ${s.toName}` : isHandover ? `${s.fromName ?? "Owner"} → ${s.toName}` : isPiggy ? `${s.fromName} → ${s.toName} · Piggy` : isManual || isAdvance || isTransfer ? `${s.fromName} → ${s.toName}` : `${s.payerName} → ${s.vendor}`;
             // Urgency (only while unpaid — a done step is never "overdue"): RED for overdue OR due
             // today (needs action now), AMBER for due in 1–2 days, plain otherwise.
             const urgent = !s.done && (s.status === "overdue" || (s.status === "soon" && (s.days ?? 1) <= 0));
@@ -182,7 +188,8 @@ export function MoneyPlan({
             const confirmFront = (e: React.FormEvent) => { if (frontMsg && !confirm(frontMsg)) e.preventDefault(); };
 
             return (
-              <li key={s.id} className={`flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-xs ${s.done ? "bg-emerald-50/50" : isIncome ? "bg-emerald-50/40" : urgent ? "bg-red-50" : soon ? "bg-amber-50" : "bg-slate-50"}`}>
+              <Fragment key={s.id}>
+              <li className={`flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-xs ${s.done ? "bg-emerald-50/50" : isIncome ? "bg-emerald-50/40" : isManual ? "bg-cyan-50/50" : urgent ? "bg-red-50" : soon ? "bg-amber-50" : "bg-slate-50"}`}>
                 <button
                   type="button"
                   onClick={() => setBalances({ s, n })}
@@ -196,6 +203,7 @@ export function MoneyPlan({
                   <div className={`flex flex-wrap items-center gap-1.5 ${s.done ? "text-slate-400 line-through" : "text-slate-800"}`}>
                     <span className="truncate font-medium">{title}</span>
                     {isIncome && <span className="shrink-0 rounded-full bg-emerald-50 px-1.5 py-0.5 text-[9px] font-medium text-emerald-600">↓ income in hand</span>}
+                    {isManual && <span className="shrink-0 rounded-full bg-cyan-50 px-1.5 py-0.5 text-[9px] font-medium text-cyan-600">✎ manual</span>}
                     {isAllowance && <span className="shrink-0 rounded-full bg-violet-50 px-1.5 py-0.5 text-[9px] font-medium text-violet-500">personal · from hub</span>}
                     {isPiggy && <span className="shrink-0 rounded-full bg-pink-50 px-1.5 py-0.5 text-[9px] font-medium text-pink-500">{isHandover ? "🐷 last month’s leftovers → holder" : "🐷 to piggy · at wind-down"}</span>}
                     {!s.done && (!isPiggy || isHandover) && (() => {
@@ -313,6 +321,10 @@ export function MoneyPlan({
                         <MiniBtn primary>mark done</MiniBtn>
                       </form>
                     ) : null
+                  ) : isManual ? (
+                    s.manualId != null && canActManual ? (
+                      <form action={toggleManualStepDone}><input type="hidden" name="id" value={s.manualId} /><MiniBtn primary={!s.done}>{s.done ? "undo" : "✓ done"}</MiniBtn></form>
+                    ) : null
                   ) : isIncome ? (
                     s.incomeId != null && canActIncome ? (
                       <form action={toggleIncomeReceived}><input type="hidden" name="id" value={s.incomeId} /><MiniBtn primary={!s.done}>{s.done ? "undo" : "✓ received"}</MiniBtn></form>
@@ -323,11 +335,74 @@ export function MoneyPlan({
                     <form action={toggleBillPaid} onSubmit={confirmFront}><input type="hidden" name="id" value={s.billId} /><MiniBtn primary={!s.done}>{s.done ? "undo" : "✓ paid"}</MiniBtn></form>
                   ) : null}
                 </span>
+
+                {/* delete: manual steps are removed outright; derived steps are hidden from the plan view */}
+                {canEdit && open && who == null && (
+                  isManual ? (
+                    <form action={deleteManualStep} className="shrink-0"><input type="hidden" name="id" value={s.manualId} /><button title="Delete this step" className="px-0.5 text-sm text-slate-300 hover:text-red-600">✕</button></form>
+                  ) : (
+                    <form action={hideStep} className="shrink-0"><input type="hidden" name="periodId" value={periodId} /><input type="hidden" name="stepKey" value={s.id} /><button title="Remove from plan (keeps the underlying bill/income)" className="px-0.5 text-sm text-slate-300 hover:text-red-600">✕</button></form>
+                  )
+                )}
               </li>
+              {canEdit && open && who == null && <InsertHere onClick={() => setInsert({ anchor: s.id })} />}
+              </Fragment>
             );
           })}
         </ol>
+
+        {/* hidden (removed) steps — listed so they can be brought back; they move no cash while hidden */}
+        {plan.steps.some((s) => s.hidden) && (
+          <details className="mt-3 rounded-lg border border-slate-200 bg-slate-50/60">
+            <summary className="cursor-pointer px-3 py-2 text-[11px] font-medium text-slate-500">Hidden steps ({plan.steps.filter((s) => s.hidden).length}) — removed from this plan</summary>
+            <ul className="space-y-1 px-3 pb-2">
+              {plan.steps.filter((s) => s.hidden).map((s) => (
+                <li key={s.id} className="flex items-center justify-between gap-2 text-xs text-slate-400">
+                  <span className="truncate line-through">{stepTitle(s)}</span>
+                  <span className="flex shrink-0 items-center gap-2">
+                    <span className="tabular-nums">{formatINR(s.amount)}</span>
+                    {canEdit && open && (
+                      <form action={unhideStep}><input type="hidden" name="periodId" value={periodId} /><input type="hidden" name="stepKey" value={s.id} /><button className="font-medium text-emerald-600 hover:underline">un-hide</button></form>
+                    )}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </details>
+        )}
         </>
+      )}
+
+      {/* Add-a-step modal: a real member↔member (or ↔ hub) move, inserted at the chosen spot. */}
+      {insert && (
+        <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 sm:items-center sm:p-4" onClick={() => setInsert(null)}>
+          <div className="w-full max-w-sm rounded-t-2xl bg-white p-4 shadow-xl sm:rounded-2xl" onClick={(e) => e.stopPropagation()} style={{ paddingBottom: "max(1rem, env(safe-area-inset-bottom))" }}>
+            <h3 className="mb-3 text-sm font-semibold text-slate-900">Add a step</h3>
+            <form action={addManualStep} onSubmit={() => setInsert(null)} className="space-y-2.5">
+              <input type="hidden" name="periodId" value={periodId} />
+              <input type="hidden" name="afterStepKey" value={insert.anchor ?? ""} />
+              <label className="block text-[11px] font-medium text-slate-500">From
+                <select name="fromMemberId" required defaultValue="" className="mt-1 w-full rounded-md border border-slate-200 px-2 py-1.5 text-sm">
+                  <option value="" disabled>Sender…</option>
+                  {members.map((m) => <option key={m.id} value={m.id}>{m.name}{m.id === treasurerId ? " (Hub)" : ""}</option>)}
+                </select>
+              </label>
+              <label className="block text-[11px] font-medium text-slate-500">To
+                <select name="toMemberId" required defaultValue="" className="mt-1 w-full rounded-md border border-slate-200 px-2 py-1.5 text-sm">
+                  <option value="" disabled>Receiver…</option>
+                  {members.map((m) => <option key={m.id} value={m.id}>{m.name}{m.id === treasurerId ? " (Hub)" : ""}</option>)}
+                </select>
+              </label>
+              <label className="block text-[11px] font-medium text-slate-500">Amount
+                <input name="amount" type="number" step="0.01" min="0" required placeholder="₹" className="mt-1 w-full rounded-md border border-slate-200 px-2 py-1.5 text-sm" />
+              </label>
+              <div className="flex justify-end gap-2 pt-1">
+                <button type="button" onClick={() => setInsert(null)} className="rounded-md px-3 py-1.5 text-sm text-slate-500">Cancel</button>
+                <button className="rounded-md bg-emerald-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-emerald-700">Add step</button>
+              </div>
+            </form>
+          </div>
+        </div>
       )}
 
       {/* Per-step balances — a mobile-friendly bottom sheet: everyone's running cash right after the
@@ -401,6 +476,24 @@ function FilterPill({ active, onClick, children }: { active: boolean; onClick: (
     >
       {children}
     </button>
+  );
+}
+
+// A slim "+" sitting between two rows — click to insert a manual step right there.
+function InsertHere({ onClick }: { onClick: () => void }) {
+  return (
+    <li className="list-none">
+      <div className="flex items-center justify-center py-0.5">
+        <button
+          type="button"
+          onClick={onClick}
+          title="Insert a step here"
+          className="grid h-5 w-5 place-items-center rounded-full border border-dashed border-slate-300 text-sm leading-none text-slate-400 opacity-40 transition hover:border-emerald-400 hover:text-emerald-600 hover:opacity-100"
+        >
+          +
+        </button>
+      </div>
+    </li>
   );
 }
 

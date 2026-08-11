@@ -1222,6 +1222,75 @@ export async function toggleIncomeReceived(formData: FormData) {
   revalidatePath("/", "layout");
 }
 
+// ── Money Plan: head-editable steps (persist across a refresh) ──────────────────────────────────
+// Add an ad-hoc member↔member (or ↔ hub) move, inserted right after `afterStepKey` (empty = top).
+export async function addManualStep(formData: FormData) {
+  const session = await auth();
+  const memberId = session?.user?.memberId ?? null;
+  if (!(await unlocked())) await relock("addManualStep");
+  if (!(await canEdit())) { log.warn("addManualStep", "blocked", { outcome: "blocked", reason: "not-allowed", memberId }); return; }
+  const periodId = Number(formData.get("periodId"));
+  const fromMemberId = Number(formData.get("fromMemberId"));
+  const toMemberId = Number(formData.get("toMemberId"));
+  const amount = Math.round((Number(formData.get("amount")) || 0) * 100) / 100;
+  const afterStepKey = String(formData.get("afterStepKey") ?? "").trim() || null;
+  const dayRaw = formData.get("day");
+  const day = dayRaw ? Number(dayRaw) : null;
+  if (!periodId || !fromMemberId || !toMemberId || amount <= 0 || fromMemberId === toMemberId) return;
+  if (!(await isHead()) && !(await periodOpen(periodId))) return;
+  await prisma.manualPlanStep.create({ data: { periodId, fromMemberId, toMemberId, amount, afterStepKey, day } });
+  log.info("addManualStep", "ok", { outcome: "ok", memberId, periodId, amount });
+  revalidatePath("/", "layout");
+}
+
+export async function deleteManualStep(formData: FormData) {
+  if (!(await unlocked())) await relock("deleteManualStep");
+  if (!(await canEdit())) return;
+  const id = Number(formData.get("id"));
+  const m = await prisma.manualPlanStep.findUnique({ where: { id } });
+  if (!m) return;
+  if (!(await isHead()) && !(await periodOpen(m.periodId))) return;
+  await prisma.manualPlanStep.delete({ where: { id } });
+  revalidatePath("/", "layout");
+}
+
+// Tick a manual step done — head/manager, or either party to the move; open month unless head.
+export async function toggleManualStepDone(formData: FormData) {
+  const session = await auth();
+  const memberId = session?.user?.memberId ?? null;
+  if (!(await unlocked())) await relock("toggleManualStepDone");
+  const id = Number(formData.get("id"));
+  const m = await prisma.manualPlanStep.findUnique({ where: { id } });
+  if (!m) return;
+  const isParty = memberId != null && (memberId === m.fromMemberId || memberId === m.toMemberId);
+  if (!(await canEdit()) && !isParty) return;
+  if (!(await isHead()) && !(await periodOpen(m.periodId))) return;
+  await prisma.manualPlanStep.update({ where: { id }, data: { done: !m.done } });
+  revalidatePath("/", "layout");
+}
+
+// Hide a derived step from the plan VIEW (Sheet untouched); un-hide by deleting the marker.
+export async function hideStep(formData: FormData) {
+  if (!(await unlocked())) await relock("hideStep");
+  if (!(await canEdit())) return;
+  const periodId = Number(formData.get("periodId"));
+  const stepKey = String(formData.get("stepKey") ?? "").trim();
+  if (!periodId || !stepKey) return;
+  if (!(await isHead()) && !(await periodOpen(periodId))) return;
+  await prisma.hiddenPlanStep.upsert({ where: { periodId_stepKey: { periodId, stepKey } }, create: { periodId, stepKey }, update: {} });
+  revalidatePath("/", "layout");
+}
+
+export async function unhideStep(formData: FormData) {
+  if (!(await unlocked())) await relock("unhideStep");
+  if (!(await canEdit())) return;
+  const periodId = Number(formData.get("periodId"));
+  const stepKey = String(formData.get("stepKey") ?? "").trim();
+  if (!periodId || !stepKey) return;
+  await prisma.hiddenPlanStep.deleteMany({ where: { periodId, stepKey } });
+  revalidatePath("/", "layout");
+}
+
 // Pay a due-month "save the share" bill from the In Hand tab (head/manager, open month).
 // The bill's own fund is used FIRST and fully; any remainder comes from the general Piggy or
 // out-of-pocket (recorded as the payer's Misc spend). Idempotent via BillPayment (one per

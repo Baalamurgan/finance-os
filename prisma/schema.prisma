@@ -470,6 +470,8 @@ model Period {
   settlements  SettlementRecord[]
   advances     Advance[]
   stepDayOverrides StepDayOverride[]
+  manualPlanSteps  ManualPlanStep[]
+  hiddenPlanSteps  HiddenPlanStep[]
 
   @@unique([householdId, year, month])
 }
@@ -629,6 +631,33 @@ model StepDayOverride {
   periodId Int
   stepKey  String // e.g. "fund-<categoryId>", "piggyho-<priorPeriodId>-<ownerId>"
   day      Int
+  @@unique([periodId, stepKey])
+}
+
+// Head-added ad-hoc Money-plan step: a real member→member (or →/from hub) move inserted between two
+// steps. Persisted so a plan refresh keeps it. `afterStepKey` = the plan-step id it sits right after
+// (null = top); it moves the running balances like a transfer and is tickable.
+model ManualPlanStep {
+  id           Int      @id @default(autoincrement())
+  period       Period   @relation(fields: [periodId], references: [id])
+  periodId     Int
+  fromMemberId Int // sender (a member; the hub = the treasurer's member id)
+  toMemberId   Int // receiver
+  amount       Float
+  afterStepKey String? // the plan-step id this was inserted AFTER (null = top of the list)
+  day          Int? // fallback ordering / display if the anchor step is gone
+  note         String?
+  done         Boolean  @default(false)
+  createdAt    DateTime @default(now())
+}
+
+// Head-hidden Money-plan step: removes a derived step from the plan VIEW only (the underlying
+// bill/income/Sheet is untouched). Persisted so a refresh keeps it hidden; deleted to un-hide.
+model HiddenPlanStep {
+  id       Int    @id @default(autoincrement())
+  period   Period @relation(fields: [periodId], references: [id])
+  periodId Int
+  stepKey  String // the plan-step id to hide
   @@unique([periodId, stepKey])
 }
 
