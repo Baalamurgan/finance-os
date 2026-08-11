@@ -393,9 +393,14 @@ export function MoneyPlan({
                   {members.map((m) => <option key={m.id} value={m.id}>{m.name}{m.id === treasurerId ? " (Hub)" : ""}</option>)}
                 </select>
               </label>
-              <label className="block text-[11px] font-medium text-slate-500">Amount
-                <input name="amount" type="number" step="0.01" min="0" required placeholder="₹" className="mt-1 w-full rounded-md border border-slate-200 px-2 py-1.5 text-sm" />
-              </label>
+              <div className="flex gap-2">
+                <label className="block flex-1 text-[11px] font-medium text-slate-500">Amount
+                  <input name="amount" type="number" step="0.01" min="0" required placeholder="₹" className="mt-1 w-full rounded-md border border-slate-200 px-2 py-1.5 text-sm" />
+                </label>
+                <label className="block w-28 text-[11px] font-medium text-slate-500">Day
+                  <input name="day" type="number" min="1" max="31" placeholder="of month" className="mt-1 w-full rounded-md border border-slate-200 px-2 py-1.5 text-sm" />
+                </label>
+              </div>
               <div className="flex justify-end gap-2 pt-1">
                 <button type="button" onClick={() => setInsert(null)} className="rounded-md px-3 py-1.5 text-sm text-slate-500">Cancel</button>
                 <button className="rounded-md bg-emerald-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-emerald-700">Add step</button>
