@@ -2307,6 +2307,12 @@ export async function setStepDay(formData: FormData) {
     if (!period || period.status !== "open") return { ok: false, error: "This month is closed." };
     if (day == null) await prisma.stepDayOverride.deleteMany({ where: { periodId: id, stepKey } });
     else await prisma.stepDayOverride.upsert({ where: { periodId_stepKey: { periodId: id, stepKey } }, create: { periodId: id, stepKey, day }, update: { day } });
+  } else if (kind === "manual") {
+    // A head-added manual step owns its own day (positioning still follows its insert anchor, so the
+    // date is display + fallback order). Editable even once ticked done — it's ad-hoc metadata.
+    const m = await prisma.manualPlanStep.findUnique({ where: { id }, select: { period: { select: { status: true } } } });
+    if (!m || m.period.status !== "open") return { ok: false, error: "This month is closed." };
+    await prisma.manualPlanStep.update({ where: { id }, data: { day } });
   } else {
     return { ok: false, error: "This step's date can’t be edited." };
   }

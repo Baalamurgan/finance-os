@@ -206,7 +206,14 @@ export function MoneyPlan({
                     {isManual && <span className="shrink-0 rounded-full bg-cyan-50 px-1.5 py-0.5 text-[9px] font-medium text-cyan-600">✎ manual</span>}
                     {isAllowance && <span className="shrink-0 rounded-full bg-violet-50 px-1.5 py-0.5 text-[9px] font-medium text-violet-500">personal · from hub</span>}
                     {isPiggy && <span className="shrink-0 rounded-full bg-pink-50 px-1.5 py-0.5 text-[9px] font-medium text-pink-500">{isHandover ? "🐷 last month’s leftovers → holder" : "🐷 to piggy · at wind-down"}</span>}
-                    {!s.done && (!isPiggy || isHandover) && (() => {
+                    {/* Manual steps own their day and can edit it in ANY state (it's ad-hoc metadata;
+                        position still follows the insert anchor). Handled here so it's not gated by !done. */}
+                    {isManual && (() => {
+                      const tag = <DayTag kind="manual" day={s.day} status={null} days={null} />;
+                      if (!isHead || !open || s.manualId == null) return s.day != null ? tag : null;
+                      return <StepDayEditor kind="manual" id={s.manualId} day={s.day}>{tag}</StepDayEditor>;
+                    })()}
+                    {!isManual && !s.done && (!isPiggy || isHandover) && (() => {
                       const tag = <DayTag kind={s.kind} day={s.day} status={s.status ?? null} days={s.days ?? null} />;
                       if (!isHead || !open) return tag;
                       // Row-backed steps → edit the row's day (+ pin): bill/allowance line, income entry, advance.
@@ -228,7 +235,7 @@ export function MoneyPlan({
                     })()}
                     {/* A done step keeps its date visible — when it was scheduled / due — as a muted tag,
                         plus a "paid <day>" tag when it was actually paid on a DIFFERENT day than due. */}
-                    {s.done && s.day != null && (!isPiggy || isHandover) && (
+                    {!isManual && s.done && s.day != null && (!isPiggy || isHandover) && (
                       <span className="shrink-0 rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] font-normal text-slate-400 no-underline">{isIncome ? "on" : "was due"} {ordinal(s.day)}</span>
                     )}
                     {s.done && s.paidDay != null && s.paidDay !== s.day && (
