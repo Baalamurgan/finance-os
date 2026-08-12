@@ -3,6 +3,7 @@
 import { prisma } from "@/lib/prisma";
 import { Prisma } from "@prisma/client";
 import { revalidatePath } from "next/cache";
+import { revalidateFamily } from "@/lib/revalidate";
 import { redirect } from "next/navigation";
 import { cookies, headers } from "next/headers";
 import { auth, signOut } from "@/auth";
@@ -70,7 +71,7 @@ export async function setViewAs(formData: FormData) {
   } else {
     jar.delete(VIEW_AS_COOKIE);
   }
-  revalidatePath("/", "layout");
+  revalidateFamily();
 }
 
 export async function doSignOut() {
@@ -357,7 +358,7 @@ async function doSaveExpense(formData: FormData): Promise<{ ok: boolean; error?:
     }
     await logActivity("expense", "created", `Added ${deferred ? "deferred " : ""}expense “${label}” ${formatINR(amount)}`, periodId);
   }
-  revalidatePath("/", "layout");
+  revalidateFamily();
   return { ok: true };
 }
 
@@ -386,7 +387,7 @@ async function doAddIncome(formData: FormData): Promise<boolean> {
   await prisma.incomeEntry.create({ data: { periodId, source, amount, ownerId, oneOff } });
   if (!oneOff) await promoteToTemplate(periodId, "income", source, amount, null, ownerId);
   await logActivity("income", "created", `Added income “${source}” ${formatINR(amount)}`, periodId);
-  revalidatePath("/", "layout");
+  revalidateFamily();
   return true;
 }
 
@@ -414,7 +415,7 @@ export async function updateIncome(prev: SaveState, formData: FormData): Promise
   const pin = i.amount !== amount ? { pinned: true } : {};
   await prisma.incomeEntry.update({ where: { id }, data: { source, amount, ownerId, ...pin } });
   await logActivity("income", "updated", `Edited income “${source}” to ${formatINR(amount)}`, i.periodId);
-  revalidatePath("/", "layout");
+  revalidateFamily();
   return { ok: true, n: prev.n + 1 };
 }
 
@@ -427,7 +428,7 @@ export async function deleteExpense(formData: FormData) {
   if (e?.paid) return; // a line already paid in the money plan is frozen — paid is paid
   await prisma.expenseEntry.delete({ where: { id } });
   if (e) await logActivity("expense", "deleted", `Removed expense “${e.label}” ${formatINR(e.amount)}`, e.periodId);
-  revalidatePath("/", "layout");
+  revalidateFamily();
 }
 
 export async function deleteIncome(formData: FormData) {
@@ -438,7 +439,7 @@ export async function deleteIncome(formData: FormData) {
   if (i && !(await canEditNow(i.periodId))) return;
   await prisma.incomeEntry.delete({ where: { id } });
   if (i) await logActivity("income", "deleted", `Removed income “${i.source}” ${formatINR(i.amount)}`, i.periodId);
-  revalidatePath("/", "layout");
+  revalidateFamily();
 }
 
 // Save an uploaded image to public/uploads and return its public path, or null.
@@ -507,7 +508,7 @@ async function doAddSpend(formData: FormData): Promise<boolean> {
   // (the same item can be "for someone else"), so we never learn from it.
   if (cat && cat.tracked && !misc) await learnSpendItem(cat.householdId, label, categoryId);
   await logActivity("spend", "created", `Logged spend “${label}” ${formatINR(amount)}`, targetPeriodId);
-  revalidatePath("/", "layout");
+  revalidateFamily();
   return true;
 }
 
@@ -572,7 +573,7 @@ export async function createSpendShortcut(formData: FormData) {
   await prisma.spendShortcut.create({
     data: { householdId: household.id, label, icon, categoryId, sortOrder: (max._max.sortOrder ?? 0) + 1 },
   });
-  revalidatePath("/", "layout");
+  revalidateFamily();
 }
 
 export async function updateSpendShortcut(formData: FormData) {
@@ -586,7 +587,7 @@ export async function updateSpendShortcut(formData: FormData) {
   const categoryId = Number(formData.get("categoryId")) || sc.categoryId;
   if (!label || !(await validShortcutCategory(household.id, categoryId))) return;
   await prisma.spendShortcut.update({ where: { id }, data: { label, icon, categoryId } });
-  revalidatePath("/", "layout");
+  revalidateFamily();
 }
 
 export async function deleteSpendShortcut(formData: FormData) {
@@ -596,7 +597,7 @@ export async function deleteSpendShortcut(formData: FormData) {
   const sc = await prisma.spendShortcut.findUnique({ where: { id } });
   if (!sc || sc.householdId !== household.id) return;
   await prisma.spendShortcut.delete({ where: { id } });
-  revalidatePath("/", "layout");
+  revalidateFamily();
 }
 
 export async function moveSpendShortcut(formData: FormData) {
@@ -617,7 +618,7 @@ export async function moveSpendShortcut(formData: FormData) {
     prisma.spendShortcut.update({ where: { id: a.id }, data: { sortOrder: b.sortOrder } }),
     prisma.spendShortcut.update({ where: { id: b.id }, data: { sortOrder: a.sortOrder } }),
   ]);
-  revalidatePath("/", "layout");
+  revalidateFamily();
 }
 
 // Recategorise a spend from Misc into a tracked category (the "Review Misc" fix and the
@@ -647,7 +648,7 @@ export async function moveSpendCategory(formData: FormData) {
   });
   if (!nowMisc) await learnSpendItem(target.householdId, spend.label, categoryId);
   await logActivity("spend", "updated", `Moved “${spend.label}” → ${target.name}`, spend.periodId);
-  revalidatePath("/", "layout");
+  revalidateFamily();
 }
 
 // Dismiss a "Review Misc" suggestion: this misc spend is genuinely miscellaneous, so
@@ -665,7 +666,7 @@ export async function ignoreMiscReview(formData: FormData) {
   const isOwner = spend.memberId === session.user.memberId;
   if (session.user.role !== "head" && !isOwner) return;
   await prisma.spend.update({ where: { id }, data: { reviewIgnored: true } });
-  revalidatePath("/", "layout");
+  revalidateFamily();
 }
 
 // Plain form-action caller (card mode on the Expenses page): fire-and-forget.
@@ -702,7 +703,7 @@ export async function deleteSpend(formData: FormData) {
   // (Receipt files are deferred/cloud-stored — nothing to unlink locally.)
   await prisma.spend.delete({ where: { id } });
   await logActivity("spend", "deleted", `Removed spend “${spend.label}” ${formatINR(spend.amount)}`, spend.periodId);
-  revalidatePath("/", "layout");
+  revalidateFamily();
 }
 
 // Re-tag a misc spend's reporting sub-category (Food, Travel…). Reporting only — no
@@ -724,7 +725,7 @@ export async function setSpendSubCategory(formData: FormData) {
 
   const valid = MISC_SUBCATEGORIES.some((s) => s.name === value);
   await prisma.spend.update({ where: { id }, data: { subCategory: valid ? value : null } });
-  revalidatePath("/", "layout");
+  revalidateFamily();
 }
 
 // Edit a spend in place — same category (card) and same date, just corrected data.
@@ -768,7 +769,7 @@ export async function editSpendAction(
   // createdAt is intentionally left untouched — the date of spend stays as it was.
   await prisma.spend.update({ where: { id }, data: { label, amount, subCategory, memberId } });
   await logActivity("spend", "updated", `Edited spend “${label}” ${formatINR(amount)}`, spend.periodId);
-  revalidatePath("/", "layout");
+  revalidateFamily();
   return { ok: true, n: prev.n + 1 };
 }
 
@@ -816,7 +817,7 @@ export async function withdrawPiggy(formData: FormData) {
     });
   });
   await logActivity("piggy", "updated", `Used Piggy ${formatINR(amount)} — ${note}`, periodId);
-  revalidatePath("/", "layout");
+  revalidateFamily();
 }
 
 // Head adjusts the general Piggy or a sinking fund (e.g. a manual top-up). Head-only, so a
@@ -845,7 +846,7 @@ export async function depositPiggy(formData: FormData) {
     "created",
     `${amount < 0 ? "Removed" : "Added"} ${formatINR(Math.abs(amount))} ${amount < 0 ? "from" : "to"} Piggy — ${note}`,
   );
-  revalidatePath("/", "layout");
+  revalidateFamily();
 }
 
 // Head sets a fund's CURRENT balance to an exact amount — records the difference
@@ -877,7 +878,7 @@ export async function setFundBalance(formData: FormData) {
     },
   });
   await logActivity("piggy", "updated", `Set a fund balance to ${formatINR(targetAmount)}`);
-  revalidatePath("/", "layout");
+  revalidateFamily();
 }
 
 // Add a new recurring/tracked category (Setup screen). useActionState-shaped.
@@ -905,7 +906,7 @@ export async function skipSetAside(formData: FormData) {
     await tx.expenseEntry.deleteMany({ where: { periodId, categoryId, OR: [{ label: { endsWith: "(saving)" } }, { label: { endsWith: "(monthly share)" } }] } });
   });
   await logActivity("expense", "updated", `Skipped this month's set-aside for “${cat.name}”`, periodId);
-  revalidatePath("/", "layout");
+  revalidateFamily();
 }
 
 // Undo a skip — put the set-aside back on the sheet (recomputed from the current fund).
@@ -932,7 +933,7 @@ export async function restoreSetAside(formData: FormData) {
     }
   });
   await logActivity("expense", "updated", `Restored the set-aside for “${cat.name}”`, periodId);
-  revalidatePath("/", "layout");
+  revalidateFamily();
 }
 
 const CATEGORY_SECTIONS = ["Loans", "Chits", "Monthly", "Yearly", "Misc"] as const;
@@ -1018,7 +1019,7 @@ export async function createCategory(
   }
   // Setup is the template for FUTURE months — it does not touch the current sheet.
   // From next month, clonePeriodInto turns this category into a tagged Sheet line.
-  revalidatePath("/", "layout");
+  revalidateFamily();
   return { ok: true, n };
 }
 
@@ -1035,7 +1036,7 @@ export async function deleteCategory(formData: FormData) {
     prisma.piggyEntry.deleteMany({ where: { categoryId: id } }),
     prisma.category.delete({ where: { id } }),
   ]);
-  revalidatePath("/", "layout");
+  revalidateFamily();
 }
 
 // Pause / resume a category (skipped from new-month seeding & wind-down while held).
@@ -1046,7 +1047,7 @@ export async function toggleHold(formData: FormData) {
   const cat = await prisma.category.findUnique({ where: { id } });
   if (!cat) return;
   await prisma.category.update({ where: { id }, data: { onHold: !cat.onHold } });
-  revalidatePath("/", "layout");
+  revalidateFamily();
 }
 
 // Per-bill reminder toggle: mute/unmute the due popup for one bill (head-only).
@@ -1057,7 +1058,7 @@ export async function toggleRemind(formData: FormData) {
   const cat = await prisma.category.findUnique({ where: { id }, select: { remind: true } });
   if (!cat) return;
   await prisma.category.update({ where: { id }, data: { remind: !cat.remind } });
-  revalidatePath("/", "layout");
+  revalidateFamily();
 }
 
 // Per-bill reminder settings (from the row's popup): notify on/off + how many days before due.
@@ -1070,7 +1071,7 @@ export async function setBillReminderConfig(formData: FormData) {
   const n = rawDays == null || String(rawDays).trim() === "" ? null : Number(rawDays);
   const reminderDays = n == null || Number.isNaN(n) ? null : Math.min(30, Math.max(0, Math.round(n)));
   await prisma.category.update({ where: { id }, data: { remind, reminderDays } });
-  revalidatePath("/", "layout");
+  revalidateFamily();
 }
 
 // Shared family note: ANY signed-in member may edit it (deliberately not head-gated) — it's
@@ -1099,7 +1100,7 @@ export async function setBillReminders(formData: FormData) {
   const household = await prisma.household.findFirst({ select: { id: true } });
   if (!household) return;
   await prisma.household.update({ where: { id: household.id }, data: { billRemindersOn: on } });
-  revalidatePath("/", "layout");
+  revalidateFamily();
 }
 
 // The bill-due reminders relevant to the signed-in member (they're the responsible/paying
@@ -1177,7 +1178,7 @@ export async function setTreasurer(formData: FormData) {
   } else {
     return;
   }
-  revalidatePath("/", "layout");
+  revalidateFamily();
 }
 
 // Mark / unmark a bill as paid — head/manager, on an open month. A paid bill drops out
@@ -1200,7 +1201,7 @@ export async function toggleBillPaid(formData: FormData) {
   // Stamp the paid time when marking paid (cleared on un-mark) so the plan can show "paid <day>".
   await prisma.expenseEntry.update({ where: { id }, data: { paid: !e.paid, paidAt: e.paid ? null : new Date() } });
   log.info("toggleBillPaid", "ok", { outcome: "ok", memberId, id, paid: !e.paid, periodId: e.periodId });
-  revalidatePath("/", "layout");
+  revalidateFamily();
 }
 
 // Tick an income arrival "received" in the Money Plan — strikes the row through (display only; it
@@ -1219,7 +1220,7 @@ export async function toggleIncomeReceived(formData: FormData) {
   if (!(await isHead()) && !(await periodOpen(e.periodId))) { log.warn("toggleIncomeReceived", "blocked", { outcome: "blocked", reason: "period-closed", memberId, id, periodId: e.periodId }); return; }
   await prisma.incomeEntry.update({ where: { id }, data: { receivedAt: e.receivedAt ? null : new Date() } });
   log.info("toggleIncomeReceived", "ok", { outcome: "ok", memberId, id, received: !e.receivedAt, periodId: e.periodId });
-  revalidatePath("/", "layout");
+  revalidateFamily();
 }
 
 // ── Money Plan: head-editable steps (persist across a refresh) ──────────────────────────────────
@@ -1240,7 +1241,7 @@ export async function addManualStep(formData: FormData) {
   if (!(await isHead()) && !(await periodOpen(periodId))) return;
   await prisma.manualPlanStep.create({ data: { periodId, fromMemberId, toMemberId, amount, afterStepKey, day } });
   log.info("addManualStep", "ok", { outcome: "ok", memberId, periodId, amount });
-  revalidatePath("/", "layout");
+  revalidateFamily();
 }
 
 export async function deleteManualStep(formData: FormData) {
@@ -1251,7 +1252,7 @@ export async function deleteManualStep(formData: FormData) {
   if (!m) return;
   if (!(await isHead()) && !(await periodOpen(m.periodId))) return;
   await prisma.manualPlanStep.delete({ where: { id } });
-  revalidatePath("/", "layout");
+  revalidateFamily();
 }
 
 // Tick a manual step done — head/manager, or either party to the move; open month unless head.
@@ -1266,7 +1267,7 @@ export async function toggleManualStepDone(formData: FormData) {
   if (!(await canEdit()) && !isParty) return;
   if (!(await isHead()) && !(await periodOpen(m.periodId))) return;
   await prisma.manualPlanStep.update({ where: { id }, data: { done: !m.done } });
-  revalidatePath("/", "layout");
+  revalidateFamily();
 }
 
 // Hide a derived step from the plan VIEW (Sheet untouched); un-hide by deleting the marker.
@@ -1278,7 +1279,7 @@ export async function hideStep(formData: FormData) {
   if (!periodId || !stepKey) return;
   if (!(await isHead()) && !(await periodOpen(periodId))) return;
   await prisma.hiddenPlanStep.upsert({ where: { periodId_stepKey: { periodId, stepKey } }, create: { periodId, stepKey }, update: {} });
-  revalidatePath("/", "layout");
+  revalidateFamily();
 }
 
 export async function unhideStep(formData: FormData) {
@@ -1288,7 +1289,7 @@ export async function unhideStep(formData: FormData) {
   const stepKey = String(formData.get("stepKey") ?? "").trim();
   if (!periodId || !stepKey) return;
   await prisma.hiddenPlanStep.deleteMany({ where: { periodId, stepKey } });
-  revalidatePath("/", "layout");
+  revalidateFamily();
 }
 
 // Pay a due-month "save the share" bill from the In Hand tab (head/manager, open month).
@@ -1339,7 +1340,7 @@ export async function payPeriodicBill(prev: PayBillState, formData: FormData): P
     await prisma.billPayment.create({ data: { householdId: cat.householdId, categoryId, periodId, spendPeriodId, memberId: payer, fromFund: 0, fromPiggy: 0, outOfPocket: 0 } });
     await logActivity("expense", "created", `Marked ${cat.name} bill already paid (outside)`, spendPeriodId);
     log.info("payPeriodicBill", "ok", { outcome: "ok", ...ctx, mode: "already", amount: 0 });
-    revalidatePath("/", "layout");
+    revalidateFamily();
     return { ok: true, n: prev.n + 1 };
   }
 
@@ -1386,7 +1387,7 @@ export async function payPeriodicBill(prev: PayBillState, formData: FormData): P
   });
   await logActivity("expense", "created", `Paid ${cat.name} bill ${formatINR(actual)}${carried ? " (carried)" : ""}`, spendPeriodId);
   log.info("payPeriodicBill", "ok", { outcome: "ok", ...ctx, mode: source, amount: actual, fromFund, fromPiggy, outOfPocket });
-  revalidatePath("/", "layout");
+  revalidateFamily();
   return { ok: true, n: prev.n + 1 };
 }
 
@@ -1414,7 +1415,7 @@ export async function unpayPeriodicBill(formData: FormData) {
     await tx.billPayment.delete({ where: { id: bp.id } });
   });
   log.info("unpayPeriodicBill", "ok", { outcome: "ok", memberId, categoryId, periodId });
-  revalidatePath("/", "layout");
+  revalidateFamily();
 }
 
 // Choose who holds the Piggy / pool in the in-hand view (head + manager). Default = head.
@@ -1429,7 +1430,7 @@ export async function setPiggyHolder(formData: FormData) {
     if (!m) return;
   }
   await prisma.household.update({ where: { id: household.id }, data: { piggyHolderMemberId: memberId } });
-  revalidatePath("/", "layout");
+  revalidateFamily();
 }
 
 // Mark one settlement transfer (from → to) as paid for a month. Head-only.
@@ -1462,7 +1463,7 @@ export async function markSettled(formData: FormData) {
     },
   });
   await logActivity("settlement", "created", `Marked a settlement paid (${formatINR(amount)})`, periodId);
-  revalidatePath("/", "layout");
+  revalidateFamily();
 }
 
 // Undo a recorded settlement. Head-only.
@@ -1479,7 +1480,7 @@ export async function unsettle(formData: FormData) {
   if (!allowed) return;
   await prisma.settlementRecord.delete({ where: { id } });
   await logActivity("settlement", "deleted", `Undid a settlement (${formatINR(rec.amount)})`, rec.periodId);
-  revalidatePath("/", "layout");
+  revalidateFamily();
 }
 
 // Mark a funding advance leg paid. leg="payback" ticks the return (borrower → funder); otherwise the
@@ -1497,7 +1498,7 @@ export async function markAdvanceSettled(formData: FormData) {
   const payback = formData.get("leg") === "payback";
   await prisma.advance.update({ where: { id }, data: payback ? { paybackSettled: true, paybackSettledAt: new Date() } : { settled: true, settledAt: new Date() } });
   await logActivity("settlement", "created", `Marked an advance ${payback ? "repaid" : "paid"} (${formatINR(adv.amount)})`, adv.periodId);
-  revalidatePath("/", "layout");
+  revalidateFamily();
 }
 // Undo a funding advance leg's paid mark (leg="payback" → the return), or delete the whole advance
 // (delete=1) — e.g. it's no longer needed.
@@ -1514,7 +1515,7 @@ export async function unsettleAdvance(formData: FormData) {
   if (formData.get("delete") === "1") await prisma.advance.delete({ where: { id } });
   else if (formData.get("leg") === "payback") await prisma.advance.update({ where: { id }, data: { paybackSettled: false, paybackSettledAt: null } });
   else await prisma.advance.update({ where: { id }, data: { settled: false, settledAt: null } });
-  revalidatePath("/", "layout");
+  revalidateFamily();
 }
 
 // ---- Loans & chits (head-only) ----
@@ -1538,7 +1539,7 @@ export async function createLoan(formData: FormData) {
     data: { householdId, name, kind, outstanding, monthlyAmount, memberId, totalInstallments, paidInstallments, interestRate, note },
   });
   await logActivity("loan", "created", `Added ${kind} “${name}”`);
-  revalidatePath("/", "layout");
+  revalidateFamily();
 }
 
 // Record a monthly payment / prepayment. principalPart reduces the outstanding;
@@ -1571,7 +1572,7 @@ export async function recordLoanPayment(formData: FormData) {
     }),
   ]);
   await logActivity("loan", "updated", `Paid ${formatINR(amount)} on “${loan.name}”`);
-  revalidatePath("/", "layout");
+  revalidateFamily();
 }
 
 // Chit: record that the pot was won on a given installment, for a given amount.
@@ -1592,7 +1593,7 @@ export async function setChitWon(formData: FormData) {
     "updated",
     installment ? `Won the “${loan.name}” pot (${formatINR(potAmount ?? 0)})` : `Cleared pot-won on “${loan.name}”`,
   );
-  revalidatePath("/", "layout");
+  revalidateFamily();
 }
 
 export async function closeLoan(formData: FormData) {
@@ -1601,7 +1602,7 @@ export async function closeLoan(formData: FormData) {
   if (!loanId) return;
   const loan = await prisma.loan.update({ where: { id: loanId }, data: { status: "closed" } });
   await logActivity("loan", "updated", `Closed “${loan.name}”`);
-  revalidatePath("/", "layout");
+  revalidateFamily();
 }
 
 export async function deleteLoan(formData: FormData) {
@@ -1611,7 +1612,7 @@ export async function deleteLoan(formData: FormData) {
   const loan = await prisma.loan.findUnique({ where: { id: loanId } });
   await prisma.loan.delete({ where: { id: loanId } });
   if (loan) await logActivity("loan", "deleted", `Deleted “${loan.name}”`);
-  revalidatePath("/", "layout");
+  revalidateFamily();
 }
 
 // Delete a single loan/chit payment (correction). Reverses its effect on the loan.
@@ -1630,7 +1631,7 @@ export async function deleteLoanPayment(formData: FormData) {
     }),
   ]);
   await logActivity("loan", "updated", `Removed a payment on “${p.loan.name}”`);
-  revalidatePath("/", "layout");
+  revalidateFamily();
 }
 
 // Head edits a category's recurring defaults on the Monthly Setup screen.
@@ -1671,14 +1672,14 @@ export async function saveRecurring(
       where: { id },
       data: { section, responsibleMemberId, needsReview: false, ...billing.fields },
     });
-    revalidatePath("/", "layout");
+    revalidateFamily();
     return { ok: false, error: `"${name}" is already taken — saved everything except the name.`, n };
   }
 
   // Setup edits define the recurring TEMPLATE only — the current open month is left
   // untouched. The change takes effect from next month (clonePeriodInto regenerates
   // each Setup category's tagged Sheet line + budget from the template).
-  revalidatePath("/", "layout");
+  revalidateFamily();
   return { ok: true, n };
 }
 
@@ -1731,7 +1732,7 @@ export async function saveAllRecurring(
   } catch {
     return { ok: false, error: "Couldn't save — a category name may already be taken.", n };
   }
-  revalidatePath("/", "layout");
+  revalidateFamily();
   return { ok: true, n };
 }
 
@@ -1744,7 +1745,7 @@ export async function setWindDownDay(formData: FormData) {
   const household = await prisma.household.findFirst();
   if (!household) return;
   await prisma.household.update({ where: { id: household.id }, data: { windDownDay: day } });
-  revalidatePath("/", "layout");
+  revalidateFamily();
 }
 
 type Tx = Parameters<Parameters<typeof prisma.$transaction>[0]>[0];
@@ -1764,7 +1765,7 @@ export async function createPeriod(formData: FormData) {
     where: { householdId_year_month: { householdId, year, month } },
   });
   if (existing) {
-    revalidatePath("/", "layout");
+    revalidateFamily();
     return;
   }
 
@@ -1777,7 +1778,7 @@ export async function createPeriod(formData: FormData) {
     // always generate from the RecurringItem template (source of truth)
     await generateMonth(tx, p.id, householdId);
   });
-  revalidatePath("/", "layout");
+  revalidateFamily();
 }
 
 
@@ -1931,7 +1932,7 @@ export async function createNextMonthDraft(formData: FormData) {
       await applyBudgetShortfall(tx, current, p.id);
     });
   }
-  revalidatePath("/", "layout");
+  revalidateFamily();
   redirect(`/?y=${year}&m=${month}`);
 }
 
@@ -1950,7 +1951,7 @@ export async function rebuildDraft(formData: FormData) {
     await addEstimatedSurplus(tx, current, periodId);
     await applyBudgetShortfall(tx, current, periodId);
   });
-  revalidatePath("/", "layout");
+  revalidateFamily();
   redirect(`/?y=${draft.year}&m=${draft.month}`);
 }
 
@@ -1981,7 +1982,7 @@ export async function refreshCarryEstimates(formData: FormData): Promise<{ ok: b
     await applyBudgetShortfall(tx, { id: source.id, householdId: source.householdId, carryForward: source.carryForward }, target.id);
   });
   log.info("refreshCarryEstimates", "ok", { targetId: target.id, sourceId: source.id });
-  revalidatePath("/", "layout");
+  revalidateFamily();
   return { ok: true, message: `Estimate refreshed from ${source.label}.` };
 }
 
@@ -2001,7 +2002,7 @@ export async function rebuildDraftToast(formData: FormData): Promise<{ ok: boole
     await addEstimatedSurplus(tx, current, periodId);
     await applyBudgetShortfall(tx, current, periodId);
   });
-  revalidatePath("/", "layout");
+  revalidateFamily();
   return { ok: true, message: "Preview rebuilt from your latest setup." };
 }
 
@@ -2012,7 +2013,7 @@ export async function toggleIncomeRepeat(formData: FormData) {
   const row = await prisma.incomeEntry.findUnique({ where: { id } });
   if (!row) return;
   await prisma.incomeEntry.update({ where: { id }, data: { oneOff: !row.oneOff } });
-  revalidatePath("/", "layout");
+  revalidateFamily();
 }
 
 export async function toggleExpenseRepeat(formData: FormData) {
@@ -2021,7 +2022,7 @@ export async function toggleExpenseRepeat(formData: FormData) {
   const row = await prisma.expenseEntry.findUnique({ where: { id } });
   if (!row) return;
   await prisma.expenseEntry.update({ where: { id }, data: { oneOff: !row.oneOff } });
-  revalidatePath("/", "layout");
+  revalidateFamily();
 }
 
 // ── Recurring template CRUD (Setup = source of truth; months generate from it) ──
@@ -2086,7 +2087,7 @@ export async function createRecurringItem(formData: FormData) {
   await prisma.recurringItem.create({
     data: { householdId, kind, name, amount, categoryId: kind === "expense" ? categoryId : null, memberId, sortOrder: (max._max.sortOrder ?? 0) + 1, ...sched },
   });
-  revalidatePath("/", "layout");
+  revalidateFamily();
 }
 
 export async function updateRecurringItem(formData: FormData) {
@@ -2113,7 +2114,7 @@ export async function updateRecurringItem(formData: FormData) {
     if (sched.installmentsTotal && sched.intervalMonths === 1 && data.name) data.name = stripInstNumber(data.name);
   }
   await prisma.recurringItem.update({ where: { id }, data });
-  revalidatePath("/", "layout");
+  revalidateFamily();
 }
 
 // Refresh the CURRENT open month from Setup: Setup is the source of truth for AMOUNTS + DUE DAYS, so
@@ -2215,7 +2216,7 @@ export async function syncMonthFromSetup(
   }
 
   log.info("syncMonthFromSetup", "ok", { householdId, periodId, updated: updates.length, hadSource: !!source });
-  revalidatePath("/", "layout");
+  revalidateFamily();
   return { ok: true, updated: updates.length };
 }
 
@@ -2236,7 +2237,7 @@ export async function unpinLine(formData: FormData) {
     const cands = items.filter((it) => it.memberId === inc.ownerId);
     const it = cands.length === 1 ? cands[0] : cands.find((x) => stripInstNumber(x.name) === stripInstNumber(inc.source));
     await prisma.incomeEntry.update({ where: { id }, data: { pinned: false, ...(it ? { amount: it.amount, dueDay: it.dueDay } : {}) } });
-    revalidatePath("/", "layout");
+    revalidateFamily();
     return { ok: true };
   }
 
@@ -2264,7 +2265,7 @@ export async function unpinLine(formData: FormData) {
     const it = cands.length === 1 ? cands[0] : cands.find((x) => stripInstNumber(x.name) === stripInstNumber(exp.label));
     await prisma.expenseEntry.update({ where: { id }, data: { pinned: false, ...(it ? { amount: it.amount, dueDay: it.dueDay } : {}) } });
   }
-  revalidatePath("/", "layout");
+  revalidateFamily();
   return { ok: true };
 }
 
@@ -2316,7 +2317,7 @@ export async function setStepDay(formData: FormData) {
   } else {
     return { ok: false, error: "This step's date can’t be edited." };
   }
-  revalidatePath("/", "layout");
+  revalidateFamily();
   return { ok: true };
 }
 
@@ -2369,7 +2370,7 @@ export async function saveAllRecurringItems(
     });
   }
   log.info("saveAllRecurringItems", "ok", { count: rows.length });
-  revalidatePath("/", "layout");
+  revalidateFamily();
   return { ok: true, n };
 }
 
@@ -2377,7 +2378,7 @@ export async function deleteRecurringItem(formData: FormData) {
   if (!(await isHead())) return;
   const id = Number(formData.get("id"));
   await prisma.recurringItem.deleteMany({ where: { id } });
-  revalidatePath("/", "layout");
+  revalidateFamily();
 }
 
 export async function toggleRecurringActive(formData: FormData) {
@@ -2386,7 +2387,7 @@ export async function toggleRecurringActive(formData: FormData) {
   const item = await prisma.recurringItem.findUnique({ where: { id } });
   if (!item) return;
   await prisma.recurringItem.update({ where: { id }, data: { active: !item.active } });
-  revalidatePath("/", "layout");
+  revalidateFamily();
 }
 
 // Throw the draft away entirely.
@@ -2399,7 +2400,7 @@ export async function discardDraft(formData: FormData) {
     await clearPeriodRows(tx, periodId);
     await tx.period.delete({ where: { id: periodId } });
   });
-  revalidatePath("/", "layout");
+  revalidateFamily();
   redirect("/");
 }
 
@@ -2447,7 +2448,7 @@ export async function saveMember(
   } catch {
     return { ok: false, error: "That email or code is already taken.", n };
   }
-  revalidatePath("/", "layout");
+  revalidateFamily();
   return { ok: true, n };
 }
 
@@ -2474,7 +2475,7 @@ export async function deleteMember(formData: FormData) {
     prisma.incomeEntry.updateMany({ where: { ownerId: id }, data: { ownerId: null } }),
     prisma.member.delete({ where: { id } }),
   ]);
-  revalidatePath("/", "layout");
+  revalidateFamily();
 }
 
 // Month close:
@@ -2489,7 +2490,7 @@ export async function windDownMonth(formData: FormData) {
   // contribution) into NEXT month's income instead of parking them in the Piggy bank.
   const leftoversToIncome = formData.get("leftoversToIncome") === "1";
   await windDownPeriod(periodId, { leftoversToIncome });
-  revalidatePath("/", "layout");
+  revalidateFamily();
 }
 
 // Mark a wound-down month's Piggy leftover as physically handed from the category owners to the
@@ -2501,5 +2502,5 @@ export async function markPiggyHandedOver(formData: FormData) {
   if (!periodId) return;
   const undo = formData.get("undo") === "1";
   await prisma.period.update({ where: { id: periodId }, data: { piggyHandedOverAt: undo ? null : new Date() } });
-  revalidatePath("/", "layout");
+  revalidateFamily();
 }

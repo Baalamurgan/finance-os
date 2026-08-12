@@ -1,4 +1,6 @@
+import { unstable_cache } from "next/cache";
 import { prisma } from "@/lib/prisma";
+import { FAMILY_TAG } from "@/lib/revalidate";
 import { computeSettlement } from "@/lib/settlement-core";
 import { planBillMonth, isLumpDue, monthsUntilNextDue, type FundingStyle } from "@/lib/schedule";
 import { suggestCategoryName, normalizeItem, resolveCategoryId } from "@/lib/spendCategorize";
@@ -438,7 +440,7 @@ export type Settlement = Awaited<ReturnType<typeof getSettlement>>;
  * attributed to them. Every non-treasurer member settles that net with the treasurer (hub):
  * net > 0 → member pays treasurer; net < 0 → treasurer pays member. (Matches the family sheet.)
  */
-export async function getSettlement(
+async function _getSettlement(
   householdId: number,
   periodId: number,
   treasurerId: number | null
@@ -679,6 +681,21 @@ export type SettlementHistory = Awaited<ReturnType<typeof getSettlementHistory>>
  * All recorded settlement payments across months, grouped by period (newest first),
  * with member names resolved. Powers the inline History section.
  */
+// Cached wrapper: settlement is per-member (treasurerId varies the "hub" perspective), so key
+// on all three ids. Busted by any family write via FAMILY_TAG; 1h backstop refreshes the
+// date-derived bits (e.g. day-status) even in a quiet month.
+export function getSettlement(
+  householdId: number,
+  periodId: number,
+  treasurerId: number | null
+) {
+  return unstable_cache(
+    () => _getSettlement(householdId, periodId, treasurerId),
+    ["getSettlement", String(householdId), String(periodId), String(treasurerId)],
+    { tags: [FAMILY_TAG], revalidate: 3600 }
+  )();
+}
+
 export async function getSettlementHistory(householdId: number) {
   const [records, members] = await Promise.all([
     prisma.settlementRecord.findMany({
@@ -792,7 +809,7 @@ export type InHand = Awaited<ReturnType<typeof getInHand>>;
  * expense balance); the piggy-holder's row carries the Piggy bank. Both roles
  * default to the head and always appear even with no personal in-hand.
  */
-export async function getInHand(householdId: number, periodId: number) {
+async function _getInHand(householdId: number, periodId: number) {
   const [household, period, categories, budgets, spends, billLines, miscLines, fundLines, fundCats, sinkBal, billPayments, members, piggy, incomeAgg, expenseAgg, carriedRaw, closedPeriods, allPays, allowanceLines, sinkCats] = await Promise.all([
     prisma.household.findUnique({ where: { id: householdId }, select: { treasurerMemberId: true, piggyHolderMemberId: true } }),
     prisma.period.findUnique({ where: { id: periodId }, select: { treasurerMemberId: true, status: true, month: true, year: true } }),
@@ -1138,7 +1155,17 @@ export async function getInHand(householdId: number, periodId: number) {
  * The monthly roll-up for one period: totals, by-category (with planned-vs-actual),
  * per-member attribution, necessary-vs-other, and the raw entry lists.
  */
-export async function getRollup(periodId: number) {
+// Cached wrapper: family-wide (identical for every member in the period). Busted by any family
+// write via FAMILY_TAG; 1h backstop refreshes day-status/due synthesis in a quiet month.
+export function getInHand(householdId: number, periodId: number) {
+  return unstable_cache(
+    () => _getInHand(householdId, periodId),
+    ["getInHand", String(householdId), String(periodId)],
+    { tags: [FAMILY_TAG], revalidate: 3600 }
+  )();
+}
+
+async function _getRollup(periodId: number) {
   const [incomes, expenses, budgets, members, spends, cats] = await Promise.all([
     prisma.incomeEntry.findMany({
       where: { periodId },
@@ -1237,6 +1264,15 @@ export async function getRollup(periodId: number) {
 
 // Aggregate getRollup across every period in an inclusive [from, to] month range
 // (for the Analysis "custom range" view). Sums totals + by-category/member/split.
+// Cached wrapper: family-wide per period. Busted by any family write via FAMILY_TAG.
+export function getRollup(periodId: number) {
+  return unstable_cache(
+    () => _getRollup(periodId),
+    ["getRollup", String(periodId)],
+    { tags: [FAMILY_TAG], revalidate: 3600 }
+  )();
+}
+
 export async function getRollupRange(
   householdId: number,
   fromY: number,
