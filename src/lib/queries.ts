@@ -631,12 +631,11 @@ export async function getMoneyPlan(householdId: number, periodId: number, inhand
           toId: inhand.piggyHolderId,
           toName: nameById.get(inhand.piggyHolderId) ?? "Piggy holder",
           handoverPeriodId: inhand.pendingPiggyHandover.priorPeriodId,
-          owners: inhand.pendingPiggyHandover.owners.map((o) => ({
-            fromId: o.id,
-            fromName: o.name,
-            amount: o.amount,
-            day: dayOverride.get(`piggyho-${inhand.pendingPiggyHandover!.priorPeriodId}-${o.id}`) ?? inhand.pendingPiggyHandover!.day,
-          })),
+          owners: inhand.pendingPiggyHandover.owners.map((o) => {
+            const day = dayOverride.get(`piggyho-${inhand.pendingPiggyHandover!.priorPeriodId}-${o.id}`) ?? inhand.pendingPiggyHandover!.day;
+            const st = dayStatus(day); // so an overdue hand-over reads red like any late step
+            return { fromId: o.id, fromName: o.name, amount: o.amount, day, status: st?.status ?? null, days: st?.days ?? null };
+          }),
         }
       : undefined;
 

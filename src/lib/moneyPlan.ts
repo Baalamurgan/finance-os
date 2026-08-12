@@ -73,7 +73,7 @@ export function buildMoneyPlan(input: {
   incomeArrivals?: { memberId: number; day: number | null; amount: number; source?: string; name?: string; id?: number }[]; // each income event + the day it lands
   reimburseByMember?: Record<number, number>; // prior-month out-of-pocket spend each member is owed back
   reimburseDay?: number; // target day to hand back those reimbursements (e.g. the day after wind-down)
-  piggyHandover?: { toId: number; toName: string; handoverPeriodId: number; owners: { fromId: number; fromName: string; amount: number; day: number }[] }; // prior wound-down month's leftover — one tickable step per owner who hands their slice to the Piggy holder
+  piggyHandover?: { toId: number; toName: string; handoverPeriodId: number; owners: { fromId: number; fromName: string; amount: number; day: number; status?: "overdue" | "soon" | "normal" | null; days?: number | null }[] }; // prior wound-down month's leftover — one tickable step per owner who hands their slice to the Piggy holder
   manualSteps?: { id: number; fromId: number; toId: number; fromName?: string; toName?: string; amount: number; day?: number | null; done: boolean; afterStepKey?: string | null }[]; // head-added ad-hoc moves
   hiddenKeys?: string[]; // step ids the head has hidden from the plan view
 }): MoneyPlan {
@@ -189,7 +189,7 @@ export function buildMoneyPlan(input: {
       steps.push({
         id: `piggyho-${piggyHandover.handoverPeriodId}-${o.fromId}`, kind: "piggy", day: o.day, amount: Math.round(o.amount * 100) / 100, done: false,
         fromId: o.fromId, fromName: o.fromName, toId: piggyHandover.toId, toName: piggyHandover.toName,
-        handoverPeriodId: piggyHandover.handoverPeriodId, status: null, days: null,
+        handoverPeriodId: piggyHandover.handoverPeriodId, status: o.status ?? null, days: o.days ?? null,
       });
     }
   }

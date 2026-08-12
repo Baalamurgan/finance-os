@@ -267,7 +267,7 @@ export function MoneyPlan({
                   )}
                   {!s.done && isHandover && (
                     <div className="mt-0.5 text-[10px] text-amber-600">
-                      🐷 {s.fromName} hands {formatINR(s.amount)} of last month’s Piggy to {s.toName}. It’s separate from this month’s cash (tracked in In-Hand / Piggy), so the running balances don’t move here — {s.toName}’s Piggy goes up by {formatINR(s.amount)} once ticked.
+                      🐷 Last month’s Piggy → {s.toName}’s once ticked · separate bucket, doesn’t move this month’s cash
                     </div>
                   )}
                   {/* Hand-over CTA/badge lives here in the (wrapping) content column — its label is too wide
