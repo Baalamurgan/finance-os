@@ -4,6 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
+    "analyze": "next experimental-analyze",
     "postinstall": "prisma generate",
     "build": "prisma generate && next build",
     "start": "next start",
