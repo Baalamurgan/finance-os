@@ -251,14 +251,9 @@ export default async function SheetPage({
     );
   }
 
-  const rollup = await getRollup(c.selected.id);
-  const skipped = await getSkippedSetAsides(c.household.id, c.selected.id);
   const open = c.selected.status === "open";
-
   // Draft estimate: what the current open month will carry in + leave in Piggy.
   const draftSource = isDraft ? c.periods.find((p) => p.status === "open") ?? null : null;
-  const preview = draftSource ? await getWindDownPreview(c.household.id, draftSource.id) : null;
-
   // 🐷 Piggy bank figure (general only — sinking is always excluded, since getPiggyBalance sums
   // kind:"piggy"). On a PREVIEW/PROVISIONAL month, show the PROJECTED general Piggy (what it'll be
   // once the working month winds down) to match the Piggy tab — not the stale live balance.
@@ -266,11 +261,19 @@ export default async function SheetPage({
   const piggySource = piggyPreview
     ? c.periods.find((p) => p.status === "open" && (p.year < c.selected!.year || (p.year === c.selected!.year && p.month < c.selected!.month))) ?? null
     : null;
-  const projectedPiggy = piggySource ? await getProjectedPiggy(c.household.id, piggySource.id) : null;
+
+  // These reads are independent — fetch them in ONE round-trip instead of a six-deep await waterfall
+  // against the (remote) DB pooler, which dominated the sheet's time-to-first-byte on mobile.
+  const [rollup, skipped, preview, projectedPiggy, inHand] = await Promise.all([
+    getRollup(c.selected.id),
+    getSkippedSetAsides(c.household.id, c.selected.id),
+    draftSource ? getWindDownPreview(c.household.id, draftSource.id) : Promise.resolve(null),
+    piggySource ? getProjectedPiggy(c.household.id, piggySource.id) : Promise.resolve(null),
+    open ? getInHand(c.household.id, c.selected.id) : Promise.resolve(null),
+  ]);
   const shownPiggy = projectedPiggy ? projectedPiggy.generalTotal : c.piggyBalance;
   // Part of the Piggy figure may be last month's leftover still sitting with the category owners
   // (not yet handed to the holder). Surface it so the piggy number isn't mistaken for fully received.
-  const inHand = open ? await getInHand(c.household.id, c.selected.id) : null;
   const pendingHandover = inHand?.pendingPiggyHandover ?? null;
   // Periodic/fund bills actually DUE this month (EB, insurance…) — synthesized in getInHand, not real
   // Sheet lines, so surface them here to show under "Yearly / periodic bills" when they land. Paid from
