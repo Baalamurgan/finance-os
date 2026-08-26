@@ -118,8 +118,12 @@ export function buildMoneyPlan(input: {
   for (const t of outbound) {
     for (const p of t.payments ?? []) {
       if (p.amount <= 0.005) continue;
+      // Keep the paid step exactly WHERE IT WAS SCHEDULED — its key encodes the day
+      // (disb/reimb-<creditor>-<hub>-<DAY>-<amount>) — so marking it paid never moves it, even when the
+      // actual paid date differs (that shows as a "paid <day>" tag instead). Fallback: the payout slot.
+      const keyDay = p.key ? Number(p.key.split("-")[3]) : NaN;
       steps.push({
-        id: `paid-${t.toId}-${p.id}`, kind: "transfer-out", day: lastDay, amount: Math.round(p.amount * 100) / 100, done: true,
+        id: `paid-${t.toId}-${p.id}`, kind: "transfer-out", day: Number.isFinite(keyDay) ? keyDay : lastDay, amount: Math.round(p.amount * 100) / 100, done: true,
         fromId: t.fromId, toId: t.toId, fromName: t.from, toName: t.to, recordId: p.id,
       });
     }

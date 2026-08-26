@@ -348,6 +348,21 @@ describe("buildMoneyPlan", () => {
     expect(done.reduce((a, s) => a + s.amount, 0)).toBe(30); // the paid 30 still shows as its done line
   });
 
+  it("a paid piece stays at its SCHEDULED day (from its key), not the payout slot", () => {
+    // Payment keyed disb-3-1-5-40 was scheduled for day 5. A later day-20 bill pushes lastDay to 20,
+    // but marking it paid must NOT move the step to day 20 — it stays at day 5 (paid date is just a tag).
+    const plan = buildMoneyPlan({
+      treasurerId: T, // = 1
+      transfers: [xfer({ fromId: T, from: "A", toId: 3, to: "C", amount: 100, paidAmount: 40, settled: false, recordId: null, payments: [{ id: 7, amount: 40, key: "disb-3-1-5-40" }] })],
+      bills: [bill({ payerId: 3, payerName: "C", vendor: "Late", amount: 10, day: 20 })], // pushes lastDay → 20
+      incomeDayByMember: {},
+      incomeArrivals: [{ memberId: T, day: 1, amount: 100 }],
+    });
+    const done = plan.steps.find((s) => s.kind === "transfer-out" && s.done && s.toId === 3)!;
+    expect(done.amount).toBe(40);
+    expect(done.day).toBe(5); // its scheduled day, not lastDay (20)
+  });
+
   it("adds a tickable piggy hand-over lump that doesn't move this month's cash walk", () => {
     const plan = buildMoneyPlan({
       treasurerId: T,
