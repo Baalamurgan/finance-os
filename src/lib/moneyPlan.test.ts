@@ -296,8 +296,24 @@ describe("buildMoneyPlan", () => {
     const scheduled = toC.filter((s) => !s.done).reduce((a, s) => a + s.amount, 0);
     expect(paid).toBe(30); // the already-paid slice shows done
     expect(scheduled).toBe(70); // the remainder is still funded, not dropped
-    expect(toC.find((s) => !s.done)!.settleAmount).toBe(100); // ticking it settles C's FULL net
+    expect(toC.find((s) => !s.done)!.settleAmount).toBe(100); // paid-so-far 30 + this 70 slice = 100 (the last piece completes the net)
     expect(plan.steps.find((s) => s.vendor === "Loan")!.senderShort).toBeUndefined(); // 30 + 70 covers the 100 bill
+  });
+
+  it("a piece tick settles ONLY its own slice (paid-so-far + slice), not the creditor's whole net", () => {
+    // Hub owes C (id 3) a net of 100, funded in TWO pieces: 30 for a day-2 bill, 70 for a day-5 bill.
+    // Nothing settled yet, so each piece's settleAmount is just paid-so-far (0) + its own slice —
+    // ticking the ₹30 piece records ₹30 and leaves the ₹70 pending, rather than settling all 100.
+    const plan = buildMoneyPlan({
+      treasurerId: T,
+      transfers: [xfer({ fromId: T, from: "A", toId: 3, to: "C", amount: 100, settled: false, recordId: null })],
+      bills: [bill({ payerId: 3, payerName: "C", vendor: "B2", amount: 30, day: 2 }), bill({ payerId: 3, payerName: "C", vendor: "B5", amount: 70, day: 5 })],
+      incomeDayByMember: {},
+      incomeArrivals: [{ memberId: T, day: 1, amount: 100, name: "A" }], // hub has cash to fund both from the hub
+    });
+    const toC = plan.steps.filter((s) => s.kind === "transfer-out" && s.toId === 3 && !s.done);
+    expect(toC.find((s) => s.day === 2)!.settleAmount).toBe(30); // ticking the day-2 piece records exactly 30
+    expect(toC.find((s) => s.day === 5)!.settleAmount).toBe(70); // and the day-5 piece records exactly 70
   });
 
   it("dates a PAID reimbursement slice to reimburseDay (not month-end), keeping its tag", () => {

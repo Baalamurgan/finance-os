@@ -1503,3 +1503,19 @@ export async function getLoanDetail(householdId: number, id: number) {
     chitNet,
   };
 }
+
+// The Money-Plan activity feed for a month: who did what, newest first. Reads the ActivityLog
+// (every settlement/bill/income/piggy action logs one row), filtered to the money-movement
+// entities so daily-spend and loan noise stays out. Shown below the In-Hand cards as one combined
+// log — the audit trail for "who marked this step done, and when".
+export type MoneyPlanActivity = { id: number; memberName: string | null; action: string; entity: string; summary: string; at: Date };
+const MONEY_PLAN_ENTITIES = ["settlement", "piggy", "income", "expense"];
+export async function getMoneyPlanActivity(periodId: number, limit = 40): Promise<MoneyPlanActivity[]> {
+  const rows = await prisma.activityLog.findMany({
+    where: { periodId, entity: { in: MONEY_PLAN_ENTITIES } },
+    orderBy: { createdAt: "desc" },
+    take: limit,
+    select: { id: true, memberName: true, action: true, entity: true, summary: true, createdAt: true },
+  });
+  return rows.map((r) => ({ id: r.id, memberName: r.memberName, action: r.action, entity: r.entity, summary: r.summary, at: r.createdAt }));
+}

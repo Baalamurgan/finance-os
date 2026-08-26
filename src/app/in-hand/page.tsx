@@ -1,6 +1,7 @@
 import { formatINR } from "@/lib/format";
 import { loadCommon } from "@/lib/load";
-import { getInHand, getMoneyPlan, type InHand } from "@/lib/queries";
+import { getInHand, getMoneyPlan, getMoneyPlanActivity, type InHand } from "@/lib/queries";
+import { MoneyPlanActivity } from "@/components/MoneyPlanActivity";
 import { NavHeader } from "@/components/NavHeader";
 import { MoneyPlan } from "@/components/MoneyPlan";
 import { InHandPersonGroup } from "@/components/InHandPersonGroup";
@@ -53,7 +54,10 @@ export default async function InHandPage({
   const periodId = c.selected.id;
   // Real cash each person holds: budget left + bills to pay + savings held − misc spent.
   const inHand = await getInHand(c.household.id, periodId);
-  const plan = await getMoneyPlan(c.household.id, periodId, inHand);
+  const [plan, activity] = await Promise.all([
+    getMoneyPlan(c.household.id, periodId, inHand),
+    getMoneyPlanActivity(periodId),
+  ]);
   const currentMemberId = c.currentMember?.id ?? null;
   const visibleGroups = c.isHead
     ? inHand.byPerson
@@ -120,6 +124,8 @@ export default async function InHandPage({
             Nothing in hand this month — no budget, bills, savings or misc.
           </p>
         )}
+
+        <MoneyPlanActivity items={activity} />
 
         {!open && (
           <p className="text-center text-xs text-slate-400">This month is closed — figures are locked.</p>

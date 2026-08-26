@@ -1201,6 +1201,7 @@ export async function toggleBillPaid(formData: FormData) {
   // Stamp the paid time when marking paid (cleared on un-mark) so the plan can show "paid <day>".
   await prisma.expenseEntry.update({ where: { id }, data: { paid: !e.paid, paidAt: e.paid ? null : new Date() } });
   log.info("toggleBillPaid", "ok", { outcome: "ok", memberId, id, paid: !e.paid, periodId: e.periodId });
+  await logActivity("expense", "updated", `${e.paid ? "Unmarked" : "Marked"} bill “${e.label}” ${formatINR(e.amount)} paid`, e.periodId);
   revalidateFamily();
 }
 
@@ -1220,6 +1221,7 @@ export async function toggleIncomeReceived(formData: FormData) {
   if (!(await isHead()) && !(await periodOpen(e.periodId))) { log.warn("toggleIncomeReceived", "blocked", { outcome: "blocked", reason: "period-closed", memberId, id, periodId: e.periodId }); return; }
   await prisma.incomeEntry.update({ where: { id }, data: { receivedAt: e.receivedAt ? null : new Date() } });
   log.info("toggleIncomeReceived", "ok", { outcome: "ok", memberId, id, received: !e.receivedAt, periodId: e.periodId });
+  await logActivity("income", "updated", `${e.receivedAt ? "Unmarked" : "Marked"} income “${e.source}” ${formatINR(e.amount)} received`, e.periodId);
   revalidateFamily();
 }
 
@@ -1241,6 +1243,7 @@ export async function addManualStep(formData: FormData) {
   if (!(await isHead()) && !(await periodOpen(periodId))) return;
   await prisma.manualPlanStep.create({ data: { periodId, fromMemberId, toMemberId, amount, afterStepKey, day } });
   log.info("addManualStep", "ok", { outcome: "ok", memberId, periodId, amount });
+  await logActivity("settlement", "created", `Added a manual move ${formatINR(amount)}`, periodId);
   revalidateFamily();
 }
 
@@ -1252,6 +1255,7 @@ export async function deleteManualStep(formData: FormData) {
   if (!m) return;
   if (!(await isHead()) && !(await periodOpen(m.periodId))) return;
   await prisma.manualPlanStep.delete({ where: { id } });
+  await logActivity("settlement", "deleted", `Removed a manual move ${formatINR(m.amount)}`, m.periodId);
   revalidateFamily();
 }
 
@@ -1267,6 +1271,7 @@ export async function toggleManualStepDone(formData: FormData) {
   if (!(await canEdit()) && !isParty) return;
   if (!(await isHead()) && !(await periodOpen(m.periodId))) return;
   await prisma.manualPlanStep.update({ where: { id }, data: { done: !m.done } });
+  await logActivity("settlement", "updated", `${m.done ? "Unmarked" : "Marked"} a manual move ${formatINR(m.amount)} done`, m.periodId);
   revalidateFamily();
 }
 
@@ -1462,7 +1467,9 @@ export async function markSettled(formData: FormData) {
       settledById: session?.user?.memberId ?? null,
     },
   });
-  await logActivity("settlement", "created", `Marked a settlement paid (${formatINR(amount)})`, periodId);
+  const pair = await prisma.member.findMany({ where: { id: { in: [fromMemberId, toMemberId] } }, select: { id: true, name: true } });
+  const nm = (mid: number) => pair.find((p) => p.id === mid)?.name ?? `#${mid}`;
+  await logActivity("settlement", "created", `Settled ${formatINR(amount)}: ${nm(fromMemberId)} → ${nm(toMemberId)}`, periodId);
   revalidateFamily();
 }
 
@@ -2502,5 +2509,6 @@ export async function markPiggyHandedOver(formData: FormData) {
   if (!periodId) return;
   const undo = formData.get("undo") === "1";
   await prisma.period.update({ where: { id: periodId }, data: { piggyHandedOverAt: undo ? null : new Date() } });
+  await logActivity("piggy", "updated", `${undo ? "Reverted" : "Confirmed"} last month's Piggy hand-over`, periodId);
   revalidateFamily();
 }

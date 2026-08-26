@@ -280,9 +280,12 @@ export function buildMoneyPlan(input: {
       fromId, toId: creditorId, fromName, toName: r.name, recordId: reroute ? null : r.recordId, fundsMember, reroute,
       ...(infeasibleFrom !== undefined ? { infeasibleFrom } : {}), // only flag pieces that genuinely can't be funded by their day
       ...(reimbursement ? { reimbursement: true } : {}),
-      // A hub-funded remainder piece settles the creditor's FULL net when ticked (one record per member);
-      // the reimbursement slice and rerouted pieces settle their own amount instead.
-      ...(!reimbursement && !reroute && netOwedByCreditor.has(creditorId) ? { settleAmount: Math.round((netOwedByCreditor.get(creditorId) ?? 0) * 100) / 100 } : {}),
+      // A hub-funded piece settles ONLY its own slice when ticked, on top of whatever's already
+      // been paid to this creditor: settleAmount = paid-so-far + this slice. One record per member
+      // (an upsert-overwrite), so it carries the new running total — ticking a ₹2,780 piece records
+      // ₹2,780 and leaves the rest as pending pieces, rather than settling the whole net at once.
+      // The reimbursement slice and rerouted pieces already settle their own amount (no settleAmount).
+      ...(!reimbursement && !reroute && netOwedByCreditor.has(creditorId) ? { settleAmount: Math.round(((paidByCreditor.get(creditorId) ?? 0) + amount) * 100) / 100 } : {}),
     });
   };
   for (const need of allNeeds) {
