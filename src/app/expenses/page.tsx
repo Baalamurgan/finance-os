@@ -9,8 +9,12 @@ import { SpendSubCategoryPicker } from "@/components/SpendSubCategoryPicker";
 import { EditSpendModal } from "@/components/EditSpendModal";
 import { ExpensesSortControl } from "@/components/ExpensesSortControl";
 import { MISC_SUBCATEGORIES } from "@/lib/misc";
+import { MoneyFlowDonut } from "@/components/Charts";
 
 type SortKey = "date" | "amount" | "member";
+
+// Distinct hues for the misc-category donut (kept away from the amber the section header uses).
+const MISC_DONUT_COLORS = ["#6366f1", "#f59e0b", "#10b981", "#ef4444", "#8b5cf6", "#ec4899", "#14b8a6", "#f97316", "#3b82f6", "#84cc16", "#a855f7", "#64748b"];
 
 export default async function ExpensesPage({
   searchParams,
@@ -85,6 +89,19 @@ export default async function ExpensesPage({
   const open = c.selected.status === "open";
   // Head-only tidy-up: misc spends that look like a tracked category (open month only).
   const miscReview = c.isHead && open ? await getMiscReview(c.household.id, c.selected.id) : [];
+
+  // Misc spends broken down by their sub-category (Food, Health, …) for the donut beside the list.
+  // Respects the member filter automatically (card.spends is already narrowed when filtered).
+  const iconOf = (name: string) => MISC_SUBCATEGORIES.find((s) => s.name === name)?.icon ?? "•";
+  const miscByCat = new Map<string, number>();
+  for (const card of miscCards) for (const s of card.spends) {
+    const key = s.subCategory ?? "Uncategorised";
+    miscByCat.set(key, (miscByCat.get(key) ?? 0) + s.amount);
+  }
+  const miscSegments = [...miscByCat.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .map(([name, value], i) => ({ name: `${iconOf(name)} ${name}`, value, color: MISC_DONUT_COLORS[i % MISC_DONUT_COLORS.length] }));
+  const miscDonutTotal = miscSegments.reduce((s, x) => s + x.value, 0);
 
   return (
     <>
@@ -180,18 +197,29 @@ export default async function ExpensesPage({
               </span>
             </div>
             <MiscReview items={miscReview} />
-            <div className="grid grid-cols-1 gap-5 md:grid-cols-2">
-              {miscCards.map((card) => (
-                <SpendCard
-                  key={card.id}
-                  card={card}
-                  open={open}
-                  periodId={c.selected!.id}
-                  isHead={c.isHead}
-                  members={c.members}
-                  currentMemberId={c.currentMember?.id}
-                />
-              ))}
+            {/* Laptop: spend list left, category donut right. Mobile: list on top, donut below. */}
+            <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
+              <div className="grid grid-cols-1 gap-5">
+                {miscCards.map((card) => (
+                  <SpendCard
+                    key={card.id}
+                    card={card}
+                    open={open}
+                    periodId={c.selected!.id}
+                    isHead={c.isHead}
+                    members={c.members}
+                    currentMemberId={c.currentMember?.id}
+                  />
+                ))}
+              </div>
+              {miscSegments.length > 0 && (
+                <div className="h-fit rounded-xl border border-slate-200 bg-white p-4 lg:sticky lg:top-4">
+                  <h3 className="mb-3 text-xs font-semibold uppercase tracking-wider text-slate-500">
+                    Where the misc went
+                  </h3>
+                  <MoneyFlowDonut segments={miscSegments} centerLabel="Misc" centerValue={formatINR(miscDonutTotal)} />
+                </div>
+              )}
             </div>
           </section>
         )}

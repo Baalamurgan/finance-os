@@ -12,13 +12,18 @@ const verbClass: Record<string, string> = { created: "text-emerald-600", deleted
 
 export function MoneyPlanActivity({ items }: { items: Activity[] }) {
   if (items.length === 0) return null;
+  // Collapsible (native <details>, zero-JS). Collapsed by default — it's a reference log, not the main
+  // view — with the count on the summary so you know there's history without expanding.
   return (
-    <section className="rounded-xl border border-slate-200 bg-white p-4">
-      <h2 className="mb-3 flex items-center gap-1.5 text-sm font-semibold text-slate-700">
+    <details className="group rounded-xl border border-slate-200 bg-white">
+      <summary className="flex cursor-pointer list-none items-center gap-1.5 p-4 text-sm font-semibold text-slate-700">
         📜 Money-plan activity
-        <span className="text-[11px] font-normal text-slate-400">· newest first</span>
-      </h2>
-      <ul className="divide-y divide-slate-100">
+        <span className="text-[11px] font-normal text-slate-400">· {items.length} · newest first</span>
+        <svg width="16" height="16" viewBox="0 0 20 20" className="ml-auto shrink-0 text-slate-400 transition-transform group-open:rotate-90" aria-hidden>
+          <path fill="currentColor" d="M7 5l6 5-6 5z" />
+        </svg>
+      </summary>
+      <ul className="divide-y divide-slate-100 px-4 pb-2">
         {items.map((it) => (
           <li key={it.id} className="flex items-start gap-2.5 py-2 text-xs">
             <span className="mt-px shrink-0" aria-hidden>{ICON[it.entity] ?? "•"}</span>
@@ -33,6 +38,6 @@ export function MoneyPlanActivity({ items }: { items: Activity[] }) {
           </li>
         ))}
       </ul>
-    </section>
+    </details>
   );
 }
