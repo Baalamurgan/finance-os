@@ -5,7 +5,7 @@
 // family can execute it step by step. Completion is written through to the underlying records
 // (SettlementRecord / bill paid) elsewhere, so this stays a projection, never a second ledger.
 
-export type PlanTransfer = { fromId: number; from: string; toId: number; to: string; amount: number; paidAmount?: number | null; settled: boolean; recordId: number | null; payments?: { id: number; amount: number; settledAt?: Date | string | null }[]; status?: "overdue" | "soon" | "normal" | null; days?: number | null };
+export type PlanTransfer = { fromId: number; from: string; toId: number; to: string; amount: number; paidAmount?: number | null; settled: boolean; recordId: number | null; payments?: { id: number; amount: number; settledAt?: Date | string | null; key?: string | null }[]; status?: "overdue" | "soon" | "normal" | null; days?: number | null };
 export type PlanBill = {
   key: string; payerId: number | null; payerName: string; vendor: string; amount: number; done: boolean;
   day: number | null; status: "overdue" | "soon" | "normal" | null; days?: number | null; billId?: number; categoryId?: number; fund?: boolean; fundAvail?: number;
@@ -275,7 +275,17 @@ export function buildMoneyPlan(input: {
       // override needed — the tick uses the step's own amount, keyed by its id for double-click safety).
     });
   };
+  // Keys of funding pieces already PAID (a settlement payment exists with that key). Their money has
+  // gone out and shows as a done line, and owed already excludes it (net − Σpaid) — so we must NOT
+  // regenerate the same need as a pending piece, or it'd be a dead "mark done" that re-ticks the same
+  // paid row and never clears. The leftover simply flows to the month-end payout instead.
+  const paidKeys = new Set<string>();
+  for (const o of outbound) for (const p of o.payments ?? []) if (p.key) paidKeys.add(p.key);
+
   for (const need of allNeeds) {
+    // The key emit() would mint for the full hub-funded piece of this need; if it's already paid, skip.
+    const fullKey = `${need.reimbursement ? "reimb" : "disb"}-${need.creditorId}-${treasurerId}-${need.day}-${Math.round(need.amount)}`;
+    if (paidKeys.has(fullKey)) continue;
     let amt = Math.min(need.amount, owed.get(need.creditorId) ?? 0);
     if (amt <= 0.005) continue;
     const treasurerName2 = treasurerName ?? "Treasurer";

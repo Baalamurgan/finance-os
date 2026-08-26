@@ -330,6 +330,24 @@ describe("buildMoneyPlan", () => {
     expect(done.map((s) => s.recordId).sort()).toEqual([1, 2]); // each individually undoable
   });
 
+  it("does NOT re-schedule a funding piece whose key is already paid (no dead 'mark done')", () => {
+    // Hub owes C (id 3) net 100; the ₹30 day-2 bill funding was already recorded (payment key
+    // disb-3-1-2-30). The bill itself is still unpaid, but the plan must NOT regenerate that piece as a
+    // pending step — clicking it would just re-tick the same paid row. The leftover 70 flows to a payout.
+    const plan = buildMoneyPlan({
+      treasurerId: T, // = 1
+      transfers: [xfer({ fromId: T, from: "A", toId: 3, to: "C", amount: 100, paidAmount: 30, settled: false, recordId: null, payments: [{ id: 5, amount: 30, key: "disb-3-1-2-30" }] })],
+      bills: [bill({ payerId: 3, payerName: "C", vendor: "Chimney", amount: 30, day: 2 })], // unpaid → would otherwise re-mint that need
+      incomeDayByMember: {},
+      incomeArrivals: [{ memberId: T, day: 1, amount: 100 }], // hub has the cash
+    });
+    const pendingToC = plan.steps.filter((s) => s.kind === "transfer-out" && s.toId === 3 && !s.done);
+    expect(pendingToC.some((s) => s.id === "disb-3-1-2-30")).toBe(false); // the paid piece never re-appears
+    expect(pendingToC.reduce((a, s) => a + s.amount, 0)).toBe(70); // just the true remainder, as a payout
+    const done = plan.steps.filter((s) => s.kind === "transfer-out" && s.toId === 3 && s.done);
+    expect(done.reduce((a, s) => a + s.amount, 0)).toBe(30); // the paid 30 still shows as its done line
+  });
+
   it("adds a tickable piggy hand-over lump that doesn't move this month's cash walk", () => {
     const plan = buildMoneyPlan({
       treasurerId: T,
