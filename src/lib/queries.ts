@@ -593,7 +593,7 @@ export async function getMoneyPlan(householdId: number, periodId: number, inhand
     // Pass BOTH the live net (amount) and the frozen paid amount (paidAmount). buildMoneyPlan shows the
     // paid slice as done and re-schedules any unpaid remainder — so a partial settlement (e.g. an early
     // reimbursement paid against a larger owed amount) doesn't drop the rest of what the creditor is owed.
-    return { fromId: t.fromId, from: t.from, toId: t.toId, to: t.to, amount: t.amount, paidAmount: t.paidAmount, settled: t.settled, recordId: t.recordId, status: st?.status ?? null, days: st?.days ?? null };
+    return { fromId: t.fromId, from: t.from, toId: t.toId, to: t.to, amount: t.amount, paidAmount: t.paidAmount, settled: t.settled, recordId: t.recordId, payments: t.payments, status: st?.status ?? null, days: st?.days ?? null };
   });
 
   // A personal expense with a due day is SENT on that day (scheduled + liquidity-checked like a bill);

@@ -5,7 +5,7 @@
 // family can execute it step by step. Completion is written through to the underlying records
 // (SettlementRecord / bill paid) elsewhere, so this stays a projection, never a second ledger.
 
-export type PlanTransfer = { fromId: number; from: string; toId: number; to: string; amount: number; paidAmount?: number | null; settled: boolean; recordId: number | null; status?: "overdue" | "soon" | "normal" | null; days?: number | null };
+export type PlanTransfer = { fromId: number; from: string; toId: number; to: string; amount: number; paidAmount?: number | null; settled: boolean; recordId: number | null; payments?: { id: number; amount: number; settledAt?: Date | string | null }[]; status?: "overdue" | "soon" | "normal" | null; days?: number | null };
 export type PlanBill = {
   key: string; payerId: number | null; payerName: string; vendor: string; amount: number; done: boolean;
   day: number | null; status: "overdue" | "soon" | "normal" | null; days?: number | null; billId?: number; categoryId?: number; fund?: boolean; fundAvail?: number;
@@ -37,7 +37,6 @@ export type PlanStep = {
   source?: string; // the income line's label (e.g. "Salary", "Rent")
   incomeId?: number; // the IncomeEntry id — lets the head edit the arrival day from the plan
   handoverPeriodId?: number; // piggy hand-over step: the wound-down period whose leftover is being handed over (ticking marks it handed over)
-  settleAmount?: number; // amount to record when THIS step is ticked (a funding remainder settles the creditor's FULL net, not just this slice)
   // transfer
   fromId?: number; toId?: number; fromName?: string; toName?: string; recordId?: number | null; feedsBills?: boolean;
   fundsMember?: boolean; // a disbursement piece timed to fund the recipient's own bills below
@@ -84,14 +83,11 @@ export function buildMoneyPlan(input: {
   // Paid-so-far on a (possibly PARTIALLY) settled disbursement. An early reimbursement can settle just
   // a SLICE of what the hub owes a creditor (the settlement record holds one amount); the unpaid rest
   // must still be scheduled below, or the creditor's later bills would show unfunded. paidOf clamps to net.
-  const paidOf = (o: PlanTransfer) => Math.min(o.paidAmount ?? o.amount, o.amount);
-  // Full net owed to each creditor, so ticking a remainder funding piece settles them FULLY (records the
-  // whole net), rather than overwriting the record with just that slice.
-  const netOwedByCreditor = new Map<number, number>(outbound.map((o) => [o.toId, o.amount]));
-  // What's already been paid to each creditor (a partial early settlement). The early REIMBURSEMENT is
-  // normally the first thing paid, so this reduces the reimbursement need below — otherwise it would be
-  // scheduled again on top of the already-paid slice (double-counting it).
-  const paidByCreditor = new Map<number, number>(outbound.filter((o) => o.settled).map((o) => [o.toId, paidOf(o)]));
+  // Paid-so-far to a creditor = SUM of their settlement payments (per-payment model), clamped to net.
+  const paidOf = (o: PlanTransfer) => Math.min(o.paidAmount ?? 0, o.amount);
+  // What's already been paid to each creditor (any partial counts, not just fully-settled ones) — used
+  // to net down the reimbursement need so an already-paid slice isn't scheduled again.
+  const paidByCreditor = new Map<number, number>(outbound.filter((o) => paidOf(o) > 0.005).map((o) => [o.toId, paidOf(o)]));
   // Disbursements happen only after everything has been collected AND the bills paid, so anchor
   // undated/residual outbound transfers to the latest inbound-income day OR bill due-day, whichever
   // is later. Undated bills contribute 0 here — a bill with no due date shouldn't push the payout later.
@@ -115,20 +111,18 @@ export function buildMoneyPlan(input: {
       recordId: t.recordId, status: t.status ?? null, days: t.days ?? null, feedsBills: hasHubBills,
     });
   }
-  // Already-PAID disbursement portion → one done step for the amount actually handed over (paidOf).
-  // A partial payment (paid < net) leaves a remainder that's re-scheduled via unsettledOut below.
-  // The early reimbursement is normally the first (and only) slice paid, so when the paid amount is
-  // no more than the creditor's reimbursement, date the done step to reimburseDay (the day it was
-  // scheduled for) and keep the reimbursement tag — otherwise it'd wrongly read as due at month-end.
-  for (const t of outbound.filter((o) => o.settled)) {
-    const paid = Math.round(paidOf(t) * 100) / 100;
-    if (paid <= 0.005) continue;
-    const reimbAmt = reimburseDay != null ? reimburseByMember[t.toId] ?? 0 : 0;
-    const isReimbSlice = reimbAmt > 0.005 && paid <= reimbAmt + 0.5;
-    steps.push({
-      id: `xfer-${t.fromId}-${t.toId}`, kind: "transfer-out", day: isReimbSlice ? reimburseDay! : lastDay, amount: paid, done: true,
-      fromId: t.fromId, toId: t.toId, fromName: t.from, toName: t.to, recordId: t.recordId, ...(isReimbSlice ? { reimbursement: true } : {}),
-    });
+  // Each recorded payment on a disbursement → its OWN done step (persistent, individually undoable via
+  // its recordId). A creditor paid in several slices shows several done lines that don't collapse into
+  // one growing figure or reshuffle when you tick the next piece. The unpaid remainder (net − Σpaid) is
+  // re-scheduled as pieces via unsettledOut below.
+  for (const t of outbound) {
+    for (const p of t.payments ?? []) {
+      if (p.amount <= 0.005) continue;
+      steps.push({
+        id: `paid-${t.toId}-${p.id}`, kind: "transfer-out", day: lastDay, amount: Math.round(p.amount * 100) / 100, done: true,
+        fromId: t.fromId, toId: t.toId, fromName: t.from, toName: t.to, recordId: p.id,
+      });
+    }
   }
   for (const b of bills) {
     steps.push({
@@ -203,13 +197,10 @@ export function buildMoneyPlan(input: {
   // If even that can't cover it in time, the piece is flagged infeasible with the earliest day it can.
   // Unsettled = never-settled disbursements PLUS the unpaid REMAINDER of partially-settled ones (net −
   // paid). The remainder keeps the creditor's record id so ticking it settles the same member.
-  const unsettledOut = [
-    ...outbound.filter((o) => !o.settled),
-    ...outbound
-      .filter((o) => o.settled)
-      .map((o) => ({ ...o, settled: false, amount: Math.round((o.amount - paidOf(o)) * 100) / 100 }))
-      .filter((o) => o.amount > 0.005),
-  ];
+  // Remainder still owed to each creditor = net − Σ payments (uniform for un-paid and part-paid alike).
+  const unsettledOut = outbound
+    .map((o) => ({ ...o, settled: false, amount: Math.round((o.amount - paidOf(o)) * 100) / 100 }))
+    .filter((o) => o.amount > 0.005);
   // ALL of a member's cash bills, with their paid flag — a DONE bill already consumed their cash (so it
   // still counts against their liquidity), but only an UNPAID one can generate a funding need.
   // Deferred (wind-down) bills are the assignee's own responsibility, NOT pool-funded — exclude them
@@ -280,12 +271,8 @@ export function buildMoneyPlan(input: {
       fromId, toId: creditorId, fromName, toName: r.name, recordId: reroute ? null : r.recordId, fundsMember, reroute,
       ...(infeasibleFrom !== undefined ? { infeasibleFrom } : {}), // only flag pieces that genuinely can't be funded by their day
       ...(reimbursement ? { reimbursement: true } : {}),
-      // A hub-funded piece settles ONLY its own slice when ticked, on top of whatever's already
-      // been paid to this creditor: settleAmount = paid-so-far + this slice. One record per member
-      // (an upsert-overwrite), so it carries the new running total — ticking a ₹2,780 piece records
-      // ₹2,780 and leaves the rest as pending pieces, rather than settling the whole net at once.
-      // The reimbursement slice and rerouted pieces already settle their own amount (no settleAmount).
-      ...(!reimbursement && !reroute && netOwedByCreditor.has(creditorId) ? { settleAmount: Math.round(((paidByCreditor.get(creditorId) ?? 0) + amount) * 100) / 100 } : {}),
+      // Per-payment model: ticking a piece records EXACTLY this slice as one payment (no settleAmount
+      // override needed — the tick uses the step's own amount, keyed by its id for double-click safety).
     });
   };
   for (const need of allNeeds) {

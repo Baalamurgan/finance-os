@@ -726,12 +726,17 @@ model SettlementRecord {
   periodId     Int
   fromMemberId Int // who pays
   toMemberId   Int // who receives (the treasurer/hub)
-  amount       Float // amount recorded at settle time
+  amount       Float // amount of THIS payment (a pair's total paid = sum of its rows)
   note         String?
   settledById  Int? // session member who marked it
   settledAt    DateTime   @default(now())
+  // Per-payment model: a settlement can be paid in several slices (one per Money-Plan piece), so
+  // there can be MANY rows per (period, from, to). `key` is the ticked step's stable id — ticking is
+  // an upsert on it, so a double-click updates the same row instead of double-recording a payment.
+  key          String?
 
-  @@unique([periodId, fromMemberId, toMemberId])
+  @@unique([periodId, key])
+  @@index([periodId, fromMemberId, toMemberId])
 }
 
 // Planned amount per category per month (planned-vs-actual).

@@ -1447,6 +1447,9 @@ export async function markSettled(formData: FormData) {
   const toMemberId = Number(formData.get("toMemberId"));
   const amount = parseAmount(formData.get("amount"));
   const note = String(formData.get("note") ?? "").trim() || null;
+  // The ticked step's stable id — one payment row per step (per-payment model). Falls back to the
+  // pair so an un-keyed tick still records something, but the Money Plan always sends a key.
+  const key = String(formData.get("key") ?? "").trim() || `pair-${fromMemberId}-${toMemberId}`;
   if (!householdId || !periodId || !fromMemberId || !toMemberId || !amount) return;
   await requireUnlocked("markSettled");
   // head, OR the payer/receiver of THIS transfer, may mark it settled
@@ -1454,9 +1457,12 @@ export async function markSettled(formData: FormData) {
   const allowed = session?.user?.role === "head" || me === fromMemberId || me === toMemberId;
   if (!allowed) return;
 
+  // Upsert on (periodId, key): ticking a piece records EXACTLY its own slice as one payment, and a
+  // double-click updates the same row instead of double-recording. A creditor's total paid is the SUM
+  // of these rows, so several slices never collapse into one growing figure.
   await prisma.settlementRecord.upsert({
-    where: { periodId_fromMemberId_toMemberId: { periodId, fromMemberId, toMemberId } },
-    update: { amount, note, settledById: session?.user?.memberId ?? null, settledAt: new Date() },
+    where: { periodId_key: { periodId, key } },
+    update: { amount, note, fromMemberId, toMemberId, settledById: session?.user?.memberId ?? null, settledAt: new Date() },
     create: {
       householdId,
       periodId,
@@ -1464,6 +1470,7 @@ export async function markSettled(formData: FormData) {
       toMemberId,
       amount,
       note,
+      key,
       settledById: session?.user?.memberId ?? null,
     },
   });

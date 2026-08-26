@@ -76,22 +76,42 @@ describe("computeSettlement", () => {
     expect(t!.amount).toBe(20_000); // KA -> Harish 20,000
   });
 
-  it("marks settled transfers and flags amount drift", () => {
+  it("sums payment rows; settled only once they cover the net", () => {
     const res = computeSettlement({
       members,
       incomes: [{ ownerId: 1, amount: 80_000 }],
       expenses: [],
       spends: [],
-      records: [{ id: 9, fromMemberId: 1, toMemberId: 3, amount: 70_000, settledAt: new Date() }],
+      // Two partial payments (per-payment model) that together cover the 80k owed.
+      records: [
+        { id: 9, fromMemberId: 1, toMemberId: 3, amount: 30_000, settledAt: new Date(), key: "a" },
+        { id: 10, fromMemberId: 1, toMemberId: 3, amount: 50_000, settledAt: new Date(), key: "b" },
+      ],
       treasurerId: 3,
       prevLabel: null,
     });
     const t = res.transfers.find((x) => x.fromId === 1 && x.toId === 3)!;
     expect(t.amount).toBe(80_000);
-    expect(t.settled).toBe(true);
-    expect(t.amountChanged).toBe(true); // recorded 70k ≠ current 80k
-    expect(res.settledCount).toBe(1);
+    expect(t.paidAmount).toBe(80_000); // 30k + 50k summed
+    expect(t.payments).toHaveLength(2);
+    expect(t.settled).toBe(true); // fully covered
     expect(res.allSettled).toBe(true);
+  });
+
+  it("treats a part-paid transfer as NOT settled (remainder still owed)", () => {
+    const res = computeSettlement({
+      members,
+      incomes: [{ ownerId: 1, amount: 80_000 }],
+      expenses: [],
+      spends: [],
+      records: [{ id: 9, fromMemberId: 1, toMemberId: 3, amount: 30_000, settledAt: new Date(), key: "a" }],
+      treasurerId: 3,
+      prevLabel: null,
+    });
+    const t = res.transfers.find((x) => x.fromId === 1 && x.toId === 3)!;
+    expect(t.paidAmount).toBe(30_000);
+    expect(t.settled).toBe(false); // 30k of 80k → still owed 50k
+    expect(res.allSettled).toBe(false);
   });
 
   it("no transfers when there is no treasurer", () => {

@@ -281,12 +281,12 @@ describe("buildMoneyPlan", () => {
     expect(plan.steps.find((s) => s.kind === "bill")!.senderShort).toBeUndefined(); // 500 covers the 400 bill
   });
 
-  it("schedules the unpaid remainder of a partially-settled disbursement (early reimbursement)", () => {
-    // Hub owes creditor 3 a net of 100, but only 30 has been paid so far (an early reimbursement slice).
-    // The 30 shows as done; the remaining 70 must still be scheduled to fund creditor 3's day-2 bill.
+  it("schedules the unpaid remainder of a partially-paid disbursement", () => {
+    // Hub owes creditor 3 a net of 100; one 30 payment has been recorded so far. The 30 shows as its
+    // own done line; the remaining 70 must still be scheduled to fund creditor 3's day-2 bill.
     const plan = buildMoneyPlan({
       treasurerId: T,
-      transfers: [xfer({ fromId: T, from: "A", toId: 3, to: "C", amount: 100, paidAmount: 30, settled: true, recordId: 9 })],
+      transfers: [xfer({ fromId: T, from: "A", toId: 3, to: "C", amount: 100, paidAmount: 30, settled: false, recordId: 9, payments: [{ id: 9, amount: 30 }] })],
       bills: [bill({ payerId: 3, payerName: "C", vendor: "Loan", amount: 100, day: 2 })],
       incomeDayByMember: {},
       incomeArrivals: [{ memberId: 3, day: 1, amount: 30 }], // C has 30 income → needs 70 from the pool
@@ -294,16 +294,16 @@ describe("buildMoneyPlan", () => {
     const toC = plan.steps.filter((s) => s.kind === "transfer-out" && s.toId === 3);
     const paid = toC.filter((s) => s.done).reduce((a, s) => a + s.amount, 0);
     const scheduled = toC.filter((s) => !s.done).reduce((a, s) => a + s.amount, 0);
-    expect(paid).toBe(30); // the already-paid slice shows done
+    expect(paid).toBe(30); // the recorded 30 payment shows as its own done line
+    expect(toC.filter((s) => s.done)).toHaveLength(1); // one payment → one done line (no collapse)
     expect(scheduled).toBe(70); // the remainder is still funded, not dropped
-    expect(toC.find((s) => !s.done)!.settleAmount).toBe(100); // paid-so-far 30 + this 70 slice = 100 (the last piece completes the net)
     expect(plan.steps.find((s) => s.vendor === "Loan")!.senderShort).toBeUndefined(); // 30 + 70 covers the 100 bill
   });
 
-  it("a piece tick settles ONLY its own slice (paid-so-far + slice), not the creditor's whole net", () => {
+  it("a piece tick records EXACTLY its own slice (per-payment), not the creditor's whole net", () => {
     // Hub owes C (id 3) a net of 100, funded in TWO pieces: 30 for a day-2 bill, 70 for a day-5 bill.
-    // Nothing settled yet, so each piece's settleAmount is just paid-so-far (0) + its own slice —
-    // ticking the ₹30 piece records ₹30 and leaves the ₹70 pending, rather than settling all 100.
+    // Each pending piece carries its OWN amount — ticking the ₹30 piece records ₹30 (one payment) and
+    // leaves the ₹70 pending, rather than a cumulative figure that collapses/reshuffles the rest.
     const plan = buildMoneyPlan({
       treasurerId: T,
       transfers: [xfer({ fromId: T, from: "A", toId: 3, to: "C", amount: 100, settled: false, recordId: null })],
@@ -312,26 +312,22 @@ describe("buildMoneyPlan", () => {
       incomeArrivals: [{ memberId: T, day: 1, amount: 100, name: "A" }], // hub has cash to fund both from the hub
     });
     const toC = plan.steps.filter((s) => s.kind === "transfer-out" && s.toId === 3 && !s.done);
-    expect(toC.find((s) => s.day === 2)!.settleAmount).toBe(30); // ticking the day-2 piece records exactly 30
-    expect(toC.find((s) => s.day === 5)!.settleAmount).toBe(70); // and the day-5 piece records exactly 70
+    expect(toC.find((s) => s.day === 2)!.amount).toBe(30); // ticking the day-2 piece records exactly 30
+    expect(toC.find((s) => s.day === 5)!.amount).toBe(70); // and the day-5 piece records exactly 70
   });
 
-  it("dates a PAID reimbursement slice to reimburseDay (not month-end), keeping its tag", () => {
-    // Creditor 3 is owed net 100; the early reimbursement of 50 has been paid. A later day-20 bill
-    // pushes lastDay to 20, but the DONE slice must still read as day 6 (when it was scheduled), tagged.
+  it("renders each recorded payment as its OWN done line (no collapse into one figure)", () => {
+    // Two payments (16,680 and 2,780) on the same hub→C disbursement of 100 → two done lines, not one
+    // growing 19,460 line. This is the fix for the 'vanished/random' Money-Plan behaviour.
     const plan = buildMoneyPlan({
       treasurerId: T,
-      transfers: [xfer({ fromId: T, from: "A", toId: 3, to: "C", amount: 100, paidAmount: 50, settled: true, recordId: 9 })],
-      bills: [bill({ payerId: 3, payerName: "C", vendor: "Loan", amount: 100, day: 20 })],
+      transfers: [xfer({ fromId: T, from: "A", toId: 3, to: "C", amount: 100, paidAmount: 80, settled: false, recordId: null, payments: [{ id: 1, amount: 50 }, { id: 2, amount: 30 }] })],
+      bills: [],
       incomeDayByMember: {},
-      incomeArrivals: [{ memberId: 3, day: 1, amount: 50 }],
-      reimburseByMember: { 3: 50 },
-      reimburseDay: 6,
     });
-    const donePaid = plan.steps.find((s) => s.kind === "transfer-out" && s.done && s.toId === 3)!;
-    expect(donePaid.amount).toBe(50);
-    expect(donePaid.day).toBe(6); // scheduled for day 6 → stays day 6 when done (not lastDay=20)
-    expect(donePaid.reimbursement).toBe(true);
+    const done = plan.steps.filter((s) => s.kind === "transfer-out" && s.done && s.toId === 3);
+    expect(done.map((s) => s.amount).sort((a, b) => a - b)).toEqual([30, 50]); // each payment its own line
+    expect(done.map((s) => s.recordId).sort()).toEqual([1, 2]); // each individually undoable
   });
 
   it("adds a tickable piggy hand-over lump that doesn't move this month's cash walk", () => {

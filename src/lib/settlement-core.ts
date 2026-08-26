@@ -21,6 +21,7 @@ export type SettleRecord = {
   toMemberId: number;
   amount: number;
   settledAt: Date | null;
+  key?: string | null;
 };
 
 export function computeSettlement(opts: {
@@ -78,18 +79,22 @@ export function computeSettlement(opts: {
             r.net > 0
               ? { fromId: r.id, from: r.name, toId: treasurer.id, to: treasurer.name, amount: r.net }
               : { fromId: treasurer.id, from: treasurer.name, toId: r.id, to: r.name, amount: -r.net };
-          const rec = records.find(
-            (s) => s.fromMemberId === base.fromId && s.toMemberId === base.toId,
-          );
+          // Per-payment model: a pair can have SEVERAL payment rows (one per ticked Money-Plan piece).
+          // Paid = their sum; the transfer is "settled" only once that sum covers the net. Each payment
+          // is carried through so the plan can show it as its own persistent done line with its own undo.
+          const recs = records
+            .filter((s) => s.fromMemberId === base.fromId && s.toMemberId === base.toId)
+            .map((s) => ({ id: s.id, amount: s.amount, settledAt: s.settledAt, key: s.key ?? null }))
+            .sort((a, b) => (a.settledAt?.getTime() ?? 0) - (b.settledAt?.getTime() ?? 0));
+          const paid = Math.round(recs.reduce((s, x) => s + x.amount, 0) * 100) / 100;
           return {
             ...base,
-            settled: !!rec,
-            recordId: rec?.id ?? null,
-            settledAt: rec?.settledAt ?? null,
-            // What was ACTUALLY handed over (frozen once paid) — the plan shows this on a settled step,
-            // not the live-recomputed base, so a payment you already made never redraws at a new number.
-            paidAmount: rec?.amount ?? null,
-            amountChanged: rec ? Math.abs(rec.amount - base.amount) >= 0.005 : false,
+            settled: paid >= base.amount - 0.005, // fully covered
+            payments: recs,
+            recordId: recs.length === 1 ? recs[0].id : null, // legacy single-id (one-payment case)
+            settledAt: recs.length ? recs[recs.length - 1].settledAt : null,
+            paidAmount: paid,
+            amountChanged: false,
           };
         })
         .sort((a, b) => b.amount - a.amount)
