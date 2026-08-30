@@ -8,7 +8,6 @@ import { SpendDeleteButton } from "@/components/SpendDeleteButton";
 import { SpendSubCategoryPicker } from "@/components/SpendSubCategoryPicker";
 import { EditSpendModal } from "@/components/EditSpendModal";
 import { ExpensesSortControl } from "@/components/ExpensesSortControl";
-import { MISC_SUBCATEGORIES } from "@/lib/misc";
 import { MoneyFlowDonut } from "@/components/Charts";
 
 type SortKey = "date" | "amount" | "member";
@@ -33,6 +32,7 @@ export default async function ExpensesPage({
     <NavHeader
       active="expenses"
       householdName={c.household.name}
+      miscSubCategories={c.miscSubCategories}
       selYear={c.selYear}
       selMonth={c.selMonth}
       previewPeriod={c.previewPeriod}
@@ -92,7 +92,7 @@ export default async function ExpensesPage({
 
   // Misc spends broken down by their sub-category (Food, Health, …) for the donut beside the list.
   // Respects the member filter automatically (card.spends is already narrowed when filtered).
-  const iconOf = (name: string) => MISC_SUBCATEGORIES.find((s) => s.name === name)?.icon ?? "•";
+  const iconOf = (name: string) => c.miscSubCategories.find((s) => s.name === name)?.icon ?? "•";
   const miscByCat = new Map<string, number>();
   for (const card of miscCards) for (const s of card.spends) {
     const key = s.subCategory ?? "Uncategorised";
@@ -177,6 +177,7 @@ export default async function ExpensesPage({
               isHead={c.isHead}
               members={c.members}
               currentMemberId={c.currentMember?.id}
+              subCats={c.miscSubCategories}
               filterMemberName={filterMemberName}
             />
           ))}
@@ -209,6 +210,7 @@ export default async function ExpensesPage({
                     isHead={c.isHead}
                     members={c.members}
                     currentMemberId={c.currentMember?.id}
+                    subCats={c.miscSubCategories}
                   />
                 ))}
               </div>
@@ -243,6 +245,7 @@ function SpendCard({
   members,
   currentMemberId,
   filterMemberName,
+  subCats,
 }: {
   card: SpendCardData;
   open: boolean;
@@ -251,6 +254,7 @@ function SpendCard({
   members: { id: number; name: string }[];
   currentMemberId?: number | null;
   filterMemberName?: string | null;
+  subCats: { name: string; icon: string }[];
 }) {
   const pct = card.allocation > 0 ? Math.min((card.spent / card.allocation) * 100, 100) : 0;
   const owner = card.responsibleMemberId != null ? members.find((m) => m.id === card.responsibleMemberId)?.name ?? null : null;
@@ -291,7 +295,7 @@ function SpendCard({
               isHead={isHead}
               members={members}
               currentMemberId={currentMemberId}
-              subCategories={isMisc ? MISC_SUBCATEGORIES : undefined}
+              subCategories={isMisc ? subCats : undefined}
             />
           )}
           <label htmlFor={cid} className="cursor-pointer rounded-md p-1 text-slate-400 hover:bg-slate-100 sm:hidden" aria-label={`Expand ${card.name}`}>
@@ -387,7 +391,7 @@ function SpendCard({
                     <SpendSubCategoryPicker
                       id={s.id}
                       value={s.subCategory}
-                      options={MISC_SUBCATEGORIES}
+                      options={subCats}
                       canEdit={open && (isHead || s.memberId === currentMemberId)}
                     />
                   )}
@@ -401,7 +405,7 @@ function SpendCard({
                   spend={{ id: s.id, label: s.label, amount: s.amount, memberId: s.memberId, subCategory: s.subCategory }}
                   categoryName={card.name}
                   isMisc={isMisc}
-                  subCategories={isMisc ? MISC_SUBCATEGORIES : undefined}
+                  subCategories={isMisc ? subCats : undefined}
                   isHead={isHead}
                   members={members}
                 />

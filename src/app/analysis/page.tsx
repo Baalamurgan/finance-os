@@ -34,6 +34,7 @@ export default async function AnalysisPage({
     <NavHeader
       active="analysis"
       householdName={c.household.name}
+      miscSubCategories={c.miscSubCategories}
       selYear={c.selYear}
       selMonth={c.selMonth}
       previewPeriod={c.previewPeriod}

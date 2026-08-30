@@ -205,6 +205,7 @@ export default async function SheetPage({
     <NavHeader
       active="sheet"
       householdName={c.household.name}
+      miscSubCategories={c.miscSubCategories}
       selYear={c.selYear}
       selMonth={c.selMonth}
       previewPeriod={c.previewPeriod}

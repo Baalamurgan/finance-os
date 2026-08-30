@@ -17,6 +17,7 @@ export default async function SettlementPage({
     <NavHeader
       active="settlement"
       householdName={c.household.name}
+      miscSubCategories={c.miscSubCategories}
       selYear={c.selYear}
       selMonth={c.selMonth}
       previewPeriod={c.previewPeriod}

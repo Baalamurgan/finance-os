@@ -19,6 +19,7 @@ export default async function UsersPage({
       <NavHeader
         active="users"
         householdName={c.household.name}
+        miscSubCategories={c.miscSubCategories}
         selYear={c.selYear}
         selMonth={c.selMonth}
         previewPeriod={c.previewPeriod}

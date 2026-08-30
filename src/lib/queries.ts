@@ -1,6 +1,7 @@
 import { unstable_cache } from "next/cache";
 import { prisma } from "@/lib/prisma";
 import { FAMILY_TAG } from "@/lib/revalidate";
+import { MISC_SUBCATEGORIES } from "@/lib/misc";
 import { computeSettlement } from "@/lib/settlement-core";
 import { planBillMonth, isLumpDue, monthsUntilNextDue, type FundingStyle } from "@/lib/schedule";
 import { suggestCategoryName, normalizeItem, resolveCategoryId } from "@/lib/spendCategorize";
@@ -1518,4 +1519,25 @@ export async function getMoneyPlanActivity(periodId: number, limit = 40): Promis
     select: { id: true, memberName: true, action: true, entity: true, summary: true, createdAt: true },
   });
   return rows.map((r) => ({ id: r.id, memberName: r.memberName, action: r.action, entity: r.entity, summary: r.summary, at: r.createdAt }));
+}
+
+// ── Family "Personal/Misc" sub-categories (head-editable, reporting-only) ───────────────────────
+// Returns the household's misc-tag list. Empty rows → the built-in defaults (so existing households
+// work with zero setup). The first head edit materialises the defaults into rows (see actions), after
+// which this returns the edited list.
+export type MiscSubCat = { id: number | null; name: string; icon: string };
+export async function getMiscSubCategories(householdId: number): Promise<MiscSubCat[]> {
+  const fallback = MISC_SUBCATEGORIES.map((s) => ({ id: null, name: s.name, icon: s.icon }));
+  try {
+    const rows = await prisma.miscCategory.findMany({
+      where: { householdId },
+      orderBy: [{ sortOrder: "asc" }, { id: "asc" }],
+      select: { id: true, name: true, icon: true },
+    });
+    if (rows.length === 0) return fallback;
+    return rows.map((r) => ({ id: r.id, name: r.name, icon: r.icon ?? "🔖" }));
+  } catch {
+    // Table not migrated yet → use the built-in defaults so the whole app doesn't break on deploy.
+    return fallback;
+  }
 }

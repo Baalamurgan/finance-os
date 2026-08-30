@@ -37,7 +37,24 @@ model Household {
   loans        Loan[]
   spendKeywords SpendKeyword[]
   spendShortcuts SpendShortcut[]
+  miscCategories MiscCategory[]
   createdAt    DateTime     @default(now())
+}
+
+// Head-editable sub-category tags for family "Personal/Misc" spends (reporting-only — never touches
+// settlement or budgets). Empty for a household = the built-in MISC_SUBCATEGORIES defaults are used;
+// the first add/remove materialises the defaults into rows so the head edits a full list.
+model MiscCategory {
+  id          Int       @id @default(autoincrement())
+  household   Household  @relation(fields: [householdId], references: [id])
+  householdId Int
+  name        String
+  icon        String?
+  sortOrder   Int       @default(0)
+  createdAt   DateTime  @default(now())
+
+  @@unique([householdId, name])
+  @@index([householdId, sortOrder])
 }
 
 // A loan or chit fund tracked with an outstanding balance / installment progress.

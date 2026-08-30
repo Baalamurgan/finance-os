@@ -28,6 +28,7 @@ export default async function WindDownPage({
     <NavHeader
       active="wind-down"
       householdName={c.household.name}
+      miscSubCategories={c.miscSubCategories}
       selYear={c.selYear}
       selMonth={c.selMonth}
       previewPeriod={c.previewPeriod}

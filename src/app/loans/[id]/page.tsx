@@ -30,6 +30,7 @@ export default async function LoanDetailPage({
       <NavHeader
         active="loans"
         householdName={c.household.name}
+        miscSubCategories={c.miscSubCategories}
         selYear={c.selYear}
         selMonth={c.selMonth}
         previewPeriod={c.previewPeriod}

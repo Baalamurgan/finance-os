@@ -1,7 +1,7 @@
 import { redirect } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { loadCommon } from "@/lib/load";
-import { setWindDownDay, createNextMonthDraft, setBillReminders } from "@/app/actions";
+import { setWindDownDay, createNextMonthDraft, setBillReminders, addMiscCategory, deleteMiscCategory } from "@/app/actions";
 import { getSpendShortcuts } from "@/lib/queries";
 import { NavHeader } from "@/components/NavHeader";
 import { MonthlySetup } from "@/components/MonthlySetup";
@@ -79,6 +79,7 @@ export default async function SetupPage({
       <NavHeader
         active="setup"
         householdName={c.household.name}
+        miscSubCategories={c.miscSubCategories}
         selYear={c.selYear}
         selMonth={c.selMonth}
         previewPeriod={c.previewPeriod}
@@ -150,6 +151,36 @@ export default async function SetupPage({
 
         {/* quick-add chips for the Add-Spend modal */}
         <QuickChipsSetup shortcuts={spendShortcuts} categories={chipCategoryOpts} readOnly={readOnly} />
+
+        {/* Head-editable tags for Personal/Misc spends — drive the picker & the expenses donut.
+            Reporting-only: they never touch settlement or budgets. */}
+        <section className="rounded-xl border border-slate-200 bg-white p-4">
+          <h2 className="text-sm font-semibold text-slate-900">Miscellaneous spend categories</h2>
+          <p className="mt-0.5 text-xs text-slate-500">
+            The tags shown when logging a Personal/Misc spend, and the slices in the Expenses donut.
+            Add or remove them freely — it&apos;s labelling only and never changes any amount.
+          </p>
+          <div className="mt-3 flex flex-wrap gap-2">
+            {c.miscSubCategories.map((cat) => (
+              <span key={cat.name} className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-slate-50 py-1 pl-2.5 pr-1 text-sm text-slate-700">
+                <span>{cat.icon} {cat.name}</span>
+                {!readOnly && (
+                  <form action={deleteMiscCategory}>
+                    <input type="hidden" name="name" value={cat.name} />
+                    <button type="submit" aria-label={`Remove ${cat.name}`} className="flex h-5 w-5 items-center justify-center rounded-full text-slate-400 hover:bg-red-100 hover:text-red-600">✕</button>
+                  </form>
+                )}
+              </span>
+            ))}
+          </div>
+          {!readOnly && (
+            <form action={addMiscCategory} className="mt-3 flex flex-wrap items-center gap-2">
+              <input name="icon" maxLength={2} placeholder="🔖" aria-label="Emoji" className="w-14 rounded-md border border-slate-300 px-2 py-1.5 text-center text-sm" />
+              <input name="name" required maxLength={40} placeholder="New category name" className="min-w-0 flex-1 rounded-md border border-slate-300 px-3 py-1.5 text-sm" />
+              <button type="submit" className="rounded-md bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-indigo-700">Add</button>
+            </form>
+          )}
+        </section>
 
         {/* category budgets & sinking-fund template */}
         <details className="rounded-xl border border-slate-200 bg-white">

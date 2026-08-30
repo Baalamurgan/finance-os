@@ -50,6 +50,7 @@ export default async function PiggyPage({
       <NavHeader
         active="piggy"
         householdName={c.household.name}
+        miscSubCategories={c.miscSubCategories}
         selYear={c.selYear}
         selMonth={c.selMonth}
         previewPeriod={c.previewPeriod}

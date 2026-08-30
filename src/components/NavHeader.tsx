@@ -43,6 +43,7 @@ export function NavHeader({
   hasBiometric,
   actualIsHead,
   viewingAsMember,
+  miscSubCategories = MISC_SUBCATEGORIES,
 }: {
   active:
     | "sheet"
@@ -76,6 +77,7 @@ export function NavHeader({
   hasBiometric?: boolean;
   actualIsHead?: boolean;
   viewingAsMember?: boolean;
+  miscSubCategories?: { name: string; icon: string }[];
 }) {
   const router = useRouter();
   const now = new Date();
@@ -204,7 +206,7 @@ export function NavHeader({
                 isHead={isHead}
                 members={members}
                 currentMemberId={currentMemberId}
-                subCategories={MISC_SUBCATEGORIES}
+                subCategories={miscSubCategories}
               />
             </span>
           )}
@@ -265,7 +267,7 @@ export function NavHeader({
         isHead={isHead}
         members={members}
         currentMemberId={currentMemberId}
-        subCategories={MISC_SUBCATEGORIES}
+        subCategories={miscSubCategories}
       />
     )}
 

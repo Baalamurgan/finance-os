@@ -7,6 +7,7 @@ import {
   getCategories,
   getHousehold,
   getMembers,
+  getMiscSubCategories,
   getPeriods,
   getPiggyBalance,
 } from "@/lib/queries";
@@ -22,11 +23,12 @@ export async function loadCommon(params?: { y?: string; m?: string }) {
   const household = await getHousehold();
   if (!household) return null;
 
-  const [periods, members, categories, piggyBalance, session] = await Promise.all([
+  const [periods, members, categories, piggyBalance, miscSubCategories, session] = await Promise.all([
     getPeriods(household.id),
     getMembers(household.id),
     getCategories(household.id),
     getPiggyBalance(household.id),
+    getMiscSubCategories(household.id),
     auth(),
   ]);
 
@@ -144,6 +146,7 @@ export async function loadCommon(params?: { y?: string; m?: string }) {
     members,
     categories,
     piggyBalance,
+    miscSubCategories,
     currentMember,
     pinEnabled,
     hasBiometric,

@@ -13,7 +13,7 @@ import { formatINR, parseAmount } from "@/lib/format";
 import { generateMonth } from "@/lib/periodClone";
 import { isMiscBucket, MISC_SUBCATEGORIES } from "@/lib/misc";
 import { isLearnable } from "@/lib/spendCategorize";
-import { getSpendShortcuts, getMatcherKeywords, getFrequentSpendItems, getMoneyPlan } from "@/lib/queries";
+import { getSpendShortcuts, getMatcherKeywords, getFrequentSpendItems, getMoneyPlan, getMiscSubCategories } from "@/lib/queries";
 import { planBillMonth, type FundingStyle } from "@/lib/schedule";
 import { getBillReminders } from "@/lib/billReminders";
 import { applyBudgetShortfall, windDownPeriod } from "@/lib/windDown";
@@ -723,8 +723,55 @@ export async function setSpendSubCategory(formData: FormData) {
   const isOwner = spend.memberId === session.user.memberId;
   if (session.user.role !== "head" && !isOwner) return;
 
-  const valid = MISC_SUBCATEGORIES.some((s) => s.name === value);
+  const household = await prisma.household.findFirst({ select: { id: true } });
+  const valid = household ? (await getMiscSubCategories(household.id)).some((s) => s.name === value) : false;
   await prisma.spend.update({ where: { id }, data: { subCategory: valid ? value : null } });
+  revalidateFamily();
+}
+
+// ── Head-editable misc sub-categories (reporting tags for family Personal/Misc spends) ───────────
+// The built-in defaults live in code; a household starts with none in the DB and falls back to them.
+// The first add/remove MATERIALISES the defaults into rows so the head then edits a complete list.
+async function ensureMiscSeeded(householdId: number) {
+  if ((await prisma.miscCategory.count({ where: { householdId } })) > 0) return;
+  await prisma.miscCategory.createMany({
+    data: MISC_SUBCATEGORIES.map((s, i) => ({ householdId, name: s.name, icon: s.icon, sortOrder: i })),
+    skipDuplicates: true,
+  });
+}
+
+export async function addMiscCategory(formData: FormData) {
+  if (!(await unlocked())) await relock("addMiscCategory");
+  if (!(await isHead())) return;
+  const name = String(formData.get("name") ?? "").trim().slice(0, 40);
+  const icon = String(formData.get("icon") ?? "").trim().slice(0, 8) || null;
+  if (!name) return;
+  const household = await prisma.household.findFirst({ select: { id: true } });
+  if (!household) return;
+  await ensureMiscSeeded(household.id);
+  const max = await prisma.miscCategory.aggregate({ where: { householdId: household.id }, _max: { sortOrder: true } });
+  // Keyed on name so re-adding an existing one just updates its icon (idempotent).
+  await prisma.miscCategory.upsert({
+    where: { householdId_name: { householdId: household.id, name } },
+    update: { icon: icon ?? undefined },
+    create: { householdId: household.id, name, icon, sortOrder: (max._max.sortOrder ?? 0) + 1 },
+  });
+  await logActivity("expense", "created", `Added misc category “${name}”`);
+  revalidateFamily();
+}
+
+// Delete by NAME (not id): before the first edit the UI is showing the in-code defaults, which have no
+// row id yet — seeding then deleting by name works whether the item was a default or a custom one.
+export async function deleteMiscCategory(formData: FormData) {
+  if (!(await unlocked())) await relock("deleteMiscCategory");
+  if (!(await isHead())) return;
+  const name = String(formData.get("name") ?? "").trim();
+  if (!name) return;
+  const household = await prisma.household.findFirst({ select: { id: true } });
+  if (!household) return;
+  await ensureMiscSeeded(household.id);
+  await prisma.miscCategory.deleteMany({ where: { householdId: household.id, name } });
+  await logActivity("expense", "deleted", `Removed misc category “${name}”`);
   revalidateFamily();
 }
 
@@ -755,7 +802,8 @@ export async function editSpendAction(
   // misc spends must keep a sub-category; non-misc stay null
   const misc = isMiscBucket(spend.category);
   const subRaw = String(formData.get("subCategory") ?? "").trim();
-  if (misc && !MISC_SUBCATEGORIES.some((s) => s.name === subRaw)) return prev;
+  const household = await prisma.household.findFirst({ select: { id: true } });
+  if (misc && !(household && (await getMiscSubCategories(household.id)).some((s) => s.name === subRaw))) return prev;
   const subCategory = misc ? subRaw : null;
 
   // Only the head may reassign who spent (incl. "Shared" = null); the owner's stays put.
