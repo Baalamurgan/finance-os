@@ -2,6 +2,7 @@ import { unstable_cache } from "next/cache";
 import { prisma } from "@/lib/prisma";
 import { FAMILY_TAG } from "@/lib/revalidate";
 import { MISC_SUBCATEGORIES } from "@/lib/misc";
+import { KEPT_NOTE } from "@/lib/notes";
 import { computeSettlement } from "@/lib/settlement-core";
 import { planBillMonth, isLumpDue, monthsUntilNextDue, type FundingStyle } from "@/lib/schedule";
 import { suggestCategoryName, normalizeItem, resolveCategoryId } from "@/lib/spendCategorize";
@@ -530,8 +531,8 @@ export async function getMoneyPlan(householdId: number, periodId: number, inhand
 
   const bills: import("./moneyPlan").PlanBill[] = [];
   for (const g of inhand.byPerson) {
-    for (const b of g.unpaidBills) bills.push({ key: `bill-${b.id}`, payerId: g.memberId, payerName: g.name, vendor: b.name, amount: b.amount, done: false, day: b.due?.day ?? null, status: b.due?.status ?? null, days: b.due?.days ?? null, billId: b.id });
-    for (const b of g.paidBills) bills.push({ key: `bill-${b.id}`, payerId: g.memberId, payerName: g.name, vendor: b.name, amount: b.amount, done: true, day: b.due?.day ?? null, status: b.due?.status ?? null, days: b.due?.days ?? null, billId: b.id });
+    for (const b of g.unpaidBills) bills.push({ key: `bill-${b.id}`, payerId: g.memberId, payerName: g.name, vendor: b.name, amount: b.amount, done: false, day: b.due?.day ?? null, status: b.due?.status ?? null, days: b.due?.days ?? null, billId: b.id, misc: b.misc });
+    for (const b of g.paidBills) bills.push({ key: `bill-${b.id}`, payerId: g.memberId, payerName: g.name, vendor: b.name, amount: b.amount, done: true, day: b.due?.day ?? null, status: b.due?.status ?? null, days: b.due?.days ?? null, billId: b.id, misc: b.misc });
     for (const p of g.unpaidPeriodic) bills.push({ key: `fund-${p.categoryId}`, payerId: g.memberId, payerName: g.name, vendor: p.name, amount: p.bill, done: false, day: p.due?.day ?? null, status: p.due?.status ?? null, days: p.due?.days ?? null, categoryId: p.categoryId, fund: true, fundAvail: p.fund });
     for (const p of g.paidPeriodic) bills.push({ key: `fund-${p.categoryId}`, payerId: g.memberId, payerName: g.name, vendor: p.name, amount: p.bill, done: true, day: p.due?.day ?? null, status: p.due?.status ?? null, days: p.due?.days ?? null, categoryId: p.categoryId, fund: true, fundAvail: p.fund });
   }
@@ -601,7 +602,7 @@ export async function getMoneyPlan(householdId: number, periodId: number, inhand
   // with no day it stays "after collection" (buildMoneyPlan pins it to the last day).
   const allowances = inhand.allowances.map((a) => {
     const st = a.dueDay != null ? dayStatus(a.dueDay) : null;
-    return { key: `allow-${a.id}`, recipientId: a.recipientId, recipientName: a.recipientName, amount: a.amount, done: a.done, billId: a.id, day: a.dueDay, status: st?.status ?? null, days: st?.days ?? null };
+    return { key: `allow-${a.id}`, recipientId: a.recipientId, recipientName: a.recipientName, label: a.label, amount: a.amount, done: a.done, billId: a.id, day: a.dueDay, status: st?.status ?? null, days: st?.days ?? null };
   });
 
   // Piggy returns (open month only): each budget holder who isn't the Piggy holder hands their GROSS
@@ -649,8 +650,13 @@ export async function getMoneyPlan(householdId: number, periodId: number, inhand
   }));
   const hiddenKeys = hiddenRows.map((r) => r.stepKey);
 
+  // 📌 Kept earmarks → informational "keep ₹X with <member>" steps (dated to the line's due day).
+  const kept = inhand.byPerson.flatMap((g) =>
+    (g.kept ?? []).map((k) => ({ id: k.id, memberId: g.memberId as number, memberName: g.name, amount: k.amount, day: k.dueDay ?? null, label: k.name })),
+  );
+
   const { buildMoneyPlan } = await import("./moneyPlan");
-  const plan = buildMoneyPlan({ treasurerId: inhand.treasurerId, treasurerName: settlement.treasurer?.name, transfers, bills, allowances, piggyReturns, advances, incomeDayByMember, incomeByMember, incomeArrivals, reimburseByMember, reimburseDay, piggyHandover, manualSteps, hiddenKeys });
+  const plan = buildMoneyPlan({ treasurerId: inhand.treasurerId, treasurerName: settlement.treasurer?.name, transfers, bills, allowances, piggyReturns, advances, incomeDayByMember, incomeByMember, incomeArrivals, reimburseByMember, reimburseDay, piggyHandover, manualSteps, kept, hiddenKeys });
 
   // Enrich done steps with the day they were ACTUALLY marked paid (IST), so the plan can show
   // "paid <day>" when it differs from the scheduled/due day. Timestamps live on the underlying record:
@@ -673,7 +679,9 @@ export async function getMoneyPlan(householdId: number, periodId: number, inhand
     else if ((s.kind === "transfer-in" || s.kind === "transfer-out") && s.recordId != null) s.paidDay = settlementPaidDay.get(s.recordId) ?? null;
     else if (s.kind === "advance" && s.advanceId != null) { const a = advancePaidDay.get(s.advanceId); s.paidDay = (s.payback ? a?.payback : a?.front) ?? null; }
   }
-  return { ...plan, treasurerId: inhand.treasurerId, periodId };
+  // reimburseByMember (prior-month out-of-pocket each member fronted) is surfaced so the balance walk
+  // can explain a contributor's end-of-month leftover: it ≈ what they're repaid for last month's spends.
+  return { ...plan, treasurerId: inhand.treasurerId, periodId, reimburseByMember };
 }
 
 export type SettlementHistory = Awaited<ReturnType<typeof getSettlementHistory>>;
@@ -811,23 +819,18 @@ export type InHand = Awaited<ReturnType<typeof getInHand>>;
  * default to the head and always appear even with no personal in-hand.
  */
 async function _getInHand(householdId: number, periodId: number) {
-  const [household, period, categories, budgets, spends, billLines, miscLines, fundLines, fundCats, sinkBal, billPayments, members, piggy, incomeAgg, expenseAgg, carriedRaw, closedPeriods, allPays, allowanceLines, sinkCats] = await Promise.all([
+  const [household, period, categories, budgets, spends, billLines, fundLines, fundCats, sinkBal, billPayments, members, piggy, incomeAgg, expenseAgg, carriedRaw, closedPeriods, allPays, allowanceLines, sinkCats] = await Promise.all([
     prisma.household.findUnique({ where: { id: householdId }, select: { treasurerMemberId: true, piggyHolderMemberId: true } }),
     prisma.period.findUnique({ where: { id: periodId }, select: { treasurerMemberId: true, status: true, month: true, year: true } }),
     prisma.category.findMany({ where: { householdId, tracked: true, onHold: false } }),
     prisma.budget.findMany({ where: { periodId } }),
     prisma.spend.findMany({ where: { periodId } }),
     // "bills" = tagged Sheet expense lines the person was handed money to pay: loans, chits,
-    // interest, fixed bills, plain "pay someone" (cook, milk…), AND hand-added Misc lines
-    // (tracked:false). Each shows with a "paid" toggle. Excludes tracked-budget lines
-    // (handled via budgets), goal-based bill funds (fundingStyle) and carried misc (note set).
-    prisma.expenseEntry.findMany({ where: { periodId, note: null, category: { tracked: false, fundingStyle: null, isAllowance: false } }, include: { category: { select: { section: true } } } }),
-    // Preview/draft ONLY: own-period misc Sheet lines (Misc section, no carry marker),
-    // subtracted as an estimated lump — a draft can't log Spends or mark bills paid, so misc
-    // is just a planned reduction. In an OPEN/closed month these same lines instead ride in
-    // `billLines` above (with a paid toggle), so we do NOT lump them there. Carried misc
-    // (note "__carry__") stays excluded either way — settled at month start, not held cash.
-    prisma.expenseEntry.findMany({ where: { periodId, note: null, category: { section: "Misc" } }, select: { amount: true, memberId: true } }),
+    // interest, fixed bills, plain "pay someone" (cook, milk…), AND hand-added Misc lines — including
+    // ones in the tracked "Personal/Misc" bucket (section Misc), so planned misc becomes plan steps.
+    // Each shows with a "paid" toggle. Excludes goal-based bill funds (fundingStyle), allowances, and
+    // carried misc (note set); budgeted-category envelope lines are dropped later via `budgetedIds`.
+    prisma.expenseEntry.findMany({ where: { periodId, note: null, category: { fundingStyle: null, isAllowance: false, OR: [{ tracked: false }, { section: "Misc" }] } }, include: { category: { select: { section: true } } } }),
     // Bill-with-a-fund lines: the "(saving)" set-aside (tagged to the SAVER — held/earmarked),
     // the due-month full bill and its "— from fund" credit (tagged to the PAYER — net out-of-pocket).
     prisma.expenseEntry.findMany({ where: { periodId, note: null, category: { fundingStyle: { not: null } } }, select: { id: true, label: true, amount: true, memberId: true, paid: true, categoryId: true, category: { select: { name: true } } } }),
@@ -860,13 +863,21 @@ async function _getInHand(householdId: number, periodId: number) {
     // under the person who actually holds it — separate from the general Piggy holder.
     prisma.category.findMany({ where: { householdId, OR: [{ sinking: true }, { fundingStyle: { not: null } }] }, select: { id: true, name: true, responsibleMemberId: true } }),
   ]);
-  const isDraft = period?.status === "draft";
-  // In a draft, Misc lines are a lump estimate (below), so keep them OUT of the bill list.
-  // In an open/closed month, Misc lines stay in the bill list (paid-toggleable), as before.
-  const bills = isDraft ? billLines.filter((e) => e.category.section !== "Misc") : billLines;
-
+  // 📌 Kept earmarks: misc lines marked to be HELD by a member (note "__kept__"). Excluded from
+  // `billLines` already (that query filters note:null), so they never show as a bill to pay; here they
+  // become held cash on the assignee's card. Still counted in settlement (reduces their remittance), so
+  // holding them is balance-neutral — the same rupee, relabelled from "bill to pay" to "kept/held".
+  const keptLines = await prisma.expenseEntry.findMany({
+    where: { periodId, note: KEPT_NOTE },
+    select: { id: true, label: true, amount: true, memberId: true, dueDay: true, paid: true },
+  });
   const plannedByCat = new Map(budgets.map((b) => [b.categoryId, b.planned]));
   const budgetedIds = new Set(categories.filter((c) => (plannedByCat.get(c.id) ?? 0) > 0).map((c) => c.id));
+  // Bill list = tagged Sheet lines to pay, in EVERY state (draft included) so the preview shows them as
+  // dated, orderable Money-Plan steps + held cash — exactly like the open month. billLines already pulls
+  // hand-added misc lines (incl. those in the tracked "Personal/Misc" bucket). We only drop BUDGETED
+  // categories' envelope lines here (handled via budgets), so a budgeted category can never double-count.
+  const bills = billLines.filter((e) => !budgetedIds.has(e.categoryId));
   const catHolder = new Map(categories.map((c) => [c.id, c.responsibleMemberId ?? null]));
 
   // Split each budgeted-category spend by WHO actually spent it:
@@ -908,14 +919,6 @@ async function _getInHand(householdId: number, periodId: number) {
     if (fundCatIds.has(s.categoryId)) continue; // a spend against a bill's fund isn't misc (it draws the fund)
     const k = s.memberId ?? null;
     miscByMember.set(k, (miscByMember.get(k) ?? 0) + s.amount);
-  }
-  // Draft/preview only: planned Misc Sheet lines subtract as an estimated lump (no Spends,
-  // no paid toggle yet). Open/closed months show these as paid-toggleable bills instead.
-  if (isDraft) {
-    for (const e of miscLines) {
-      const k = e.memberId ?? null;
-      miscByMember.set(k, (miscByMember.get(k) ?? 0) + e.amount);
-    }
   }
   // Spends on someone else's budgeted category came out of the spender's pocket — lump them into
   // the same misc subtraction (they're already off the holder's remaining, above).
@@ -1019,7 +1022,9 @@ async function _getInHand(householdId: number, periodId: number) {
     const cats = rows.filter((r) => (r.responsibleMemberId ?? null) === key);
     const memberBills = bills
       .filter((e) => (e.memberId ?? null) === key)
-      .map((e) => ({ id: e.id, name: e.label, amount: e.amount, paid: e.paid, due: dueOf(e.dueDay) }));
+      // `misc` = a planned misc bill (estimated) → paid via the actual-amount + Piggy-reconcile popup;
+      // a regular bill (loan/EMI, exact) → a plain paid toggle.
+      .map((e) => ({ id: e.id, name: e.label, amount: e.amount, paid: e.paid, misc: e.category.section === "Misc", due: dueOf(e.dueDay) }));
     // urgent (overdue → soon) bills float to the top of the unpaid list
     const unpaidBills = memberBills.filter((b) => !b.paid).sort((a, b) => billRank(a.due) - billRank(b.due));
     const paidBills = memberBills.filter((b) => b.paid);
@@ -1058,26 +1063,46 @@ async function _getInHand(householdId: number, periodId: number) {
     const miscSpent = miscByMember.get(key) ?? 0;
     // Last month's Piggy leftover this owner is still HOLDING (until they hand it to the Piggy holder).
     const pendingPiggyHeld = key != null ? Math.round((pendingByOwner.get(key) ?? 0) * 100) / 100 : 0;
+    // Self-funded bills: a CONTRIBUTOR (settlement net ≥ 0 — their own income covers their tagged
+    // expenses) pays their assigned bills from their OWN salary, so the cash for those unpaid bills is
+    // HELD BY THEM. A RECEIVER's bills are pool-funded (the treasurer disburses), so those stay "yet to
+    // receive". The treasurer holds the pool itself, so their bills always ride in the pool (excluded).
+    // The SHARED/pool bucket (key null) keeps its unpaid bills too (the treasurer holds that pool cash).
+    // Moving a self-funder's bills from `yetToReceive` into `net` (and out of the pool total that sums
+    // yetToReceive) conserves the family total exactly — the cash just sits with them instead of the pool.
+    const selfFunds = key != null && key !== treasurerId && (netByMember.get(key) ?? 0) >= -0.005;
+    const heldBills = selfFunds || key == null ? unpaidTotal : 0;
+    const yetToReceive = selfFunds ? 0 : unpaidTotal;
+    // 📌 Kept earmarks this member holds (unpaid only — a paid one has been spent on its purpose).
+    const kept = keptLines
+      .filter((e) => (e.memberId ?? null) === key && !e.paid)
+      .map((e) => ({ id: e.id, name: e.label, amount: e.amount, dueDay: e.dueDay }));
+    const keptTotal = kept.reduce((s, e) => s + e.amount, 0);
     return {
       memberId: key, name, cats, unpaidBills, paidBills, earmarked, unpaidPeriodic, paidPeriodic, carried, carriedDue,
-      sinkingFunds, sinkingHeld, pendingPiggyHeld,
+      sinkingFunds, sinkingHeld, pendingPiggyHeld, kept, keptTotal,
       budgetRemaining, unpaidTotal, earmarkedTotal, miscSpent,
-      // Money still owed TO this member from the pool: their assigned bills are pool-funded — the cash
-      // comes via the Money-plan disbursement, so until the bill is paid it's "yet to receive", NOT
-      // held. (Once ticked paid it drops out entirely.) Surfaced so the card can show it out of total.
-      yetToReceive: unpaidTotal,
+      // Money still owed TO this member from the pool. For a self-funding contributor this is 0 — they
+      // already hold the cash (it's in `net`); a pool-funded receiver still awaits it via the Money plan.
+      yetToReceive,
+      selfFundsBills: selfFunds,
       // In-hand = what this member PHYSICALLY holds right now: budget cash left + set-asides they hold
-      // + last month's Piggy leftover they still hold, minus their own out-of-pocket. A member's assigned
-      // bills are NOT here (pool-funded → "yet to receive"); carried bills aren't either (settled in their
-      // month). The SHARED/pool bucket (key null) DOES keep its unpaid bills — the treasurer holds that
-      // cash in the pool until it's paid, so it must stay counted (else the family total wouldn't balance).
-      net: budgetRemaining + earmarkedTotal - miscSpent + pendingPiggyHeld + (key == null ? unpaidTotal : 0),
+      // + last month's Piggy leftover they still hold − their own out-of-pocket + any unpaid bills they
+      // SELF-FUND (held until paid) + 📌 kept earmarks. Pool-funded bills are excluded (→ "yet to
+      // receive"); carried bills aren't here either (settled in their month).
+      net: budgetRemaining + earmarkedTotal - miscSpent + pendingPiggyHeld + heldBills + keptTotal,
     };
   };
 
   const headId = members.find((m) => m.role === "head")?.id ?? null;
   const treasurerId = period?.treasurerMemberId ?? household?.treasurerMemberId ?? headId;
   const piggyHolderId = household?.piggyHolderMemberId ?? headId;
+  // Per-member settlement net (income owned − tagged expenses/spends). A member with net ≥ 0 is a
+  // CONTRIBUTOR who funds their own assigned bills from their salary (so they HOLD that cash); net < 0
+  // is a RECEIVER whose bills the pool funds ("yet to receive"). `build` uses this to place unpaid-bill
+  // cash on the right side. Net is independent of who the treasurer is, so the id passed doesn't matter.
+  const settlementNet = await getSettlement(householdId, periodId, treasurerId);
+  const netByMember = new Map(settlementNet.rows.map((r) => [r.id, r.net]));
 
   // Prior month's PENDING Piggy hand-over: if the immediately-preceding month is CLOSED but its
   // general-Piggy leftover hasn't been handed to the Piggy holder yet (piggyHandedOverAt null), that
@@ -1124,7 +1149,7 @@ async function _getInHand(householdId: number, periodId: number) {
   const nameOf = (id: number | null) => members.find((m) => m.id === id)?.name ?? "member";
   const allowances = allowanceLines
     .filter((e) => e.memberId != null)
-    .map((e) => ({ id: e.id, recipientId: e.memberId as number, recipientName: nameOf(e.memberId), amount: e.amount, done: e.paid, dueDay: e.dueDay }));
+    .map((e) => ({ id: e.id, recipientId: e.memberId as number, recipientName: nameOf(e.memberId), label: e.label, amount: e.amount, done: e.paid, dueDay: e.dueDay }));
 
   // The Piggy holder's ACTUALLY-received general Piggy = accrued total minus what's still pending
   // hand-over (held by the owners). The pending lump is surfaced so the Money Plan can add the

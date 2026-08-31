@@ -88,6 +88,7 @@ export default async function InHandPage({
           currentMemberId={currentMemberId}
           canEdit={c.canEdit}
           open={open}
+          datesEditable={open || c.selected.status === "draft"}
           generalPiggy={inHand.generalPiggy}
           billCategories={c.categories
             .filter((cat) => !cat.tracked && cat.fundingStyle == null && !cat.isAllowance)

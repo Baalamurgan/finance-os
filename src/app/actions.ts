@@ -17,7 +17,7 @@ import { getSpendShortcuts, getMatcherKeywords, getFrequentSpendItems, getMoneyP
 import { planBillMonth, type FundingStyle } from "@/lib/schedule";
 import { getBillReminders } from "@/lib/billReminders";
 import { applyBudgetShortfall, windDownPeriod } from "@/lib/windDown";
-import { SURPLUS_NOTE, CARRY_NOTE, DEFERRED_NOTE } from "@/lib/notes";
+import { SURPLUS_NOTE, CARRY_NOTE, DEFERRED_NOTE, KEPT_NOTE } from "@/lib/notes";
 
 // Record a money-affecting change for the head-only activity log (who + what + when).
 async function logActivity(
@@ -161,6 +161,7 @@ async function promoteToTemplate(
   amount: number,
   categoryId: number | null,
   memberId: number | null,
+  dueDay: number | null = null,
 ) {
   const period = await prisma.period.findUnique({ where: { id: periodId }, select: { householdId: true } });
   if (!period) return;
@@ -176,11 +177,11 @@ async function promoteToTemplate(
     where: { householdId, kind, name, ...(kind === "expense" ? { categoryId } : {}) },
   });
   if (existing) {
-    await prisma.recurringItem.update({ where: { id: existing.id }, data: { amount, memberId, active: true } });
+    await prisma.recurringItem.update({ where: { id: existing.id }, data: { amount, memberId, active: true, ...(dueDay != null ? { dueDay } : {}) } });
   } else {
     const max = await prisma.recurringItem.aggregate({ where: { householdId }, _max: { sortOrder: true } });
     await prisma.recurringItem.create({
-      data: { householdId, kind, name, amount, categoryId: kind === "expense" ? categoryId : null, memberId, sortOrder: (max._max.sortOrder ?? 0) + 1 },
+      data: { householdId, kind, name, amount, categoryId: kind === "expense" ? categoryId : null, memberId, dueDay, sortOrder: (max._max.sortOrder ?? 0) + 1 },
     });
   }
 }
@@ -250,6 +251,11 @@ async function doSaveExpense(formData: FormData): Promise<{ ok: boolean; error?:
   const dueNum = dueRaw === "" ? null : Number(dueRaw);
   const dueDay = dueNum != null && Number.isFinite(dueNum) && dueNum >= 1 && dueNum <= 31 ? Math.round(dueNum) : null;
   const hasDueField = formData.has("dueDay"); // only touch dueDay when the form actually sent it
+  // 📌 "Keep for this member": mark this misc line as an earmark the assignee HOLDS (not a bill to pay
+  // out). Stored via the KEPT_NOTE marker; In-Hand shows it as held, the Money Plan as a "keep with X"
+  // step. Requires an assignee. Only meaningful when the form actually offered the toggle.
+  const hasKeptField = formData.has("keptToggle");
+  const keptFlag = formData.get("kept") === "on";
 
   if (!periodId || !amount || !label) return { ok: false }; // note required
   if (!(await canEditNow(periodId))) return { ok: false };
@@ -276,19 +282,24 @@ async function doSaveExpense(formData: FormData): Promise<{ ok: boolean; error?:
     necessaryRaw === "yes" ? true : necessaryRaw === "no" ? false : (category?.necessary ?? true);
   // auto-attribute to the category's responsible member when none is picked
   const finalMemberId = memberId ?? category?.responsibleMemberId ?? null;
+  if (keptFlag && finalMemberId == null) return { ok: false, error: "Pick who holds this kept amount." };
 
   if (id) {
     // A line already paid in the money plan is frozen — the head can edit anything else all month, but
     // a paid step is paid (editing it would silently redraw a payment that already happened).
-    const existing = await prisma.expenseEntry.findUnique({ where: { id }, select: { paid: true, amount: true, dueDay: true } });
+    const existing = await prisma.expenseEntry.findUnique({ where: { id }, select: { paid: true, amount: true, dueDay: true, note: true } });
     if (existing?.paid) return { ok: false, error: "This is already paid in the money plan — it can’t be changed." };
     // Editing the VALUE (amount / due-day) on the Sheet pins this line for the month: a later
     // refresh-from-Setup leaves the intentional override alone (until it's un-pinned). Editing only
     // the label / member / necessary flag doesn't pin — those aren't touched by the Setup sync.
     const valueChanged = existing != null && (existing.amount !== amount || (hasDueField && existing.dueDay !== dueDay));
+    // Toggle the 📌 kept marker only when the form offered it, and never clobber a __deferred__/__carry__ line.
+    const keptUpdate = hasKeptField && (existing?.note == null || existing?.note === KEPT_NOTE)
+      ? { note: keptFlag ? KEPT_NOTE : null }
+      : {};
     await prisma.expenseEntry.update({
       where: { id },
-      data: { categoryId, amount, label, memberId: finalMemberId, necessary, ...(hasDueField ? { dueDay } : {}), ...(valueChanged ? { pinned: true } : {}) },
+      data: { categoryId, amount, label, memberId: finalMemberId, necessary, ...(hasDueField ? { dueDay } : {}), ...keptUpdate, ...(valueChanged ? { pinned: true } : {}) },
     });
     await logActivity("expense", "updated", `Edited expense “${label}” to ${formatINR(amount)}`, periodId);
   } else {
@@ -334,16 +345,18 @@ async function doSaveExpense(formData: FormData): Promise<{ ok: boolean; error?:
     const pbNum = pbRaw === "" ? null : Number(pbRaw);
     const paybackOverride = pbNum != null && Number.isFinite(pbNum) && pbNum >= 1 && pbNum <= 31 ? Math.round(pbNum) : null;
     // Timing gate: a DATED expense that can't be paid in order is blocked — UNLESS the user is funding
-    // it. Deferred lines skip the gate (they always settle at wind-down, not against a due date).
-    if (!deferred && !funding) {
+    // it. Deferred lines skip the gate (they always settle at wind-down, not against a due date). A 📌
+    // kept earmark also skips it — it's held cash reaching the member via the normal flow, not a vendor
+    // payment racing a due date.
+    if (!deferred && !funding && !keptFlag) {
       const feas = await checkAddExpenseFeasible(periodId, { amount, dueDay, payerId: finalMemberId, label });
       if (!feas.ok) return { ok: false, error: feas.reason, shortfall: feas.shortfall, sources: feas.sources };
     }
     // "Repeat every month" (checkbox) → also add to the recurring template so it's generated every
-    // month; unchecked → one-off (this month only). A deferred line is always one-off.
-    const oneOff = deferred || formData.get("repeat") !== "on";
+    // month; unchecked → one-off (this month only). A deferred or kept line is always one-off.
+    const oneOff = deferred || keptFlag || formData.get("repeat") !== "on";
     await prisma.expenseEntry.create({
-      data: { periodId, categoryId, amount, label, memberId: finalMemberId, necessary, oneOff, dueDay, ...(deferred ? { note: DEFERRED_NOTE } : {}) },
+      data: { periodId, categoryId, amount, label, memberId: finalMemberId, necessary, oneOff, dueDay, ...(keptFlag ? { note: KEPT_NOTE } : deferred ? { note: DEFERRED_NOTE } : {}) },
     });
     if (!oneOff) await promoteToTemplate(periodId, "expense", label, amount, categoryId, finalMemberId);
     // Record the funding advances (one per funder) so each front + payback appears in the plan.
@@ -378,14 +391,17 @@ async function doAddIncome(formData: FormData): Promise<boolean> {
   const amount = parseAmount(formData.get("amount"));
   const ownerRaw = formData.get("ownerId");
   const ownerId = ownerRaw ? Number(ownerRaw) : null;
+  // Arrival day (optional): drives the Money-plan ordering — when this income lands.
+  const dueNum = Number(String(formData.get("dueDay") ?? "").trim());
+  const dueDay = Number.isFinite(dueNum) && dueNum >= 1 && dueNum <= 31 ? Math.round(dueNum) : null;
 
   if (!periodId || !source || !amount) return false;
   if (!(await canEditNow(periodId))) return false;
 
   // "Repeat every month" → also add to the recurring template; unchecked → one-time
   const oneOff = formData.get("repeat") !== "on";
-  await prisma.incomeEntry.create({ data: { periodId, source, amount, ownerId, oneOff } });
-  if (!oneOff) await promoteToTemplate(periodId, "income", source, amount, null, ownerId);
+  await prisma.incomeEntry.create({ data: { periodId, source, amount, ownerId, oneOff, dueDay } });
+  if (!oneOff) await promoteToTemplate(periodId, "income", source, amount, null, ownerId, dueDay);
   await logActivity("income", "created", `Added income “${source}” ${formatINR(amount)}`, periodId);
   revalidateFamily();
   return true;
@@ -408,12 +424,15 @@ export async function updateIncome(prev: SaveState, formData: FormData): Promise
   const amount = parseAmount(formData.get("amount"));
   const ownerRaw = formData.get("ownerId");
   const ownerId = ownerRaw ? Number(ownerRaw) : null;
+  const hasDueField = formData.has("dueDay");
+  const dueNum = Number(String(formData.get("dueDay") ?? "").trim());
+  const dueDay = Number.isFinite(dueNum) && dueNum >= 1 && dueNum <= 31 ? Math.round(dueNum) : null;
   if (!id || !source || !amount) return { ok: false, n: prev.n };
   const i = await prisma.incomeEntry.findUnique({ where: { id } });
   if (!i || !(await canEditNow(i.periodId))) return { ok: false, n: prev.n };
-  // A month-specific amount edit pins the line so a refresh-from-Setup won't revert it (until un-pinned).
-  const pin = i.amount !== amount ? { pinned: true } : {};
-  await prisma.incomeEntry.update({ where: { id }, data: { source, amount, ownerId, ...pin } });
+  // A month-specific amount/date edit pins the line so a refresh-from-Setup won't revert it (until un-pinned).
+  const pin = i.amount !== amount || (hasDueField && i.dueDay !== dueDay) ? { pinned: true } : {};
+  await prisma.incomeEntry.update({ where: { id }, data: { source, amount, ownerId, ...(hasDueField ? { dueDay } : {}), ...pin } });
   await logActivity("income", "updated", `Edited income “${source}” to ${formatINR(amount)}`, i.periodId);
   revalidateFamily();
   return { ok: true, n: prev.n + 1 };
@@ -1250,6 +1269,81 @@ export async function toggleBillPaid(formData: FormData) {
   await prisma.expenseEntry.update({ where: { id }, data: { paid: !e.paid, paidAt: e.paid ? null : new Date() } });
   log.info("toggleBillPaid", "ok", { outcome: "ok", memberId, id, paid: !e.paid, periodId: e.periodId });
   await logActivity("expense", "updated", `${e.paid ? "Unmarked" : "Marked"} bill “${e.label}” ${formatINR(e.amount)} paid`, e.periodId);
+  revalidateFamily();
+}
+
+export type MiscPayState = { ok: boolean; n: number; error?: string };
+
+// Pay a PLANNED MISC bill (an estimate) with its ACTUAL amount, reconciling the difference against the
+// general Piggy — the misc analogue of the EB/fund-bill pay flow:
+//   • spent LESS than estimated → the surplus goes INTO the Piggy;
+//   • spent MORE → the extra is drawn FROM the Piggy; whatever the Piggy can't cover is logged as an
+//     out-of-pocket Misc Spend on the payer (the modal confirms this before submitting).
+// The Sheet line's amount stays the ESTIMATE (settlement basis); the reconciliation moves the diff.
+// Every side-effect carries a stable `[mp<id>]` marker so unpayMiscBill can reverse it exactly.
+export async function payMiscBill(prev: MiscPayState, formData: FormData): Promise<MiscPayState> {
+  const session = await auth();
+  const memberId = session?.user?.memberId ?? null;
+  if (!(await unlocked())) await relock("payMiscBill");
+  const id = Number(formData.get("id"));
+  const e = await prisma.expenseEntry.findUnique({ where: { id }, include: { category: { select: { section: true, householdId: true } } } });
+  if (!e) return { ok: false, n: prev.n, error: "Not found." };
+  const isEditor = await canEdit();
+  const isPayer = memberId != null && memberId === e.memberId;
+  if (!isEditor && !isPayer) return { ok: false, n: prev.n, error: "Not allowed." };
+  if (!(await isHead()) && !(await periodOpen(e.periodId))) return { ok: false, n: prev.n, error: "This month is closed." };
+  if (e.paid) return { ok: false, n: prev.n, error: "Already paid." };
+  if (e.category.section !== "Misc") return { ok: false, n: prev.n, error: "Not a misc bill." };
+
+  const householdId = e.category.householdId;
+  const round = (x: number) => Math.round(x * 100) / 100;
+  const estimate = round(e.amount);
+  const actualRaw = parseAmount(formData.get("amount"));
+  const actual = actualRaw && actualRaw > 0 ? round(actualRaw) : estimate;
+  const marker = `[mp${id}]`;
+
+  const piggyAgg = await prisma.piggyEntry.aggregate({ where: { householdId, kind: "piggy" }, _sum: { amount: true } });
+  const piggyAvail = Math.max(0, piggyAgg._sum.amount ?? 0);
+
+  const diff = round(actual - estimate);
+  let toPiggy = 0, fromPiggy = 0, outOfPocket = 0;
+  if (diff < -0.005) toPiggy = round(-diff); // under-spent → surplus into the Piggy
+  else if (diff > 0.005) { fromPiggy = round(Math.min(diff, piggyAvail)); outOfPocket = round(diff - fromPiggy); }
+
+  const miscCat = outOfPocket > 0 ? await prisma.category.findFirst({ where: { householdId, section: "Misc", tracked: true } }) : null;
+  await prisma.$transaction(async (tx) => {
+    if (toPiggy > 0) await tx.piggyEntry.create({ data: { householdId, periodId: e.periodId, kind: "piggy", amount: toPiggy, note: `${e.label} — under-spent ${marker}` } });
+    if (fromPiggy > 0) await tx.piggyEntry.create({ data: { householdId, periodId: e.periodId, kind: "piggy", amount: -fromPiggy, note: `${e.label} — over-spent ${marker}` } });
+    if (outOfPocket > 0 && miscCat) await tx.spend.create({ data: { periodId: e.periodId, categoryId: miscCat.id, memberId: e.memberId, label: `${e.label} (out-of-pocket) ${marker}`, amount: outOfPocket, subCategory: null } });
+    await tx.expenseEntry.update({ where: { id }, data: { paid: true, paidAt: new Date() } });
+  });
+  log.info("payMiscBill", "ok", { outcome: "ok", memberId, id, estimate, actual, toPiggy, fromPiggy, outOfPocket, periodId: e.periodId });
+  await logActivity("expense", "created", `Paid misc “${e.label}” ${formatINR(actual)} (est. ${formatINR(estimate)})${toPiggy > 0 ? ` · ${formatINR(toPiggy)} → Piggy` : outOfPocket > 0 ? ` · ${formatINR(outOfPocket)} out-of-pocket` : fromPiggy > 0 ? ` · ${formatINR(fromPiggy)} from Piggy` : ""}`, e.periodId);
+  revalidateFamily();
+  return { ok: true, n: prev.n + 1 };
+}
+
+// Undo a misc-bill payment: reverse the Piggy deposit/withdrawal and the out-of-pocket Spend (found by
+// the [mp<id>] marker), and clear the paid flag. Head/manager or the payer; open month (head any).
+export async function unpayMiscBill(formData: FormData) {
+  const session = await auth();
+  const memberId = session?.user?.memberId ?? null;
+  if (!(await unlocked())) await relock("unpayMiscBill");
+  const id = Number(formData.get("id"));
+  const e = await prisma.expenseEntry.findUnique({ where: { id } });
+  if (!e || !e.paid) return;
+  const isEditor = await canEdit();
+  const isPayer = memberId != null && memberId === e.memberId;
+  if (!isEditor && !isPayer) return;
+  if (!(await isHead()) && !(await periodOpen(e.periodId))) return;
+  const marker = `[mp${id}]`;
+  await prisma.$transaction(async (tx) => {
+    await tx.piggyEntry.deleteMany({ where: { periodId: e.periodId, note: { endsWith: marker } } });
+    await tx.spend.deleteMany({ where: { periodId: e.periodId, label: { endsWith: marker } } });
+    await tx.expenseEntry.update({ where: { id }, data: { paid: false, paidAt: null } });
+  });
+  log.info("unpayMiscBill", "ok", { outcome: "ok", memberId, id, periodId: e.periodId });
+  await logActivity("expense", "updated", `Unmarked misc “${e.label}” paid`, e.periodId);
   revalidateFamily();
 }
 
@@ -2345,14 +2439,16 @@ export async function setStepDay(formData: FormData) {
   const day = n == null || !Number.isFinite(n) ? null : Math.min(31, Math.max(1, Math.round(n)));
   if (!id) return { ok: false, error: "Bad request." };
 
+  // Dates are editable in the OPEN month AND the next-month PREVIEW draft (so the head can pre-arrange
+  // the plan before it goes live). Only a CLOSED month is frozen.
   if (kind === "bill" || kind === "allowance") {
     const e = await prisma.expenseEntry.findUnique({ where: { id }, select: { paid: true, period: { select: { status: true } } } });
-    if (!e || e.period.status !== "open") return { ok: false, error: "This month is closed." };
+    if (!e || e.period.status === "closed") return { ok: false, error: "This month is closed." };
     if (e.paid) return { ok: false, error: "This is already paid — its date can’t be changed." };
     await prisma.expenseEntry.update({ where: { id }, data: { dueDay: day, pinned: true } });
   } else if (kind === "income") {
     const i = await prisma.incomeEntry.findUnique({ where: { id }, select: { period: { select: { status: true } } } });
-    if (!i || i.period.status !== "open") return { ok: false, error: "This month is closed." };
+    if (!i || i.period.status === "closed") return { ok: false, error: "This month is closed." };
     await prisma.incomeEntry.update({ where: { id }, data: { dueDay: day, pinned: true } });
   } else if (kind === "advance" || kind === "advance-payback") {
     const a = await prisma.advance.findUnique({ where: { id }, select: { settled: true, paybackSettled: true } });
@@ -2367,14 +2463,14 @@ export async function setStepDay(formData: FormData) {
     const stepKey = String(formData.get("stepKey") ?? "");
     if (!stepKey) return { ok: false, error: "Bad request." };
     const period = await prisma.period.findUnique({ where: { id }, select: { status: true } });
-    if (!period || period.status !== "open") return { ok: false, error: "This month is closed." };
+    if (!period || period.status === "closed") return { ok: false, error: "This month is closed." };
     if (day == null) await prisma.stepDayOverride.deleteMany({ where: { periodId: id, stepKey } });
     else await prisma.stepDayOverride.upsert({ where: { periodId_stepKey: { periodId: id, stepKey } }, create: { periodId: id, stepKey, day }, update: { day } });
   } else if (kind === "manual") {
     // A head-added manual step owns its own day (positioning still follows its insert anchor, so the
     // date is display + fallback order). Editable even once ticked done — it's ad-hoc metadata.
     const m = await prisma.manualPlanStep.findUnique({ where: { id }, select: { period: { select: { status: true } } } });
-    if (!m || m.period.status !== "open") return { ok: false, error: "This month is closed." };
+    if (!m || m.period.status === "closed") return { ok: false, error: "This month is closed." };
     await prisma.manualPlanStep.update({ where: { id }, data: { day } });
   } else {
     return { ok: false, error: "This step's date can’t be edited." };

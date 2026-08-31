@@ -15,7 +15,7 @@ export function IncomeRowActions({
 }: {
   members: Mem[];
   periodId: number;
-  initial: { id: number; source: string; amount: number; ownerId: number | null };
+  initial: { id: number; source: string; amount: number; ownerId: number | null; dueDay?: number | null };
 }) {
   const [editOpen, setEditOpen] = useState(false);
   return (

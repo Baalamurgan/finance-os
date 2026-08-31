@@ -4,8 +4,9 @@ import { Fragment, useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { formatINR } from "@/lib/format";
-import { markSettled, unsettle, toggleBillPaid, markAdvanceSettled, unsettleAdvance, markPiggyHandedOver, toggleIncomeReceived, addManualStep, deleteManualStep, toggleManualStepDone, hideStep, unhideStep } from "@/app/actions";
+import { markSettled, unsettle, toggleBillPaid, markAdvanceSettled, unsettleAdvance, markPiggyHandedOver, toggleIncomeReceived, addManualStep, deleteManualStep, toggleManualStepDone, hideStep, unhideStep, unpayMiscBill } from "@/app/actions";
 import { PayBillModal } from "@/components/PayBillModal";
+import { MiscPayModal } from "@/components/MiscPayModal";
 import { ExpenseModal } from "@/components/ExpenseModal";
 import { StepDayEditor } from "@/components/StepDayEditor";
 import { useToast } from "@/components/Toast";
@@ -17,7 +18,7 @@ import type { MoneyPlanResult } from "@/lib/queries";
 // A member filter narrows to just one person's remaining to-dos (keeping each step's real number);
 // Refresh re-pulls due dates + amounts from Setup into this month, then re-orders the plan.
 export function MoneyPlan({
-  plan, householdId, periodId, isHead, currentMemberId, canEdit, open, generalPiggy,
+  plan, householdId, periodId, isHead, currentMemberId, canEdit, open, datesEditable = false, generalPiggy,
   billCategories, members, monthBalance,
 }: {
   plan: MoneyPlanResult;
@@ -27,6 +28,9 @@ export function MoneyPlan({
   currentMemberId: number | null;
   canEdit: boolean;
   open: boolean;
+  // Dates can be edited in the OPEN month AND the next-month PREVIEW draft (so the head can pre-arrange
+  // the plan). Ticking steps stays open-only (`open`); this only unlocks the date editors.
+  datesEditable?: boolean;
   generalPiggy: number;
   billCategories: { id: number; name: string; section?: string }[];
   members: { id: number; name: string }[];
@@ -63,6 +67,9 @@ export function MoneyPlan({
     ? rows
     : rows.filter(({ s }) => s.fromId === who || s.toId === who || s.payerId === who);
   const whoName = people.find((p) => p.id === who)?.name;
+  // Steps are already in display order (sorted by day). Group them under a date heading: a new heading
+  // starts whenever the day changes from the previous visible step (undated steps share a "no date" head).
+  const visibleRows = shown.filter(({ s }) => !s.hidden);
 
   // Money-plan refresh re-derives the STEPS from the current Sheet — it does NOT pull from Setup or
   // touch Sheet lines (that's the Sheet's own refresh). Done steps stay done (their state is persisted);
@@ -149,13 +156,18 @@ export function MoneyPlan({
         <p className="mb-1.5 text-[10px] text-slate-400">Tap any step&apos;s number <span className="mx-0.5 inline-grid h-3.5 w-3.5 place-items-center rounded-full ring-1 ring-slate-300 align-middle text-[8px]">1</span> to see everyone&apos;s cash before &amp; after it.</p>
         <ol className="space-y-1.5">
           {canEdit && open && who == null && <InsertHere onClick={() => setInsert({ anchor: null })} />}
-          {shown.filter(({ s }) => !s.hidden).map(({ s, n }) => {
+          {visibleRows.map(({ s, n }, i) => {
+            // A date heading precedes the first step of each new day (income "up front" at the top,
+            // undated bills/piggy "no date" at the bottom) so same-day steps read as one dated group.
+            const prev = i > 0 ? visibleRows[i - 1].s : null;
+            const newDateGroup = i === 0 || (prev?.day ?? null) !== (s.day ?? null);
             const isAllowance = s.kind === "allowance";
             const isPiggy = s.kind === "piggy";
             const isAdvance = s.kind === "advance";
             const isTransfer = s.kind === "transfer-in" || s.kind === "transfer-out";
             const isIncome = s.kind === "income";
             const isManual = s.kind === "manual";
+            const isKept = s.kind === "kept";
             const canActManual = open && (canEdit || currentMemberId === s.fromId || currentMemberId === s.toId);
             const canActTransfer = open && (isHead || currentMemberId === s.fromId || currentMemberId === s.toId);
             const canActBill = open && (canEdit || currentMemberId === s.payerId);
@@ -165,7 +177,7 @@ export function MoneyPlan({
             // kind, so the title just shows the money flow (sender → recipient) like every other step.
             // Income = a member's own money landing (recipient · source), an inflow row.
             const isHandover = isPiggy && s.handoverPeriodId != null;
-            const title = isIncome ? `${s.toName ?? "?"} · ${s.source ?? "income"}` : isAllowance ? `${s.fromName} → ${s.toName}` : isHandover ? `${s.fromName ?? "Owner"} → ${s.toName}` : isPiggy ? `${s.fromName} → ${s.toName} · Piggy` : isManual || isAdvance || isTransfer ? `${s.fromName} → ${s.toName}` : `${s.payerName} → ${s.vendor}`;
+            const title = isIncome ? `${s.toName ?? "?"} · ${s.source ?? "income"}` : isKept ? `Keep with ${s.toName ?? "?"}` : isAllowance ? `${s.fromName} → ${s.source ?? s.toName}` : isHandover ? `${s.fromName ?? "Owner"} → ${s.toName}` : isPiggy ? `${s.fromName} → ${s.toName} · Piggy` : isManual || isAdvance || isTransfer ? `${s.fromName} → ${s.toName}` : `${s.payerName} → ${s.vendor}`;
             // Urgency (only while unpaid — a done step is never "overdue"): RED for overdue OR due
             // today (needs action now), AMBER for due in 1–2 days, plain otherwise.
             const urgent = !s.done && (s.status === "overdue" || (s.status === "soon" && (s.days ?? 1) <= 0));
@@ -175,6 +187,8 @@ export function MoneyPlan({
             const cashParties: { id: number; name: string }[] = (
               s.kind === "bill"
                 ? (s.fund ? [] : [{ id: s.payerId, name: s.payerName }])
+                : isKept // a kept earmark moves no cash in the walk — the money arrives via the normal flow
+                ? []
                 : [{ id: s.fromId, name: s.fromName }, { id: s.toId, name: s.toName }]
             ).filter((p): p is { id: number; name: string } => p.id != null && p.name != null);
             const short = s.senderShort ?? s.short; // member shortfall OR treasurer(hub) shortfall
@@ -189,6 +203,7 @@ export function MoneyPlan({
 
             return (
               <Fragment key={s.id}>
+              {newDateGroup && <DateGroupHeader day={s.day} kind={s.kind} />}
               <li className={`flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-xs ${s.done ? "bg-emerald-50/50" : isIncome ? "bg-emerald-50/40" : isManual ? "bg-cyan-50/50" : urgent ? "bg-red-50" : soon ? "bg-amber-50" : "bg-slate-50"}`}>
                 <button
                   type="button"
@@ -206,20 +221,22 @@ export function MoneyPlan({
                     {isManual && <span className="shrink-0 rounded-full bg-cyan-50 px-1.5 py-0.5 text-[9px] font-medium text-cyan-600">✎ manual</span>}
                     {isAllowance && <span className="shrink-0 rounded-full bg-violet-50 px-1.5 py-0.5 text-[9px] font-medium text-violet-500">personal · from hub</span>}
                     {isPiggy && <span className="shrink-0 rounded-full bg-pink-50 px-1.5 py-0.5 text-[9px] font-medium text-pink-500">{isHandover ? "🐷 last month’s leftovers → holder" : "🐷 to piggy · at wind-down"}</span>}
+                    {isKept && <span className="shrink-0 rounded-full bg-amber-50 px-1.5 py-0.5 text-[9px] font-medium text-amber-600" title={`Held by ${s.toName ?? "them"} — already counted in their in-hand; the cash reaches them via the normal collection/disbursement`}>📌 kept{s.source ? ` · ${s.source}` : ""}</span>}
                     {/* Manual steps own their day and can edit it in ANY state (it's ad-hoc metadata;
                         position still follows the insert anchor). Handled here so it's not gated by !done. */}
                     {isManual && (() => {
                       const tag = <DayTag kind="manual" day={s.day} status={null} days={null} />;
-                      if (!isHead || !open || s.manualId == null) return s.day != null ? tag : null;
+                      if (!isHead || !datesEditable || s.manualId == null) return s.day != null ? tag : null;
                       return <StepDayEditor kind="manual" id={s.manualId} day={s.day}>{tag}</StepDayEditor>;
                     })()}
                     {!isManual && !s.done && (!isPiggy || isHandover) && (() => {
                       const tag = <DayTag kind={s.kind} day={s.day} status={s.status ?? null} days={s.days ?? null} />;
-                      if (!isHead || !open) return tag;
-                      // Row-backed steps → edit the row's day (+ pin): bill/allowance line, income entry, advance.
-                      const rowId = s.kind === "income" ? s.incomeId : (s.kind === "bill" && !s.fund) || isAllowance ? s.billId : isAdvance ? s.advanceId : undefined;
+                      if (!isHead || !datesEditable) return tag;
+                      // Row-backed steps → edit the row's day (+ pin): bill/allowance line, income entry,
+                      // advance, and a 📌 kept earmark (its ExpenseEntry id, edited like a bill line).
+                      const rowId = s.kind === "income" ? s.incomeId : (s.kind === "bill" && !s.fund) || isAllowance || isKept ? s.billId : isAdvance ? s.advanceId : undefined;
                       if (rowId != null) {
-                        const editKind = isAdvance ? (s.payback ? "advance-payback" : "advance") : s.kind;
+                        const editKind = isAdvance ? (s.payback ? "advance-payback" : "advance") : isKept ? "bill" : s.kind;
                         return <StepDayEditor kind={editKind} id={rowId} day={s.day}>{tag}</StepDayEditor>;
                       }
                       // Rowless steps → a per-month override keyed by a stable step key: a fund/periodic
@@ -337,10 +354,24 @@ export function MoneyPlan({
                     s.incomeId != null && canActIncome ? (
                       <form action={toggleIncomeReceived}><input type="hidden" name="id" value={s.incomeId} /><MiniBtn primary={!s.done}>{s.done ? "undo" : "✓ received"}</MiniBtn></form>
                     ) : null
-                  ) : s.fund && !s.done ? (
-                    <PayBillModal categoryId={s.categoryId!} periodId={periodId} name={s.vendor!} bill={s.amount} fund={s.fundAvail ?? 0} generalPiggy={generalPiggy} />
-                  ) : s.billId != null && canActBill ? (
-                    <form action={toggleBillPaid} onSubmit={confirmFront}><input type="hidden" name="id" value={s.billId} /><MiniBtn primary={!s.done}>{s.done ? "undo" : "✓ paid"}</MiniBtn></form>
+                  ) : (s.fund || s.billId != null) ? (
+                    // Bill steps only become payable once the month is OPEN and you're the head or the
+                    // bill's own payer. Before the month starts (preview draft) or for someone else's
+                    // bill, show a muted "to be paid" placeholder instead of an active control.
+                    !canActBill ? (
+                      s.done ? null : <span className="text-[9px] text-slate-300">to be paid</span>
+                    ) : s.fund && !s.done ? (
+                      <PayBillModal categoryId={s.categoryId!} periodId={periodId} name={s.vendor!} bill={s.amount} fund={s.fundAvail ?? 0} generalPiggy={generalPiggy} />
+                    ) : s.misc && s.billId != null ? (
+                      // Planned misc = estimate → actual-amount + Piggy-reconcile popup (undo reverses it).
+                      s.done ? (
+                        <form action={unpayMiscBill}><input type="hidden" name="id" value={s.billId} /><MiniBtn>undo</MiniBtn></form>
+                      ) : (
+                        <MiscPayModal id={s.billId} name={s.vendor!} estimate={s.amount} generalPiggy={generalPiggy} />
+                      )
+                    ) : s.billId != null ? (
+                      <form action={toggleBillPaid} onSubmit={confirmFront}><input type="hidden" name="id" value={s.billId} /><MiniBtn primary={!s.done}>{s.done ? "undo" : "✓ paid"}</MiniBtn></form>
+                    ) : null
                   ) : null}
                 </span>
 
@@ -443,14 +474,25 @@ export function MoneyPlan({
                 const before = balances.s.balancesBefore?.[m.id] ?? 0;
                 const after = balances.s.balancesAfter?.[m.id] ?? 0;
                 const acting = m.id === balances.s.fromId || m.id === balances.s.payerId || m.id === balances.s.toId;
+                // A contributor's leftover cash ≈ what they fronted out-of-pocket last month — they keep
+                // their surplus instead of remitting it, which repays them. Flag it on the LAST step so
+                // the ending balance doesn't read as unexplained "money they keep forever".
+                const reimb = plan.reimburseByMember?.[m.id] ?? 0;
+                const isLastStep = balances.n === rows.length;
+                const explainsReimburse = isLastStep && m.id !== treasurerId && reimb > 0.005 && Math.abs(after - reimb) <= 1;
                 return (
-                  <li key={m.id} className={`flex items-center justify-between rounded-md px-2 py-1.5 text-sm ${acting ? "bg-slate-50" : ""}`}>
-                    <span className={acting ? "font-semibold text-slate-800" : "text-slate-600"}>{m.name}</span>
-                    <span className="flex items-center gap-2 tabular-nums text-xs">
-                      <span className="text-slate-400">{formatINR(before)}</span>
-                      <span className="text-slate-300">→</span>
-                      <span className={`w-20 text-right ${after < -0.005 ? "font-semibold text-red-600" : after > 0.005 ? "font-medium text-emerald-700" : "text-slate-400"}`}>{formatINR(after)}</span>
-                    </span>
+                  <li key={m.id} className={`rounded-md px-2 py-1.5 text-sm ${acting ? "bg-slate-50" : ""}`}>
+                    <div className="flex items-center justify-between">
+                      <span className={acting ? "font-semibold text-slate-800" : "text-slate-600"}>{m.name}</span>
+                      <span className="flex items-center gap-2 tabular-nums text-xs">
+                        <span className="text-slate-400">{formatINR(before)}</span>
+                        <span className="text-slate-300">→</span>
+                        <span className={`w-20 text-right ${after < -0.005 ? "font-semibold text-red-600" : after > 0.005 ? "font-medium text-emerald-700" : "text-slate-400"}`}>{formatINR(after)}</span>
+                      </span>
+                    </div>
+                    {explainsReimburse && (
+                      <p className="mt-0.5 text-[10px] text-emerald-600">≈ repays what {m.name} spent out of pocket last month — kept instead of remitted</p>
+                    )}
                   </li>
                 );
               })}
@@ -474,7 +516,8 @@ export function MoneyPlan({
 // Human label for a step (shared by the row + the balances sheet).
 function stepTitle(s: MoneyPlanResult["steps"][number]): string {
   if (s.kind === "income") return `${s.toName ?? "?"} · ${s.source ?? "income"}`;
-  if (s.kind === "allowance") return `${s.fromName} → ${s.toName}`;
+  if (s.kind === "kept") return `Keep with ${s.toName ?? "?"}${s.source ? ` · ${s.source}` : ""}`;
+  if (s.kind === "allowance") return `${s.fromName} → ${s.source ?? s.toName}`;
   if (s.kind === "piggy") return `${s.fromName} → ${s.toName} · Piggy`;
   if (s.kind === "bill") return `${s.payerName} → ${s.vendor}`;
   return `${s.fromName} → ${s.toName}`;
@@ -493,6 +536,21 @@ function FilterPill({ active, onClick, children }: { active: boolean; onClick: (
 }
 
 // A slim "+" sitting between two rows — click to insert a manual step right there.
+// A date heading above a group of same-day steps. Dated → the ordinal day (e.g. "5th"); undated income/
+// collections at the top → "Up front"; anything else undated (sinks to the bottom) → "No set date".
+function DateGroupHeader({ day, kind }: { day: number | null; kind: MoneyPlanResult["steps"][number]["kind"] }) {
+  const label =
+    day != null ? `📅 ${ordinal(day)}` : kind === "income" || kind === "transfer-in" ? "⬆︎ Up front" : "🗓 No set date";
+  return (
+    <li className="list-none pt-2.5 first:pt-0">
+      <div className="flex items-center gap-2">
+        <span className="shrink-0 text-[11px] font-bold uppercase tracking-wide text-slate-500">{label}</span>
+        <span className="h-px flex-1 bg-slate-200" />
+      </div>
+    </li>
+  );
+}
+
 function InsertHere({ onClick }: { onClick: () => void }) {
   return (
     <li className="list-none">

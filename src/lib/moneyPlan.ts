@@ -9,11 +9,12 @@ export type PlanTransfer = { fromId: number; from: string; toId: number; to: str
 export type PlanBill = {
   key: string; payerId: number | null; payerName: string; vendor: string; amount: number; done: boolean;
   day: number | null; status: "overdue" | "soon" | "normal" | null; days?: number | null; billId?: number; categoryId?: number; fund?: boolean; fundAvail?: number;
+  misc?: boolean; // a planned misc bill (estimated) → paid via the actual-amount + Piggy-reconcile popup
   deferred?: boolean; // a wind-down-overhang expense: paid by its assignee at wind-down, out of the settlement
 };
 // An allowance = personal money the treasurer SENDS a member (not a bill they owe). Disbursed after
 // collection, never dated/overdue; completion writes through to the Sheet line's paid flag (billId).
-export type PlanAllowance = { key: string; recipientId: number; recipientName: string; amount: number; done: boolean; billId: number; day?: number | null; status?: "overdue" | "soon" | "normal" | null; days?: number | null };
+export type PlanAllowance = { key: string; recipientId: number; recipientName: string; label?: string; amount: number; done: boolean; billId: number; day?: number | null; status?: "overdue" | "soon" | "normal" | null; days?: number | null };
 // A piggy return = a budget holder handing their unspent budget (gross positive leftovers) to the
 // Piggy holder at wind-down, so the general Piggy ends up under one person. A live projection (not
 // final until wind-down), always LOWEST priority — the sender only pays it once they're flush.
@@ -23,9 +24,15 @@ export type PlanPiggyReturn = { key: string; fromId: number; fromName: string; t
 // funder) that returns the same amount once the borrower's income has landed (paybackDay/paybackDone).
 export type PlanAdvance = { id: number; fromId: number; fromName: string; toId: number; toName: string; amount: number; day: number | null; done: boolean; paybackDay: number | null; paybackDone: boolean };
 
+// A "kept" earmark: family money a member should HOLD (not pay to a vendor now) — e.g. cash set aside
+// for G704 maintenance. It's already netted in settlement (reduces their remittance / raises their
+// receivable), so the cash reaches them through the normal collection/disbursement flow; this step is
+// the informational "keep ₹X with <member> · for <label>" reminder, dated, and moves no cash in the walk.
+export type PlanKept = { id: number; memberId: number; memberName: string; amount: number; day: number | null; label?: string; done?: boolean };
+
 export type PlanStep = {
   id: string;
-  kind: "transfer-in" | "transfer-out" | "bill" | "allowance" | "piggy" | "advance" | "income" | "manual";
+  kind: "transfer-in" | "transfer-out" | "bill" | "allowance" | "piggy" | "advance" | "income" | "manual" | "kept";
   manualId?: number; // this step is a head-added manual move (write-through to the ManualPlanStep record)
   afterStepKey?: string; // a manual step: the step id it's anchored right after (for stable positioning)
   hidden?: boolean; // a head-hidden derived step — kept for the "un-hide" list but out of the walk/progress
@@ -46,7 +53,7 @@ export type PlanStep = {
   reroute?: boolean; // a disbursement paid DIRECT by a debtor (not via the hub) because the hub couldn't fund it in time
   infeasibleFrom?: number | null; // this piece can't be funded by its due day; earliest day it becomes fundable (null = never this month)
   // bill
-  payerId?: number | null; payerName?: string; vendor?: string; billId?: number; categoryId?: number; fund?: boolean; fundAvail?: number; deferred?: boolean;
+  payerId?: number | null; payerName?: string; vendor?: string; billId?: number; categoryId?: number; fund?: boolean; fundAvail?: number; misc?: boolean; deferred?: boolean;
   status?: "overdue" | "soon" | "normal" | null;
   days?: number | null; // days until due (negative = overdue), for the urgency tag
   short?: number; // hub is short this much when this step runs (funds not in yet)
@@ -74,9 +81,10 @@ export function buildMoneyPlan(input: {
   reimburseDay?: number; // target day to hand back those reimbursements (e.g. the day after wind-down)
   piggyHandover?: { toId: number; toName: string; handoverPeriodId: number; owners: { fromId: number; fromName: string; amount: number; day: number; status?: "overdue" | "soon" | "normal" | null; days?: number | null }[] }; // prior wound-down month's leftover — one tickable step per owner who hands their slice to the Piggy holder
   manualSteps?: { id: number; fromId: number; toId: number; fromName?: string; toName?: string; amount: number; day?: number | null; done: boolean; afterStepKey?: string | null }[]; // head-added ad-hoc moves
+  kept?: PlanKept[]; // 📌 earmarks: money a member should HOLD (informational, dated; no cash move here)
   hiddenKeys?: string[]; // step ids the head has hidden from the plan view
 }): MoneyPlan {
-  const { treasurerId, treasurerName, transfers, bills, allowances = [], piggyReturns = [], advances = [], incomeDayByMember, incomeByMember = {}, incomeArrivals, reimburseByMember = {}, reimburseDay, piggyHandover, manualSteps = [], hiddenKeys = [] } = input;
+  const { treasurerId, treasurerName, transfers, bills, allowances = [], piggyReturns = [], advances = [], incomeDayByMember, incomeByMember = {}, incomeArrivals, reimburseByMember = {}, reimburseDay, piggyHandover, manualSteps = [], kept = [], hiddenKeys = [] } = input;
 
   const inbound = transfers.filter((t) => t.toId === treasurerId);
   const outbound = transfers.filter((t) => t.toId !== treasurerId && t.fromId === treasurerId); // hub → creditor
@@ -102,11 +110,25 @@ export function buildMoneyPlan(input: {
     return (upto: number) => ev.reduce((s, e) => (e.day <= upto ? s + e.amount : s), 0);
   };
 
+  // A debtor can only pay the hub once THEIR OWN income has actually covered what they owe — not on
+  // their earliest trickle. So date each collection to the first day their cumulative income ≥ their
+  // net; if their income never fully covers it (a genuine shortfall), fall back to their earliest
+  // income day so the walk still flags it. Fixes e.g. a big earner whose ₹6k advance lands day 1 but
+  // whose ₹70k salary (which funds the collection) lands day 2 — the collection belongs on day 2.
+  const memberIncomeEvents = (memberId: number) =>
+    arrivalList.filter((a) => a.memberId === memberId).map((a) => ({ day: a.day ?? 0, amount: a.amount })).sort((x, y) => x.day - y.day);
+  const collectionDay = (memberId: number, amount: number): number | null => {
+    let cum = 0;
+    for (const e of memberIncomeEvents(memberId)) { cum = Math.round((cum + e.amount) * 100) / 100; if (cum >= amount - 0.005) return e.day || null; }
+    return incomeDayByMember[memberId] ?? null;
+  };
+  const inboundDay = new Map<number, number | null>(inbound.map((t) => [t.fromId, collectionDay(t.fromId, t.amount)]));
+
   const steps: PlanStep[] = [];
-  // Inbound collections: a debtor pays their net to the hub when THEIR income lands.
+  // Inbound collections: a debtor pays their net to the hub once their income covers it.
   for (const t of inbound) {
     steps.push({
-      id: `xfer-${t.fromId}-${t.toId}`, kind: "transfer-in", day: incomeDayByMember[t.fromId] ?? null,
+      id: `xfer-${t.fromId}-${t.toId}`, kind: "transfer-in", day: inboundDay.get(t.fromId) ?? null,
       amount: t.amount, done: t.settled, fromId: t.fromId, toId: t.toId, fromName: t.from, toName: t.to,
       recordId: t.recordId, status: t.status ?? null, days: t.days ?? null, feedsBills: hasHubBills,
     });
@@ -131,7 +153,7 @@ export function buildMoneyPlan(input: {
   for (const b of bills) {
     steps.push({
       id: b.key, kind: "bill", day: b.day, amount: b.amount, done: b.done,
-      payerId: b.payerId, payerName: b.payerName, vendor: b.vendor, billId: b.billId, categoryId: b.categoryId, fund: b.fund, fundAvail: b.fundAvail, status: b.status, days: b.days ?? null, deferred: b.deferred,
+      payerId: b.payerId, payerName: b.payerName, vendor: b.vendor, billId: b.billId, categoryId: b.categoryId, fund: b.fund, fundAvail: b.fundAvail, misc: b.misc, status: b.status, days: b.days ?? null, deferred: b.deferred,
     });
   }
   // Allowances: the treasurer disburses these AFTER collection (like a payout), never dated/overdue.
@@ -140,7 +162,7 @@ export function buildMoneyPlan(input: {
     steps.push({
       // dated → sent on that day (in order, liquidity-checked); undated → after collection (last day)
       id: a.key, kind: "allowance", day: a.day ?? lastDay, amount: a.amount, done: a.done,
-      fromId: treasurerId ?? undefined, toId: a.recipientId, fromName: treasurerName, toName: a.recipientName,
+      fromId: treasurerId ?? undefined, toId: a.recipientId, fromName: treasurerName, toName: a.recipientName, source: a.label,
       billId: a.billId, status: a.status ?? null, days: a.days ?? null,
     });
   }
@@ -170,6 +192,16 @@ export function buildMoneyPlan(input: {
       toId: a.memberId, toName: a.name, source: a.source, incomeId: a.id, status: null, days: null,
     });
   });
+  // Kept earmarks (📌): money a member should HOLD this month for a stated purpose. The cash reaches
+  // them via the normal collection/disbursement flow (it's already in the settlement net), so this step
+  // moves nothing in the walk — it's the dated reminder that ₹X of their in-hand is spoken for.
+  for (const k of kept) {
+    if (k.amount <= 0.005) continue;
+    steps.push({
+      id: `kept-${k.id}`, kind: "kept", day: k.day, amount: Math.round(k.amount * 100) / 100, done: k.done ?? false,
+      toId: k.memberId, toName: k.memberName, source: k.label, billId: k.id, status: null, days: null,
+    });
+  }
   // Piggy returns: the very last thing each month — a holder hands their unspent budget to the Piggy
   // holder. Undated + lowest priority (below even other undated steps), a projection until wind-down.
   for (const p of piggyReturns) {
@@ -234,7 +266,7 @@ export function buildMoneyPlan(input: {
   // minus the treasurer's own cash bills and any already-settled disbursements.
   const hubCashBy = cashBy([
     ...incomeOf(treasurerId ?? -1),
-    ...inbound.map((t) => ({ day: incomeDayByMember[t.fromId] ?? null, amount: t.amount })),
+    ...inbound.map((t) => ({ day: inboundDay.get(t.fromId) ?? null, amount: t.amount })),
     ...bills.filter((b) => !b.fund && b.payerId === treasurerId).map((b) => ({ day: b.day, amount: -b.amount })),
     ...outbound.filter((o) => o.settled).map((o) => ({ day: 0 as number | null, amount: -paidOf(o) })), // only what actually left the hub
   ]);
@@ -340,7 +372,7 @@ export function buildMoneyPlan(input: {
   // bills → other disbursements/allowances out → piggy returns (money comes in, members get funded,
   // bills get paid, the remainder flows back). Anything with NO due date sinks to the very bottom.
   const rank = (s: PlanStep) =>
-    s.kind === "income" ? -1 : s.kind === "transfer-in" ? 0 : ((s.kind === "advance" && s.fundsMember) || (s.kind === "transfer-out" && s.fundsMember)) ? 1 : s.kind === "bill" ? (s.deferred ? 3.5 : 2) : s.kind === "piggy" ? 4 : 3;
+    s.kind === "income" ? -1 : s.kind === "transfer-in" ? 0 : ((s.kind === "advance" && s.fundsMember) || (s.kind === "transfer-out" && s.fundsMember)) ? 1 : s.kind === "bill" ? (s.deferred ? 3.5 : 2) : s.kind === "kept" ? 2.5 : s.kind === "piggy" ? 4 : 3;
   // Undated INBOUND collections are gathered UP FRONT (money in before money out) — an unknown income
   // day must never sort a collection AFTER the disbursements/bills it funds, which would make the hub
   // look deeply negative when in truth the cash is simply collected first. Undated bills, disbursements
@@ -428,9 +460,10 @@ export function buildMoneyPlan(input: {
     }
     if (s.kind === "income") {
       shift(s.toId, s.amount); // income lands in the recipient's hand (always — not gated by a done flag)
-    } else if (s.kind === "piggy") {
-      // Piggy hand-over = PRIOR-month cash (tracked in In-Hand), not this month's income — so it's
-      // informational in the cash walk and doesn't move any running balance here.
+    } else if (s.kind === "piggy" || s.kind === "kept") {
+      // Piggy hand-over = PRIOR-month cash (tracked in In-Hand); a kept earmark's cash already reaches the
+      // member via the normal collection/disbursement flow (it's in the settlement net). Both are
+      // informational in the cash walk and move no running balance here.
     } else if (s.kind === "transfer-in" || s.kind === "transfer-out" || s.kind === "allowance" || s.kind === "advance" || s.kind === "manual") {
       shift(s.fromId, -s.amount);
       shift(s.toId, s.amount);
@@ -443,7 +476,7 @@ export function buildMoneyPlan(input: {
 
   // Income rows are informational and Piggy returns are live projections (finalised at wind-down), so
   // neither counts toward the "N/total done" progress — they're context, not tickable settlement steps.
-  const counted = steps.filter((s) => s.kind !== "piggy" && s.kind !== "income" && !s.hidden);
+  const counted = steps.filter((s) => s.kind !== "piggy" && s.kind !== "income" && s.kind !== "kept" && !s.hidden);
   const done = counted.filter((s) => s.done).length;
   return { steps, done, total: counted.length, hubShortfall: Math.round(hubShortfall) };
 }

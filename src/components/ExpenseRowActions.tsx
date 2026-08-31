@@ -16,6 +16,7 @@ export function ExpenseRowActions({
   members,
   periodId,
   initial,
+  showDueDay = false,
 }: {
   categories: Cat[];
   members: Mem[];
@@ -27,7 +28,9 @@ export function ExpenseRowActions({
     categoryId: number;
     memberId: number | null;
     necessary: boolean;
+    dueDay?: number | null;
   };
+  showDueDay?: boolean;
 }) {
   const [editOpen, setEditOpen] = useState(false);
   return (
@@ -41,6 +44,7 @@ export function ExpenseRowActions({
         hideTrigger
         controlledOpen={editOpen}
         onOpenChange={setEditOpen}
+        showDueDay={showDueDay}
       />
     </>
   );

@@ -4,7 +4,7 @@ import { useActionState, useEffect, useRef, useState } from "react";
 import { addIncomeAction, updateIncome, type SaveState } from "@/app/actions";
 
 type Mem = { id: number; name: string };
-type IncomeInitial = { id: number; source: string; amount: number; ownerId: number | null };
+type IncomeInitial = { id: number; source: string; amount: number; ownerId: number | null; dueDay?: number | null };
 
 // Add- or Edit-income modal. Add mode matches the Sheet "+ Add expense" UI;
 // edit mode (initial set) is opened from the row kebab and posts to updateIncome.
@@ -134,6 +134,24 @@ export function IncomeModal({
                       <option key={m.id} value={m.id}>{m.name}</option>
                     ))}
                   </select>
+                </div>
+
+                {/* optional arrival day — drives Money-plan ordering (when this income lands) */}
+                <div>
+                  <label className="text-xs font-medium text-slate-500">Arrives on day (optional)</label>
+                  <input
+                    name="dueDay"
+                    type="number"
+                    min="1"
+                    max="31"
+                    inputMode="numeric"
+                    defaultValue={isEdit ? (initial!.dueDay ?? "") : ""}
+                    placeholder="e.g. 1"
+                    className="input mt-1 w-full"
+                  />
+                  <p className="mt-1 text-[11px] text-slate-400">
+                    Day of the month it arrives — leave blank for &ldquo;up front&rdquo; (sorts first in the Money plan).
+                  </p>
                 </div>
 
                 {!isEdit && (

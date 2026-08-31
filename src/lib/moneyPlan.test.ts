@@ -46,6 +46,25 @@ describe("buildMoneyPlan", () => {
     expect(plan.total).toBe(1); // only the bill counts
   });
 
+  it("renders a 📌 kept earmark as an informational step that moves no cash and isn't counted", () => {
+    const plan = buildMoneyPlan({
+      treasurerId: T,
+      transfers: [xfer({ fromId: 2, toId: T, amount: 100, settled: true })],
+      bills: [],
+      incomeDayByMember: { 2: 1 },
+      kept: [{ id: 9, memberId: 2, memberName: "B", amount: 30, day: 5, label: "G704 maintenance" }],
+    });
+    const k = plan.steps.find((s) => s.kind === "kept");
+    expect(k).toBeTruthy();
+    expect(k!.id).toBe("kept-9");
+    expect(k!.day).toBe(5);
+    expect(k!.toId).toBe(2);
+    // moves no running balance (the cash reaches them via the normal flow)
+    expect(k!.balancesAfter?.[2] ?? 0).toBe(k!.balancesBefore?.[2] ?? 0);
+    // informational: not part of the N/total progress
+    expect(plan.total).toBe(1); // only the inbound transfer counts
+  });
+
   it("flags a hub shortfall when an outflow runs before enough has arrived", () => {
     // treasurer must pay a 50 bill on the 1st, but only 30 arrives (on the 1st)
     const plan = buildMoneyPlan({
@@ -402,25 +421,28 @@ describe("buildMoneyPlan", () => {
     expect(plan.hubShortfall).toBe(100); // 120 needed on day 1 − 20 collected
   });
 
-  it("reroutes through a debtor who holds cash the hub hasn't collected yet", () => {
-    // B is paid on day 1 but only settles with the hub on day 20. Creditor H needs 100 on day 2 —
-    // the hub has nothing by then, but B is holding cash, so B pays H directly (the two legs collapse).
+  it("reroutes a debtor's early cash to a creditor before the debtor's full collection lands", () => {
+    // B owes the hub 150, but their income arrives in two parts — 100 on day 1, 50 on day 10 — so B's
+    // FULL collection isn't payable until day 10. Creditor H needs 100 on day 2: the hub has nothing by
+    // then, but B is already holding 100, so B pays H directly (that leg collapses out of B's collection).
     const plan = buildMoneyPlan({
       treasurerId: T,
       transfers: [
-        xfer({ fromId: 2, from: "B", toId: T, amount: 100 }), // B owes the hub 100
+        xfer({ fromId: 2, from: "B", toId: T, amount: 150 }), // B owes the hub 150
         xfer({ fromId: T, from: "A", toId: 3, to: "H", amount: 100 }), // hub owes H 100
       ],
       bills: [bill({ payerId: 3, payerName: "H", vendor: "Rent", amount: 100, day: 2 })],
-      incomeDayByMember: { 2: 20 }, // B settles with the hub late (day 20)
-      incomeArrivals: [{ memberId: 2, day: 1, amount: 100 }], // but B's cash is in hand from day 1
+      incomeDayByMember: { 2: 1 },
+      incomeArrivals: [{ memberId: 2, day: 1, amount: 100 }, { memberId: 2, day: 10, amount: 50 }],
     });
     const reroute = plan.steps.find((s) => s.reroute);
     expect(reroute?.fromId).toBe(2); // B pays…
     expect(reroute?.toId).toBe(3); // …H directly
     expect(reroute?.amount).toBe(100);
     expect(plan.hubShortfall).toBe(0);
-    expect(plan.steps.some((s) => s.kind === "transfer-in" && s.fromId === 2)).toBe(false); // fully redirected → collection gone
+    // B's collection shrinks by the redirected 100 → only the remaining 50 is still collected to the hub
+    const bCollection = plan.steps.find((s) => s.kind === "transfer-in" && s.fromId === 2);
+    expect(bCollection?.amount).toBe(50);
   });
 
   it("flags a disbursement piece infeasible when nobody can fund it by its due day", () => {

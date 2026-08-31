@@ -3,8 +3,9 @@
 import { useState } from "react";
 import { formatINR } from "@/lib/format";
 import type { InHand } from "@/lib/queries";
-import { toggleBillPaid, unpayPeriodicBill } from "@/app/actions";
+import { toggleBillPaid, unpayPeriodicBill, unpayMiscBill } from "@/app/actions";
 import { PayBillModal } from "@/components/PayBillModal";
+import { MiscPayModal } from "@/components/MiscPayModal";
 
 export function InHandPersonGroup({
   group,
@@ -41,7 +42,7 @@ export function InHandPersonGroup({
   selYear: number;
   selMonth: number;
 }) {
-  const { name, cats, unpaidBills, paidBills, earmarked, sinkingFunds, sinkingHeld, unpaidPeriodic, paidPeriodic, carried, carriedDue, miscSpent, net, pendingPiggyHeld, yetToReceive } = group;
+  const { name, cats, unpaidBills, paidBills, earmarked, kept, sinkingFunds, sinkingHeld, unpaidPeriodic, paidPeriodic, carried, carriedDue, miscSpent, net, pendingPiggyHeld, yetToReceive, selfFundsBills } = group;
   // Per-card toggle: include or exclude this member's own misc/out-of-pocket in their total.
   // Default = include (the true position). Excluding shows "budget + bills + savings" only, so
   // someone can see where they'd stand without their discretionary spending counted.
@@ -133,6 +134,15 @@ export function InHandPersonGroup({
             <span className="shrink-0 tabular-nums text-teal-700">{formatINR(e.amount)}</span>
           </li>
         ))}
+        {/* 📌 Kept earmarks: misc money set aside for this person to HOLD (e.g. G704 maintenance). */}
+        {kept.map((e) => (
+          <li key={`kp${e.id}`} className="flex items-center justify-between gap-2 text-xs">
+            <span className="truncate text-amber-600">
+              📌 Kept · {e.name} <span className="text-[10px] text-slate-400">held to spend later</span>
+            </span>
+            <span className="shrink-0 tabular-nums text-amber-700">{formatINR(e.amount)}</span>
+          </li>
+        ))}
         {/* Accrued sinking-fund holds this person is the saver of — held separately from the Piggy. */}
         {sinkingFunds.map((f) => (
           <li key={`sf${f.name}`} className="flex items-center justify-between gap-2 text-xs">
@@ -169,16 +179,32 @@ export function InHandPersonGroup({
           </li>
         )}
         {isTreasurer && (
-          <li className="flex items-center justify-between gap-2 border-t border-dashed border-slate-100 pt-1 text-xs">
-            <span className="truncate text-indigo-600">
-              Family pool{" "}
-              <span className="text-[10px] text-slate-400">
-                shared {formatINR(sharedNet)} + month bal {formatINR(monthBalance)}
-                {billsHeldForMembers > 0.005 && <> + bills to disburse {formatINR(billsHeldForMembers)}</>}
+          <>
+            <li className="flex items-center justify-between gap-2 border-t border-dashed border-slate-100 pt-1 text-xs">
+              <span className="truncate font-medium text-indigo-600">Family pool held</span>
+              <span className="shrink-0 tabular-nums font-semibold text-indigo-700">{formatINR(pool)}</span>
+            </li>
+            <li className="flex items-center justify-between gap-2 pl-3 text-xs">
+              <span className="truncate text-slate-500" title="Net of everyone's shared-expense settlement — what the family jointly owns this month">
+                <span className="mr-1 text-slate-300">↳</span>Shared settlement
               </span>
-            </span>
-            <span className="shrink-0 tabular-nums font-medium text-indigo-700">{formatINR(pool)}</span>
-          </li>
+              <span className="shrink-0 tabular-nums text-slate-500">{formatINR(sharedNet)}</span>
+            </li>
+            <li className="flex items-center justify-between gap-2 pl-3 text-xs">
+              <span className="truncate text-slate-500" title="Unspent balance carried in this month's pool">
+                <span className="mr-1 text-slate-300">↳</span>Month balance
+              </span>
+              <span className="shrink-0 tabular-nums text-slate-500">{formatINR(monthBalance)}</span>
+            </li>
+            {billsHeldForMembers > 0.005 && (
+              <li className="flex items-center justify-between gap-2 pl-3 text-xs">
+                <span className="truncate text-slate-500" title="Cash the treasurer holds to pay out members' pool-funded bills (they've yet to receive it)">
+                  <span className="mr-1 text-slate-300">↳</span>Bills to disburse
+                </span>
+                <span className="shrink-0 tabular-nums text-slate-500">{formatINR(billsHeldForMembers)}</span>
+              </li>
+            )}
+          </>
         )}
         {isPiggyHolder && piggyAmt !== 0 && (
           <li className="flex items-center justify-between gap-2 text-xs">
@@ -211,8 +237,9 @@ export function InHandPersonGroup({
         )}
 
         {/* Bills to pay THIS month — assigned bills (loans / EMIs / interest / fixed) AND periodic
-            fund bills. NOT in the in-hand total: they're pool/fund-funded, so the cash arrives via the
-            Money plan. `yetToReceive` (assigned bills) is the money still coming from the pool. */}
+            fund bills. A SELF-FUNDER (net contributor) holds this cash from their own salary, so it's
+            IN their in-hand total; a pool-funded receiver still awaits it (`yetToReceive`), and periodic
+            fund bills are drawn from the fund (neither). */}
         {(unpaidBills.length > 0 || unpaidPeriodic.length > 0) && (
           <>
             <li className="pt-2">
@@ -222,7 +249,9 @@ export function InHandPersonGroup({
                   Bills to pay this month
                 </span>
                 <span className="text-[9px] text-slate-400">
-                  {yetToReceive > 0.005
+                  {selfFundsBills && unpaidBills.length > 0
+                    ? "you hold this cash · included in your in-hand"
+                    : yetToReceive > 0.005
                     ? `yet to receive ${formatINR(yetToReceive)} from the pool · not in your in-hand`
                     : "reminder · paid from the fund, not your in-hand"}
                 </span>
@@ -239,7 +268,9 @@ export function InHandPersonGroup({
                   <span className="flex shrink-0 items-center gap-1.5">
                     <span className={`tabular-nums ${st === "overdue" ? "font-medium text-red-700" : "text-slate-600"}`}>{formatINR(b.amount)}</span>
                     {!b.due && <span className="rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-400">to pay</span>}
-                    {canPay && <PaidToggle id={b.id} title="Mark this bill paid" label="✓ paid" />}
+                    {canPay && (b.misc
+                      ? <MiscPayModal id={b.id} name={b.name} estimate={b.amount} generalPiggy={generalPiggy} />
+                      : <PaidToggle id={b.id} title="Mark this bill paid" label="✓ paid" />)}
                   </span>
                 </li>
               );
@@ -278,7 +309,9 @@ export function InHandPersonGroup({
                 <span className="truncate line-through">{b.name}</span>
                 <span className="flex shrink-0 items-center gap-1.5">
                   <span className="tabular-nums">{formatINR(b.amount)}</span>
-                  {canPay && <PaidToggle id={b.id} title="Mark unpaid" label="undo" />}
+                  {canPay && (b.misc
+                    ? <form action={unpayMiscBill}><input type="hidden" name="id" value={b.id} /><button type="submit" title="Undo payment (reverses the Piggy reconciliation)" className="rounded-full border border-slate-200 px-1.5 py-0.5 text-[10px] text-slate-400 hover:text-slate-600">undo</button></form>
+                    : <PaidToggle id={b.id} title="Mark unpaid" label="undo" />)}
                 </span>
               </li>
             ))}

@@ -14,3 +14,8 @@ export const CARRY_NOTE = "__carry__";
 // rolled to the next month but this one isn't wound down yet). A real expense of THIS month
 // (shows on the Sheet, counts in totals + carry) but kept OUT of the frozen settlement.
 export const DEFERRED_NOTE = "__deferred__";
+// A "kept" misc line (📌): family money EARMARKED to a member to HOLD (not pay out to a vendor
+// now) — e.g. cash set aside for G704 maintenance. Still a real tagged expense (counts in the
+// settlement so it reduces the member's remittance → they keep the cash), but In-Hand shows it as
+// HELD by them, and the Money Plan renders a "keep ₹X with <member>" step, not a pay-a-vendor bill.
+export const KEPT_NOTE = "__kept__";

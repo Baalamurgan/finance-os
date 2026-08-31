@@ -128,6 +128,7 @@ function ExpenseRow({
           categories={categories}
           members={members}
           periodId={periodId}
+          showDueDay={sheetSection(e) === "Misc"}
           initial={{
             id: e.id,
             label: e.label,
@@ -135,6 +136,7 @@ function ExpenseRow({
             categoryId: e.categoryId,
             memberId: e.memberId,
             necessary: e.necessary,
+            dueDay: e.dueDay,
           }}
         />
       )}
@@ -505,7 +507,7 @@ export default async function SheetPage({
                     <IncomeRowActions
                       members={c.members}
                       periodId={c.selected!.id}
-                      initial={{ id: i.id, source: i.source, amount: i.amount, ownerId: i.ownerId }}
+                      initial={{ id: i.id, source: i.source, amount: i.amount, ownerId: i.ownerId, dueDay: i.dueDay }}
                     />
                   ) : (
                     canEditHere && <RowActions id={i.id} deleteAction={deleteIncome} />
@@ -691,6 +693,8 @@ export default async function SheetPage({
                         balance={rollup.balance}
                         sheetLabel="+ Add misc expense"
                         newCategoryDefaultSection="Misc"
+                        showDueDay
+                        defaultRepeat={false}
                       />
                     </div>
                   )}
