@@ -2,7 +2,6 @@ import { unstable_cache } from "next/cache";
 import { prisma } from "@/lib/prisma";
 import { FAMILY_TAG } from "@/lib/revalidate";
 import { MISC_SUBCATEGORIES } from "@/lib/misc";
-import { KEPT_NOTE } from "@/lib/notes";
 import { computeSettlement } from "@/lib/settlement-core";
 import { planBillMonth, isLumpDue, monthsUntilNextDue, type FundingStyle } from "@/lib/schedule";
 import { suggestCategoryName, normalizeItem, resolveCategoryId } from "@/lib/spendCategorize";
@@ -650,13 +649,8 @@ export async function getMoneyPlan(householdId: number, periodId: number, inhand
   }));
   const hiddenKeys = hiddenRows.map((r) => r.stepKey);
 
-  // 📌 Kept earmarks → informational "keep ₹X with <member>" steps (dated to the line's due day).
-  const kept = inhand.byPerson.flatMap((g) =>
-    (g.kept ?? []).map((k) => ({ id: k.id, memberId: g.memberId as number, memberName: g.name, amount: k.amount, day: k.dueDay ?? null, label: k.name })),
-  );
-
   const { buildMoneyPlan } = await import("./moneyPlan");
-  const plan = buildMoneyPlan({ treasurerId: inhand.treasurerId, treasurerName: settlement.treasurer?.name, transfers, bills, allowances, piggyReturns, advances, incomeDayByMember, incomeByMember, incomeArrivals, reimburseByMember, reimburseDay, piggyHandover, manualSteps, kept, hiddenKeys });
+  const plan = buildMoneyPlan({ treasurerId: inhand.treasurerId, treasurerName: settlement.treasurer?.name, transfers, bills, allowances, piggyReturns, advances, incomeDayByMember, incomeByMember, incomeArrivals, reimburseByMember, reimburseDay, piggyHandover, manualSteps, hiddenKeys });
 
   // Enrich done steps with the day they were ACTUALLY marked paid (IST), so the plan can show
   // "paid <day>" when it differs from the scheduled/due day. Timestamps live on the underlying record:
@@ -863,14 +857,6 @@ async function _getInHand(householdId: number, periodId: number) {
     // under the person who actually holds it — separate from the general Piggy holder.
     prisma.category.findMany({ where: { householdId, OR: [{ sinking: true }, { fundingStyle: { not: null } }] }, select: { id: true, name: true, responsibleMemberId: true } }),
   ]);
-  // 📌 Kept earmarks: misc lines marked to be HELD by a member (note "__kept__"). Excluded from
-  // `billLines` already (that query filters note:null), so they never show as a bill to pay; here they
-  // become held cash on the assignee's card. Still counted in settlement (reduces their remittance), so
-  // holding them is balance-neutral — the same rupee, relabelled from "bill to pay" to "kept/held".
-  const keptLines = await prisma.expenseEntry.findMany({
-    where: { periodId, note: KEPT_NOTE },
-    select: { id: true, label: true, amount: true, memberId: true, dueDay: true, paid: true },
-  });
   const plannedByCat = new Map(budgets.map((b) => [b.categoryId, b.planned]));
   const budgetedIds = new Set(categories.filter((c) => (plannedByCat.get(c.id) ?? 0) > 0).map((c) => c.id));
   // Bill list = tagged Sheet lines to pay, in EVERY state (draft included) so the preview shows them as
@@ -1073,14 +1059,9 @@ async function _getInHand(householdId: number, periodId: number) {
     const selfFunds = key != null && key !== treasurerId && (netByMember.get(key) ?? 0) >= -0.005;
     const heldBills = selfFunds || key == null ? unpaidTotal : 0;
     const yetToReceive = selfFunds ? 0 : unpaidTotal;
-    // 📌 Kept earmarks this member holds (unpaid only — a paid one has been spent on its purpose).
-    const kept = keptLines
-      .filter((e) => (e.memberId ?? null) === key && !e.paid)
-      .map((e) => ({ id: e.id, name: e.label, amount: e.amount, dueDay: e.dueDay }));
-    const keptTotal = kept.reduce((s, e) => s + e.amount, 0);
     return {
       memberId: key, name, cats, unpaidBills, paidBills, earmarked, unpaidPeriodic, paidPeriodic, carried, carriedDue,
-      sinkingFunds, sinkingHeld, pendingPiggyHeld, kept, keptTotal,
+      sinkingFunds, sinkingHeld, pendingPiggyHeld,
       budgetRemaining, unpaidTotal, earmarkedTotal, miscSpent,
       // Money still owed TO this member from the pool. For a self-funding contributor this is 0 — they
       // already hold the cash (it's in `net`); a pool-funded receiver still awaits it via the Money plan.
@@ -1088,9 +1069,9 @@ async function _getInHand(householdId: number, periodId: number) {
       selfFundsBills: selfFunds,
       // In-hand = what this member PHYSICALLY holds right now: budget cash left + set-asides they hold
       // + last month's Piggy leftover they still hold − their own out-of-pocket + any unpaid bills they
-      // SELF-FUND (held until paid) + 📌 kept earmarks. Pool-funded bills are excluded (→ "yet to
-      // receive"); carried bills aren't here either (settled in their month).
-      net: budgetRemaining + earmarkedTotal - miscSpent + pendingPiggyHeld + heldBills + keptTotal,
+      // SELF-FUND (held until paid). Pool-funded bills are excluded (→ "yet to receive"); carried bills
+      // aren't here either (settled in their month).
+      net: budgetRemaining + earmarkedTotal - miscSpent + pendingPiggyHeld + heldBills,
     };
   };
 

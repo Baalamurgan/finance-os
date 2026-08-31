@@ -24,15 +24,9 @@ export type PlanPiggyReturn = { key: string; fromId: number; fromName: string; t
 // funder) that returns the same amount once the borrower's income has landed (paybackDay/paybackDone).
 export type PlanAdvance = { id: number; fromId: number; fromName: string; toId: number; toName: string; amount: number; day: number | null; done: boolean; paybackDay: number | null; paybackDone: boolean };
 
-// A "kept" earmark: family money a member should HOLD (not pay to a vendor now) — e.g. cash set aside
-// for G704 maintenance. It's already netted in settlement (reduces their remittance / raises their
-// receivable), so the cash reaches them through the normal collection/disbursement flow; this step is
-// the informational "keep ₹X with <member> · for <label>" reminder, dated, and moves no cash in the walk.
-export type PlanKept = { id: number; memberId: number; memberName: string; amount: number; day: number | null; label?: string; done?: boolean };
-
 export type PlanStep = {
   id: string;
-  kind: "transfer-in" | "transfer-out" | "bill" | "allowance" | "piggy" | "advance" | "income" | "manual" | "kept";
+  kind: "transfer-in" | "transfer-out" | "bill" | "allowance" | "piggy" | "advance" | "income" | "manual";
   manualId?: number; // this step is a head-added manual move (write-through to the ManualPlanStep record)
   afterStepKey?: string; // a manual step: the step id it's anchored right after (for stable positioning)
   hidden?: boolean; // a head-hidden derived step — kept for the "un-hide" list but out of the walk/progress
@@ -81,10 +75,9 @@ export function buildMoneyPlan(input: {
   reimburseDay?: number; // target day to hand back those reimbursements (e.g. the day after wind-down)
   piggyHandover?: { toId: number; toName: string; handoverPeriodId: number; owners: { fromId: number; fromName: string; amount: number; day: number; status?: "overdue" | "soon" | "normal" | null; days?: number | null }[] }; // prior wound-down month's leftover — one tickable step per owner who hands their slice to the Piggy holder
   manualSteps?: { id: number; fromId: number; toId: number; fromName?: string; toName?: string; amount: number; day?: number | null; done: boolean; afterStepKey?: string | null }[]; // head-added ad-hoc moves
-  kept?: PlanKept[]; // 📌 earmarks: money a member should HOLD (informational, dated; no cash move here)
   hiddenKeys?: string[]; // step ids the head has hidden from the plan view
 }): MoneyPlan {
-  const { treasurerId, treasurerName, transfers, bills, allowances = [], piggyReturns = [], advances = [], incomeDayByMember, incomeByMember = {}, incomeArrivals, reimburseByMember = {}, reimburseDay, piggyHandover, manualSteps = [], kept = [], hiddenKeys = [] } = input;
+  const { treasurerId, treasurerName, transfers, bills, allowances = [], piggyReturns = [], advances = [], incomeDayByMember, incomeByMember = {}, incomeArrivals, reimburseByMember = {}, reimburseDay, piggyHandover, manualSteps = [], hiddenKeys = [] } = input;
 
   const inbound = transfers.filter((t) => t.toId === treasurerId);
   const outbound = transfers.filter((t) => t.toId !== treasurerId && t.fromId === treasurerId); // hub → creditor
@@ -192,16 +185,6 @@ export function buildMoneyPlan(input: {
       toId: a.memberId, toName: a.name, source: a.source, incomeId: a.id, status: null, days: null,
     });
   });
-  // Kept earmarks (📌): money a member should HOLD this month for a stated purpose. The cash reaches
-  // them via the normal collection/disbursement flow (it's already in the settlement net), so this step
-  // moves nothing in the walk — it's the dated reminder that ₹X of their in-hand is spoken for.
-  for (const k of kept) {
-    if (k.amount <= 0.005) continue;
-    steps.push({
-      id: `kept-${k.id}`, kind: "kept", day: k.day, amount: Math.round(k.amount * 100) / 100, done: k.done ?? false,
-      toId: k.memberId, toName: k.memberName, source: k.label, billId: k.id, status: null, days: null,
-    });
-  }
   // Piggy returns: the very last thing each month — a holder hands their unspent budget to the Piggy
   // holder. Undated + lowest priority (below even other undated steps), a projection until wind-down.
   for (const p of piggyReturns) {
@@ -372,7 +355,7 @@ export function buildMoneyPlan(input: {
   // bills → other disbursements/allowances out → piggy returns (money comes in, members get funded,
   // bills get paid, the remainder flows back). Anything with NO due date sinks to the very bottom.
   const rank = (s: PlanStep) =>
-    s.kind === "income" ? -1 : s.kind === "transfer-in" ? 0 : ((s.kind === "advance" && s.fundsMember) || (s.kind === "transfer-out" && s.fundsMember)) ? 1 : s.kind === "bill" ? (s.deferred ? 3.5 : 2) : s.kind === "kept" ? 2.5 : s.kind === "piggy" ? 4 : 3;
+    s.kind === "income" ? -1 : s.kind === "transfer-in" ? 0 : ((s.kind === "advance" && s.fundsMember) || (s.kind === "transfer-out" && s.fundsMember)) ? 1 : s.kind === "bill" ? (s.deferred ? 3.5 : 2) : s.kind === "piggy" ? 4 : 3;
   // Undated INBOUND collections are gathered UP FRONT (money in before money out) — an unknown income
   // day must never sort a collection AFTER the disbursements/bills it funds, which would make the hub
   // look deeply negative when in truth the cash is simply collected first. Undated bills, disbursements
@@ -460,10 +443,9 @@ export function buildMoneyPlan(input: {
     }
     if (s.kind === "income") {
       shift(s.toId, s.amount); // income lands in the recipient's hand (always — not gated by a done flag)
-    } else if (s.kind === "piggy" || s.kind === "kept") {
-      // Piggy hand-over = PRIOR-month cash (tracked in In-Hand); a kept earmark's cash already reaches the
-      // member via the normal collection/disbursement flow (it's in the settlement net). Both are
-      // informational in the cash walk and move no running balance here.
+    } else if (s.kind === "piggy") {
+      // Piggy hand-over = PRIOR-month cash (tracked in In-Hand), informational in the cash walk here — it
+      // moves no running balance.
     } else if (s.kind === "transfer-in" || s.kind === "transfer-out" || s.kind === "allowance" || s.kind === "advance" || s.kind === "manual") {
       shift(s.fromId, -s.amount);
       shift(s.toId, s.amount);
@@ -476,7 +458,7 @@ export function buildMoneyPlan(input: {
 
   // Income rows are informational and Piggy returns are live projections (finalised at wind-down), so
   // neither counts toward the "N/total done" progress — they're context, not tickable settlement steps.
-  const counted = steps.filter((s) => s.kind !== "piggy" && s.kind !== "income" && s.kind !== "kept" && !s.hidden);
+  const counted = steps.filter((s) => s.kind !== "piggy" && s.kind !== "income" && !s.hidden);
   const done = counted.filter((s) => s.done).length;
   return { steps, done, total: counted.length, hubShortfall: Math.round(hubShortfall) };
 }

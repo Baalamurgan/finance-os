@@ -167,7 +167,6 @@ export function MoneyPlan({
             const isTransfer = s.kind === "transfer-in" || s.kind === "transfer-out";
             const isIncome = s.kind === "income";
             const isManual = s.kind === "manual";
-            const isKept = s.kind === "kept";
             const canActManual = open && (canEdit || currentMemberId === s.fromId || currentMemberId === s.toId);
             const canActTransfer = open && (isHead || currentMemberId === s.fromId || currentMemberId === s.toId);
             const canActBill = open && (canEdit || currentMemberId === s.payerId);
@@ -177,7 +176,7 @@ export function MoneyPlan({
             // kind, so the title just shows the money flow (sender → recipient) like every other step.
             // Income = a member's own money landing (recipient · source), an inflow row.
             const isHandover = isPiggy && s.handoverPeriodId != null;
-            const title = isIncome ? `${s.toName ?? "?"} · ${s.source ?? "income"}` : isKept ? `Keep with ${s.toName ?? "?"}` : isAllowance ? `${s.fromName} → ${s.source ?? s.toName}` : isHandover ? `${s.fromName ?? "Owner"} → ${s.toName}` : isPiggy ? `${s.fromName} → ${s.toName} · Piggy` : isManual || isAdvance || isTransfer ? `${s.fromName} → ${s.toName}` : `${s.payerName} → ${s.vendor}`;
+            const title = isIncome ? `${s.toName ?? "?"} · ${s.source ?? "income"}` : isAllowance ? `${s.fromName} → ${s.source ?? s.toName}` : isHandover ? `${s.fromName ?? "Owner"} → ${s.toName}` : isPiggy ? `${s.fromName} → ${s.toName} · Piggy` : isManual || isAdvance || isTransfer ? `${s.fromName} → ${s.toName}` : `${s.payerName} → ${s.vendor}`;
             // Urgency (only while unpaid — a done step is never "overdue"): RED for overdue OR due
             // today (needs action now), AMBER for due in 1–2 days, plain otherwise.
             const urgent = !s.done && (s.status === "overdue" || (s.status === "soon" && (s.days ?? 1) <= 0));
@@ -187,8 +186,6 @@ export function MoneyPlan({
             const cashParties: { id: number; name: string }[] = (
               s.kind === "bill"
                 ? (s.fund ? [] : [{ id: s.payerId, name: s.payerName }])
-                : isKept // a kept earmark moves no cash in the walk — the money arrives via the normal flow
-                ? []
                 : [{ id: s.fromId, name: s.fromName }, { id: s.toId, name: s.toName }]
             ).filter((p): p is { id: number; name: string } => p.id != null && p.name != null);
             const short = s.senderShort ?? s.short; // member shortfall OR treasurer(hub) shortfall
@@ -221,7 +218,6 @@ export function MoneyPlan({
                     {isManual && <span className="shrink-0 rounded-full bg-cyan-50 px-1.5 py-0.5 text-[9px] font-medium text-cyan-600">✎ manual</span>}
                     {isAllowance && <span className="shrink-0 rounded-full bg-violet-50 px-1.5 py-0.5 text-[9px] font-medium text-violet-500">personal · from hub</span>}
                     {isPiggy && <span className="shrink-0 rounded-full bg-pink-50 px-1.5 py-0.5 text-[9px] font-medium text-pink-500">{isHandover ? "🐷 last month’s leftovers → holder" : "🐷 to piggy · at wind-down"}</span>}
-                    {isKept && <span className="shrink-0 rounded-full bg-amber-50 px-1.5 py-0.5 text-[9px] font-medium text-amber-600" title={`Held by ${s.toName ?? "them"} — already counted in their in-hand; the cash reaches them via the normal collection/disbursement`}>📌 kept{s.source ? ` · ${s.source}` : ""}</span>}
                     {/* Manual steps own their day and can edit it in ANY state (it's ad-hoc metadata;
                         position still follows the insert anchor). Handled here so it's not gated by !done. */}
                     {isManual && (() => {
@@ -233,10 +229,10 @@ export function MoneyPlan({
                       const tag = <DayTag kind={s.kind} day={s.day} status={s.status ?? null} days={s.days ?? null} />;
                       if (!isHead || !datesEditable) return tag;
                       // Row-backed steps → edit the row's day (+ pin): bill/allowance line, income entry,
-                      // advance, and a 📌 kept earmark (its ExpenseEntry id, edited like a bill line).
-                      const rowId = s.kind === "income" ? s.incomeId : (s.kind === "bill" && !s.fund) || isAllowance || isKept ? s.billId : isAdvance ? s.advanceId : undefined;
+                      // advance (its ExpenseEntry / IncomeEntry / advance id).
+                      const rowId = s.kind === "income" ? s.incomeId : (s.kind === "bill" && !s.fund) || isAllowance ? s.billId : isAdvance ? s.advanceId : undefined;
                       if (rowId != null) {
-                        const editKind = isAdvance ? (s.payback ? "advance-payback" : "advance") : isKept ? "bill" : s.kind;
+                        const editKind = isAdvance ? (s.payback ? "advance-payback" : "advance") : s.kind;
                         return <StepDayEditor kind={editKind} id={rowId} day={s.day}>{tag}</StepDayEditor>;
                       }
                       // Rowless steps → a per-month override keyed by a stable step key: a fund/periodic
@@ -516,7 +512,6 @@ export function MoneyPlan({
 // Human label for a step (shared by the row + the balances sheet).
 function stepTitle(s: MoneyPlanResult["steps"][number]): string {
   if (s.kind === "income") return `${s.toName ?? "?"} · ${s.source ?? "income"}`;
-  if (s.kind === "kept") return `Keep with ${s.toName ?? "?"}${s.source ? ` · ${s.source}` : ""}`;
   if (s.kind === "allowance") return `${s.fromName} → ${s.source ?? s.toName}`;
   if (s.kind === "piggy") return `${s.fromName} → ${s.toName} · Piggy`;
   if (s.kind === "bill") return `${s.payerName} → ${s.vendor}`;

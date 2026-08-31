@@ -42,7 +42,7 @@ export function InHandPersonGroup({
   selYear: number;
   selMonth: number;
 }) {
-  const { name, cats, unpaidBills, paidBills, earmarked, kept, sinkingFunds, sinkingHeld, unpaidPeriodic, paidPeriodic, carried, carriedDue, miscSpent, net, pendingPiggyHeld, yetToReceive, selfFundsBills } = group;
+  const { name, cats, unpaidBills, paidBills, earmarked, sinkingFunds, sinkingHeld, unpaidPeriodic, paidPeriodic, carried, carriedDue, miscSpent, net, pendingPiggyHeld, yetToReceive, selfFundsBills } = group;
   // Per-card toggle: include or exclude this member's own misc/out-of-pocket in their total.
   // Default = include (the true position). Excluding shows "budget + bills + savings" only, so
   // someone can see where they'd stand without their discretionary spending counted.
@@ -132,15 +132,6 @@ export function InHandPersonGroup({
               Set aside · {e.name} <span className="text-[10px] text-slate-400">held for the bill</span>
             </span>
             <span className="shrink-0 tabular-nums text-teal-700">{formatINR(e.amount)}</span>
-          </li>
-        ))}
-        {/* 📌 Kept earmarks: misc money set aside for this person to HOLD (e.g. G704 maintenance). */}
-        {kept.map((e) => (
-          <li key={`kp${e.id}`} className="flex items-center justify-between gap-2 text-xs">
-            <span className="truncate text-amber-600">
-              📌 Kept · {e.name} <span className="text-[10px] text-slate-400">held to spend later</span>
-            </span>
-            <span className="shrink-0 tabular-nums text-amber-700">{formatINR(e.amount)}</span>
           </li>
         ))}
         {/* Accrued sinking-fund holds this person is the saver of — held separately from the Piggy. */}

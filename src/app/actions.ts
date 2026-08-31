@@ -17,7 +17,7 @@ import { getSpendShortcuts, getMatcherKeywords, getFrequentSpendItems, getMoneyP
 import { planBillMonth, type FundingStyle } from "@/lib/schedule";
 import { getBillReminders } from "@/lib/billReminders";
 import { applyBudgetShortfall, windDownPeriod } from "@/lib/windDown";
-import { SURPLUS_NOTE, CARRY_NOTE, DEFERRED_NOTE, KEPT_NOTE } from "@/lib/notes";
+import { SURPLUS_NOTE, CARRY_NOTE, DEFERRED_NOTE } from "@/lib/notes";
 
 // Record a money-affecting change for the head-only activity log (who + what + when).
 async function logActivity(
@@ -251,11 +251,6 @@ async function doSaveExpense(formData: FormData): Promise<{ ok: boolean; error?:
   const dueNum = dueRaw === "" ? null : Number(dueRaw);
   const dueDay = dueNum != null && Number.isFinite(dueNum) && dueNum >= 1 && dueNum <= 31 ? Math.round(dueNum) : null;
   const hasDueField = formData.has("dueDay"); // only touch dueDay when the form actually sent it
-  // 📌 "Keep for this member": mark this misc line as an earmark the assignee HOLDS (not a bill to pay
-  // out). Stored via the KEPT_NOTE marker; In-Hand shows it as held, the Money Plan as a "keep with X"
-  // step. Requires an assignee. Only meaningful when the form actually offered the toggle.
-  const hasKeptField = formData.has("keptToggle");
-  const keptFlag = formData.get("kept") === "on";
 
   if (!periodId || !amount || !label) return { ok: false }; // note required
   if (!(await canEditNow(periodId))) return { ok: false };
@@ -282,7 +277,6 @@ async function doSaveExpense(formData: FormData): Promise<{ ok: boolean; error?:
     necessaryRaw === "yes" ? true : necessaryRaw === "no" ? false : (category?.necessary ?? true);
   // auto-attribute to the category's responsible member when none is picked
   const finalMemberId = memberId ?? category?.responsibleMemberId ?? null;
-  if (keptFlag && finalMemberId == null) return { ok: false, error: "Pick who holds this kept amount." };
 
   if (id) {
     // A line already paid in the money plan is frozen — the head can edit anything else all month, but
@@ -293,13 +287,9 @@ async function doSaveExpense(formData: FormData): Promise<{ ok: boolean; error?:
     // refresh-from-Setup leaves the intentional override alone (until it's un-pinned). Editing only
     // the label / member / necessary flag doesn't pin — those aren't touched by the Setup sync.
     const valueChanged = existing != null && (existing.amount !== amount || (hasDueField && existing.dueDay !== dueDay));
-    // Toggle the 📌 kept marker only when the form offered it, and never clobber a __deferred__/__carry__ line.
-    const keptUpdate = hasKeptField && (existing?.note == null || existing?.note === KEPT_NOTE)
-      ? { note: keptFlag ? KEPT_NOTE : null }
-      : {};
     await prisma.expenseEntry.update({
       where: { id },
-      data: { categoryId, amount, label, memberId: finalMemberId, necessary, ...(hasDueField ? { dueDay } : {}), ...keptUpdate, ...(valueChanged ? { pinned: true } : {}) },
+      data: { categoryId, amount, label, memberId: finalMemberId, necessary, ...(hasDueField ? { dueDay } : {}), ...(valueChanged ? { pinned: true } : {}) },
     });
     await logActivity("expense", "updated", `Edited expense “${label}” to ${formatINR(amount)}`, periodId);
   } else {
@@ -345,18 +335,16 @@ async function doSaveExpense(formData: FormData): Promise<{ ok: boolean; error?:
     const pbNum = pbRaw === "" ? null : Number(pbRaw);
     const paybackOverride = pbNum != null && Number.isFinite(pbNum) && pbNum >= 1 && pbNum <= 31 ? Math.round(pbNum) : null;
     // Timing gate: a DATED expense that can't be paid in order is blocked — UNLESS the user is funding
-    // it. Deferred lines skip the gate (they always settle at wind-down, not against a due date). A 📌
-    // kept earmark also skips it — it's held cash reaching the member via the normal flow, not a vendor
-    // payment racing a due date.
-    if (!deferred && !funding && !keptFlag) {
+    // it. Deferred lines skip the gate (they always settle at wind-down, not against a due date).
+    if (!deferred && !funding) {
       const feas = await checkAddExpenseFeasible(periodId, { amount, dueDay, payerId: finalMemberId, label });
       if (!feas.ok) return { ok: false, error: feas.reason, shortfall: feas.shortfall, sources: feas.sources };
     }
     // "Repeat every month" (checkbox) → also add to the recurring template so it's generated every
-    // month; unchecked → one-off (this month only). A deferred or kept line is always one-off.
-    const oneOff = deferred || keptFlag || formData.get("repeat") !== "on";
+    // month; unchecked → one-off (this month only). A deferred line is always one-off.
+    const oneOff = deferred || formData.get("repeat") !== "on";
     await prisma.expenseEntry.create({
-      data: { periodId, categoryId, amount, label, memberId: finalMemberId, necessary, oneOff, dueDay, ...(keptFlag ? { note: KEPT_NOTE } : deferred ? { note: DEFERRED_NOTE } : {}) },
+      data: { periodId, categoryId, amount, label, memberId: finalMemberId, necessary, oneOff, dueDay, ...(deferred ? { note: DEFERRED_NOTE } : {}) },
     });
     if (!oneOff) await promoteToTemplate(periodId, "expense", label, amount, categoryId, finalMemberId);
     // Record the funding advances (one per funder) so each front + payback appears in the plan.

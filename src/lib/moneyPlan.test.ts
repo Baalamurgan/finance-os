@@ -46,25 +46,6 @@ describe("buildMoneyPlan", () => {
     expect(plan.total).toBe(1); // only the bill counts
   });
 
-  it("renders a 📌 kept earmark as an informational step that moves no cash and isn't counted", () => {
-    const plan = buildMoneyPlan({
-      treasurerId: T,
-      transfers: [xfer({ fromId: 2, toId: T, amount: 100, settled: true })],
-      bills: [],
-      incomeDayByMember: { 2: 1 },
-      kept: [{ id: 9, memberId: 2, memberName: "B", amount: 30, day: 5, label: "G704 maintenance" }],
-    });
-    const k = plan.steps.find((s) => s.kind === "kept");
-    expect(k).toBeTruthy();
-    expect(k!.id).toBe("kept-9");
-    expect(k!.day).toBe(5);
-    expect(k!.toId).toBe(2);
-    // moves no running balance (the cash reaches them via the normal flow)
-    expect(k!.balancesAfter?.[2] ?? 0).toBe(k!.balancesBefore?.[2] ?? 0);
-    // informational: not part of the N/total progress
-    expect(plan.total).toBe(1); // only the inbound transfer counts
-  });
-
   it("flags a hub shortfall when an outflow runs before enough has arrived", () => {
     // treasurer must pay a 50 bill on the 1st, but only 30 arrives (on the 1st)
     const plan = buildMoneyPlan({
