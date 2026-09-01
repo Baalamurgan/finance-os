@@ -2,6 +2,7 @@ import { unstable_cache } from "next/cache";
 import { prisma } from "@/lib/prisma";
 import { FAMILY_TAG } from "@/lib/revalidate";
 import { MISC_SUBCATEGORIES } from "@/lib/misc";
+import { LEFTOVER_NOTE } from "@/lib/notes";
 import { computeSettlement } from "@/lib/settlement-core";
 import { planBillMonth, isLumpDue, monthsUntilNextDue, type FundingStyle } from "@/lib/schedule";
 import { suggestCategoryName, normalizeItem, resolveCategoryId } from "@/lib/spendCategorize";
@@ -649,8 +650,33 @@ export async function getMoneyPlan(householdId: number, periodId: number, inhand
   }));
   const hiddenKeys = hiddenRows.map((r) => r.stepKey);
 
+  // Prior-month cash now booked as this month's pool income but still HELD by a member (their budget
+  // leftover routed to income and/or the general Piggy) → one combined tickable "holder → treasurer"
+  // hand-over per holder. Sources named in the subtitle; done only when every underlying row is handed.
+  const inr = (n: number) => "₹" + Math.round(n).toLocaleString("en-IN");
+  const handoverByHolder = new Map<number, { amount: number; parts: string[]; ids: number[]; done: boolean }>();
+  for (const p of inhand.poolHandovers ?? []) {
+    if (p.fromMemberId === inhand.treasurerId) continue; // already at the hub
+    const g = handoverByHolder.get(p.fromMemberId) ?? { amount: 0, parts: [], ids: [], done: true };
+    g.amount = Math.round((g.amount + p.amount) * 100) / 100;
+    g.parts.push(p.kind === "piggy" ? `from Piggy (${inr(p.amount)})` : `leftover · ${p.detail ?? "budget"} (${inr(p.amount)})`);
+    g.ids.push(p.id);
+    g.done = g.done && p.handedOverAt != null;
+    handoverByHolder.set(p.fromMemberId, g);
+  }
+  const poolHandovers = inhand.treasurerId == null ? [] : [...handoverByHolder.entries()].map(([fromId, g]) => {
+    const day = dayOverride.get(`poolho-${fromId}`) ?? 1; // early — the hub needs it before disbursing
+    const st = dayStatus(day);
+    return {
+      fromId, fromName: nameById.get(fromId) ?? "member", toId: inhand.treasurerId as number,
+      toName: nameById.get(inhand.treasurerId as number) ?? "treasurer",
+      amount: g.amount, detail: g.parts.join("  +  "), recordIds: g.ids, done: g.done,
+      day, status: st?.status ?? null, days: st?.days ?? null,
+    };
+  });
+
   const { buildMoneyPlan } = await import("./moneyPlan");
-  const plan = buildMoneyPlan({ treasurerId: inhand.treasurerId, treasurerName: settlement.treasurer?.name, transfers, bills, allowances, piggyReturns, advances, incomeDayByMember, incomeByMember, incomeArrivals, reimburseByMember, reimburseDay, piggyHandover, manualSteps, hiddenKeys });
+  const plan = buildMoneyPlan({ treasurerId: inhand.treasurerId, treasurerName: settlement.treasurer?.name, transfers, bills, allowances, piggyReturns, advances, incomeDayByMember, incomeByMember, incomeArrivals, reimburseByMember, reimburseDay, piggyHandover, manualSteps, poolHandovers, hiddenKeys });
 
   // Enrich done steps with the day they were ACTUALLY marked paid (IST), so the plan can show
   // "paid <day>" when it differs from the scheduled/due day. Timestamps live on the underlying record:
@@ -1114,9 +1140,23 @@ async function _getInHand(householdId: number, periodId: number) {
   }
   const pendingPiggyLump = Math.round([...pendingByOwner.values()].reduce((s, v) => s + v, 0) * 100) / 100;
 
+  // Prior-month cash a member still HOLDS that became this month's pool income (their budget leftover
+  // routed to income, and/or the general Piggy taken as income) — each must be handed to the treasurer.
+  // Attached to the holder's card (rows below) + summed for the treasurer's "to collect" note.
+  const [poolHandovers, leftoverIncomeAgg] = await Promise.all([
+    prisma.poolHandover.findMany({ where: { periodId }, select: { id: true, fromMemberId: true, kind: true, amount: true, detail: true, handedOverAt: true } }),
+    prisma.incomeEntry.aggregate({ where: { periodId, note: LEFTOVER_NOTE }, _sum: { amount: true } }),
+  ]);
+
   // Show EVERY member's In-Hand card — even at ₹0 — so the family sees a complete picture (the
   // total is "what they hold right now", and 0 is a real, meaningful answer).
-  const byPerson = members.map((m) => build(m.id, m.name));
+  const byPerson = members.map((m) => {
+    const g = build(m.id, m.name);
+    const handovers = poolHandovers
+      .filter((p) => p.fromMemberId === m.id && p.handedOverAt == null)
+      .map((p) => ({ id: p.id, kind: p.kind as "leftover" | "piggy", amount: p.amount, detail: p.detail }));
+    return { ...g, handovers };
+  });
   const shared = build(null, "Shared / pool");
   const piggyTotal = piggy.generalTotal + piggy.sinking.reduce((s, x) => s + x.hold, 0);
   const monthBalance = (incomeAgg._sum.amount ?? 0) - (expenseAgg._sum.amount ?? 0);
@@ -1128,6 +1168,16 @@ async function _getInHand(householdId: number, periodId: number) {
 
   // Allowances to send this month (treasurer → member). `done` = the Sheet line's paid flag.
   const nameOf = (id: number | null) => members.find((m) => m.id === id)?.name ?? "member";
+
+  // Treasurer-facing view of those hand-overs: who still owes the hub cash (pending), and how much of
+  // the leftover income is the treasurer's OWN (already at the hub = total leftover income − everyone
+  // else's leftover hand-overs). Surfaced as a Family-pool annotation on the treasurer's card.
+  const poolIncoming = poolHandovers
+    .filter((p) => p.handedOverAt == null)
+    .map((p) => ({ fromId: p.fromMemberId, fromName: nameOf(p.fromMemberId), amount: p.amount, kind: p.kind as "leftover" | "piggy", detail: p.detail }));
+  const leftoverIncomeTotal = Math.round((leftoverIncomeAgg._sum.amount ?? 0) * 100) / 100;
+  const leftoverHandoverTotal = Math.round(poolHandovers.filter((p) => p.kind === "leftover").reduce((s, p) => s + p.amount, 0) * 100) / 100;
+  const treasurerOwnLeftover = Math.round((leftoverIncomeTotal - leftoverHandoverTotal) * 100) / 100;
   const allowances = allowanceLines
     .filter((e) => e.memberId != null)
     .map((e) => ({ id: e.id, recipientId: e.memberId as number, recipientName: nameOf(e.memberId), label: e.label, amount: e.amount, done: e.paid, dueDay: e.dueDay }));
@@ -1155,7 +1205,7 @@ async function _getInHand(householdId: number, periodId: number) {
     priorPeriod && priorPeriod.piggyHandedOverAt == null && pendingPiggyLump > 0.005
       ? { priorPeriodId: priorPeriod.id, lump: pendingPiggyLump, day: handoverDay, owners: pendingOwners }
       : null;
-  return { byPerson, shared, allowances, piggyTotal, generalPiggy: piggy.generalTotal, treasurerId, piggyHolderId, monthBalance, treasurerPool, poolHoldsForMembers, pendingPiggyHandover };
+  return { byPerson, shared, allowances, piggyTotal, generalPiggy: piggy.generalTotal, treasurerId, piggyHolderId, monthBalance, treasurerPool, poolHoldsForMembers, pendingPiggyHandover, poolHandovers, poolIncoming, treasurerOwnLeftover };
 }
 
 /**

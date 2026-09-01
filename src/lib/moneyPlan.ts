@@ -26,7 +26,8 @@ export type PlanAdvance = { id: number; fromId: number; fromName: string; toId: 
 
 export type PlanStep = {
   id: string;
-  kind: "transfer-in" | "transfer-out" | "bill" | "allowance" | "piggy" | "advance" | "income" | "manual";
+  kind: "transfer-in" | "transfer-out" | "bill" | "allowance" | "piggy" | "advance" | "income" | "manual" | "pool-handover";
+  recordIds?: number[]; // pool-handover: the PoolHandover row ids this combined step ticks handed-over
   manualId?: number; // this step is a head-added manual move (write-through to the ManualPlanStep record)
   afterStepKey?: string; // a manual step: the step id it's anchored right after (for stable positioning)
   hidden?: boolean; // a head-hidden derived step — kept for the "un-hide" list but out of the walk/progress
@@ -75,9 +76,10 @@ export function buildMoneyPlan(input: {
   reimburseDay?: number; // target day to hand back those reimbursements (e.g. the day after wind-down)
   piggyHandover?: { toId: number; toName: string; handoverPeriodId: number; owners: { fromId: number; fromName: string; amount: number; day: number; status?: "overdue" | "soon" | "normal" | null; days?: number | null }[] }; // prior wound-down month's leftover — one tickable step per owner who hands their slice to the Piggy holder
   manualSteps?: { id: number; fromId: number; toId: number; fromName?: string; toName?: string; amount: number; day?: number | null; done: boolean; afterStepKey?: string | null }[]; // head-added ad-hoc moves
+  poolHandovers?: { fromId: number; fromName: string; toId: number; toName: string; amount: number; detail: string; recordIds: number[]; done: boolean; day: number | null; status?: "overdue" | "soon" | "normal" | null; days?: number | null }[]; // prior-month cash (leftover→income and/or Piggy→income) a holder hands to the treasurer
   hiddenKeys?: string[]; // step ids the head has hidden from the plan view
 }): MoneyPlan {
-  const { treasurerId, treasurerName, transfers, bills, allowances = [], piggyReturns = [], advances = [], incomeDayByMember, incomeByMember = {}, incomeArrivals, reimburseByMember = {}, reimburseDay, piggyHandover, manualSteps = [], hiddenKeys = [] } = input;
+  const { treasurerId, treasurerName, transfers, bills, allowances = [], piggyReturns = [], advances = [], incomeDayByMember, incomeByMember = {}, incomeArrivals, reimburseByMember = {}, reimburseDay, piggyHandover, manualSteps = [], poolHandovers = [], hiddenKeys = [] } = input;
 
   const inbound = transfers.filter((t) => t.toId === treasurerId);
   const outbound = transfers.filter((t) => t.toId !== treasurerId && t.fromId === treasurerId); // hub → creditor
@@ -185,6 +187,17 @@ export function buildMoneyPlan(input: {
       toId: a.memberId, toName: a.name, source: a.source, incomeId: a.id, status: null, days: null,
     });
   });
+  // Pool hand-overs (📥): prior-month cash a member still HOLDS that became this month's pool income —
+  // their budget leftover routed to income and/or the general Piggy taken as income. One combined
+  // "holder → treasurer" step per holder, dated early so the hub has it before disbursing. Real cash
+  // (the holder is seeded with it below, so no false shortfall), tickable, and counted in progress.
+  for (const p of poolHandovers) {
+    steps.push({
+      id: `poolho-${p.fromId}`, kind: "pool-handover", day: p.day, amount: Math.round(p.amount * 100) / 100, done: p.done,
+      fromId: p.fromId, toId: p.toId, fromName: p.fromName, toName: p.toName, source: p.detail, recordIds: p.recordIds,
+      status: p.status ?? null, days: p.days ?? null,
+    });
+  }
   // Piggy returns: the very last thing each month — a holder hands their unspent budget to the Piggy
   // holder. Undated + lowest priority (below even other undated steps), a projection until wind-down.
   for (const p of piggyReturns) {
@@ -355,12 +368,12 @@ export function buildMoneyPlan(input: {
   // bills → other disbursements/allowances out → piggy returns (money comes in, members get funded,
   // bills get paid, the remainder flows back). Anything with NO due date sinks to the very bottom.
   const rank = (s: PlanStep) =>
-    s.kind === "income" ? -1 : s.kind === "transfer-in" ? 0 : ((s.kind === "advance" && s.fundsMember) || (s.kind === "transfer-out" && s.fundsMember)) ? 1 : s.kind === "bill" ? (s.deferred ? 3.5 : 2) : s.kind === "piggy" ? 4 : 3;
+    s.kind === "income" ? -1 : (s.kind === "transfer-in" || s.kind === "pool-handover") ? 0 : ((s.kind === "advance" && s.fundsMember) || (s.kind === "transfer-out" && s.fundsMember)) ? 1 : s.kind === "bill" ? (s.deferred ? 3.5 : 2) : s.kind === "piggy" ? 4 : 3;
   // Undated INBOUND collections are gathered UP FRONT (money in before money out) — an unknown income
   // day must never sort a collection AFTER the disbursements/bills it funds, which would make the hub
   // look deeply negative when in truth the cash is simply collected first. Undated bills, disbursements
   // and piggy returns still sink to the very bottom (no deadline = lowest priority).
-  const eff = (s: PlanStep) => (s.day == null ? (s.kind === "transfer-in" || s.kind === "income" ? 0 : Infinity) : s.day);
+  const eff = (s: PlanStep) => (s.day == null ? (s.kind === "transfer-in" || s.kind === "income" || s.kind === "pool-handover" ? 0 : Infinity) : s.day);
   steps.sort((a, b) => eff(a) - eff(b) || rank(a) - rank(b) || b.amount - a.amount);
 
   // Head edits, persisted so a refresh keeps them. HIDDEN: mark the derived step in place — it's skipped
@@ -421,12 +434,16 @@ export function buildMoneyPlan(input: {
     if (id == null) return;
     bal.set(id, Math.round(((bal.get(id) ?? 0) + delta) * 100) / 100);
   };
+  // Seed each pool-handover holder with the prior-month cash they physically START holding (their
+  // leftover / Piggy that became this month's pool income). This lets the hand-over move real balance
+  // to the hub — crediting the pool income so the hub can disburse — WITHOUT flagging the holder short.
+  for (const p of poolHandovers) shift(p.fromId, p.amount);
   const senderOf = (s: PlanStep): number | null => (s.kind === "bill" ? s.payerId ?? null : s.fromId ?? null);
   const touchesHub = (s: PlanStep): boolean =>
     treasurerId != null &&
     ((s.kind === "bill" && !s.fund && s.payerId === treasurerId) ||
       (s.kind === "income" && s.toId === treasurerId) ||
-      ((s.kind === "transfer-in" || s.kind === "transfer-out" || s.kind === "allowance" || s.kind === "advance" || s.kind === "manual") && (s.fromId === treasurerId || s.toId === treasurerId)));
+      ((s.kind === "transfer-in" || s.kind === "transfer-out" || s.kind === "allowance" || s.kind === "advance" || s.kind === "manual" || s.kind === "pool-handover") && (s.fromId === treasurerId || s.toId === treasurerId)));
   let hubShortfall = 0;
   for (const s of steps) {
     s.balancesBefore = Object.fromEntries(bal); // snapshot each person's cash BEFORE this step moves any
@@ -446,7 +463,7 @@ export function buildMoneyPlan(input: {
     } else if (s.kind === "piggy") {
       // Piggy hand-over = PRIOR-month cash (tracked in In-Hand), informational in the cash walk here — it
       // moves no running balance.
-    } else if (s.kind === "transfer-in" || s.kind === "transfer-out" || s.kind === "allowance" || s.kind === "advance" || s.kind === "manual") {
+    } else if (s.kind === "transfer-in" || s.kind === "transfer-out" || s.kind === "allowance" || s.kind === "advance" || s.kind === "manual" || s.kind === "pool-handover") {
       shift(s.fromId, -s.amount);
       shift(s.toId, s.amount);
     } else if (s.kind === "bill" && !s.fund) {
@@ -467,7 +484,7 @@ export function buildMoneyPlan(input: {
 // and transfers/allowances/advances/manual moves relocate cash. BILLS are excluded on purpose — the
 // In-Hand card already treats an unpaid bill as cash the payer still HOLDS, so it's live without an
 // adjustment; and fund bills / Piggy steps move no member cash. See pendingCashMoveByMember.
-const CASH_MOVE_KINDS = new Set(["income", "transfer-in", "transfer-out", "allowance", "advance", "manual"]);
+const CASH_MOVE_KINDS = new Set(["income", "transfer-in", "transfer-out", "allowance", "advance", "manual", "pool-handover"]);
 
 // Per-member sum of the cash-moves NOT yet completed, signed from that member's view (+ if they'd
 // RECEIVE it, − if they'd SEND it). Subtracting this from a member's projected In-Hand total gives

@@ -14,3 +14,7 @@ export const CARRY_NOTE = "__carry__";
 // rolled to the next month but this one isn't wound down yet). A real expense of THIS month
 // (shows on the Sheet, counts in totals + carry) but kept OUT of the frozen settlement.
 export const DEFERRED_NOTE = "__deferred__";
+// A one-off income line created by taking the GENERAL Piggy into this month's spendable income. The
+// cash is still physically held by the Piggy holder, so it drives a "holder → treasurer" hand-over
+// step (PoolHandover kind "piggy"); the handover amount is re-derived from these lines on add/delete.
+export const PIGGY_INCOME_NOTE = "__piggy_income__";

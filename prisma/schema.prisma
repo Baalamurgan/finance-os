@@ -489,8 +489,28 @@ model Period {
   stepDayOverrides StepDayOverride[]
   manualPlanSteps  ManualPlanStep[]
   hiddenPlanSteps  HiddenPlanStep[]
+  poolHandovers    PoolHandover[]
 
   @@unique([householdId, year, month])
+}
+
+// Prior-month cash a member physically HOLDS that has become THIS month's pool income and must be
+// handed to the treasurer: their own budget leftover routed to income at wind-down (kind "leftover")
+// and/or the general Piggy taken as income (kind "piggy", held by the Piggy holder). Rendered as one
+// combined "holder → treasurer" hand-over step per holder in the Money Plan; tickable via handedOverAt.
+// A holder who IS the treasurer is never recorded (the cash is already at the hub).
+model PoolHandover {
+  id           Int       @id @default(autoincrement())
+  period       Period    @relation(fields: [periodId], references: [id])
+  periodId     Int // the month the income LANDS in (e.g. September)
+  householdId  Int
+  fromMemberId Int // the holder who must hand the cash to the treasurer
+  kind         String // "leftover" | "piggy"
+  amount       Float
+  detail       String? // e.g. "LPG Gas, Petrol" (leftover categories); null for piggy
+  handedOverAt DateTime? // set when ticked handed over; null = still pending
+  createdAt    DateTime  @default(now())
+  @@unique([periodId, fromMemberId, kind])
 }
 
 // A funding ADVANCE: someone (a member, or later a budget category) fronts cash to a member who'd

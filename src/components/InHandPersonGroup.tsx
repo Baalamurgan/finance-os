@@ -25,6 +25,8 @@ export function InHandPersonGroup({
   open,
   selYear,
   selMonth,
+  poolIncoming = [],
+  treasurerOwnLeftover = 0,
 }: {
   group: InHand["byPerson"][number];
   pendingCashMove: number;
@@ -43,8 +45,11 @@ export function InHandPersonGroup({
   open: boolean;
   selYear: number;
   selMonth: number;
+  poolIncoming?: { fromId: number; fromName: string; amount: number; kind: "leftover" | "piggy"; detail: string | null }[];
+  treasurerOwnLeftover?: number;
 }) {
   const { name, cats, unpaidBills, paidBills, earmarked, sinkingFunds, sinkingHeld, unpaidPeriodic, paidPeriodic, carried, carriedDue, miscSpent, net, pendingPiggyHeld, yetToReceive, selfFundsBills } = group;
+  const handovers = group.handovers ?? []; // tolerate a stale cached shape (pre-feature) until it refreshes
   // Per-card toggle: include or exclude this member's own misc/out-of-pocket in their total.
   // Default = include (the true position). Excluding shows "budget + bills + savings" only, so
   // someone can see where they'd stand without their discretionary spending counted.
@@ -218,6 +223,12 @@ export function InHandPersonGroup({
               </span>
               <span className="shrink-0 tabular-nums text-slate-500">{formatINR(monthBalance)}</span>
             </li>
+            {treasurerOwnLeftover > 0.005 && (
+              <li className="flex items-center justify-between gap-2 pl-6 text-[10px] text-slate-400" title="Your own budget leftover from last month that was routed to this month's income — already at the hub, so no hand-over. Shown for provenance; it's already part of Month balance above.">
+                incl. your own last-month leftover
+                <span className="shrink-0 tabular-nums">{formatINR(treasurerOwnLeftover)}</span>
+              </li>
+            )}
             {billsHeldForMembers > 0.005 && (
               <li className="flex items-center justify-between gap-2 pl-3 text-xs">
                 <span className="truncate text-slate-500" title="Cash the treasurer holds to pay out members' pool-funded bills (they've yet to receive it)">
@@ -240,6 +251,51 @@ export function InHandPersonGroup({
             <span className="truncate text-amber-600">🐷 holding for Piggy <span className="text-[10px] text-slate-400">hand to the holder</span></span>
             <span className="shrink-0 tabular-nums font-medium text-amber-700">{formatINR(pendingPiggyHeld)}</span>
           </li>
+        )}
+        {/* Prior-month cash this member still HOLDS that became this month's pool income — their budget
+            leftover routed to income and/or the general Piggy taken as income. In their holding-now total
+            now; leaves once they hand it to the treasurer (the combined Money-Plan step). */}
+        {handovers.length > 0 && (
+          <>
+            <li className="pt-2">
+              <div className="border-t border-dashed border-amber-100" />
+              <div className="mt-1.5 flex items-center justify-between gap-2">
+                <span className="text-[10px] font-semibold uppercase tracking-wide text-amber-600">Holding to hand to the treasurer</span>
+                <span className="text-[9px] text-slate-400">in your total now · leaves at month-end</span>
+              </div>
+            </li>
+            {handovers.map((h) => (
+              <li key={`ho${h.id}`} className="flex items-center justify-between gap-2 text-xs">
+                <span className="truncate text-amber-600">
+                  {h.kind === "piggy" ? "🐷 From Piggy" : "Last month’s leftover"}
+                  {h.detail && <span className="text-[10px] text-slate-400"> · {h.detail}</span>}
+                </span>
+                <span className="shrink-0 tabular-nums font-medium text-amber-700">{formatINR(h.amount)}</span>
+              </li>
+            ))}
+          </>
+        )}
+        {/* Treasurer: pool income still HELD by others until they hand it over — NOT in the treasurer's
+            holding-now yet (it's why holding-now sits below the projected pool). */}
+        {isTreasurer && poolIncoming.length > 0 && (
+          <>
+            <li className="pt-2">
+              <div className="border-t border-dashed border-amber-100" />
+              <div className="mt-1.5 flex items-center justify-between gap-2">
+                <span className="text-[10px] font-semibold uppercase tracking-wide text-amber-600">To collect from holders</span>
+                <span className="text-[9px] text-slate-400">not in your holding-now yet</span>
+              </div>
+            </li>
+            {[...new Map(poolIncoming.map((p) => [p.fromId, p.fromName])).entries()].map(([fromId, fromName]) => {
+              const amt = poolIncoming.filter((p) => p.fromId === fromId).reduce((s, p) => s + p.amount, 0);
+              return (
+                <li key={`inc${fromId}`} className="flex items-center justify-between gap-2 text-xs">
+                  <span className="truncate text-amber-600">📥 from {fromName} <span className="text-[10px] text-slate-400">last month’s leftover / Piggy</span></span>
+                  <span className="shrink-0 tabular-nums font-medium text-amber-700">{formatINR(amt)}</span>
+                </li>
+              );
+            })}
+          </>
         )}
         {/* Piggy holder still waiting on the owners' leftover (NOT in their total). */}
         {isPiggyHolder && pendingPiggyLump > 0.005 && (

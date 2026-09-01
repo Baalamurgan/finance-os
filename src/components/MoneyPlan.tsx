@@ -4,7 +4,7 @@ import { Fragment, useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { formatINR } from "@/lib/format";
-import { markSettled, unsettle, toggleBillPaid, markAdvanceSettled, unsettleAdvance, markPiggyHandedOver, toggleIncomeReceived, addManualStep, deleteManualStep, toggleManualStepDone, hideStep, unhideStep, unpayMiscBill } from "@/app/actions";
+import { markSettled, unsettle, toggleBillPaid, markAdvanceSettled, unsettleAdvance, markPiggyHandedOver, toggleIncomeReceived, addManualStep, deleteManualStep, toggleManualStepDone, hideStep, unhideStep, unpayMiscBill, togglePoolHandover } from "@/app/actions";
 import { PayBillModal } from "@/components/PayBillModal";
 import { MiscPayModal } from "@/components/MiscPayModal";
 import { ExpenseModal } from "@/components/ExpenseModal";
@@ -167,6 +167,7 @@ export function MoneyPlan({
             const isTransfer = s.kind === "transfer-in" || s.kind === "transfer-out";
             const isIncome = s.kind === "income";
             const isManual = s.kind === "manual";
+            const isPoolHandover = s.kind === "pool-handover";
             const canActManual = open && (canEdit || currentMemberId === s.fromId || currentMemberId === s.toId);
             const canActTransfer = open && (isHead || currentMemberId === s.fromId || currentMemberId === s.toId);
             const canActBill = open && (canEdit || currentMemberId === s.payerId);
@@ -176,7 +177,7 @@ export function MoneyPlan({
             // kind, so the title just shows the money flow (sender → recipient) like every other step.
             // Income = a member's own money landing (recipient · source), an inflow row.
             const isHandover = isPiggy && s.handoverPeriodId != null;
-            const title = isIncome ? `${s.toName ?? "?"} · ${s.source ?? "income"}` : isAllowance ? `${s.fromName} → ${s.source ?? s.toName}` : isHandover ? `${s.fromName ?? "Owner"} → ${s.toName}` : isPiggy ? `${s.fromName} → ${s.toName} · Piggy` : isManual || isAdvance || isTransfer ? `${s.fromName} → ${s.toName}` : `${s.payerName} → ${s.vendor}`;
+            const title = isIncome ? `${s.toName ?? "?"} · ${s.source ?? "income"}` : isAllowance ? `${s.fromName} → ${s.source ?? s.toName}` : isHandover ? `${s.fromName ?? "Owner"} → ${s.toName}` : isPiggy ? `${s.fromName} → ${s.toName} · Piggy` : isManual || isAdvance || isTransfer || isPoolHandover ? `${s.fromName} → ${s.toName}` : `${s.payerName} → ${s.vendor}`;
             // Urgency (only while unpaid — a done step is never "overdue"): RED for overdue OR due
             // today (needs action now), AMBER for due in 1–2 days, plain otherwise.
             const urgent = !s.done && (s.status === "overdue" || (s.status === "soon" && (s.days ?? 1) <= 0));
@@ -192,7 +193,7 @@ export function MoneyPlan({
             // Fronting: marking a step paid while its sender is short (earlier steps not done) means they
             // pay from their own pocket. That's allowed — they're already owed it back (their funding step
             // / settlement covers it, so the books stay balanced); we just confirm it so it's deliberate.
-            const frontName = isPiggy || isTransfer || isAllowance || isAdvance ? s.fromName : s.payerName;
+            const frontName = isPiggy || isTransfer || isAllowance || isAdvance || isPoolHandover ? s.fromName : s.payerName;
             const frontMsg = !s.done && short != null && short > 0.005
               ? `⚠ ${frontName ?? "This person"} is short ${formatINR(short)} right now — earlier steps aren't done yet.\n\nMarking this paid means ${frontName ?? "they"} front ${formatINR(short)} from their own pocket. That's fine — they're already owed it back (their funding step / settlement covers it, so the books stay balanced). It'll come back once that funding step is done.\n\nProceed?`
               : null;
@@ -218,6 +219,7 @@ export function MoneyPlan({
                     {isManual && <span className="shrink-0 rounded-full bg-cyan-50 px-1.5 py-0.5 text-[9px] font-medium text-cyan-600">✎ manual</span>}
                     {isAllowance && <span className="shrink-0 rounded-full bg-violet-50 px-1.5 py-0.5 text-[9px] font-medium text-violet-500">personal · from hub</span>}
                     {isPiggy && <span className="shrink-0 rounded-full bg-pink-50 px-1.5 py-0.5 text-[9px] font-medium text-pink-500">{isHandover ? "🐷 last month’s leftovers → holder" : "🐷 to piggy · at wind-down"}</span>}
+                    {isPoolHandover && <span className="shrink-0 rounded-full bg-amber-50 px-1.5 py-0.5 text-[9px] font-medium text-amber-600" title="Last month's money this person still holds — their budget leftover routed to income and/or the general Piggy — handed to the treasurer so the hub can run the plan">📥 last month’s money → treasurer</span>}
                     {/* Manual steps own their day and can edit it in ANY state (it's ad-hoc metadata;
                         position still follows the insert anchor). Handled here so it's not gated by !done. */}
                     {isManual && (() => {
@@ -239,9 +241,11 @@ export function MoneyPlan({
                       // bill (no line of its own) and the Piggy hand-over (date otherwise derived).
                       const stepKey = isHandover && s.handoverPeriodId != null && s.fromId != null
                         ? `piggyho-${s.handoverPeriodId}-${s.fromId}`
-                        : s.kind === "bill" && s.fund && s.categoryId != null
-                          ? `fund-${s.categoryId}`
-                          : undefined;
+                        : isPoolHandover && s.fromId != null
+                          ? `poolho-${s.fromId}`
+                          : s.kind === "bill" && s.fund && s.categoryId != null
+                            ? `fund-${s.categoryId}`
+                            : undefined;
                       if (stepKey) return <StepDayEditor kind="override" id={periodId} stepKey={stepKey} day={s.day}>{tag}</StepDayEditor>;
                       // Everything else (collections / disbursements) derives its date — read-only.
                       return tag;
@@ -294,9 +298,22 @@ export function MoneyPlan({
                       <MiniBtn primary>✓ mark handed over</MiniBtn>
                     </form>
                   )}
+                  {/* Pool hand-over: the wide "leftover · … + from Piggy" provenance + a combined tick. */}
+                  {isPoolHandover && s.source && (
+                    <div className="mt-0.5 text-[10px] text-amber-600">{s.source}</div>
+                  )}
+                  {isPoolHandover && s.done && (
+                    <span className="mt-1 inline-flex items-center rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-medium text-emerald-700 no-underline">✓ handed to {s.toName}</span>
+                  )}
+                  {isPoolHandover && !s.done && (canEdit || currentMemberId === s.fromId) && s.recordIds && s.recordIds.length > 0 && (
+                    <form action={togglePoolHandover} className="mt-1">
+                      <input type="hidden" name="ids" value={s.recordIds.join(",")} />
+                      <MiniBtn primary>✓ mark handed over</MiniBtn>
+                    </form>
+                  )}
                   {!s.done && short != null && short > 0.005 && (
                     <div className="text-[10px] font-semibold text-red-600">
-                      ⚠ {isPiggy || isTransfer || isAllowance || isAdvance ? s.fromName : s.payerName} needs {formatINR(short)} more in hand first
+                      ⚠ {isPiggy || isTransfer || isAllowance || isAdvance || isPoolHandover ? s.fromName : s.payerName} needs {formatINR(short)} more in hand first
                     </div>
                   )}
                   {!s.done && s.infeasibleFrom !== undefined && (
@@ -312,7 +329,7 @@ export function MoneyPlan({
 
                 {/* action */}
                 <span className="flex w-16 shrink-0 justify-end">
-                  {isHandover ? null /* rendered inline in the content column above */ : isPiggy ? (
+                  {isHandover || isPoolHandover ? null /* rendered inline in the content column above */ : isPiggy ? (
                     <span className="text-[9px] text-slate-300">est.</span>
                   ) : isAdvance ? (
                     s.advanceId != null && canActTransfer ? (

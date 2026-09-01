@@ -17,7 +17,7 @@ import { getSpendShortcuts, getMatcherKeywords, getFrequentSpendItems, getMoneyP
 import { planBillMonth, type FundingStyle } from "@/lib/schedule";
 import { getBillReminders } from "@/lib/billReminders";
 import { applyBudgetShortfall, windDownPeriod } from "@/lib/windDown";
-import { SURPLUS_NOTE, CARRY_NOTE, DEFERRED_NOTE } from "@/lib/notes";
+import { SURPLUS_NOTE, CARRY_NOTE, DEFERRED_NOTE, PIGGY_INCOME_NOTE } from "@/lib/notes";
 
 // Record a money-affecting change for the head-only activity log (who + what + when).
 async function logActivity(
@@ -445,6 +445,11 @@ export async function deleteIncome(formData: FormData) {
   const i = await prisma.incomeEntry.findUnique({ where: { id } });
   if (i && !(await canEditNow(i.periodId))) return;
   await prisma.incomeEntry.delete({ where: { id } });
+  // Removing a general-Piggy income line shrinks (or clears) the holder's hand-over to the treasurer.
+  if (i?.note === PIGGY_INCOME_NOTE) {
+    const period = await prisma.period.findUnique({ where: { id: i.periodId }, select: { householdId: true } });
+    if (period) await syncPiggyHandover(period.householdId, i.periodId);
+  }
   if (i) await logActivity("income", "deleted", `Removed income “${i.source}” ${formatINR(i.amount)}`, i.periodId);
   revalidateFamily();
 }
@@ -866,13 +871,41 @@ export async function withdrawPiggy(formData: FormData) {
         note: `Withdrawal: ${note}`,
       },
     });
-    // 2. one-off income line (money brought into the month; not copied forward)
+    // 2. one-off income line (money brought into the month; not copied forward). A GENERAL-Piggy use
+    // carries the marker note so its "holder → treasurer" hand-over can be re-derived; a sinking-fund
+    // withdrawal is held by the fund's saver, not the Piggy holder, so it's left unmarked.
     await tx.incomeEntry.create({
-      data: { periodId, source: `From Piggy: ${note}`, amount, oneOff: true },
+      data: { periodId, source: `From Piggy: ${note}`, amount, oneOff: true, note: sinkingCatId ? null : PIGGY_INCOME_NOTE },
     });
   });
+  if (!sinkingCatId) await syncPiggyHandover(household.id, periodId);
   await logActivity("piggy", "updated", `Used Piggy ${formatINR(amount)} — ${note}`, periodId);
   revalidateFamily();
+}
+
+// Keep the "general Piggy taken as income" hand-over (PoolHandover kind "piggy") in sync with the
+// marked income lines: the Piggy holder physically holds that cash until they hand it to the treasurer.
+// Re-derived from the marked lines so it self-corrects when one is added OR deleted. A no-op amount, or
+// a Piggy holder who IS the treasurer, clears the row (cash already at the hub).
+async function syncPiggyHandover(householdId: number, periodId: number) {
+  const [household, period, head] = await Promise.all([
+    prisma.household.findUnique({ where: { id: householdId }, select: { treasurerMemberId: true, piggyHolderMemberId: true } }),
+    prisma.period.findUnique({ where: { id: periodId }, select: { treasurerMemberId: true } }),
+    prisma.member.findFirst({ where: { householdId, role: "head" }, select: { id: true } }),
+  ]);
+  const treasurerId = period?.treasurerMemberId ?? household?.treasurerMemberId ?? head?.id ?? null;
+  const holderId = household?.piggyHolderMemberId ?? head?.id ?? null;
+  const agg = await prisma.incomeEntry.aggregate({ where: { periodId, note: PIGGY_INCOME_NOTE }, _sum: { amount: true } });
+  const total = Math.round((agg._sum.amount ?? 0) * 100) / 100;
+  if (holderId == null || holderId === treasurerId || total <= 0.005) {
+    if (holderId != null) await prisma.poolHandover.deleteMany({ where: { periodId, fromMemberId: holderId, kind: "piggy" } });
+    return;
+  }
+  await prisma.poolHandover.upsert({
+    where: { periodId_fromMemberId_kind: { periodId, fromMemberId: holderId, kind: "piggy" } },
+    create: { periodId, householdId, fromMemberId: holderId, kind: "piggy", amount: total, detail: null },
+    update: { amount: total },
+  });
 }
 
 // Head adjusts the general Piggy or a sinking fund (e.g. a manual top-up). Head-only, so a
@@ -1243,7 +1276,7 @@ export async function toggleBillPaid(formData: FormData) {
   const memberId = session?.user?.memberId ?? null;
   if (!(await unlocked())) await relock("toggleBillPaid");
   const id = Number(formData.get("id"));
-  const e = await prisma.expenseEntry.findUnique({ where: { id } });
+  const e = await prisma.expenseEntry.findUnique({ where: { id }, include: { category: { select: { isAllowance: true, householdId: true } } } });
   if (!e) { log.warn("toggleBillPaid", "blocked", { outcome: "blocked", reason: "not-found", memberId, id }); return; }
   // Marking a bill paid TRACKS REALITY — it doesn't change the planned sheet, so the settlement
   // lock (which freezes planned numbers) must NOT apply here, or a manager gets blocked while a
@@ -1251,7 +1284,20 @@ export async function toggleBillPaid(formData: FormData) {
   // month, everyone else only while the month is still open.
   const isEditor = await canEdit(); // head or manager (and unlocked)
   const isPayer = memberId != null && memberId === e.memberId;
-  if (!isEditor && !isPayer) { log.warn("toggleBillPaid", "blocked", { outcome: "blocked", reason: "not-allowed", memberId, id, periodId: e.periodId }); return; }
+  // An allowance ("personal · from hub") is stored against the RECIPIENT, but it's SENT by the
+  // treasurer — so the treasurer (the step's sender) must be able to tick it, matching the UI which
+  // already shows them the "✓ sent" button. Resolve the treasurer only when it could unblock.
+  let isAllowanceSender = false;
+  if (!isEditor && !isPayer && e.category?.isAllowance && memberId != null) {
+    const [period, household, headMember] = await Promise.all([
+      prisma.period.findUnique({ where: { id: e.periodId }, select: { treasurerMemberId: true } }),
+      prisma.household.findUnique({ where: { id: e.category.householdId }, select: { treasurerMemberId: true } }),
+      prisma.member.findFirst({ where: { householdId: e.category.householdId, role: "head" }, select: { id: true } }),
+    ]);
+    const treasurerId = period?.treasurerMemberId ?? household?.treasurerMemberId ?? headMember?.id ?? null;
+    isAllowanceSender = memberId === treasurerId;
+  }
+  if (!isEditor && !isPayer && !isAllowanceSender) { log.warn("toggleBillPaid", "blocked", { outcome: "blocked", reason: "not-allowed", memberId, id, periodId: e.periodId }); return; }
   if (!(await isHead()) && !(await periodOpen(e.periodId))) { log.warn("toggleBillPaid", "blocked", { outcome: "blocked", reason: "period-closed", memberId, id, periodId: e.periodId }); return; }
   // Stamp the paid time when marking paid (cleared on un-mark) so the plan can show "paid <day>".
   await prisma.expenseEntry.update({ where: { id }, data: { paid: !e.paid, paidAt: e.paid ? null : new Date() } });
@@ -1402,6 +1448,26 @@ export async function toggleManualStepDone(formData: FormData) {
   if (!(await isHead()) && !(await periodOpen(m.periodId))) return;
   await prisma.manualPlanStep.update({ where: { id }, data: { done: !m.done } });
   await logActivity("settlement", "updated", `${m.done ? "Unmarked" : "Marked"} a manual move ${formatINR(m.amount)} done`, m.periodId);
+  revalidateFamily();
+}
+
+// Tick a combined pool hand-over (holder → treasurer) received — marks every underlying PoolHandover
+// row handed over, or undoes it. The holder themselves or the head/manager can tick it.
+export async function togglePoolHandover(formData: FormData) {
+  const session = await auth();
+  const memberId = session?.user?.memberId ?? null;
+  if (!(await unlocked())) await relock("togglePoolHandover");
+  const ids = String(formData.get("ids") ?? "").split(",").map((s) => Number(s.trim())).filter((n) => n > 0);
+  if (ids.length === 0) return;
+  const rows = await prisma.poolHandover.findMany({ where: { id: { in: ids } }, select: { id: true, periodId: true, fromMemberId: true, handedOverAt: true } });
+  if (rows.length === 0) return;
+  const periodId = rows[0].periodId;
+  const isHolder = memberId != null && rows.every((r) => r.fromMemberId === memberId);
+  if (!(await canEdit()) && !isHolder) return;
+  if (!(await isHead()) && !(await periodOpen(periodId))) return;
+  const allDone = rows.every((r) => r.handedOverAt != null);
+  await prisma.poolHandover.updateMany({ where: { id: { in: ids } }, data: { handedOverAt: allDone ? null : new Date() } });
+  await logActivity("settlement", "updated", allDone ? "Undid a pool hand-over to the treasurer" : "Marked a pool hand-over received by the treasurer", periodId);
   revalidateFamily();
 }
 

@@ -552,6 +552,21 @@ describe("buildMoneyPlan", () => {
     });
     expect(plan.hubShortfall).toBe(40);
   });
+
+  it("seeds a pool-handover holder so the hub is funded without a false shortfall", () => {
+    const plan = buildMoneyPlan({
+      treasurerId: T,
+      transfers: [xfer({ fromId: T, from: "A", toId: 3, to: "C", amount: 50 })], // hub disburses 50 to C
+      bills: [],
+      incomeDayByMember: { 3: 1 },
+      poolHandovers: [{ fromId: 2, fromName: "B", toId: T, toName: "A", amount: 50, detail: "leftover · Petrol", recordIds: [9], done: false, day: 1, status: null, days: null }],
+    });
+    const ho = plan.steps.find((s) => s.kind === "pool-handover")!;
+    expect(ho.amount).toBe(50);
+    expect(ho.senderShort ?? 0).toBe(0); // B was seeded with the cash they hold → not flagged short
+    expect(ho.balancesAfter?.[T]).toBe(50); // the hand-over credits the hub
+    expect(plan.hubShortfall).toBe(0); // …so the hub can fund its 50 disbursement, no shortfall
+  });
 });
 
 describe("pendingCashMoveByMember", () => {
@@ -584,6 +599,12 @@ describe("pendingCashMoveByMember", () => {
     const p = pendingCashMoveByMember(steps);
     expect(p[2]).toBeUndefined();   // B's holding-now must NOT drop by their personal expense
     expect(p[1]).toBe(-10000);      // treasurer still holds B's undisbursed allowance; his own self-allowance is excluded
+  });
+
+  it("counts a pool hand-over like a collection: holder holds it, treasurer still awaits it", () => {
+    const p = pendingCashMoveByMember([step({ kind: "pool-handover", fromId: 5, toId: 1, amount: 8186 })]);
+    expect(p[5]).toBe(-8186); // Baala still physically holds the ₹8,186 → in his holding-now
+    expect(p[1]).toBe(8186); // the treasurer hasn't received it → below his projected pool
   });
 
   it("is empty once every cash-move is done — holding-now equals the projection", () => {

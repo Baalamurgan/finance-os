@@ -112,6 +112,9 @@ export async function windDownPeriod(periodId: number, opts: { leftoversToIncome
 
   let movedToPiggy = 0;
   let leftoverIncome = 0; // under-budget leftovers routed to next month's income (opt-in)
+  // Per-owner slices of that leftover income — the cash each category owner still physically HOLDS and
+  // must hand to the treasurer next month (kind "leftover" PoolHandover). Keyed by responsibleMemberId.
+  const leftoverByOwner = new Map<number, { amount: number; cats: string[] }>();
   // over-budget excess + misc spends are carried into NEXT month as one-off expenses
   const carryToNext: { categoryId: number; amount: number; label: string; memberId?: number | null }[] = [];
 
@@ -146,6 +149,14 @@ export async function windDownPeriod(periodId: number, opts: { leftoversToIncome
             // head chose to bring this month's leftovers into next month's spendable
             // income instead of parking them in Piggy (no piggy entry is written).
             leftoverIncome += remainder;
+            // Track WHO holds each slice (the category's owner) so next month can show a hand-over
+            // step to the treasurer. Owner-less (shared) leftovers are already pool cash at the hub.
+            if (remainder > 0.005 && cat.responsibleMemberId != null) {
+              const g = leftoverByOwner.get(cat.responsibleMemberId) ?? { amount: 0, cats: [] };
+              g.amount = Math.round((g.amount + remainder) * 100) / 100;
+              g.cats.push(cat.name);
+              leftoverByOwner.set(cat.responsibleMemberId, g);
+            }
           } else {
             // under budget → save the leftover to the general Piggy
             await tx.piggyEntry.create({
@@ -288,6 +299,22 @@ export async function windDownPeriod(periodId: number, opts: { leftoversToIncome
           note: LEFTOVER_NOTE,
         },
       });
+    }
+
+    // Hand-over steps: each category owner physically holds their slice of that leftover income, so
+    // record a "holder → treasurer" hand-over for next month (skipping the treasurer's own slice —
+    // already at the hub). Idempotent: replace any rows from a prior run of this wind-down.
+    await tx.poolHandover.deleteMany({ where: { periodId: next.id, kind: "leftover" } });
+    if (leftoverByOwner.size > 0) {
+      const hh = await tx.household.findUnique({ where: { id: householdId }, select: { treasurerMemberId: true } });
+      const headMember = await tx.member.findFirst({ where: { householdId, role: "head" }, select: { id: true } });
+      const treasurerId = next.treasurerMemberId ?? hh?.treasurerMemberId ?? headMember?.id ?? null;
+      for (const [ownerId, g] of leftoverByOwner) {
+        if (ownerId === treasurerId || g.amount <= 0.005) continue; // treasurer's own is already at the hub
+        await tx.poolHandover.create({
+          data: { periodId: next.id, householdId, fromMemberId: ownerId, kind: "leftover", amount: g.amount, detail: g.cats.join(", ") },
+        });
+      }
     }
   });
 }

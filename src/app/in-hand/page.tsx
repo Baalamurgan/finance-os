@@ -124,6 +124,8 @@ export default async function InHandPage({
                 open={open}
                 selYear={c.selYear}
                 selMonth={c.selMonth}
+                poolIncoming={g.memberId === inHand.treasurerId ? inHand.poolIncoming : []}
+                treasurerOwnLeftover={g.memberId === inHand.treasurerId ? inHand.treasurerOwnLeftover : 0}
               />
             ))}
           </div>
