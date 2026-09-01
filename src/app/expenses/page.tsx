@@ -110,7 +110,7 @@ export default async function ExpensesPage({
       {nav}
       <main className="mx-auto max-w-7xl space-y-5 p-6 pb-28 sm:pb-6">
         <div className="flex flex-wrap items-end justify-between gap-2">
-          <div>
+          <div className="min-w-0 flex-1 basis-64">
             <h1 className="text-xl font-bold text-slate-900">
               {c.selected.label} — daily spends
             </h1>
@@ -120,7 +120,7 @@ export default async function ExpensesPage({
               <b> + Add expense</b> on the Sheet instead.
             </p>
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex flex-1 basis-64 flex-wrap items-center justify-end gap-3">
             <ExpensesMemberFilter members={c.members} selectedId={filterMemberId} />
             <ExpensesSortControl sort={sort} />
             {filterMemberId != null ? (

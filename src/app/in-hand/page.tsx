@@ -75,7 +75,9 @@ export default async function InHandPage({
   return (
     <>
       {nav}
-      <main className="mx-auto max-w-2xl space-y-4 p-6">
+      {/* Tighter top/side padding on mobile shrinks the header↔content gap; the global `main` x-clip
+          (globals.css) keeps any stray wide row from pushing the page past the viewport. */}
+      <main className="mx-auto max-w-2xl space-y-4 p-4 sm:p-6">
         <div>
           <h1 className="text-xl font-bold text-slate-900">🧭 Money plan</h1>
           <p className="text-sm text-slate-500">

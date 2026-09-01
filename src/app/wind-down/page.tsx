@@ -132,10 +132,11 @@ export default async function WindDownPage({
         </section>
 
         {open ? (
-          c.canEdit ? (
             <section className="space-y-4 rounded-xl border border-slate-200 bg-white p-5">
               <h2 className="text-sm font-semibold text-slate-700">
-                When you wind down, here&apos;s what happens
+                {c.canEdit
+                  ? "When you wind down, here's what happens"
+                  : `What happens when ${c.selected.label} winds down`}
               </h2>
 
               <Breakdown
@@ -180,18 +181,19 @@ export default async function WindDownPage({
                 </p>
               )}
 
-              <WindDownButton periodId={c.selected.id} label={c.selected.label} leftovers={piggyAdd} nextLabel={nextLabel} />
+              {c.canEdit ? (
+                <WindDownButton periodId={c.selected.id} label={c.selected.label} leftovers={piggyAdd} nextLabel={nextLabel} />
+              ) : (
+                <p className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-3 text-center text-sm text-slate-500">
+                  🔒 This is a preview — only the head
+                  {(() => {
+                    const h = c.members.find((m) => m.role === "head")?.name;
+                    return h ? ` (${h})` : "";
+                  })()}{" "}
+                  or a manager can wind down &amp; lock {c.selected.label}.
+                </p>
+              )}
             </section>
-          ) : (
-            <p className="rounded-xl border border-slate-200 bg-white p-5 text-center text-sm text-slate-500">
-              Only the head
-              {(() => {
-                const h = c.members.find((m) => m.role === "head")?.name;
-                return h ? ` (${h})` : "";
-              })()}{" "}
-              or a manager can wind down {c.selected.label}.
-            </p>
-          )
         ) : (
           <section className="rounded-xl border border-slate-200 bg-slate-50 p-5 text-sm text-slate-600">
             <div className="font-semibold text-slate-800">✓ {c.selected.label} is closed</div>

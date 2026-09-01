@@ -51,10 +51,24 @@ body {
   background: #f8fafc; /* slate-50 */
   color: #0f172a; /* slate-900 */
   font-family: var(--font-geist-sans), Arial, Helvetica, sans-serif;
-  /* NOTE: no `overflow-x: clip` here on purpose — it was clipping genuinely-wide content with no
-     way to pan or pinch-zoom to reach it on mobile. The sticky header (the original overflow
-     culprit) clips itself instead (see NavHeader), and wide tables/rows keep their own
-     overflow-x-auto, so a stray wide element scrolls/zooms rather than being cut off. */
+}
+
+/* Keep every page's <main> from pushing the WHOLE page past the viewport on a narrow phone (which
+   forced a mobile zoom-out). Three parts, all needed:
+   • width: 100% — the load-bearing one. <main> is a flex child of the flex-col <body> AND uses
+     `mx-auto` (auto cross-axis margins), which makes a flex item size to its CONTENT instead of
+     stretching to the parent. So a wide descendant grew <main> to ~615px on a 375px screen and
+     dragged the page. Forcing width to 100% makes <main> fill the parent (still capped by its
+     max-w-* and centred by mx-auto on desktop). min-width:0 / overflow-clip alone can't fix this —
+     there's no stretch target to clamp a content-sized item down to.
+   • min-width: 0 — lets inner flex/grid children shrink instead of forcing width back out.
+   • overflow-x: clip — contains any genuinely-wide child (clip, not hidden: vertical flow and the
+     Sheet's sticky section headers keep working). Wide content (tables) still needs its own
+     overflow-x-auto to stay scrollable. The sticky app header sits OUTSIDE main and clips itself. */
+main {
+  width: 100%;
+  min-width: 0;
+  overflow-x: clip;
 }
 .dark body {
   background: #0b1220; /* a touch darker than the cards so they lift off it */

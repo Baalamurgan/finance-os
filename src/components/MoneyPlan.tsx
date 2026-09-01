@@ -103,7 +103,7 @@ export function MoneyPlan({
 
       {/* filter + refresh */}
       <div className="mb-3 flex items-center gap-2">
-        <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto pb-0.5">
+        <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1">
           <FilterPill active={who == null} onClick={() => setWho(null)}>Everyone</FilterPill>
           {people.map((p) => (
             <FilterPill key={p.id} active={who === p.id} onClick={() => setWho(p.id)}>{p.name}</FilterPill>
@@ -220,7 +220,7 @@ export function MoneyPlan({
 
                 <div className="min-w-0 flex-1">
                   <div className={`flex flex-wrap items-center gap-1.5 ${s.done ? "text-slate-400 line-through" : "text-slate-800"}`}>
-                    <span className="truncate font-medium">{title}</span>
+                    <span className="min-w-0 truncate font-medium">{title}</span>
                     {isIncome && <span className="shrink-0 rounded-full bg-emerald-50 px-1.5 py-0.5 text-[9px] font-medium text-emerald-600">↓ income in hand</span>}
                     {isManual && <span className="shrink-0 rounded-full bg-cyan-50 px-1.5 py-0.5 text-[9px] font-medium text-cyan-600">✎ manual</span>}
                     {isAllowance && <span className="shrink-0 rounded-full bg-violet-50 px-1.5 py-0.5 text-[9px] font-medium text-violet-500">personal · from hub</span>}
@@ -416,7 +416,7 @@ export function MoneyPlan({
             <ul className="space-y-1 px-3 pb-2">
               {plan.steps.filter((s) => s.hidden).map((s) => (
                 <li key={s.id} className="flex items-center justify-between gap-2 text-xs text-slate-400">
-                  <span className="truncate line-through">{stepTitle(s)}</span>
+                  <span className="min-w-0 truncate line-through">{stepTitle(s)}</span>
                   <span className="flex shrink-0 items-center gap-2">
                     <span className="tabular-nums">{formatINR(s.amount)}</span>
                     {canEdit && open && (
