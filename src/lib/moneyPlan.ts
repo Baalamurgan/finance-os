@@ -462,3 +462,39 @@ export function buildMoneyPlan(input: {
   const done = counted.filter((s) => s.done).length;
   return { steps, done, total: counted.length, hubShortfall: Math.round(hubShortfall) };
 }
+
+// Cash-move step kinds that shift a member's actual holding when completed: income lands in a hand,
+// and transfers/allowances/advances/manual moves relocate cash. BILLS are excluded on purpose — the
+// In-Hand card already treats an unpaid bill as cash the payer still HOLDS, so it's live without an
+// adjustment; and fund bills / Piggy steps move no member cash. See pendingCashMoveByMember.
+const CASH_MOVE_KINDS = new Set(["income", "transfer-in", "transfer-out", "allowance", "advance", "manual"]);
+
+// Per-member sum of the cash-moves NOT yet completed, signed from that member's view (+ if they'd
+// RECEIVE it, − if they'd SEND it). Subtracting this from a member's projected In-Hand total gives
+// their "holding now" — what they physically hold given only the steps done so far. When every step is
+// done the sum is 0 (holding-now == projection); at month start it backs the total down to the carried
+// stock. Excludes hidden and already-done steps.
+//
+// ALLOWANCES (personal-expense money the treasurer sends a member) are special. A member's In-Hand net
+// never includes their own allowance — it's spending money, not retained holding — so the RECEIVER
+// must NOT be adjusted for it (adjusting would double-count it downward). The treasurer, though, still
+// physically holds every undisbursed allowance in the pool, so the SENDER keeps the −amount — except a
+// self-allowance (the treasurer's OWN personal expense, from == to), which is excluded for everyone.
+export function pendingCashMoveByMember(steps: PlanStep[]): Record<number, number> {
+  const out = new Map<number, number>();
+  const bump = (id: number | null | undefined, d: number) => {
+    if (id == null) return;
+    out.set(id, Math.round(((out.get(id) ?? 0) + d) * 100) / 100);
+  };
+  for (const s of steps) {
+    if (s.done || s.hidden || !CASH_MOVE_KINDS.has(s.kind)) continue;
+    if (s.kind === "income") { bump(s.toId, s.amount); continue; }
+    if (s.kind === "allowance") {
+      if (s.fromId != null && s.fromId !== s.toId) bump(s.fromId, -s.amount); // sender holds it; receiver doesn't count it
+      continue;
+    }
+    bump(s.fromId, -s.amount);
+    bump(s.toId, s.amount);
+  }
+  return Object.fromEntries(out);
+}

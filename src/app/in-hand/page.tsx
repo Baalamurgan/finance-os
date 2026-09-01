@@ -1,6 +1,7 @@
 import { formatINR } from "@/lib/format";
 import { loadCommon } from "@/lib/load";
 import { getInHand, getMoneyPlan, getMoneyPlanActivity, type InHand } from "@/lib/queries";
+import { pendingCashMoveByMember } from "@/lib/moneyPlan";
 import { MoneyPlanActivity } from "@/components/MoneyPlanActivity";
 import { NavHeader } from "@/components/NavHeader";
 import { MoneyPlan } from "@/components/MoneyPlan";
@@ -60,6 +61,10 @@ export default async function InHandPage({
     getMoneyPlanActivity(periodId),
   ]);
   const currentMemberId = c.currentMember?.id ?? null;
+  // "Holding now" per member = their projected In-Hand total MINUS the cash-moves not yet completed
+  // (see pendingCashMoveByMember). Backs each member's total down to what they physically hold given
+  // only the steps done so far; converges to the projection as the plan is worked through.
+  const pendingByMember = pendingCashMoveByMember(plan.steps);
   const visibleGroups = c.isHead
     ? inHand.byPerson
     : inHand.byPerson.filter((g) => g.memberId === currentMemberId);
@@ -103,6 +108,7 @@ export default async function InHandPage({
               <InHandPersonGroup
                 key={g.memberId}
                 group={g}
+                pendingCashMove={g.memberId != null ? pendingByMember[g.memberId] ?? 0 : 0}
                 isTreasurer={g.memberId === inHand.treasurerId}
                 pool={inHand.treasurerPool}
                 sharedNet={inHand.shared.net}

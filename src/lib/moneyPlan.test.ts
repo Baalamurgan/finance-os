@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildMoneyPlan, type PlanTransfer, type PlanBill } from "./moneyPlan";
+import { buildMoneyPlan, pendingCashMoveByMember, type PlanTransfer, type PlanBill, type PlanStep } from "./moneyPlan";
 
 const T = 1; // treasurer id
 const xfer = (o: Partial<PlanTransfer>): PlanTransfer => ({ fromId: 2, from: "B", toId: T, to: "A", amount: 100, settled: false, recordId: null, ...o });
@@ -551,5 +551,48 @@ describe("buildMoneyPlan", () => {
       incomeDayByMember: {},
     });
     expect(plan.hubShortfall).toBe(40);
+  });
+});
+
+describe("pendingCashMoveByMember", () => {
+  const step = (o: Partial<PlanStep> & Pick<PlanStep, "kind">): PlanStep =>
+    ({ id: `s${Math.random()}`, day: null, amount: 0, done: false, status: null, days: null, ...o } as PlanStep);
+
+  it("backs out only not-done cash-moves, signed per member; ignores bills / done / hidden", () => {
+    const steps = [
+      step({ kind: "income", toId: 3, amount: 200 }),                         // C not received → +200
+      step({ kind: "income", toId: 4, amount: 50, done: true }),              // received → ignored
+      step({ kind: "transfer-in", fromId: 2, toId: 1, amount: 100 }),         // B → hub, not done → B −100, hub +100
+      step({ kind: "transfer-out", fromId: 1, toId: 3, amount: 40 }),         // hub → C, not done → hub −40, C +40
+      step({ kind: "manual", fromId: 2, toId: 3, amount: 10, done: true }),   // done → ignored
+      step({ kind: "bill", payerId: 2, amount: 30 }),                         // a bill is held-until-paid → excluded
+      step({ kind: "transfer-in", fromId: 5, toId: 1, amount: 70, hidden: true }), // hidden → ignored
+    ];
+    const p = pendingCashMoveByMember(steps);
+    expect(p[3]).toBe(240); // income 200 + disbursement 40 both still to land
+    expect(p[2]).toBe(-100); // still physically holds the collection they'll hand over
+    expect(p[1]).toBe(60); // hub: +100 to collect − 40 to disburse
+    expect(p[4]).toBeUndefined(); // their income was received
+    expect(p[5]).toBeUndefined(); // the bill never enters the adjustment
+  });
+
+  it("does not count a personal-expense allowance against its receiver, but the treasurer holds it", () => {
+    const steps = [
+      step({ kind: "allowance", fromId: 1, toId: 2, amount: 10000 }),   // hub → B (personal expense), not sent
+      step({ kind: "allowance", fromId: 1, toId: 1, amount: 8000 }),    // treasurer's OWN personal expense (self)
+    ];
+    const p = pendingCashMoveByMember(steps);
+    expect(p[2]).toBeUndefined();   // B's holding-now must NOT drop by their personal expense
+    expect(p[1]).toBe(-10000);      // treasurer still holds B's undisbursed allowance; his own self-allowance is excluded
+  });
+
+  it("is empty once every cash-move is done — holding-now equals the projection", () => {
+    const steps = [
+      step({ kind: "income", toId: 3, amount: 200, done: true }),
+      step({ kind: "transfer-in", fromId: 2, toId: 1, amount: 100, done: true }),
+      step({ kind: "transfer-out", fromId: 1, toId: 3, amount: 40, done: true }),
+      step({ kind: "bill", payerId: 2, amount: 30, done: true }),
+    ];
+    expect(pendingCashMoveByMember(steps)).toEqual({});
   });
 });

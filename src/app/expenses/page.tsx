@@ -8,6 +8,7 @@ import { SpendDeleteButton } from "@/components/SpendDeleteButton";
 import { SpendSubCategoryPicker } from "@/components/SpendSubCategoryPicker";
 import { EditSpendModal } from "@/components/EditSpendModal";
 import { ExpensesSortControl } from "@/components/ExpensesSortControl";
+import { ExpensesMemberFilter } from "@/components/ExpensesMemberFilter";
 import { MoneyFlowDonut } from "@/components/Charts";
 
 type SortKey = "date" | "amount" | "member";
@@ -86,6 +87,7 @@ export default async function ExpensesPage({
   const sumSpends = (cs: typeof cards) => cs.reduce((s, c) => s + c.spends.reduce((a, x) => a + x.amount, 0), 0);
   const filteredBudgetedSpent = filterMemberId != null ? sumSpends(budgetedCards) : null;
   const filteredMisc = filterMemberId != null ? sumSpends(miscCards) : null;
+  const filteredTotal = filterMemberId != null ? (filteredBudgetedSpent ?? 0) + (filteredMisc ?? 0) : null;
   const open = c.selected.status === "open";
   // Head-only tidy-up: misc spends that look like a tracked category (open month only).
   const miscReview = c.isHead && open ? await getMiscReview(c.household.id, c.selected.id) : [];
@@ -119,6 +121,7 @@ export default async function ExpensesPage({
             </p>
           </div>
           <div className="flex items-center gap-3">
+            <ExpensesMemberFilter members={c.members} selectedId={filterMemberId} />
             <ExpensesSortControl sort={sort} />
             {filterMemberId != null ? (
               <div className="rounded-xl border border-indigo-200 bg-white px-4 py-2 text-right">
@@ -126,10 +129,13 @@ export default async function ExpensesPage({
                   {filterMemberName}&apos;s spend
                 </div>
                 <div className="text-lg font-bold text-slate-800">
-                  {formatINR(filteredBudgetedSpent ?? 0)}{" "}
-                  <span className="text-sm font-normal text-slate-400">budgeted</span>
+                  {formatINR(filteredTotal ?? 0)}{" "}
+                  <span className="text-sm font-normal text-slate-400">total</span>
                 </div>
-                <div className="text-xs text-amber-600">+ {formatINR(filteredMisc ?? 0)} misc</div>
+                <div className="text-xs text-slate-500">
+                  {formatINR(filteredBudgetedSpent ?? 0)} budgeted{" "}
+                  <span className="text-amber-600">+ {formatINR(filteredMisc ?? 0)} misc</span>
+                </div>
               </div>
             ) : (
               <div className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-right">
@@ -211,6 +217,7 @@ export default async function ExpensesPage({
                     members={c.members}
                     currentMemberId={c.currentMember?.id}
                     subCats={c.miscSubCategories}
+                    filterMemberName={filterMemberName}
                   />
                 ))}
               </div>

@@ -9,6 +9,7 @@ import { MiscPayModal } from "@/components/MiscPayModal";
 
 export function InHandPersonGroup({
   group,
+  pendingCashMove,
   isTreasurer,
   pool,
   sharedNet,
@@ -26,6 +27,7 @@ export function InHandPersonGroup({
   selMonth,
 }: {
   group: InHand["byPerson"][number];
+  pendingCashMove: number;
   isTreasurer: boolean;
   pool: number;
   sharedNet: number;
@@ -59,19 +61,48 @@ export function InHandPersonGroup({
   // this person's own pendingPiggyHeld, so it isn't re-added here.
   const piggyAmt = isPiggyHolder ? piggy - pendingPiggyLump : 0;
   const total = shownNet + poolAmt + piggyAmt + sinkingHeld;
+  // "Holding now" = the projected total minus the cash-moves still pending (computed in the page from the
+  // Money Plan). As steps get ticked, `pendingCashMove` shrinks to 0 and holding-now rises to `total`.
+  const holdingNow = Math.round((total - pendingCashMove) * 100) / 100;
   const paidCount = paidBills.length + paidPeriodic.length;
+  const toPayCount = unpaidBills.length + unpaidPeriodic.length;
+  // Live headline, projected + full breakdown on tap. Default collapsed to keep the wall of cards
+  // scannable; expanding reveals where the money will land and the bills still to pay.
+  const [expanded, setExpanded] = useState(false);
   return (
     <div className="rounded-xl border border-slate-200 p-3">
-      <div className="flex items-baseline justify-between gap-2">
+      <button
+        type="button"
+        onClick={() => setExpanded((v) => !v)}
+        aria-expanded={expanded}
+        title={expanded ? "Hide the breakdown" : "Show where it lands + bills to pay"}
+        className="flex w-full items-baseline justify-between gap-2 text-left"
+      >
         <span className="text-sm font-semibold text-slate-800">
           {name}
           {isTreasurer && <span className="ml-1 text-[10px] font-normal text-indigo-500">treasurer</span>}
           {isPiggyHolder && <span className="ml-1 text-[10px] font-normal text-pink-500">piggy</span>}
         </span>
-        <span className={`text-right text-sm font-bold tabular-nums ${total < 0 ? "text-red-600" : "text-emerald-700"}`}>
-          {formatINR(total)}
-          <span className="ml-1 text-[10px] font-normal text-slate-400">{total < 0 ? "to reclaim" : "in hand"}</span>
+        <span className="flex items-baseline gap-1.5">
+          <span className={`text-right text-sm font-bold tabular-nums ${holdingNow < 0 ? "text-red-600" : "text-emerald-700"}`}>
+            {formatINR(holdingNow)}
+            <span className="ml-1 text-[10px] font-normal text-slate-400">{holdingNow < 0 ? "to reclaim" : "holding now"}</span>
+          </span>
+          <span className={`text-[10px] text-slate-300 transition-transform ${expanded ? "rotate-180" : ""}`}>▾</span>
         </span>
+      </button>
+      {/* Collapsed hint: the two things worth seeing at a glance without expanding. */}
+      {!expanded && (Math.abs(pendingCashMove) > 0.005 || toPayCount > 0) && (
+        <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[10px] text-slate-400">
+          {Math.abs(pendingCashMove) > 0.005 && <span>→ {formatINR(total)} once settled</span>}
+          {toPayCount > 0 && <span className="text-amber-500">· {toPayCount} bill{toPayCount > 1 ? "s" : ""} to pay</span>}
+        </div>
+      )}
+      {expanded && (
+      <>
+      <div className="mt-1 flex items-baseline justify-between gap-2 border-b border-dashed border-slate-100 pb-1 text-[10px] text-slate-400">
+        <span>Expected by month-end</span>
+        <span className="tabular-nums">{formatINR(total)}{total !== holdingNow && <span className="ml-1 text-slate-300">({formatINR(total - holdingNow)} still to move)</span>}</span>
       </div>
       <ul className="mt-2 space-y-1">
         {/* Pinned to the TOP: things owed from an earlier month that were never paid. A pure
@@ -328,6 +359,8 @@ export function InHandPersonGroup({
         <p className="mt-2 text-[11px] leading-tight text-amber-600">
           Fronted more than budget — reclaim from the treasurer at wind-down, or deduct from next month.
         </p>
+      )}
+      </>
       )}
     </div>
   );
