@@ -19,7 +19,8 @@ import { getBillReminders } from "@/lib/billReminders";
 import { applyBudgetShortfall, windDownPeriod } from "@/lib/windDown";
 import { SURPLUS_NOTE, CARRY_NOTE, DEFERRED_NOTE, PIGGY_INCOME_NOTE } from "@/lib/notes";
 
-// Record a money-affecting change for the head-only activity log (who + what + when).
+// Record a money-affecting change (who + what + when) for the activity feeds: the Money-Plan
+// activity (In-Hand) and the Spend activity (Spends tab), both visible to everyone.
 async function logActivity(
   entity: string,
   action: "created" | "updated" | "deleted",

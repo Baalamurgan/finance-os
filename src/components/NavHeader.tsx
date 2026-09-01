@@ -95,10 +95,10 @@ export function NavHeader({
   // moved under the avatar menu to declutter the bar.
   const tabs = [
     { key: "sheet", label: "Sheet", href: "/" },
-    { key: "expenses", label: "Expenses", href: "/expenses" },
+    { key: "expenses", label: "Spends", href: "/expenses" },
     { key: "in-hand", label: "Money Plan", href: "/in-hand" },
     { key: "settlement", label: "Settlement", href: "/settlement" },
-    { key: "activity", label: "Activity", href: "/activity" },
+    { key: "activity", label: "Changes", href: "/activity" },
     { key: "analysis", label: "Analysis", href: "/analysis" },
     { key: "piggy", label: "Piggy", href: "/piggy" },
     { key: "notes", label: "Notes", href: "/notes" },

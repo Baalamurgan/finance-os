@@ -11,6 +11,12 @@ import { formatINR } from "@/lib/format";
 // from live dues, so an item clears automatically once its bill is marked paid — nothing stored.
 type Item = { key: string; title: string; dueISO: string; daysUntilDue: number; overdue: boolean; amount: number; href: string; dot?: string };
 
+// Reminders are derived from live dues (nothing is stored server-side), so "dismiss forever" is a
+// per-device preference kept in localStorage. We key by the reminder AND its due date, so dismissing
+// hides THIS due only — next cycle's due is a fresh key and reappears (you still want that nudge).
+const DISMISS_KEY = "reminders:dismissed";
+const dismissId = (r: Item) => `${r.key}@${r.dueISO}`;
+
 async function loadItems(context: "family" | "personal"): Promise<Item[]> {
   if (context === "personal") {
     const rows = await getMyCardReminders();
@@ -22,6 +28,7 @@ async function loadItems(context: "family" | "personal"): Promise<Item[]> {
 
 export function RemindersBell({ context }: { context: "family" | "personal" }) {
   const [items, setItems] = useState<Item[] | null>(null);
+  const [dismissed, setDismissed] = useState<Set<string>>(new Set());
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   const accent = context === "personal" ? "emerald" : "indigo";
@@ -32,6 +39,22 @@ export function RemindersBell({ context }: { context: "family" | "personal" }) {
     return () => { alive = false; };
   }, [context]);
 
+  // Load the per-device dismissed set once.
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(DISMISS_KEY);
+      if (raw) setDismissed(new Set(JSON.parse(raw) as string[]));
+    } catch {}
+  }, []);
+
+  const dismiss = (r: Item) => {
+    setDismissed((prev) => {
+      const next = new Set(prev).add(dismissId(r));
+      try { localStorage.setItem(DISMISS_KEY, JSON.stringify([...next])); } catch {}
+      return next;
+    });
+  };
+
   useEffect(() => {
     if (!open) return;
     const onClick = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false); };
@@ -39,7 +62,8 @@ export function RemindersBell({ context }: { context: "family" | "personal" }) {
     return () => window.removeEventListener("mousedown", onClick);
   }, [open]);
 
-  const count = items?.length ?? 0;
+  const visible = items?.filter((r) => !dismissed.has(dismissId(r))) ?? null;
+  const count = visible?.length ?? 0;
   const fmtDue = (r: Item) =>
     r.overdue ? `overdue (was due ${fmtDate(r.dueISO)})` : r.daysUntilDue === 0 ? "due today" : `due in ${r.daysUntilDue}d (${fmtDate(r.dueISO)})`;
 
@@ -65,9 +89,9 @@ export function RemindersBell({ context }: { context: "family" | "personal" }) {
             <p className="px-4 py-6 text-center text-sm text-slate-400">Nothing due right now. 🎉</p>
           ) : (
             <ul className="max-h-80 divide-y divide-slate-100 overflow-y-auto">
-              {items!.map((r) => (
-                <li key={r.key}>
-                  <Link href={r.href} onClick={() => setOpen(false)} className="flex items-center gap-3 px-4 py-3 hover:bg-slate-50">
+              {visible!.map((r) => (
+                <li key={r.key} className="flex items-stretch">
+                  <Link href={r.href} onClick={() => setOpen(false)} className="flex min-w-0 flex-1 items-center gap-3 py-3 pl-4 hover:bg-slate-50">
                     <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ background: r.dot ?? "#f59e0b" }} />
                     <div className="min-w-0 flex-1">
                       <div className="truncate text-sm font-medium text-slate-900">{r.title}</div>
@@ -75,6 +99,15 @@ export function RemindersBell({ context }: { context: "family" | "personal" }) {
                     </div>
                     {r.amount > 0 && <span className="shrink-0 text-sm font-semibold tabular-nums text-slate-700">{formatINR(r.amount)}</span>}
                   </Link>
+                  <button
+                    type="button"
+                    onClick={() => dismiss(r)}
+                    aria-label={`Dismiss ${r.title} reminder`}
+                    title="Dismiss — won't show again"
+                    className="grid shrink-0 place-items-center px-3 text-base text-slate-300 hover:text-red-500"
+                  >
+                    ✕
+                  </button>
                 </li>
               ))}
             </ul>

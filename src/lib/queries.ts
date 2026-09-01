@@ -1510,14 +1510,6 @@ export async function getCategoryTrendRange(
 }
 
 // ── Activity log (head-only) ─────────────────────────────────────────────────
-export async function getActivityLog(householdId: number, limit = 150) {
-  return prisma.activityLog.findMany({
-    where: { householdId },
-    orderBy: { id: "desc" },
-    take: limit,
-  });
-}
-
 // ── "What changed since last month" (everyone) ──────────────────────────────
 // Diffs the selected month's income + expense lines against the previous month,
 // aggregating by name so it reads as simple Added / Removed / Amount-changed lists.
@@ -1634,6 +1626,28 @@ export async function getMoneyPlanActivity(periodId: number, limit = 40): Promis
     select: { id: true, memberName: true, action: true, entity: true, summary: true, createdAt: true },
   });
   return rows.map((r) => ({ id: r.id, memberName: r.memberName, action: r.action, entity: r.entity, summary: r.summary, at: r.createdAt }));
+}
+
+// Every daily spend for a month, newest first — who spent, on what, how much, when. Reads the Spend
+// table directly (the same source the category cards use), NOT the ActivityLog, so it's complete:
+// spends that were seeded/imported or logged before activity-logging existed still show. Shown at the
+// bottom of the Spends tab (this is the per-month spend visibility that used to sit in the head-only
+// "Member activity log", now open to everyone). Scoped to one month, so no cap is needed.
+export type SpendActivityItem = { id: number; memberName: string | null; label: string; category: string; amount: number; at: Date };
+export async function getSpendActivity(periodId: number): Promise<SpendActivityItem[]> {
+  const rows = await prisma.spend.findMany({
+    where: { periodId },
+    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+    include: { member: { select: { name: true } }, category: { select: { name: true } } },
+  });
+  return rows.map((s) => ({
+    id: s.id,
+    memberName: s.member?.name ?? null,
+    label: s.label,
+    category: s.category?.name ?? "",
+    amount: s.amount,
+    at: s.createdAt,
+  }));
 }
 
 // ── Family "Personal/Misc" sub-categories (head-editable, reporting-only) ───────────────────────

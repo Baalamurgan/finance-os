@@ -329,6 +329,22 @@ export function MoneyPlan({
                         : `⚠ can't be funded until day ${s.infeasibleFrom} — this step will run late`}
                     </div>
                   )}
+                  {/* Fund bill: paid from the saved-up fund, not cash — so no balance moves above. Show
+                      the fund draw here so the payer sees their saved money is what covers it (and a
+                      warning when the fund can't cover the full bill). */}
+                  {!s.done && s.kind === "bill" && s.fund && (() => {
+                    const avail = s.fundAvail ?? 0;
+                    const shortBy = Math.round((s.amount - avail) * 100) / 100;
+                    return shortBy > 0.005 ? (
+                      <div className="text-[10px] font-semibold text-amber-600">
+                        🏦 {s.vendor} fund has {formatINR(avail)} of {formatINR(s.amount)} · {s.payerName} tops up {formatINR(shortBy)}
+                      </div>
+                    ) : (
+                      <div className="text-[10px] text-indigo-500">
+                        🏦 From the {s.vendor} fund · {formatINR(avail)} → {formatINR(Math.round((avail - s.amount) * 100) / 100)} left
+                      </div>
+                    );
+                  })()}
                 </div>
 
                 <span className={`shrink-0 tabular-nums ${s.done ? "text-slate-400 line-through" : isIncome ? "font-medium text-emerald-600" : urgent ? "font-semibold text-red-700" : "text-slate-700"}`}>{isIncome ? "+" : ""}{formatINR(s.amount)}</span>
@@ -484,6 +500,24 @@ export function MoneyPlan({
               </div>
               <button type="button" onClick={() => setBalances(null)} className="shrink-0 rounded-md px-1.5 text-slate-400 hover:bg-slate-100" aria-label="Close">✕</button>
             </div>
+            {/* Fund bill: explain WHY every cash row below is unchanged — it's drawn from the saved-up
+                fund, not anyone's cash — and warn when the fund can't cover the whole bill. */}
+            {balances.s.kind === "bill" && balances.s.fund && (() => {
+              const avail = balances.s.fundAvail ?? 0;
+              const amount = balances.s.amount;
+              const shortBy = Math.round((amount - avail) * 100) / 100;
+              const after = Math.max(0, Math.round((avail - amount) * 100) / 100);
+              return (
+                <div className="mt-2 rounded-lg bg-indigo-50 px-3 py-2 text-[11px] leading-relaxed text-indigo-800">
+                  🏦 Paid from the <b>{balances.s.vendor}</b> fund — money already set aside, so no one&apos;s cash-in-hand below moves.
+                  {shortBy > 0.005 ? (
+                    <span className="mt-1 block font-medium text-amber-700">Fund covers {formatINR(avail)} of {formatINR(amount)}; {balances.s.payerName} tops up the remaining {formatINR(shortBy)} from the Piggy or their pocket.</span>
+                  ) : (
+                    <span className="mt-1 block text-indigo-600">Fund {formatINR(avail)} → {formatINR(after)} after this bill.</span>
+                  )}
+                </div>
+              );
+            })()}
             <p className="mt-2 text-[10px] text-slate-400">Everyone&apos;s cash in hand, from each person&apos;s own income as the plan runs to here — <b>before → after</b> this step. The people moving money are highlighted. − = short / already fronted.</p>
             <div className="mt-2 flex items-center justify-end gap-6 px-2 text-[9px] uppercase tracking-wide text-slate-300">
               <span>before</span><span>after</span>

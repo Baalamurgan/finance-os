@@ -1,7 +1,8 @@
 import { formatINR } from "@/lib/format";
 import { loadCommon } from "@/lib/load";
-import { getTrackedExpenses, getMiscReview } from "@/lib/queries";
+import { getTrackedExpenses, getMiscReview, getSpendActivity } from "@/lib/queries";
 import { NavHeader } from "@/components/NavHeader";
+import { SpendActivity } from "@/components/SpendActivity";
 import { AddSpendModal } from "@/components/AddSpendModal";
 import { MiscReview } from "@/components/MiscReview";
 import { SpendDeleteButton } from "@/components/SpendDeleteButton";
@@ -104,6 +105,8 @@ export default async function ExpensesPage({
     .sort((a, b) => b[1] - a[1])
     .map(([name, value], i) => ({ name: `${iconOf(name)} ${name}`, value, color: MISC_DONUT_COLORS[i % MISC_DONUT_COLORS.length] }));
   const miscDonutTotal = miscSegments.reduce((s, x) => s + x.value, 0);
+  // Who logged/edited/removed a spend this month (audit trail, everyone) — at the bottom under the cards.
+  const spendActivity = await getSpendActivity(c.selected.id);
 
   return (
     <>
@@ -238,6 +241,9 @@ export default async function ExpensesPage({
             This month is closed — spends are locked.
           </p>
         )}
+
+        {/* Spend activity — who logged / edited / moved / removed a spend this month (everyone). */}
+        <SpendActivity items={spendActivity} />
       </main>
     </>
   );
