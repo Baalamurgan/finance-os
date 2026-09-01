@@ -156,7 +156,9 @@ export function NavHeader({
           <MoreMenu items={moreTabs} q={q} active={active} />
         </nav>
 
-        <div className="ml-auto flex min-w-0 flex-wrap items-center justify-end gap-1.5 sm:gap-2">
+        {/* Single non-wrapping row on mobile (the household name truncates to make room) so the header
+            can't grow to two rows on a narrow phone; wraps only from sm: up where there's space. */}
+        <div className="ml-auto flex shrink-0 flex-nowrap items-center justify-end gap-1.5 sm:flex-wrap sm:gap-2">
           <span className="hidden rounded-full bg-amber-50 px-3 py-1 text-xs font-medium text-amber-700 sm:inline">
             🐷 {formatINR(piggyBalance)}
           </span>

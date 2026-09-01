@@ -16,10 +16,16 @@ import {
   setUnlockCookie,
 } from "@/lib/applock";
 
-// Manually re-lock this device (clears the unlock cookie → back to the PIN).
-export async function lockNow(): Promise<void> {
+// Manually / auto re-lock this device (clears the unlock cookie → back to the PIN). `next` is the page
+// the user was on, so unlocking returns them there instead of home. Only in-app paths are honoured
+// (never an absolute URL → open-redirect safe), and never /lock itself (would loop).
+// `next` is a string when called directly (AutoLock passes the current path); it's a FormData when
+// used as a <form action> (the manual lock button) — that case just falls back to no destination.
+export async function lockNow(next?: string | FormData): Promise<void> {
   await clearUnlockCookie();
-  redirect("/lock");
+  const raw = typeof next === "string" ? next : null;
+  const safe = raw && raw.startsWith("/") && !raw.startsWith("//") && !raw.startsWith("/lock") ? raw : null;
+  redirect(safe ? `/lock?next=${encodeURIComponent(safe)}` : "/lock");
 }
 
 // Jump to the Personal app from the family lock screen (mirror of exitToFamily).

@@ -39,7 +39,13 @@ export function MoneyPlan({
   const router = useRouter();
   const toast = useToast();
   const [pending, startTransition] = useTransition();
-  const [who, setWho] = useState<number | null>(null);
+  // Default the filter to the viewer's OWN steps (they mostly care about what they must do), falling
+  // back to Everyone if they're not part of any step this month. They can switch to Everyone any time.
+  const [who, setWho] = useState<number | null>(() =>
+    currentMemberId != null && plan.steps.some((s) => s.fromId === currentMemberId || s.toId === currentMemberId || s.payerId === currentMemberId)
+      ? currentMemberId
+      : null
+  );
   const [addOpen, setAddOpen] = useState(false);
   const [balances, setBalances] = useState<{ s: MoneyPlanResult["steps"][number]; n: number } | null>(null);
   // Add-a-step modal: open with the anchor (the step id it goes AFTER; null = top of the list).

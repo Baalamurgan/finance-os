@@ -191,23 +191,74 @@ export async function getSinkingBalances(householdId: number) {
   return map;
 }
 
-// Every Piggy/sinking transaction (deposits +, withdrawals/payments −) newest first.
-export async function getPiggyHistory(householdId: number) {
-  const rows = await prisma.piggyEntry.findMany({
-    where: { householdId },
-    include: { category: true, period: true },
-    orderBy: { createdAt: "desc" },
-    take: 200,
+// Every Piggy/sinking transaction (deposits +, withdrawals/payments −) newest first, each carrying the
+// running balance OF ITS OWN BUCKET after that entry (general pool, or the sinking fund). Anchored on
+// the bucket's true current total (summed across ALL entries, not just the shown 200), then walked
+// backwards, so the running balance stays correct even past the display cap.
+export type PiggyHistoryEntry = {
+  id: number;
+  amount: number;
+  balanceAfter: number; // this bucket's balance right after the entry
+  note: string;
+  period: string | null;
+  createdAt: Date;
+};
+export type PiggyHistoryBucket = {
+  key: string;
+  name: string;
+  kind: "general" | "sinking";
+  balance: number; // current bucket balance
+  entries: PiggyHistoryEntry[]; // newest first, with a per-bucket running balance
+};
+
+// History grouped by bucket — the General Piggy and each sinking fund get their own
+// clean, monotonic running balance. (A single interleaved list mixed buckets, so the
+// "balance after" column jumped between funds and looked like it didn't add up.)
+export async function getPiggyHistory(householdId: number): Promise<PiggyHistoryBucket[]> {
+  const [rows, totals] = await Promise.all([
+    prisma.piggyEntry.findMany({ where: { householdId }, include: { category: true, period: true }, orderBy: { createdAt: "desc" }, take: 500 }),
+    prisma.piggyEntry.groupBy({ by: ["kind", "categoryId"], where: { householdId }, _sum: { amount: true } }),
+  ]);
+  const bucketKey = (kind: string, categoryId: number | null) => (kind === "sinking" ? `sink-${categoryId}` : "general");
+  // Current balance per bucket (all "piggy" rows collapse into one general pool regardless of category).
+  const balance = new Map<string, number>();
+  for (const t of totals) {
+    const k = bucketKey(t.kind, t.categoryId);
+    balance.set(k, Math.round(((balance.get(k) ?? 0) + (t._sum.amount ?? 0)) * 100) / 100);
+  }
+
+  const buckets = new Map<string, PiggyHistoryBucket>();
+  const running = new Map<string, number>(balance); // walk each bucket down from its current balance
+  for (const r of rows) {
+    const k = bucketKey(r.kind, r.categoryId);
+    let b = buckets.get(k);
+    if (!b) {
+      b = {
+        key: k,
+        name: r.kind === "sinking" ? r.category?.name ?? "Sinking" : "General Piggy",
+        kind: r.kind === "sinking" ? "sinking" : "general",
+        balance: balance.get(k) ?? 0,
+        entries: [],
+      };
+      buckets.set(k, b);
+    }
+    const balanceAfter = running.get(k) ?? 0;
+    running.set(k, Math.round((balanceAfter - r.amount) * 100) / 100); // balance BEFORE this entry, for the next (older) row
+    b.entries.push({
+      id: r.id,
+      amount: r.amount,
+      balanceAfter,
+      note: r.note ?? "",
+      period: r.period?.label ?? null,
+      createdAt: r.createdAt,
+    });
+  }
+
+  // General first, then sinking funds by current balance (largest first).
+  return [...buckets.values()].sort((a, b) => {
+    if (a.kind !== b.kind) return a.kind === "general" ? -1 : 1;
+    return b.balance - a.balance;
   });
-  return rows.map((r) => ({
-    id: r.id,
-    kind: r.kind, // "piggy" | "sinking"
-    bucket: r.kind === "sinking" ? r.category?.name ?? "Sinking" : "General Piggy",
-    amount: r.amount,
-    note: r.note ?? "",
-    period: r.period?.label ?? null,
-    createdAt: r.createdAt,
-  }));
 }
 
 // General Piggy (per-category breakdown) + each sinking fund's accumulated hold.
@@ -1030,13 +1081,21 @@ async function _getInHand(householdId: number, periodId: number) {
   };
   const billRank = (d: { status: string } | null) => (d?.status === "overdue" ? 0 : d?.status === "soon" ? 1 : 2);
 
+  // Steps the head has hidden from the Money Plan (HiddenPlanStep.stepKey = the plan step's id:
+  // "bill-<expenseId>" for a Sheet bill, "fund-<categoryId>" for a periodic fund bill). Bills whose
+  // step is hidden are moved into the card's own "Hidden" section instead of the pay list — the plan
+  // and the In-Hand card stay in sync. Hiding is view-only; the underlying bill/total is untouched.
+  const hiddenSteps = await prisma.hiddenPlanStep.findMany({ where: { periodId }, select: { stepKey: true } });
+  const hiddenStepKeys = new Set(hiddenSteps.map((h) => h.stepKey));
+  const isHiddenBill = (id: number) => hiddenStepKeys.has(`bill-${id}`);
+  const isHiddenPeriodic = (categoryId: number) => hiddenStepKeys.has(`fund-${categoryId}`);
   const build = (key: number | null, name: string) => {
     const cats = rows.filter((r) => (r.responsibleMemberId ?? null) === key);
     const memberBills = bills
       .filter((e) => (e.memberId ?? null) === key)
       // `misc` = a planned misc bill (estimated) → paid via the actual-amount + Piggy-reconcile popup;
       // a regular bill (loan/EMI, exact) → a plain paid toggle.
-      .map((e) => ({ id: e.id, name: e.label, amount: e.amount, paid: e.paid, misc: e.category.section === "Misc", due: dueOf(e.dueDay) }));
+      .map((e) => ({ id: e.id, name: e.label, amount: e.amount, paid: e.paid, misc: e.category.section === "Misc", due: dueOf(e.dueDay), hidden: isHiddenBill(e.id) }));
     // urgent (overdue → soon) bills float to the top of the unpaid list
     const unpaidBills = memberBills.filter((b) => !b.paid).sort((a, b) => billRank(a.due) - billRank(b.due));
     const paidBills = memberBills.filter((b) => b.paid);
@@ -1049,8 +1108,8 @@ async function _getInHand(householdId: number, periodId: number) {
       .filter((e) => e.amount > 0.005);
     // due-month periodic bills this member pays (net-neutral; paid from fund/Piggy in the modal)
     const memberDue = dueBills.filter((b) => b.payer === key);
-    const unpaidPeriodic = memberDue.filter((b) => !b.paid).map((b) => ({ categoryId: b.categoryId, name: b.name, bill: b.bill, fund: b.fund, afterWindDown: b.afterWindDown, due: dueOf(b.day) }));
-    const paidPeriodic = memberDue.filter((b) => b.paid).map((b) => ({ categoryId: b.categoryId, name: b.name, bill: b.bill, fund: b.fund, afterWindDown: b.afterWindDown, due: dueOf(b.day) }));
+    const unpaidPeriodic = memberDue.filter((b) => !b.paid).map((b) => ({ categoryId: b.categoryId, name: b.name, bill: b.bill, fund: b.fund, afterWindDown: b.afterWindDown, due: dueOf(b.day), hidden: isHiddenPeriodic(b.categoryId) }));
+    const paidPeriodic = memberDue.filter((b) => b.paid).map((b) => ({ categoryId: b.categoryId, name: b.name, bill: b.bill, fund: b.fund, afterWindDown: b.afterWindDown, due: dueOf(b.day), hidden: isHiddenPeriodic(b.categoryId) }));
 
     // bills carried over from an earlier closed month, still not marked paid (net-neutral nag)
     const carried = carriedBills

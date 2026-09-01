@@ -17,6 +17,15 @@ import { SheetLockNotice } from "@/components/SheetLockNotice";
 import { RebuildDraftButton } from "@/components/RebuildDraftButton";
 import { SheetRefreshButton } from "@/components/SheetRefreshButton";
 import { monthsUntilNextDue } from "@/lib/schedule";
+import { SURPLUS_NOTE, LEFTOVER_NOTE, PIGGY_INCOME_NOTE, CARRY_NOTE } from "@/lib/notes";
+
+// Auto brought-forward income (last month's surplus / leftovers, Piggy → income) and this-month's
+// planned/added misc are KEPT through a Sheet refresh — sync only touches oneOff:false, note:null
+// template lines, so these are never re-pulled from Setup. A small tag makes that reassurance visible.
+const KEPT_INCOME_NOTES = new Set<string>([SURPLUS_NOTE, LEFTOVER_NOTE, PIGGY_INCOME_NOTE]);
+function KeptTag({ title }: { title: string }) {
+  return <span title={title} className="shrink-0 rounded-full bg-amber-50 px-1.5 py-0.5 text-[9px] font-medium text-amber-600">📌 kept</span>;
+}
 import { createPeriod, deleteIncome, createNextMonthDraft, discardDraft, skipSetAside, restoreSetAside } from "./actions";
 
 const SECTION_COLOR: Record<string, string> = {
@@ -113,7 +122,7 @@ function ExpenseRow({
         : `This was the last set-aside before the bill — the shortfall will be paid out-of-pocket on the due month.`) +
       `\n\nIt won't come back on a rebuild; Setup stays the template.`;
   return (
-    <Row label={e.label} sub={e.category.name} emoji={categoryEmoji(e.category.name)} tag={e.member?.name} amount={e.amount} pinnedControl={e.pinned ? <PinnedBadge kind="expense" id={e.id} canEdit={canEditHere} /> : null}>
+    <Row label={e.label} sub={e.category.name} emoji={categoryEmoji(e.category.name)} tag={e.member?.name} amount={e.amount} pinnedControl={e.pinned ? <PinnedBadge kind="expense" id={e.id} canEdit={canEditHere} /> : sheetSection(e) === "Misc" && e.note !== CARRY_NOTE ? <KeptTag title="Planned / added this month — kept through a Sheet refresh" /> : null}>
       {canEditHere && isSetAside && (
         <ConfirmForm action={skipSetAside} message={removeMsg}>
           <input type="hidden" name="categoryId" value={e.categoryId} />
@@ -322,10 +331,16 @@ export default async function SheetPage({
   const fixedGroups = grouped.filter((g) => FIXED_SECTIONS.includes(g.section));
   const yearlyRows = rollup.expenses.filter((e) => sheetSection(e) === "Yearly");
   const yearlySubtotal = yearlyRows.reduce((s, e) => s + e.amount, 0);
-  // Misc / extra shown newest-first (carried lines + ad-hoc adds) — most recent on top.
+  // Misc / extra: this-month's KEPT lines (planned/added, survive a refresh) on top, then the previous
+  // month's carried spends (CARRY_NOTE, "AUG · …") below. Each group newest-first.
   const miscRows = rollup.expenses
     .filter((e) => sheetSection(e) === "Misc")
-    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime() || b.id - a.id);
+    .sort((a, b) => {
+      const ac = a.note === CARRY_NOTE ? 1 : 0;
+      const bc = b.note === CARRY_NOTE ? 1 : 0;
+      if (ac !== bc) return ac - bc; // kept/this-month (0) before carried (1)
+      return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime() || b.id - a.id;
+    });
   const fixedSubtotal = fixedGroups.reduce((s, g) => s + g.subtotal, 0);
   const miscSubtotal = miscRows.reduce((s, e) => s + e.amount, 0);
   const fixedCats = c.categories.filter((cat) => FIXED_SECTIONS.includes(cat.section));
@@ -502,7 +517,7 @@ export default async function SheetPage({
             </summary>
             <div className="divide-y divide-slate-100 px-4 py-1">
               {rollup.incomes.map((i) => (
-                <Row key={i.id} label={i.source} tag={i.owner?.name} amount={i.amount} pinnedControl={i.pinned ? <PinnedBadge kind="income" id={i.id} canEdit={canEditHere} /> : null}>
+                <Row key={i.id} label={i.source} tag={i.owner?.name} amount={i.amount} pinnedControl={i.pinned ? <PinnedBadge kind="income" id={i.id} canEdit={canEditHere} /> : i.note != null && KEPT_INCOME_NOTES.has(i.note) ? <KeptTag title="Brought forward from last month — kept through a Sheet refresh" /> : null}>
                   {c.isHead ? (
                     <IncomeRowActions
                       members={c.members}

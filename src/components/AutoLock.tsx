@@ -20,7 +20,8 @@ export function AutoLock({ enabled, thresholdMs = 300_000 }: { enabled: boolean;
       // became visible → re-lock if we were away long enough
       let hiddenAt = 0;
       try { hiddenAt = Number(localStorage.getItem(KEY) || 0); localStorage.removeItem(KEY); } catch {}
-      if (hiddenAt && Date.now() - hiddenAt > thresholdMs) void lockNow();
+      // Pass the page they were on so unlocking returns them here, not to home.
+      if (hiddenAt && Date.now() - hiddenAt > thresholdMs) void lockNow(window.location.pathname + window.location.search);
     };
     document.addEventListener("visibilitychange", onVisibility);
     // If this component is mounting, we're already visible AND past the lock screen (unlocked),

@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { formatINR } from "@/lib/format";
 import type { InHand } from "@/lib/queries";
-import { toggleBillPaid, unpayPeriodicBill, unpayMiscBill } from "@/app/actions";
+import { toggleBillPaid, unpayPeriodicBill, unpayMiscBill, unhideStep } from "@/app/actions";
 import { PayBillModal } from "@/components/PayBillModal";
 import { MiscPayModal } from "@/components/MiscPayModal";
 
@@ -70,7 +70,14 @@ export function InHandPersonGroup({
   // Money Plan). As steps get ticked, `pendingCashMove` shrinks to 0 and holding-now rises to `total`.
   const holdingNow = Math.round((total - pendingCashMove) * 100) / 100;
   const paidCount = paidBills.length + paidPeriodic.length;
-  const toPayCount = unpaidBills.length + unpaidPeriodic.length;
+  // Bills whose Money-Plan step the head hid drop out of the pay list into a muted "Hidden" section,
+  // so the card and the plan stay in sync. Hiding is view-only — the bill (and the total) is untouched.
+  const shownBills = unpaidBills.filter((b) => !b.hidden);
+  const shownPeriodic = unpaidPeriodic.filter((b) => !b.hidden);
+  const hiddenBills = unpaidBills.filter((b) => b.hidden);
+  const hiddenPeriodic = unpaidPeriodic.filter((b) => b.hidden);
+  const hiddenCount = hiddenBills.length + hiddenPeriodic.length;
+  const toPayCount = shownBills.length + shownPeriodic.length;
   // Live headline, projected + full breakdown on tap. Default collapsed to keep the wall of cards
   // scannable; expanding reveals where the money will land and the bills still to pay.
   const [expanded, setExpanded] = useState(false);
@@ -318,7 +325,7 @@ export function InHandPersonGroup({
             fund bills. A SELF-FUNDER (net contributor) holds this cash from their own salary, so it's
             IN their in-hand total; a pool-funded receiver still awaits it (`yetToReceive`), and periodic
             fund bills are drawn from the fund (neither). */}
-        {(unpaidBills.length > 0 || unpaidPeriodic.length > 0) && (
+        {(shownBills.length > 0 || shownPeriodic.length > 0) && (
           <>
             <li className="pt-2">
               <div className="border-t border-slate-200" />
@@ -327,7 +334,7 @@ export function InHandPersonGroup({
                   Bills to pay this month
                 </span>
                 <span className="text-[9px] text-slate-400">
-                  {selfFundsBills && unpaidBills.length > 0
+                  {selfFundsBills && shownBills.length > 0
                     ? "you hold this cash · included in your in-hand"
                     : yetToReceive > 0.005
                     ? `yet to receive ${formatINR(yetToReceive)} from the pool · not in your in-hand`
@@ -335,7 +342,7 @@ export function InHandPersonGroup({
                 </span>
               </div>
             </li>
-            {unpaidBills.map((b) => {
+            {shownBills.map((b) => {
               const st = b.due?.status;
               return (
                 <li key={`ub${b.id}`} className={`flex items-center justify-between gap-2 rounded-md text-xs ${st === "overdue" ? "bg-red-50 px-1.5 py-0.5" : st === "soon" ? "bg-amber-50 px-1.5 py-0.5" : ""}`}>
@@ -353,7 +360,7 @@ export function InHandPersonGroup({
                 </li>
               );
             })}
-            {unpaidPeriodic.map((b) => (
+            {shownPeriodic.map((b) => (
               <li key={`pb${b.categoryId}`} className="flex items-center justify-between gap-2 text-xs">
                 <span className="truncate text-slate-500">
                   {b.name} <span className="text-[10px] text-teal-500">bill due</span>
@@ -374,6 +381,37 @@ export function InHandPersonGroup({
               </li>
             ))}
           </>
+        )}
+        {/* Bills whose Money-Plan step the head hid — mirrored here as a muted section with un-hide,
+            so hiding a step declutters the pay list too. Underlying bill/total is unchanged. */}
+        {canToggle && hiddenCount > 0 && (
+          <li className="pt-2">
+            <details>
+              <summary className="cursor-pointer list-none text-[10px] font-semibold uppercase tracking-wide text-slate-400 [&::-webkit-details-marker]:hidden">
+                ▸ Hidden ({hiddenCount}) <span className="font-normal normal-case text-slate-400">— removed from the plan &amp; pay list</span>
+              </summary>
+              <ul className="mt-1 space-y-1">
+                {hiddenBills.map((b) => (
+                  <li key={`hb${b.id}`} className="flex items-center justify-between gap-2 text-xs">
+                    <span className="truncate text-slate-400 line-through">{b.name} <span className="text-[10px] no-underline">bill</span></span>
+                    <span className="flex shrink-0 items-center gap-1.5">
+                      <span className="tabular-nums text-slate-400 line-through">{formatINR(b.amount)}</span>
+                      <form action={unhideStep}><input type="hidden" name="periodId" value={periodId} /><input type="hidden" name="stepKey" value={`bill-${b.id}`} /><button type="submit" title="Bring this bill back into the plan &amp; pay list" className="rounded-full border border-slate-200 px-1.5 py-0.5 text-[10px] font-medium text-emerald-600 hover:bg-emerald-50">un-hide</button></form>
+                    </span>
+                  </li>
+                ))}
+                {hiddenPeriodic.map((b) => (
+                  <li key={`hp${b.categoryId}`} className="flex items-center justify-between gap-2 text-xs">
+                    <span className="truncate text-slate-400 line-through">{b.name} <span className="text-[10px] no-underline">bill due · fund {formatINR(b.fund)}</span></span>
+                    <span className="flex shrink-0 items-center gap-1.5">
+                      <span className="tabular-nums text-slate-400 line-through">{formatINR(b.bill)}</span>
+                      <form action={unhideStep}><input type="hidden" name="periodId" value={periodId} /><input type="hidden" name="stepKey" value={`fund-${b.categoryId}`} /><button type="submit" title="Bring this bill back into the plan &amp; pay list" className="rounded-full border border-slate-200 px-1.5 py-0.5 text-[10px] font-medium text-emerald-600 hover:bg-emerald-50">un-hide</button></form>
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </details>
+          </li>
         )}
       </ul>
       {paidCount > 0 && (
