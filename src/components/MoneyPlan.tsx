@@ -208,7 +208,7 @@ export function MoneyPlan({
             return (
               <Fragment key={s.id}>
               {newDateGroup && <DateGroupHeader day={s.day} kind={s.kind} />}
-              <li className={`flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-xs ${s.done ? "bg-emerald-50/50" : isIncome ? "bg-emerald-50/40" : isManual ? "bg-cyan-50/50" : urgent ? "bg-red-50" : soon ? "bg-amber-50" : "bg-slate-50"}`}>
+              <li className={`flex items-start gap-2.5 rounded-lg px-2.5 py-2 text-xs ${s.done ? "bg-emerald-50/50" : isIncome ? "bg-emerald-50/40" : isManual ? "bg-cyan-50/50" : urgent ? "bg-red-50" : soon ? "bg-amber-50" : "bg-slate-50"}`}>
                 <button
                   type="button"
                   onClick={() => setBalances({ s, n })}
@@ -219,8 +219,10 @@ export function MoneyPlan({
                 </button>
 
                 <div className="min-w-0 flex-1">
-                  <div className={`flex flex-wrap items-center gap-1.5 ${s.done ? "text-slate-400 line-through" : "text-slate-800"}`}>
-                    <span className="min-w-0 truncate font-medium">{title}</span>
+                  {/* Sender → receiver on its own line — never truncated; wraps to as many lines as it
+                      needs so it's always fully readable on a phone. Metadata badges sit below it. */}
+                  <div className={`break-words font-medium leading-snug ${s.done ? "text-slate-400 line-through" : "text-slate-800"}`}>{title}</div>
+                  <div className={`mt-1 flex flex-wrap items-center gap-1.5 empty:mt-0 ${s.done ? "text-slate-400" : "text-slate-800"}`}>
                     {isIncome && <span className="shrink-0 rounded-full bg-emerald-50 px-1.5 py-0.5 text-[9px] font-medium text-emerald-600">↓ income in hand</span>}
                     {isManual && <span className="shrink-0 rounded-full bg-cyan-50 px-1.5 py-0.5 text-[9px] font-medium text-cyan-600">✎ manual</span>}
                     {isAllowance && <span className="shrink-0 rounded-full bg-violet-50 px-1.5 py-0.5 text-[9px] font-medium text-violet-500">personal · from hub</span>}
@@ -347,10 +349,12 @@ export function MoneyPlan({
                   })()}
                 </div>
 
-                <span className={`shrink-0 tabular-nums ${s.done ? "text-slate-400 line-through" : isIncome ? "font-medium text-emerald-600" : urgent ? "font-semibold text-red-700" : "text-slate-700"}`}>{isIncome ? "+" : ""}{formatINR(s.amount)}</span>
+                {/* amount + action stacked on the right so the title column keeps its full width */}
+                <div className="flex shrink-0 flex-col items-end gap-1">
+                <span className={`tabular-nums ${s.done ? "text-slate-400 line-through" : isIncome ? "font-medium text-emerald-600" : urgent ? "font-semibold text-red-700" : "text-slate-700"}`}>{isIncome ? "+" : ""}{formatINR(s.amount)}</span>
 
                 {/* action */}
-                <span className="flex w-16 shrink-0 justify-end">
+                <span className="flex justify-end empty:hidden">
                   {isHandover || isPoolHandover ? null /* rendered inline in the content column above */ : isPiggy ? (
                     <span className="text-[9px] text-slate-300">est.</span>
                   ) : isAdvance ? (
@@ -409,6 +413,7 @@ export function MoneyPlan({
                     ) : null
                   ) : null}
                 </span>
+                </div>
 
                 {/* delete: manual steps are removed outright; derived steps are hidden from the plan view */}
                 {canEdit && open && who == null && (
