@@ -1618,11 +1618,12 @@ export async function getLoanDetail(householdId: number, id: number) {
 // log — the audit trail for "who marked this step done, and when".
 export type MoneyPlanActivity = { id: number; memberName: string | null; action: string; entity: string; summary: string; at: Date };
 const MONEY_PLAN_ENTITIES = ["settlement", "piggy", "income", "expense"];
-export async function getMoneyPlanActivity(periodId: number, limit = 40): Promise<MoneyPlanActivity[]> {
+export async function getMoneyPlanActivity(periodId: number): Promise<MoneyPlanActivity[]> {
+  // No cap — scoped to a single month, so the count is naturally bounded and the user expects the
+  // WHOLE month's money-movement log, not a truncated tail.
   const rows = await prisma.activityLog.findMany({
     where: { periodId, entity: { in: MONEY_PLAN_ENTITIES } },
     orderBy: { createdAt: "desc" },
-    take: limit,
     select: { id: true, memberName: true, action: true, entity: true, summary: true, createdAt: true },
   });
   return rows.map((r) => ({ id: r.id, memberName: r.memberName, action: r.action, entity: r.entity, summary: r.summary, at: r.createdAt }));
