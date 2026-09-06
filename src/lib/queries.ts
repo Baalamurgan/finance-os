@@ -2,7 +2,7 @@ import { unstable_cache } from "next/cache";
 import { prisma } from "@/lib/prisma";
 import { FAMILY_TAG } from "@/lib/revalidate";
 import { MISC_SUBCATEGORIES } from "@/lib/misc";
-import { LEFTOVER_NOTE } from "@/lib/notes";
+import { LEFTOVER_NOTE, POOL_NOTE, POOL_BILL_NOTE, REMOVED_NOTE } from "@/lib/notes";
 import { computeSettlement } from "@/lib/settlement-core";
 import { planBillMonth, isLumpDue, monthsUntilNextDue, type FundingStyle } from "@/lib/schedule";
 import { suggestCategoryName, normalizeItem, resolveCategoryId } from "@/lib/spendCategorize";
@@ -526,7 +526,9 @@ async function _getSettlement(
   // disbursement, so keep them OUT of the settlement net or the member would be credited twice.
   // "__deferred__" lines (added in the wind-down overhang) are kept OUT of the settlement so already-
   // paid transfers never shift — they settle separately at wind-down, paid by their assignee.
-  const expenses = allExpenses.filter((e) => e.note !== "__carry__" && e.note !== "__deferred__" && !e.category.isAllowance);
+  // Pool-funded misc (POOL_NOTE / POOL_BILL_NOTE) is borne by the pool, not the assigned member — so
+  // keep it OUT of the settlement net (like allowances) or the member would be wrongly debited for it.
+  const expenses = allExpenses.filter((e) => e.note !== "__carry__" && e.note !== "__deferred__" && e.note !== POOL_NOTE && e.note !== POOL_BILL_NOTE && e.note !== REMOVED_NOTE && !e.category.isAllowance);
   const prevLabel = prevPeriod?.label ?? null;
 
   // pure math (unit-tested in settlement-core.test.ts)
@@ -928,8 +930,9 @@ async function _getInHand(householdId: number, periodId: number) {
     prisma.billPayment.findMany({ where: { householdId }, select: { categoryId: true, periodId: true } }),
     // Allowances: fixed monthly personal money the family SENDS a member (category.isAllowance).
     // Not a bill they owe — surfaced separately as a "Send ₹X to <member>" disbursement in the
-    // Money Plan, and taken OUT of the settlement blob so it isn't double-counted.
-    prisma.expenseEntry.findMany({ where: { periodId, note: null, category: { isAllowance: true } }, select: { id: true, label: true, amount: true, memberId: true, paid: true, dueDay: true } }),
+    // Money Plan, and taken OUT of the settlement blob so it isn't double-counted. Pool-funded misc
+    // (POOL_NOTE) rides the SAME path: the treasurer disburses the full amount to the member, no payback.
+    prisma.expenseEntry.findMany({ where: { periodId, OR: [{ note: null, category: { isAllowance: true } }, { note: POOL_NOTE }] }, select: { id: true, label: true, amount: true, memberId: true, paid: true, dueDay: true } }),
     // Sinking-fund categories + their SAVER (responsible member), so each accrued fund hold is shown
     // under the person who actually holds it — separate from the general Piggy holder.
     prisma.category.findMany({ where: { householdId, OR: [{ sinking: true }, { fundingStyle: { not: null } }] }, select: { id: true, name: true, responsibleMemberId: true } }),

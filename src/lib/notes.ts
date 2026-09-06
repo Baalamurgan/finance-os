@@ -18,3 +18,17 @@ export const DEFERRED_NOTE = "__deferred__";
 // cash is still physically held by the Piggy holder, so it drives a "holder → treasurer" hand-over
 // step (PoolHandover kind "piggy"); the handover amount is re-derived from these lines on add/delete.
 export const PIGGY_INCOME_NOTE = "__piggy_income__";
+// A misc/unbudgeted expense the family pays from the POOL (treasurer), not the assigned member's own
+// cash. The member is a pass-through: the treasurer disburses the FULL amount to them (no payback),
+// and they pay the vendor. Kept OUT of the settlement net (the pool bears it, so the member isn't
+// debited) and routed through the allowance machinery as a treasurer→member disbursement. Two-step
+// variant (a separate member→vendor step is also shown) uses POOL_BILL_NOTE.
+export const POOL_NOTE = "__pool__";
+export const POOL_BILL_NOTE = "__poolbill__";
+// A Setup-generated line (income / recurring expense / budget envelope / bill) the head DELETED for
+// this month. Instead of a hard delete we keep the row as a TOMBSTONE (amount 0, pinned, oneOff so a
+// rebuild's clearGeneratedRows won't wipe it) so the removal is a persistent, intentional override:
+// generateMonth skips recreating that source, and the Sheet shows it struck-through with a Restore
+// button. Amount 0 keeps every total/settlement correct automatically; it's only hidden from the rows
+// that render a live line. Restoring hard-deletes the tombstone so the next sync/rebuild regenerates it.
+export const REMOVED_NOTE = "__removed__";

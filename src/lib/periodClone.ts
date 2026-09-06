@@ -1,5 +1,10 @@
 import type { Prisma } from "@prisma/client";
 import { scheduleOccurrence, scheduleLabel, isLumpDue, planBillMonth, type FundingStyle } from "@/lib/schedule";
+import { REMOVED_NOTE } from "@/lib/notes";
+
+// Normalise an installment label ("Jewel loan 3/12" → "Jewel loan") so an override recorded on one
+// month's line matches the regenerated source. Mirrors actions.ts::stripInstNumber.
+const stripInst = (name: string) => name.replace(/\s+\d+\s*\/\s*\d+\s*$/, "").trim();
 
 /**
  * Generate a month's structure from the RecurringItem TEMPLATE (the source of
@@ -44,6 +49,20 @@ export async function generateMonth(
     : [];
   const skippedSetAside = new Set(_skips.map((s) => s.categoryId)); // bills whose set-aside is skipped this month
   const catById = new Map(cats.map((c) => [c.id, c]));
+
+  // Overrides the head already set on THIS month that a (re)generate must NOT clobber: pinned edits
+  // and "removed" tombstones. We skip regenerating any Setup source that already has one, keyed the
+  // same way syncMonthFromSetup matches (category+member+stripped-label for expenses, owner+stripped-
+  // source for income). On a fresh month there are none, so everything generates as usual; on a
+  // rebuild the overrides survive clearGeneratedRows and are respected here.
+  const [overrideExp, overrideInc] = await Promise.all([
+    tx.expenseEntry.findMany({ where: { periodId: targetId, OR: [{ pinned: true }, { note: REMOVED_NOTE }] }, select: { categoryId: true, memberId: true, label: true } }),
+    tx.incomeEntry.findMany({ where: { periodId: targetId, OR: [{ pinned: true }, { note: REMOVED_NOTE }] }, select: { ownerId: true, source: true } }),
+  ]);
+  const expKey = (categoryId: number | null, memberId: number | null, label: string) => `${categoryId ?? "x"}|${memberId ?? "x"}|${stripInst(label)}`;
+  const incKey = (ownerId: number | null, source: string) => `${ownerId ?? "x"}|${stripInst(source)}`;
+  const skipExp = new Set(overrideExp.map((r) => expKey(r.categoryId, r.memberId, r.label)));
+  const skipInc = new Set(overrideInc.map((r) => incKey(r.ownerId, r.source)));
   // fund a goal-based bill can count on = accrued piggyEntry + this month's not-yet-accrued
   // set-aside, minus any part a paid due-month bill already consumed from that set-aside.
   const fundByCat = new Map<number, number>();
@@ -78,6 +97,7 @@ export async function generateMonth(
     const label = dueLabel(it);
     if (label == null) continue; // installment outside its schedule
     if (it.kind === "income") {
+      if (skipInc.has(incKey(it.memberId, label))) continue; // head removed/pinned this income
       await tx.incomeEntry.create({
         data: { periodId: targetId, source: label, amount: it.amount, ownerId: it.memberId, oneOff: false, dueDay: it.dueDay },
       });
@@ -90,6 +110,7 @@ export async function generateMonth(
     if (isBudgeted(it.categoryId)) continue; // budgeted category → generated from the Category, not the item
     if (isBillWithFund(it.categoryId)) continue; // goal-based bill → generated from the Category (below)
     if (cat?.billEveryMonths != null) continue; // full-bill category → generated from the Category (below), never double-booked
+    if (skipExp.has(expKey(it.categoryId, it.memberId, label))) continue; // head removed/pinned this line
     await tx.expenseEntry.create({
       data: {
         periodId: targetId,
@@ -111,6 +132,7 @@ export async function generateMonth(
   for (const cat of cats) {
     if (cat.onHold || cat.monthlyBudget == null || cat.monthlyBudget <= 0) continue;
     const label = cat.sinking ? `${cat.name} (monthly share)` : cat.name;
+    if (skipExp.has(expKey(cat.id, cat.responsibleMemberId, label))) continue; // head removed/pinned this envelope (Budget skipped too)
     await tx.expenseEntry.create({
       data: {
         periodId: targetId,
@@ -135,6 +157,7 @@ export async function generateMonth(
     if (cat.fundingStyle != null) continue; // goal-based bill-with-a-fund → handled below
     if (cat.onHold || cat.billEveryMonths == null || cat.billAmount == null || cat.billAmount <= 0) continue;
     if (!isLumpDue(cat.billMonth ?? 1, cat.billEveryMonths, period!)) continue;
+    if (skipExp.has(expKey(cat.id, cat.responsibleMemberId, cat.name))) continue; // head removed/pinned this bill
     await tx.expenseEntry.create({
       data: {
         periodId: targetId,
@@ -153,10 +176,12 @@ export async function generateMonth(
   // The SAVE line is tagged to the saver (responsibleMemberId); the DUE-MONTH bill + fund
   // credit are tagged to the PAYER (payerMemberId ?? saver) — settlement nets each by member,
   // so the saver bears the cost and the payer nets ~0.
-  const mkLine = (cat: (typeof cats)[number], label: string, amount: number, memberId: number | null) =>
-    tx.expenseEntry.create({
+  const mkLine = (cat: (typeof cats)[number], label: string, amount: number, memberId: number | null) => {
+    if (skipExp.has(expKey(cat.id, memberId, label))) return Promise.resolve(null); // head removed/pinned this fund line
+    return tx.expenseEntry.create({
       data: { periodId: targetId, label, amount, categoryId: cat.id, memberId, necessary: cat.necessary ?? true, oneOff: false },
     });
+  };
   for (const cat of cats) {
     if (cat.fundingStyle == null || cat.onHold) continue;
     if (cat.billAmount == null || cat.billAmount <= 0 || cat.billMonth == null || cat.billEveryMonths == null) continue;

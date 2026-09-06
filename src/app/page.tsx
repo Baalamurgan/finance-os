@@ -11,13 +11,15 @@ import { DetailsPersist } from "@/components/DetailsPersist";
 import { IncomeModal } from "@/components/IncomeModal";
 import { IncomeRowActions } from "@/components/IncomeRowActions";
 import { PinnedBadge } from "@/components/PinnedBadge";
+import { RemovedBadge } from "@/components/RemovedBadge";
+import { BalancePiggyCard } from "@/components/BalancePiggyCard";
 import { MoneyFlowDonut } from "@/components/Charts";
 import { ConfirmForm } from "@/components/ConfirmForm";
 import { SheetLockNotice } from "@/components/SheetLockNotice";
 import { RebuildDraftButton } from "@/components/RebuildDraftButton";
 import { SheetRefreshButton } from "@/components/SheetRefreshButton";
 import { monthsUntilNextDue } from "@/lib/schedule";
-import { SURPLUS_NOTE, LEFTOVER_NOTE, PIGGY_INCOME_NOTE, CARRY_NOTE } from "@/lib/notes";
+import { SURPLUS_NOTE, LEFTOVER_NOTE, PIGGY_INCOME_NOTE, CARRY_NOTE, REMOVED_NOTE } from "@/lib/notes";
 
 // Auto brought-forward income (last month's surplus / leftovers, Piggy → income) and this-month's
 // planned/added misc are KEPT through a Sheet refresh — sync only touches oneOff:false, note:null
@@ -65,6 +67,10 @@ function isPiggyBudget(cat: ExpRow["category"]): boolean {
 // sits together under Yearly / periodic bills; tracked leftover→Piggy budgets get their own
 // section; everything else follows its category's section.
 function sheetSection(e: ExpRow): string {
+  // Any bill-with-a-fund (EB, WiFi, insurance…) — its share, due-month bill and fund credit — sits
+  // under Yearly / periodic bills, so a periodic bill is never buried in "Monthly" (even a monthly
+  // one, billEveryMonths 1). Plain multi-month bills (no fund) go there too.
+  if (e.category.fundingStyle != null) return "Yearly";
   if (e.category.billEveryMonths != null && e.category.billEveryMonths > 1) return "Yearly";
   if (isPiggyBudget(e.category)) return "PiggyBudget";
   return e.category.section;
@@ -95,6 +101,21 @@ function ExpenseRow({
   periodId: number;
   periodMonth: number;
 }) {
+  // A "removed" tombstone: the head deleted this Setup line for the month. Show it struck-through with a
+  // Restore control instead of a live row (amount is 0, so it's already out of every total).
+  if (e.note === REMOVED_NOTE) {
+    return (
+      <div className="flex items-center justify-between py-2.5 text-[15px]">
+        <div className="min-w-0">
+          <div className="flex items-center gap-1.5">
+            <span className="truncate font-medium text-slate-400 line-through">{e.label}</span>
+            <RemovedBadge kind="expense" id={e.id} canEdit={canEditHere} />
+          </div>
+          <div className="text-xs text-slate-400">{e.category.name}</div>
+        </div>
+      </div>
+    );
+  }
   const isSetAside =
     e.category.fundingStyle != null &&
     (e.label.endsWith("(saving)") || e.label.endsWith("(monthly share)"));
@@ -281,7 +302,9 @@ export default async function SheetPage({
     getSkippedSetAsides(c.household.id, c.selected.id),
     draftSource ? getWindDownPreview(c.household.id, draftSource.id) : Promise.resolve(null),
     piggySource ? getProjectedPiggy(c.household.id, piggySource.id) : Promise.resolve(null),
-    open ? getInHand(c.household.id, c.selected.id) : Promise.resolve(null),
+    // In-Hand also drives the "bill due this month" rows under Yearly/periodic — fetch it for the
+    // preview draft too, so an upcoming fund bill (EB, insurance…) is visible before the month opens.
+    open || isDraft ? getInHand(c.household.id, c.selected.id) : Promise.resolve(null),
   ]);
   const shownPiggy = projectedPiggy ? projectedPiggy.generalTotal : c.piggyBalance;
   // Part of the Piggy figure may be last month's leftover still sitting with the category owners
@@ -516,19 +539,28 @@ export default async function SheetPage({
               </span>
             </summary>
             <div className="divide-y divide-slate-100 px-4 py-1">
-              {rollup.incomes.map((i) => (
-                <Row key={i.id} label={i.source} tag={i.owner?.name} amount={i.amount} pinnedControl={i.pinned ? <PinnedBadge kind="income" id={i.id} canEdit={canEditHere} /> : i.note != null && KEPT_INCOME_NOTES.has(i.note) ? <KeptTag title="Brought forward from last month — kept through a Sheet refresh" /> : null}>
-                  {c.isHead ? (
-                    <IncomeRowActions
-                      members={c.members}
-                      periodId={c.selected!.id}
-                      initial={{ id: i.id, source: i.source, amount: i.amount, ownerId: i.ownerId, dueDay: i.dueDay }}
-                    />
-                  ) : (
-                    canEditHere && <RowActions id={i.id} deleteAction={deleteIncome} />
-                  )}
-                </Row>
-              ))}
+              {rollup.incomes.map((i) =>
+                i.note === REMOVED_NOTE ? (
+                  <div key={i.id} className="flex items-center justify-between py-2.5 text-[15px]">
+                    <div className="flex min-w-0 items-center gap-1.5">
+                      <span className="truncate font-medium text-slate-400 line-through">{i.source}</span>
+                      <RemovedBadge kind="income" id={i.id} canEdit={canEditHere} />
+                    </div>
+                  </div>
+                ) : (
+                  <Row key={i.id} label={i.source} tag={i.owner?.name} amount={i.amount} pinnedControl={i.pinned ? <PinnedBadge kind="income" id={i.id} canEdit={canEditHere} /> : i.note != null && KEPT_INCOME_NOTES.has(i.note) ? <KeptTag title="Brought forward from last month — kept through a Sheet refresh" /> : null}>
+                    {c.isHead ? (
+                      <IncomeRowActions
+                        members={c.members}
+                        periodId={c.selected!.id}
+                        initial={{ id: i.id, source: i.source, amount: i.amount, ownerId: i.ownerId, dueDay: i.dueDay }}
+                      />
+                    ) : (
+                      canEditHere && <RowActions id={i.id} deleteAction={deleteIncome} />
+                    )}
+                  </Row>
+                )
+              )}
               {canEditHere && (
                 <div className="py-2">
                   <IncomeModal members={c.members} periodId={c.selected.id} />
@@ -773,22 +805,13 @@ export default async function SheetPage({
           );
         })()}
 
-        {/* balance + piggy (+ their sum, if you swept the whole Piggy into hand) */}
-        <div className="rounded-xl border border-slate-200 bg-white p-5">
-          <div className="grid grid-cols-2 gap-4">
-            <Stat label="Balance (Income − Expense)" value={formatINR(rollup.balance)} accent />
-            <Stat label={piggyPreview ? "🐷 Piggy bank (est.)" : "🐷 Piggy bank"} value={formatINR(shownPiggy)} />
-          </div>
-          <div className="mt-3 flex items-center justify-between border-t border-dashed border-slate-200 pt-3">
-            <span className="text-xs font-medium uppercase tracking-wide text-slate-400">Balance + Piggy</span>
-            <span className="text-lg font-bold tabular-nums text-slate-900">{formatINR(rollup.balance + shownPiggy)}</span>
-          </div>
-          {pendingHandover && pendingHandover.lump > 0.005 && (
-            <div className="mt-2 text-[11px] text-amber-700">
-              🐷 {formatINR(pendingHandover.lump)} of the Piggy is last month’s leftover still with the category owners — not yet handed to the holder.
-            </div>
-          )}
-        </div>
+        {/* balance + piggy — preview months can toggle the estimated Piggy in/out of the total */}
+        <BalancePiggyCard
+          balance={rollup.balance}
+          piggy={shownPiggy}
+          isPreview={piggyPreview}
+          pendingLump={pendingHandover?.lump ?? 0}
+        />
 
         {/* where did the income go — quick visual breakdown */}
         {rollup.totalIncome > 0 &&
@@ -874,25 +897,6 @@ function Row({
       <div className="flex items-center gap-2 pl-2">
         <span className="tabular-nums text-slate-700">{formatINR(amount)}</span>
         {children}
-      </div>
-    </div>
-  );
-}
-
-function Stat({
-  label,
-  value,
-  accent,
-}: {
-  label: string;
-  value: string;
-  accent?: boolean;
-}) {
-  return (
-    <div>
-      <div className="text-xs font-medium uppercase tracking-wide text-slate-400">{label}</div>
-      <div className={`text-lg font-bold ${accent ? "text-indigo-700" : "text-slate-800"}`}>
-        {value}
       </div>
     </div>
   );

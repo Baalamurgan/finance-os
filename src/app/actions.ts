@@ -17,7 +17,7 @@ import { getSpendShortcuts, getMatcherKeywords, getFrequentSpendItems, getMoneyP
 import { planBillMonth, type FundingStyle } from "@/lib/schedule";
 import { getBillReminders } from "@/lib/billReminders";
 import { applyBudgetShortfall, windDownPeriod } from "@/lib/windDown";
-import { SURPLUS_NOTE, CARRY_NOTE, DEFERRED_NOTE, PIGGY_INCOME_NOTE } from "@/lib/notes";
+import { SURPLUS_NOTE, CARRY_NOTE, DEFERRED_NOTE, PIGGY_INCOME_NOTE, POOL_NOTE, REMOVED_NOTE } from "@/lib/notes";
 
 // Record a money-affecting change (who + what + when) for the activity feeds: the Money-Plan
 // activity (In-Hand) and the Spend activity (Spends tab), both visible to everyone.
@@ -307,6 +307,10 @@ async function doSaveExpense(formData: FormData): Promise<{ ok: boolean; error?:
       return { ok: false, error: "That month has ended — add this to the current month instead." };
     }
     const deferred = per ? inWindDownOverhang(per) : false;
+    // Pool-funded misc: the treasurer pays the full amount to the assigned member (family money, no
+    // payback) instead of the member self-funding it. Only valid when a member is actually assigned —
+    // otherwise it's just a normal (shared/own) expense. Skips the shortfall gate + funding advances.
+    const poolFund = formData.get("poolFund") === "on" && finalMemberId != null && !deferred;
     // Guard: a new expense can't exceed the month's current balance (income − expense).
     const [inc, exp] = await Promise.all([
       prisma.incomeEntry.aggregate({ where: { periodId }, _sum: { amount: true } }),
@@ -337,7 +341,7 @@ async function doSaveExpense(formData: FormData): Promise<{ ok: boolean; error?:
     const paybackOverride = pbNum != null && Number.isFinite(pbNum) && pbNum >= 1 && pbNum <= 31 ? Math.round(pbNum) : null;
     // Timing gate: a DATED expense that can't be paid in order is blocked — UNLESS the user is funding
     // it. Deferred lines skip the gate (they always settle at wind-down, not against a due date).
-    if (!deferred && !funding) {
+    if (!deferred && !funding && !poolFund) {
       const feas = await checkAddExpenseFeasible(periodId, { amount, dueDay, payerId: finalMemberId, label });
       if (!feas.ok) return { ok: false, error: feas.reason, shortfall: feas.shortfall, sources: feas.sources };
     }
@@ -345,11 +349,11 @@ async function doSaveExpense(formData: FormData): Promise<{ ok: boolean; error?:
     // month; unchecked → one-off (this month only). A deferred line is always one-off.
     const oneOff = deferred || formData.get("repeat") !== "on";
     await prisma.expenseEntry.create({
-      data: { periodId, categoryId, amount, label, memberId: finalMemberId, necessary, oneOff, dueDay, ...(deferred ? { note: DEFERRED_NOTE } : {}) },
+      data: { periodId, categoryId, amount, label, memberId: finalMemberId, necessary, oneOff, dueDay, ...(deferred ? { note: DEFERRED_NOTE } : poolFund ? { note: POOL_NOTE } : {}) },
     });
     if (!oneOff) await promoteToTemplate(periodId, "expense", label, amount, categoryId, finalMemberId);
     // Record the funding advances (one per funder) so each front + payback appears in the plan.
-    if (funding && finalMemberId != null) {
+    if (funding && !poolFund && finalMemberId != null) {
       let total = 0;
       for (const f of funders) {
         if (f.memberId === finalMemberId) continue; // a member can't fund themselves
@@ -427,15 +431,30 @@ export async function updateIncome(prev: SaveState, formData: FormData): Promise
   return { ok: true, n: prev.n + 1 };
 }
 
+// A Setup-generated line (oneOff:false, no marker note) is SOFT-deleted into a "removed" tombstone so
+// the removal is a persistent override a rebuild/sync won't undo (see REMOVED_NOTE). Hand-added
+// one-offs and estimate/marker lines hard-delete as before — generateMonth never re-creates those.
+const isGeneratedLine = (row: { oneOff: boolean; note: string | null }) => !row.oneOff && row.note == null;
+
 export async function deleteExpense(formData: FormData) {
   if (!(await canEdit())) return;
   const id = Number(formData.get("id"));
   if (!id) return;
   const e = await prisma.expenseEntry.findUnique({ where: { id } });
-  if (e && !(await canEditNow(e.periodId))) return;
-  if (e?.paid) return; // a line already paid in the money plan is frozen — paid is paid
-  await prisma.expenseEntry.delete({ where: { id } });
-  if (e) await logActivity("expense", "deleted", `Removed expense “${e.label}” ${formatINR(e.amount)}`, e.periodId);
+  if (!e) return;
+  if (!(await canEditNow(e.periodId))) return;
+  if (e.paid) return; // a line already paid in the money plan is frozen — paid is paid
+  if (isGeneratedLine(e)) {
+    // Tombstone: amount 0 keeps every total correct; note+pinned+oneOff make it a persistent override.
+    // Its budget envelope (if any) goes too, so the category isn't budgeted this month.
+    await prisma.$transaction(async (tx) => {
+      await tx.expenseEntry.update({ where: { id }, data: { note: REMOVED_NOTE, amount: 0, pinned: true, oneOff: true } });
+      await tx.budget.deleteMany({ where: { periodId: e.periodId, categoryId: e.categoryId ?? -1 } });
+    });
+  } else {
+    await prisma.expenseEntry.delete({ where: { id } });
+  }
+  await logActivity("expense", "deleted", `Removed expense “${e.label}” ${formatINR(e.amount)}`, e.periodId);
   revalidateFamily();
 }
 
@@ -444,14 +463,69 @@ export async function deleteIncome(formData: FormData) {
   const id = Number(formData.get("id"));
   if (!id) return;
   const i = await prisma.incomeEntry.findUnique({ where: { id } });
-  if (i && !(await canEditNow(i.periodId))) return;
-  await prisma.incomeEntry.delete({ where: { id } });
-  // Removing a general-Piggy income line shrinks (or clears) the holder's hand-over to the treasurer.
-  if (i?.note === PIGGY_INCOME_NOTE) {
-    const period = await prisma.period.findUnique({ where: { id: i.periodId }, select: { householdId: true } });
-    if (period) await syncPiggyHandover(period.householdId, i.periodId);
+  if (!i) return;
+  if (!(await canEditNow(i.periodId))) return;
+  if (isGeneratedLine(i)) {
+    await prisma.incomeEntry.update({ where: { id }, data: { note: REMOVED_NOTE, amount: 0, pinned: true, oneOff: true } });
+  } else {
+    await prisma.incomeEntry.delete({ where: { id } });
+    // Removing a general-Piggy income line shrinks (or clears) the holder's hand-over to the treasurer.
+    if (i.note === PIGGY_INCOME_NOTE) {
+      const period = await prisma.period.findUnique({ where: { id: i.periodId }, select: { householdId: true } });
+      if (period) await syncPiggyHandover(period.householdId, i.periodId);
+    }
   }
-  if (i) await logActivity("income", "deleted", `Removed income “${i.source}” ${formatINR(i.amount)}`, i.periodId);
+  await logActivity("income", "deleted", `Removed income “${i.source}” ${formatINR(i.amount)}`, i.periodId);
+  revalidateFamily();
+}
+
+// Restore a "removed" tombstone back to a live Setup line, IN PLACE (same row): clear the removed
+// marker, make it a normal generated line again (oneOff:false, unpinned) and re-pull its amount/day
+// from the current Setup template — the exact value a fresh generate would give. A tracked budget
+// envelope also gets its Budget row back. Head/manager, editable months (open OR the preview draft).
+export async function restoreLine(formData: FormData) {
+  if (!(await canEdit())) return;
+  const kind = String(formData.get("kind") ?? ""); // "income" | "expense"
+  const id = Number(formData.get("id"));
+  if (!id || (kind !== "income" && kind !== "expense")) return;
+
+  if (kind === "income") {
+    const inc = await prisma.incomeEntry.findUnique({ where: { id }, select: { ownerId: true, source: true, note: true, periodId: true, period: { select: { householdId: true } } } });
+    if (!inc || inc.note !== REMOVED_NOTE || !(await canEditNow(inc.periodId))) return;
+    const items = await prisma.recurringItem.findMany({ where: { householdId: inc.period.householdId, active: true, kind: "income" } });
+    const cands = items.filter((it) => it.memberId === inc.ownerId);
+    const it = cands.length === 1 ? cands[0] : cands.find((x) => stripInstNumber(x.name) === stripInstNumber(inc.source));
+    await prisma.incomeEntry.update({ where: { id }, data: { note: null, oneOff: false, pinned: false, ...(it ? { amount: it.amount, dueDay: it.dueDay } : {}) } });
+    await logActivity("income", "updated", `Restored income “${inc.source}”`, inc.periodId);
+    revalidateFamily();
+    return;
+  }
+
+  const exp = await prisma.expenseEntry.findUnique({
+    where: { id },
+    select: { categoryId: true, memberId: true, label: true, note: true, periodId: true, period: { select: { householdId: true } },
+      category: { select: { fundingStyle: true, billEveryMonths: true, billDay: true, billAmount: true, monthlyBudget: true, tracked: true } } },
+  });
+  if (!exp || exp.note !== REMOVED_NOTE || !(await canEditNow(exp.periodId))) return;
+  const cat = exp.category;
+  const isBudget = cat.fundingStyle == null && cat.billEveryMonths == null && cat.monthlyBudget != null && cat.monthlyBudget > 0;
+  const isFullBill = cat.fundingStyle == null && cat.billEveryMonths != null && cat.billAmount != null && cat.billAmount > 0;
+  if (isBudget) {
+    await prisma.$transaction([
+      prisma.expenseEntry.update({ where: { id }, data: { note: null, oneOff: false, pinned: false, amount: cat.monthlyBudget! } }),
+      ...(cat.tracked && exp.categoryId != null
+        ? [prisma.budget.upsert({ where: { periodId_categoryId: { periodId: exp.periodId, categoryId: exp.categoryId } }, create: { periodId: exp.periodId, categoryId: exp.categoryId, planned: cat.monthlyBudget! }, update: { planned: cat.monthlyBudget! } })]
+        : []),
+    ]);
+  } else if (isFullBill) {
+    await prisma.expenseEntry.update({ where: { id }, data: { note: null, oneOff: false, pinned: false, amount: cat.billAmount!, dueDay: cat.billDay } });
+  } else {
+    const items = await prisma.recurringItem.findMany({ where: { householdId: exp.period.householdId, active: true, kind: "expense", categoryId: exp.categoryId } });
+    const cands = items.filter((x) => x.memberId === exp.memberId);
+    const it = cands.length === 1 ? cands[0] : cands.find((x) => stripInstNumber(x.name) === stripInstNumber(exp.label));
+    await prisma.expenseEntry.update({ where: { id }, data: { note: null, oneOff: false, pinned: false, ...(it ? { amount: it.amount, dueDay: it.dueDay } : {}) } });
+  }
+  await logActivity("expense", "updated", `Restored expense “${exp.label}”`, exp.periodId);
   revalidateFamily();
 }
 
@@ -2116,9 +2190,15 @@ async function clearPeriodRows(tx: Tx, periodId: number) {
 // hand in the preview (a well-planned one-off expense/income: oneOff:true, no marker
 // note) survives a rebuild. Manual spends are left untouched too.
 async function clearGeneratedRows(tx: Tx, periodId: number) {
-  await tx.budget.deleteMany({ where: { periodId } });
-  await tx.expenseEntry.deleteMany({ where: { periodId, OR: [{ oneOff: false }, { note: CARRY_NOTE }] } });
-  await tx.incomeEntry.deleteMany({ where: { periodId, OR: [{ oneOff: false }, { note: SURPLUS_NOTE }] } });
+  // Preserve the head's intentional overrides through a rebuild: PINNED edits and "removed" tombstones
+  // (oneOff + REMOVED_NOTE) survive; only untouched generated rows are wiped so generateMonth can
+  // re-create them. generateMonth then skips regenerating any source that still has an override.
+  const pinnedCats = (
+    await tx.expenseEntry.findMany({ where: { periodId, pinned: true }, select: { categoryId: true } })
+  ).map((e) => e.categoryId);
+  await tx.budget.deleteMany({ where: { periodId, ...(pinnedCats.length ? { categoryId: { notIn: pinnedCats } } : {}) } });
+  await tx.expenseEntry.deleteMany({ where: { periodId, OR: [{ oneOff: false, NOT: { pinned: true } }, { note: CARRY_NOTE }] } });
+  await tx.incomeEntry.deleteMany({ where: { periodId, OR: [{ oneOff: false, NOT: { pinned: true } }, { note: SURPLUS_NOTE }] } });
 }
 
 // Create (or just open) the draft for the month AFTER the current open month, then go to it.

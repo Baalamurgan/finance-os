@@ -58,7 +58,20 @@ export function ExpenseModal({
   const [amount, setAmount] = useState(initial?.amount != null ? String(initial.amount) : "");
   const [newCat, setNewCat] = useState(false); // creating a brand-new category inline
   const [picks, setPicks] = useState<Record<number, number>>({}); // funder memberId → amount they front
-  const [paybackOverride, setPaybackOverride] = useState(""); // blank = auto (earliest day borrower can repay)
+  // These were uncontrolled (defaultValue). React 19 resets uncontrolled fields after a form action
+  // returns — so when the save came back reporting a shortfall (not an actual save), the member / note /
+  // due-day / repeat / new-category inputs were wiped. Controlling them here persists what the user
+  // typed across that re-render, so the form only clears once the save truly succeeds.
+  const [memberId, setMemberId] = useState(initial?.memberId != null ? String(initial.memberId) : "");
+  const [label, setLabel] = useState(initial?.label ?? "");
+  const [dueDay, setDueDay] = useState(initial?.dueDay != null ? String(initial.dueDay) : "");
+  const [repeat, setRepeat] = useState(defaultRepeat);
+  const [newCatName, setNewCatName] = useState("");
+  const [newCatSection, setNewCatSection] = useState(newCategoryDefaultSection);
+  // Pool-funded misc: for a misc expense assigned to a member, pay the FULL amount from the pool
+  // (treasurer → member, no payback) instead of the member self-funding it. Only offered for the misc
+  // bucket + an actual member (not Shared), on create.
+  const [poolFund, setPoolFund] = useState(false);
   const noteRef = useRef<HTMLInputElement>(null);
   const prevN = useRef(0);
 
@@ -76,6 +89,10 @@ export function ExpenseModal({
   const shortfallAmt = state.shortfall?.amount ?? 0;
   const coveredTotal = Math.round(Object.values(picks).reduce((s, v) => s + (v || 0), 0) * 100) / 100;
   const funding = Object.keys(picks).length > 0;
+  // Offer pool-funding only for the misc bucket assigned to a real member, on create.
+  const selectedCat = categoryId != null ? categories.find((c) => c.id === categoryId) : undefined;
+  const isMiscCat = newCat ? newCatSection === "Misc" : selectedCat?.section === "Misc";
+  const showPool = !initial && isMiscCat && memberId !== "";
   const fullyCovered = coveredTotal >= shortfallAmt - 0.5;
   const toggleFunder = (memberId: number, spare: number) =>
     setPicks((p) => {
@@ -107,11 +124,17 @@ export function ExpenseModal({
       prevN.current = state.n;
       setOpen(false);
       setPicks({});
-      setPaybackOverride("");
       if (!initial) {
         setAmount("");
         setCategoryId(null);
         setNewCat(false);
+        setMemberId("");
+        setLabel("");
+        setDueDay("");
+        setRepeat(defaultRepeat);
+        setNewCatName("");
+        setNewCatSection(newCategoryDefaultSection);
+        setPoolFund(false);
       }
     }
   }, [state.n]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -182,7 +205,7 @@ export function ExpenseModal({
                   alert("Pick a category (or add a new one).");
                   return;
                 }
-                if (!noteRef.current?.value.trim()) {
+                if (!label.trim()) {
                   e.preventDefault();
                   noteRef.current?.focus();
                   return;
@@ -266,10 +289,12 @@ export function ExpenseModal({
                         name="newCategoryName"
                         required
                         autoFocus
+                        value={newCatName}
+                        onChange={(e) => setNewCatName(e.target.value)}
                         placeholder="New category (e.g. YouTube)"
                         className="input"
                       />
-                      <select name="newCategorySection" defaultValue={newCategoryDefaultSection} className="input">
+                      <select name="newCategorySection" value={newCatSection} onChange={(e) => setNewCatSection(e.target.value)} className="input">
                         <option value="Loans">Loans</option>
                         <option value="Chits">Chits</option>
                         <option value="Monthly">Monthly</option>
@@ -283,7 +308,8 @@ export function ExpenseModal({
                   <label className="text-xs font-medium text-slate-500">Member</label>
                   <select
                     name="memberId"
-                    defaultValue={initial?.memberId ?? ""}
+                    value={memberId}
+                    onChange={(e) => setMemberId(e.target.value)}
                     className="input mt-1 w-full"
                   >
                     <option value="">Shared</option>
@@ -301,7 +327,8 @@ export function ExpenseModal({
                     ref={noteRef}
                     name="label"
                     required
-                    defaultValue={initial?.label}
+                    value={label}
+                    onChange={(e) => setLabel(e.target.value)}
                     placeholder="e.g. Jewel loan extra principal, Health insurance"
                     className="input mt-1 w-full"
                   />
@@ -317,7 +344,8 @@ export function ExpenseModal({
                       min="1"
                       max="31"
                       inputMode="numeric"
-                      defaultValue={initial?.dueDay ?? ""}
+                      value={dueDay}
+                      onChange={(e) => setDueDay(e.target.value)}
                       placeholder="e.g. 15"
                       className="input mt-1 w-full"
                     />
@@ -330,9 +358,23 @@ export function ExpenseModal({
                 {/* recurring vs one-time — create mode only */}
                 {!initial && (
                   <label className="flex items-center gap-2 rounded-lg bg-slate-50 px-3 py-2 text-sm text-slate-700">
-                    <input type="checkbox" name="repeat" defaultChecked={defaultRepeat} className="h-4 w-4 accent-indigo-600" />
+                    <input type="checkbox" name="repeat" checked={repeat} onChange={(e) => setRepeat(e.target.checked)} className="h-4 w-4 accent-indigo-600" />
                     Repeat every month
                     <span className="text-xs text-slate-400">(uncheck = only this month)</span>
+                  </label>
+                )}
+
+                {/* Pool-funded misc: treasurer sends the full amount to this member (family money, no
+                    repayment) instead of them covering it from their own cash. */}
+                {showPool && (
+                  <label className="flex items-start gap-2 rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-800">
+                    <input type="checkbox" name="poolFund" checked={poolFund} onChange={(e) => setPoolFund(e.target.checked)} className="mt-0.5 h-4 w-4 accent-amber-600" />
+                    <span>
+                      Pay the full amount from the pool
+                      <span className="mt-0.5 block text-xs font-normal text-amber-600">
+                        The treasurer sends the whole ₹{amount || "0"} to this member — family money, no repayment. Shows as a treasurer → member step in the Money Plan.
+                      </span>
+                    </span>
                   </label>
                 )}
               </div>
@@ -347,7 +389,7 @@ export function ExpenseModal({
                   Cancel
                 </button>
                 <button type="submit" disabled={(!categoryId && !newCat) || overBalance || pending || (hasSources && !fullyCovered)} className="btn disabled:opacity-40">
-                  {pending ? "Saving…" : funding ? "Fund & add" : initial ? "Save" : "Add expense"}
+                  {pending ? "Saving…" : funding ? "Fund & add" : showPool && poolFund ? "Add (pool-funded)" : initial ? "Save" : "Add expense"}
                 </button>
               </div>
               {/* When a save is blocked for a shortfall, offer to fund it from people holding spare cash —
@@ -381,20 +423,10 @@ export function ExpenseModal({
                     Covered {formatINR(coveredTotal)} of {formatINR(shortfallAmt)}
                     {fullyCovered ? " ✓" : ` — ${formatINR(Math.max(0, Math.round((shortfallAmt - coveredTotal) * 100) / 100))} still needed`}
                   </p>
-                  <label className="mt-2 flex items-center gap-2 text-amber-700">
-                    <span>Repaid on day</span>
-                    <input
-                      type="number" inputMode="numeric" min={1} max={31} placeholder="auto" value={paybackOverride}
-                      onChange={(e) => setPaybackOverride(e.target.value)}
-                      className="input w-20 py-1 text-center text-sm"
-                    />
-                    <span className="text-amber-500">(blank = when their income lands)</span>
-                  </label>
+                  {/* Repayment is automatic — the funder is repaid when the borrower's income lands, so
+                      there's no manual "repaid on day" to pick. */}
                   {funding && (
-                    <>
-                      <input type="hidden" name="funders" value={JSON.stringify(Object.entries(picks).filter(([, a]) => a > 0).map(([m, a]) => ({ memberId: Number(m), amount: a })))} />
-                      {paybackOverride && <input type="hidden" name="paybackDayOverride" value={paybackOverride} />}
-                    </>
+                    <input type="hidden" name="funders" value={JSON.stringify(Object.entries(picks).filter(([, a]) => a > 0).map(([m, a]) => ({ memberId: Number(m), amount: a })))} />
                   )}
                 </div>
               )}

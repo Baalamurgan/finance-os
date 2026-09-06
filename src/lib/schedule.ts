@@ -100,9 +100,11 @@ export function planBillMonth(input: {
   // full bill is never a Sheet line here — it's paid from the fund in the In Hand tab.
   const S = Math.max(1, Math.round(saveEveryMonths ?? 1));
   if (due) {
-    // the due month still shows a normal-sized share — as if the fund resets when the bill is paid
-    const postPay = Math.max(0, fund - billAmount);
-    const share = fundingStyle === "fixed" ? Math.max(0, fixedShare ?? 0) : ((billAmount - postPay) * S) / everyMonths;
+    // Due month (auto): set aside exactly what's still needed to bring the fund UP TO the bill, so the
+    // fund always covers it. A skipped/short save is made up here — the share RISES to fill the gap; a
+    // fully-funded fund needs nothing (0); and in the normal on-track case the fund is one share short,
+    // so this equals the usual share. `fixed` keeps its flat user-set share every month, due included.
+    const share = fundingStyle === "fixed" ? Math.max(0, fixedShare ?? 0) : Math.max(0, billAmount - fund);
     return { kind: "save", contribution: Math.round(share * 100) / 100 };
   }
   if (fundingStyle === "fixed") return { kind: "save", contribution: Math.max(0, fixedShare ?? 0) };

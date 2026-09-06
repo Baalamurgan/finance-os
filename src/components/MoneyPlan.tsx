@@ -174,7 +174,11 @@ export function MoneyPlan({
             const isIncome = s.kind === "income";
             const isManual = s.kind === "manual";
             const isPoolHandover = s.kind === "pool-handover";
-            const canActManual = open && (canEdit || currentMemberId === s.fromId || currentMemberId === s.toId);
+            // A manual move is peer-to-peer (net-zero to the household), so it never touches a closed
+            // month's carry-over — safe for the HEAD to correct after wind-down (e.g. a move that really
+            // happened but was never ticked). Non-heads stay open-only. Mirrors toggleManualStepDone's
+            // server rule: (canEdit || party) && (isHead || periodOpen).
+            const canActManual = (canEdit || currentMemberId === s.fromId || currentMemberId === s.toId) && (open || isHead);
             const canActTransfer = open && (isHead || currentMemberId === s.fromId || currentMemberId === s.toId);
             const canActBill = open && (canEdit || currentMemberId === s.payerId);
             const canActAllowance = open && (canEdit || currentMemberId === s.fromId || currentMemberId === s.toId);
@@ -183,7 +187,7 @@ export function MoneyPlan({
             // kind, so the title just shows the money flow (sender → recipient) like every other step.
             // Income = a member's own money landing (recipient · source), an inflow row.
             const isHandover = isPiggy && s.handoverPeriodId != null;
-            const title = isIncome ? `${s.toName ?? "?"} · ${s.source ?? "income"}` : isAllowance ? `${s.fromName} → ${s.source ?? s.toName}` : isHandover ? `${s.fromName ?? "Owner"} → ${s.toName}` : isPiggy ? `${s.fromName} → ${s.toName} · Piggy` : isManual || isAdvance || isTransfer || isPoolHandover ? `${s.fromName} → ${s.toName}` : `${s.payerName} → ${s.vendor}`;
+            const title = isIncome ? `${s.toName ?? "?"} · ${s.source ?? "income"}` : isAllowance ? `${s.fromName} → ${s.toName}` : isHandover ? `${s.fromName ?? "Owner"} → ${s.toName}` : isPiggy ? `${s.fromName} → ${s.toName} · Piggy` : isManual || isAdvance || isTransfer || isPoolHandover ? `${s.fromName} → ${s.toName}` : `${s.payerName} → ${s.vendor}`;
             // Urgency (only while unpaid — a done step is never "overdue"): RED for overdue OR due
             // today (needs action now), AMBER for due in 1–2 days, plain otherwise.
             const urgent = !s.done && (s.status === "overdue" || (s.status === "soon" && (s.days ?? 1) <= 0));
@@ -204,6 +208,12 @@ export function MoneyPlan({
               ? `⚠ ${frontName ?? "This person"} is short ${formatINR(short)} right now — earlier steps aren't done yet.\n\nMarking this paid means ${frontName ?? "they"} front ${formatINR(short)} from their own pocket. That's fine — they're already owed it back (their funding step / settlement covers it, so the books stay balanced). It'll come back once that funding step is done.\n\nProceed?`
               : null;
             const confirmFront = (e: React.FormEvent) => { if (frontMsg && !confirm(frontMsg)) e.preventDefault(); };
+            // Editing a step in a CLOSED month is a retroactive correction of history — confirm it so the
+            // head can't do it by accident. Only reachable for peer moves (see canActManual), which don't
+            // affect carry-over, but it still rewrites that month's In-Hand ledger.
+            const confirmClosed = (e: React.FormEvent) => {
+              if (!open && !confirm(`This is a closed month. ${s.done ? "Un-marking this move" : "Marking this move done"} corrects that month's In-Hand to match what really happened.\n\nProceed?`)) e.preventDefault();
+            };
 
             return (
               <Fragment key={s.id}>
@@ -387,7 +397,7 @@ export function MoneyPlan({
                     ) : null
                   ) : isManual ? (
                     s.manualId != null && canActManual ? (
-                      <form action={toggleManualStepDone}><input type="hidden" name="id" value={s.manualId} /><MiniBtn primary={!s.done}>{s.done ? "undo" : "✓ done"}</MiniBtn></form>
+                      <form action={toggleManualStepDone} onSubmit={confirmClosed}><input type="hidden" name="id" value={s.manualId} /><MiniBtn primary={!s.done}>{s.done ? "undo" : "✓ done"}</MiniBtn></form>
                     ) : null
                   ) : isIncome ? (
                     s.incomeId != null && canActIncome ? (
@@ -574,7 +584,7 @@ export function MoneyPlan({
 // Human label for a step (shared by the row + the balances sheet).
 function stepTitle(s: MoneyPlanResult["steps"][number]): string {
   if (s.kind === "income") return `${s.toName ?? "?"} · ${s.source ?? "income"}`;
-  if (s.kind === "allowance") return `${s.fromName} → ${s.source ?? s.toName}`;
+  if (s.kind === "allowance") return `${s.fromName} → ${s.toName}`;
   if (s.kind === "piggy") return `${s.fromName} → ${s.toName} · Piggy`;
   if (s.kind === "bill") return `${s.payerName} → ${s.vendor}`;
   return `${s.fromName} → ${s.toName}`;
