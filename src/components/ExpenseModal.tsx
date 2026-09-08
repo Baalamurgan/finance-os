@@ -97,7 +97,8 @@ export function ExpenseModal({
   const showPool = !initial && isMiscCat && memberId !== "";
   const memberLabel = members.find((m) => String(m.id) === memberId)?.name ?? "";
   const fullyCovered = coveredTotal >= shortfallAmt - 0.5;
-  const toggleFunder = (memberId: number, spare: number) =>
+  const toggleFunder = (memberId: number, spare: number) => {
+    setPoolFund(false); setPoolBill(false); // peer advance and pool-funding are mutually exclusive
     setPicks((p) => {
       const next = { ...p };
       if (memberId in next) { delete next[memberId]; return next; }
@@ -105,6 +106,11 @@ export function ExpenseModal({
       next[memberId] = Math.round(Math.min(spare, Math.max(0, shortfallAmt - covered)) * 100) / 100; // prefill: cover the rest, up to their spare
       return next;
     });
+  };
+  // Picking the treasurer in the shortfall list = pool-fund the FULL amount (no payback), not an advance
+  // of the gap. Reuses the poolFund path; clears any peer picks (the pool covers the whole expense).
+  const toggleTreasurerPool = () =>
+    setPoolFund((on) => { const next = !on; if (next) setPicks({}); else setPoolBill(false); return next; });
   const setFunderAmount = (memberId: number, spare: number, val: string) =>
     setPicks((p) => ({ ...p, [memberId]: Math.max(0, Math.min(spare, Number(val) || 0)) }));
 
@@ -370,7 +376,7 @@ export function ExpenseModal({
 
                 {/* Pool-funded misc: treasurer sends the full amount to this member (family money, no
                     repayment) instead of them covering it from their own cash. */}
-                {showPool && (
+                {showPool && !hasSources && (
                   <div className="rounded-lg bg-amber-50 px-3 py-2">
                     <label className="flex items-start gap-2 text-sm text-amber-800">
                       <input type="checkbox" name="poolFund" checked={poolFund} onChange={(e) => { setPoolFund(e.target.checked); if (!e.target.checked) setPoolBill(false); }} className="mt-0.5 h-4 w-4 accent-amber-600" />
@@ -406,7 +412,7 @@ export function ExpenseModal({
                 >
                   Cancel
                 </button>
-                <button type="submit" disabled={(!categoryId && !newCat) || overBalance || pending || (hasSources && !fullyCovered)} className="btn disabled:opacity-40">
+                <button type="submit" disabled={(!categoryId && !newCat) || overBalance || pending || (hasSources && !fullyCovered && !poolFund)} className="btn disabled:opacity-40">
                   {pending ? "Saving…" : funding ? "Fund & add" : showPool && poolFund ? (poolBill ? "Add (pool-funded, 2-step)" : "Add (pool-funded)") : initial ? "Save" : "Add expense"}
                 </button>
               </div>
@@ -415,14 +421,38 @@ export function ExpenseModal({
               {hasSources && state.shortfall && (
                 <div className="mt-2 rounded-lg bg-amber-50 px-3 py-2.5 text-xs text-amber-800">
                   <p className="font-medium">⚠ {state.shortfall.toName} would be short {formatINR(state.shortfall.amount)}{state.shortfall.day != null ? ` on day ${state.shortfall.day}` : ""}.</p>
-                  <p className="mt-1 text-amber-700">Front it from people holding spare cash — pick one, or split across several. They pay {state.shortfall.toName} just before this step, and get repaid once {state.shortfall.toName}’s income lands.</p>
+                  <p className="mt-1 text-amber-700">Cover it from the pool (treasurer pays the full amount, no payback), or front the gap from people holding spare cash — pick one, or split across several.</p>
                   <div className="mt-2 space-y-1.5">
                     {state.sources!.map((src) => {
+                      // The treasurer = the POOL option: pay the FULL expense from the pool (no payback),
+                      // not an advance of the gap. Selecting it flips poolFund (and reveals the 2-step box).
+                      if (src.isTreasurer) {
+                        return (
+                          <div key={`pool-${src.memberId}`} className="rounded-md bg-amber-100/60 px-2 py-1.5">
+                            <label className="flex items-start gap-2 cursor-pointer">
+                              <input type="checkbox" name="poolFund" checked={poolFund} onChange={toggleTreasurerPool} className="mt-0.5 accent-amber-600" />
+                              <span>
+                                <span className={poolFund ? "font-semibold" : "font-medium"}>🏦 {src.name} — pay the full {formatINR(amount ? Number(amount) : src.spare)} from the pool</span>
+                                <span className="mt-0.5 block font-normal text-amber-600">Family money, no repayment. Shows as a treasurer → {state.shortfall!.toName} step in the Money Plan.</span>
+                              </span>
+                            </label>
+                            {poolFund && (
+                              <label className="mt-1.5 ml-6 flex items-start gap-2 cursor-pointer border-t border-amber-200 pt-1.5">
+                                <input type="checkbox" name="poolBill" checked={poolBill} onChange={(e) => setPoolBill(e.target.checked)} className="mt-0.5 accent-amber-600" />
+                                <span>
+                                  Also add a separate “{state.shortfall!.toName} → vendor” payment step
+                                  <span className="mt-0.5 block font-normal text-amber-600">Two steps, ticked independently: the treasurer sends the money, then {state.shortfall!.toName} pays the vendor.</span>
+                                </span>
+                              </label>
+                            )}
+                          </div>
+                        );
+                      }
                       const on = src.memberId in picks;
                       return (
-                        <div key={src.memberId} className="flex items-center gap-2">
+                        <div key={src.memberId} className={`flex items-center gap-2 ${poolFund ? "opacity-40" : ""}`}>
                           <label className="flex flex-1 items-center gap-2 cursor-pointer">
-                            <input type="checkbox" checked={on} onChange={() => toggleFunder(src.memberId, src.spare)} className="accent-amber-600" />
+                            <input type="checkbox" checked={on} disabled={poolFund} onChange={() => toggleFunder(src.memberId, src.spare)} className="accent-amber-600" />
                             <span className={on ? "font-medium" : ""}>{src.name}</span>
                             <span className="text-amber-600">— {formatINR(src.spare)} spare</span>
                           </label>
@@ -437,13 +467,16 @@ export function ExpenseModal({
                       );
                     })}
                   </div>
-                  <p className="mt-2 font-medium">
-                    Covered {formatINR(coveredTotal)} of {formatINR(shortfallAmt)}
-                    {fullyCovered ? " ✓" : ` — ${formatINR(Math.max(0, Math.round((shortfallAmt - coveredTotal) * 100) / 100))} still needed`}
-                  </p>
-                  {/* Repayment is automatic — the funder is repaid when the borrower's income lands, so
-                      there's no manual "repaid on day" to pick. */}
-                  {funding && (
+                  {/* Pool = covers the whole thing; peer advances cover the gap (auto-repaid when income lands). */}
+                  {poolFund ? (
+                    <p className="mt-2 font-medium">🏦 Pool pays the full {formatINR(amount ? Number(amount) : shortfallAmt)}{poolBill ? " · 2 steps" : ""} ✓</p>
+                  ) : (
+                    <p className="mt-2 font-medium">
+                      Covered {formatINR(coveredTotal)} of {formatINR(shortfallAmt)}
+                      {fullyCovered ? " ✓" : ` — ${formatINR(Math.max(0, Math.round((shortfallAmt - coveredTotal) * 100) / 100))} still needed`}
+                    </p>
+                  )}
+                  {funding && !poolFund && (
                     <input type="hidden" name="funders" value={JSON.stringify(Object.entries(picks).filter(([, a]) => a > 0).map(([m, a]) => ({ memberId: Number(m), amount: a })))} />
                   )}
                 </div>

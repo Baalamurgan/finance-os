@@ -159,7 +159,7 @@ async function canEditNow(periodId: number) {
 }
 
 // Success signal for useActionState-driven modals (close + reset only on real success).
-export type FundSource = { memberId: number; name: string; spare: number };
+export type FundSource = { memberId: number; name: string; spare: number; isTreasurer?: boolean };
 export type SaveShortfall = { toMemberId: number; toName: string; amount: number; day: number | null };
 export type SaveState = { ok: boolean; n: number; error?: string; shortfall?: SaveShortfall; sources?: FundSource[] };
 
@@ -204,14 +204,21 @@ async function promoteToTemplate(
 // gets pushed past its due day. Undated expenses have no timing deadline, so they're never gated here.
 async function checkAddExpenseFeasible(
   periodId: number,
-  hyp: { amount: number; dueDay: number | null; payerId: number | null; label: string },
+  hyp: { amount: number; dueDay: number | null; payerId: number | null; label: string; isMisc?: boolean },
 ): Promise<{ ok: true } | { ok: false; reason: string; shortfall?: SaveShortfall; sources?: FundSource[] }> {
   if (hyp.dueDay == null) return { ok: true };
-  const period = await prisma.period.findUnique({ where: { id: periodId }, select: { householdId: true } });
+  const period = await prisma.period.findUnique({ where: { id: periodId }, select: { householdId: true, treasurerMemberId: true } });
   if (!period) return { ok: true };
   const hh = period.householdId;
   const members = await prisma.member.findMany({ where: { householdId: hh }, select: { id: true, name: true } });
   const payerName = members.find((m) => m.id === hyp.payerId)?.name ?? "Shared";
+  // The hub/treasurer is a special funding source: the treasurer covering a misc line isn't a peer LOAN
+  // (front + payback of the gap) — it's the family POOL paying the FULL amount, no payback. Surfaced for
+  // misc-under-member so picking it pool-funds the whole expense (see the modal). Resolve once here.
+  const household = await prisma.household.findUnique({ where: { id: hh }, select: { treasurerMemberId: true } });
+  const headMember = await prisma.member.findFirst({ where: { householdId: hh, role: "head" }, select: { id: true } });
+  const treasurerId = period.treasurerMemberId ?? household?.treasurerMemberId ?? headMember?.id ?? null;
+  const treasurerName = members.find((m) => m.id === treasurerId)?.name ?? "Treasurer";
   const hypBill = { key: "__hyp__", payerId: hyp.payerId, payerName, vendor: hyp.label, amount: hyp.amount, done: false, day: hyp.dueDay, status: null, days: null };
   const [base, withHyp] = await Promise.all([getMoneyPlan(hh, periodId), getMoneyPlan(hh, periodId, undefined, [hypBill])]);
   const inr = (n: number) => formatINR(Math.round(n));
@@ -219,14 +226,24 @@ async function checkAddExpenseFeasible(
   //    spare cash right before that step (the dropdown of sources the user picks from).
   const hypStep = withHyp.steps.find((s) => s.id === "__hyp__");
   if (hypStep?.senderShort != null && hypStep.senderShort > 0.5) {
-    const sources: FundSource[] =
+    // Peer funders = anyone (NOT the payer, NOT the treasurer) holding spare cash right before the step;
+    // each fronts part of the gap as an advance. The treasurer is handled separately as the pool option.
+    const peers: FundSource[] =
       hyp.payerId == null
         ? []
         : members
-            .filter((m) => m.id !== hyp.payerId)
+            .filter((m) => m.id !== hyp.payerId && m.id !== treasurerId)
             .map((m) => ({ memberId: m.id, name: m.name, spare: Math.round(hypStep.balancesBefore?.[m.id] ?? 0) }))
             .filter((s) => s.spare > 0.5)
             .sort((a, b) => b.spare - a.spare);
+    // For a MISC line under a member, offer the treasurer FIRST as the pool option — pay the full amount
+    // from the pool (no payback), independent of the treasurer's own spare cash. Picking it pool-funds
+    // the whole expense (the modal flips it to poolFund), not a partial advance of the gap.
+    const poolOption: FundSource[] =
+      hyp.isMisc && hyp.payerId != null && treasurerId != null && treasurerId !== hyp.payerId
+        ? [{ memberId: treasurerId, name: treasurerName, spare: Math.round(hyp.amount), isTreasurer: true }]
+        : [];
+    const sources: FundSource[] = [...poolOption, ...peers];
     return {
       ok: false,
       reason: `${payerName} would be short ${inr(hypStep.senderShort)} on day ${hyp.dueDay}.`,
@@ -356,7 +373,7 @@ async function doSaveExpense(formData: FormData): Promise<{ ok: boolean; error?:
     // Timing gate: a DATED expense that can't be paid in order is blocked — UNLESS the user is funding
     // it. Deferred lines skip the gate (they always settle at wind-down, not against a due date).
     if (!deferred && !funding && !poolFund) {
-      const feas = await checkAddExpenseFeasible(periodId, { amount, dueDay, payerId: finalMemberId, label });
+      const feas = await checkAddExpenseFeasible(periodId, { amount, dueDay, payerId: finalMemberId, label, isMisc: category?.section === "Misc" });
       if (!feas.ok) return { ok: false, error: feas.reason, shortfall: feas.shortfall, sources: feas.sources };
     }
     // "Repeat every month" (checkbox) → also add to the recurring template so it's generated every
