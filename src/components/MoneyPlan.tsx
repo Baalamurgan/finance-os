@@ -422,7 +422,11 @@ export function MoneyPlan({
                         <MiscPayModal id={s.billId} name={s.vendor!} estimate={s.amount} generalPiggy={generalPiggy} />
                       )
                     ) : s.billId != null ? (
-                      <form action={toggleBillPaid} onSubmit={confirmFront}><input type="hidden" name="id" value={s.billId} /><MiniBtn primary={!s.done}>{s.done ? "undo" : "✓ paid"}</MiniBtn></form>
+                      <form action={toggleBillPaid} onSubmit={confirmFront}>
+                        <input type="hidden" name="id" value={s.billId} />
+                        {s.poolVendorLeg && <input type="hidden" name="leg" value="vendor" />}
+                        <MiniBtn primary={!s.done}>{s.done ? "undo" : "✓ paid"}</MiniBtn>
+                      </form>
                     ) : null
                   ) : null}
                 </span>

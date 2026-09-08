@@ -4,11 +4,16 @@ config();
 import { PrismaClient } from "@prisma/client";
 import { PrismaPg } from "@prisma/adapter-pg";
 
-// READ-ONLY. Dumps the OPEN month's non-trivial expense lines with their note/pool flag, so we can see
-// whether a "pool-funded" misc actually carries note="__pool__" (→ a clean treasurer→member allowance
-// step) or was saved as a normal member bill (→ netted into settlement, disbursed in pieces).
-// Run:  npx tsx scripts/diagnose-misc-expense.ts
+// READ-ONLY. For each large/marked expense line in every OPEN month, print the exact fields that decide
+// whether it becomes a Money-Plan step, and the VERDICT of the two plan queries:
+//   • bill step   ("Baala pays X")      — getInHand billLines: note=null AND category.fundingStyle=null
+//                                          AND !isAllowance AND (tracked=false OR section=Misc), and the
+//                                          category isn't budgeted (Budget.planned>0).
+//   • allowance/pool step ("hub → member") — allowanceLines: (note=null AND category.isAllowance)
+//                                          OR note=__pool__.
+// Anything that matches NEITHER is a Sheet line with no plan step. Run: node_modules/.bin/tsx scripts/diagnose-misc-expense.ts
 const prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL }) });
+const POOL_NOTE = "__pool__";
 
 async function main() {
   const h = await prisma.household.findFirst({ select: { id: true } });
@@ -20,14 +25,22 @@ async function main() {
   for (const p of periods) {
     console.log(`\n━━ ${p.label} (open) ━━`);
     const exps = await prisma.expenseEntry.findMany({
-      where: { periodId: p.id, OR: [{ amount: { gte: 5000 } }, { note: { not: null } }] },
-      select: { id: true, label: true, amount: true, memberId: true, dueDay: true, note: true, oneOff: true, category: { select: { name: true, section: true, isAllowance: true } } },
+      where: { periodId: p.id, OR: [{ amount: { gte: 5000 } }, { note: { not: null } }, { label: { contains: "chit" } }, { label: { contains: "Thatha" } }] },
+      select: { id: true, label: true, amount: true, memberId: true, dueDay: true, note: true, oneOff: true, pinned: true, paid: true, categoryId: true, category: { select: { name: true, section: true, isAllowance: true, tracked: true, fundingStyle: true } } },
       orderBy: { amount: "desc" },
     });
     if (exps.length === 0) { console.log("  (no large / marked expense lines)"); continue; }
+    const budgets = await prisma.budget.findMany({ where: { periodId: p.id }, select: { categoryId: true, planned: true } });
+    const budgetedIds = new Set(budgets.filter((b) => b.planned > 0).map((b) => b.categoryId));
     for (const e of exps) {
-      const pool = e.note === "__pool__" ? "  ✅ POOL-FUNDED (treasurer→member allowance)" : e.note ? `  note=${e.note}` : "";
-      console.log(`  ₹${e.amount}  ${e.label}  → ${nm(e.memberId)}  [${e.category.name} · ${e.category.section}]  due=${e.dueDay ?? "—"}${pool}`);
+      const c = e.category;
+      const isBudgeted = budgetedIds.has(e.categoryId);
+      const billStep = e.note == null && c.fundingStyle == null && !c.isAllowance && (c.tracked === false || c.section === "Misc") && !isBudgeted;
+      const allowanceStep = (e.note == null && c.isAllowance) || e.note === POOL_NOTE;
+      const verdict = billStep ? "→ BILL step (member pays)" : allowanceStep ? "→ ALLOWANCE/POOL step (hub → member)" : "✗ NO plan step";
+      console.log(`\n  ₹${e.amount}  “${e.label}”  → ${nm(e.memberId)}   due=${e.dueDay ?? "—"}  paid=${e.paid}`);
+      console.log(`     category="${c.name}" section=${c.section} tracked=${c.tracked} isAllowance=${c.isAllowance} fundingStyle=${c.fundingStyle ?? "—"} budgeted=${isBudgeted}`);
+      console.log(`     note=${e.note ?? "null"} pinned=${e.pinned} oneOff=${e.oneOff}   ${verdict}`);
     }
   }
   console.log("");

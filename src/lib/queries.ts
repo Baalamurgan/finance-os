@@ -655,7 +655,7 @@ export async function getMoneyPlan(householdId: number, periodId: number, inhand
   // with no day it stays "after collection" (buildMoneyPlan pins it to the last day).
   const allowances = inhand.allowances.map((a) => {
     const st = a.dueDay != null ? dayStatus(a.dueDay) : null;
-    return { key: `allow-${a.id}`, recipientId: a.recipientId, recipientName: a.recipientName, label: a.label, amount: a.amount, done: a.done, billId: a.id, day: a.dueDay, status: st?.status ?? null, days: st?.days ?? null };
+    return { key: `allow-${a.id}`, recipientId: a.recipientId, recipientName: a.recipientName, label: a.label, amount: a.amount, done: a.done, billId: a.id, day: a.dueDay, status: st?.status ?? null, days: st?.days ?? null, vendorLeg: a.vendorLeg };
   });
 
   // Piggy returns (open month only): each budget holder who isn't the Piggy holder hands their GROSS
@@ -932,7 +932,10 @@ async function _getInHand(householdId: number, periodId: number) {
     // Not a bill they owe — surfaced separately as a "Send ₹X to <member>" disbursement in the
     // Money Plan, and taken OUT of the settlement blob so it isn't double-counted. Pool-funded misc
     // (POOL_NOTE) rides the SAME path: the treasurer disburses the full amount to the member, no payback.
-    prisma.expenseEntry.findMany({ where: { periodId, OR: [{ note: null, category: { isAllowance: true } }, { note: POOL_NOTE }] }, select: { id: true, label: true, amount: true, memberId: true, paid: true, dueDay: true } }),
+    // Two-step pool misc (POOL_BILL_NOTE) also disburses hub→member here (leg 1); its member→vendor leg 2
+    // is emitted from the same row in the plan (vendorPaid = that leg's done). `note`/`vendorPaid` are
+    // selected so the mapper can tell a two-step line apart and attach its vendor leg.
+    prisma.expenseEntry.findMany({ where: { periodId, OR: [{ note: null, category: { isAllowance: true } }, { note: POOL_NOTE }, { note: POOL_BILL_NOTE }] }, select: { id: true, label: true, amount: true, memberId: true, paid: true, dueDay: true, note: true, vendorPaid: true } }),
     // Sinking-fund categories + their SAVER (responsible member), so each accrued fund hold is shown
     // under the person who actually holds it — separate from the general Piggy holder.
     prisma.category.findMany({ where: { householdId, OR: [{ sinking: true }, { fundingStyle: { not: null } }] }, select: { id: true, name: true, responsibleMemberId: true } }),
@@ -1242,7 +1245,11 @@ async function _getInHand(householdId: number, periodId: number) {
   const treasurerOwnLeftover = Math.round((leftoverIncomeTotal - leftoverHandoverTotal) * 100) / 100;
   const allowances = allowanceLines
     .filter((e) => e.memberId != null)
-    .map((e) => ({ id: e.id, recipientId: e.memberId as number, recipientName: nameOf(e.memberId), label: e.label, amount: e.amount, done: e.paid, dueDay: e.dueDay }));
+    .map((e) => ({
+      id: e.id, recipientId: e.memberId as number, recipientName: nameOf(e.memberId), label: e.label, amount: e.amount, done: e.paid, dueDay: e.dueDay,
+      // Two-step pool misc: the member then pays the vendor — a second, independently-tickable leg.
+      vendorLeg: e.note === POOL_BILL_NOTE ? { vendor: e.label, vendorPaid: e.vendorPaid, day: e.dueDay } : null,
+    }));
 
   // The Piggy holder's ACTUALLY-received general Piggy = accrued total minus what's still pending
   // hand-over (held by the owners). The pending lump is surfaced so the Money Plan can add the

@@ -14,7 +14,10 @@ export type PlanBill = {
 };
 // An allowance = personal money the treasurer SENDS a member (not a bill they owe). Disbursed after
 // collection, never dated/overdue; completion writes through to the Sheet line's paid flag (billId).
-export type PlanAllowance = { key: string; recipientId: number; recipientName: string; label?: string; amount: number; done: boolean; billId: number; day?: number | null; status?: "overdue" | "soon" | "normal" | null; days?: number | null };
+export type PlanAllowance = { key: string; recipientId: number; recipientName: string; label?: string; amount: number; done: boolean; billId: number; day?: number | null; status?: "overdue" | "soon" | "normal" | null; days?: number | null;
+  // Two-step pool-funded misc: after the hub → member disbursement (this allowance), the member pays the
+  // vendor — a second, independently-tickable leg emitted from the same Sheet row (done = vendorPaid).
+  vendorLeg?: { vendor: string; vendorPaid: boolean; day?: number | null } | null };
 // A piggy return = a budget holder handing their unspent budget (gross positive leftovers) to the
 // Piggy holder at wind-down, so the general Piggy ends up under one person. A live projection (not
 // final until wind-down), always LOWEST priority — the sender only pays it once they're flush.
@@ -40,6 +43,7 @@ export type PlanStep = {
   incomeId?: number; // the IncomeEntry id — lets the head edit the arrival day from the plan
   handoverPeriodId?: number; // piggy hand-over step: the wound-down period whose leftover is being handed over (ticking marks it handed over)
   // transfer
+  poolVendorLeg?: boolean; // leg 2 of a two-step pool-funded misc: the member → vendor payment (ticked separately)
   fromId?: number; toId?: number; fromName?: string; toName?: string; recordId?: number | null; feedsBills?: boolean;
   fundsMember?: boolean; // a disbursement piece timed to fund the recipient's own bills below
   advanceId?: number; // this step is a funding advance (write-through to the Advance record)
@@ -160,6 +164,17 @@ export function buildMoneyPlan(input: {
       fromId: treasurerId ?? undefined, toId: a.recipientId, fromName: treasurerName, toName: a.recipientName, source: a.label,
       billId: a.billId, status: a.status ?? null, days: a.days ?? null,
     });
+    // Two-step pool-funded misc: leg 2 — the member pays the vendor with the cash just disbursed. Emitted
+    // as a bill step so it reads "member → vendor" and is tickable (via toggleBillPaid leg=vendor →
+    // vendorPaid). It's net-zero in the walk (leg 1 credited the member, this debits them) and never
+    // enters settlement/getInHand bills (the row carries note=__poolbill__), so no total shifts.
+    if (a.vendorLeg) {
+      steps.push({
+        id: `poolbill-${a.billId}`, kind: "bill", day: a.day ?? lastDay, amount: a.amount, done: a.vendorLeg.vendorPaid,
+        payerId: a.recipientId, payerName: a.recipientName, vendor: a.vendorLeg.vendor, billId: a.billId, poolVendorLeg: true,
+        status: null, days: null,
+      });
+    }
   }
   // Funding advances: a round-trip loan. The FRONT (funder → borrower) is scheduled just before the
   // step it funds (same day, ranked ahead of bills). The PAYBACK (borrower → funder) returns the same
@@ -368,7 +383,7 @@ export function buildMoneyPlan(input: {
   // bills → other disbursements/allowances out → piggy returns (money comes in, members get funded,
   // bills get paid, the remainder flows back). Anything with NO due date sinks to the very bottom.
   const rank = (s: PlanStep) =>
-    s.kind === "income" ? -1 : (s.kind === "transfer-in" || s.kind === "pool-handover") ? 0 : ((s.kind === "advance" && s.fundsMember) || (s.kind === "transfer-out" && s.fundsMember)) ? 1 : s.kind === "bill" ? (s.deferred ? 3.5 : 2) : s.kind === "piggy" ? 4 : 3;
+    s.kind === "income" ? -1 : (s.kind === "transfer-in" || s.kind === "pool-handover") ? 0 : ((s.kind === "advance" && s.fundsMember) || (s.kind === "transfer-out" && s.fundsMember)) ? 1 : s.kind === "bill" ? (s.poolVendorLeg ? 3.7 : s.deferred ? 3.5 : 2) : s.kind === "piggy" ? 4 : 3;
   // Undated INBOUND collections are gathered UP FRONT (money in before money out) — an unknown income
   // day must never sort a collection AFTER the disbursements/bills it funds, which would make the hub
   // look deeply negative when in truth the cash is simply collected first. Undated bills, disbursements

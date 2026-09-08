@@ -655,6 +655,11 @@ model ExpenseEntry {
   paidAt     DateTime? // when it was marked paid — to show "paid <day>" when that differs from the due day
   dueDay     Int?     // day-of-month this bill is due (from the template) — powers overdue/near-due In-Hand highlighting
   pinned     Boolean  @default(false) // value edited on the Sheet for THIS month — refresh-from-Setup leaves it alone
+  // Two-step pool-funded misc (note=__poolbill__) has two independently-tickable legs, like an advance's
+  // front + payback: `paid`/`paidAt` above track leg 1 (treasurer → member disbursement); the pair below
+  // track leg 2 (member → vendor payment). Unused (false/null) for every other kind of line.
+  vendorPaid   Boolean  @default(false)
+  vendorPaidAt DateTime?
   createdAt  DateTime @default(now())
 }
 

@@ -32,6 +32,30 @@ describe("buildMoneyPlan", () => {
     expect(plan.total).toBe(2); // real move → counts in progress (transfer + manual)
   });
 
+  it("two-step pool-funded misc: hub → member THEN member → vendor, net-zero, both tickable", () => {
+    const plan = buildMoneyPlan({
+      treasurerId: T,
+      treasurerName: "A",
+      transfers: [xfer({ fromId: 2, toId: T, amount: 50, settled: true })], // hub collects 50 so it can disburse
+      bills: [],
+      allowances: [{ key: "allow-9", recipientId: 3, recipientName: "C", label: "Thatha chit", amount: 50, done: false, billId: 9, day: 5, vendorLeg: { vendor: "Thatha chit", vendorPaid: false, day: 5 } }],
+      incomeDayByMember: { 2: 1 },
+    });
+    const iAllow = plan.steps.findIndex((s) => s.kind === "allowance");
+    const iVendor = plan.steps.findIndex((s) => s.poolVendorLeg);
+    expect(iAllow).toBeGreaterThanOrEqual(0);
+    expect(iVendor).toBeGreaterThan(iAllow); // leg 2 (member → vendor) sorts AFTER leg 1 (hub → member)
+    // member C ends net-zero in the walk: received 50 (leg 1), then paid the vendor 50 (leg 2)
+    const last = plan.steps[plan.steps.length - 1];
+    expect(last.balancesAfter?.[3] ?? 0).toBe(0);
+    expect(plan.total).toBe(3); // collection + both legs are tasks
+    // In-Hand holding-now: only the treasurer (sender) is adjusted for leg 1; the member isn't, and the
+    // vendor bill isn't a cash-move → C stays unaffected, exactly like the single-step pool disbursement.
+    const pending = pendingCashMoveByMember(plan.steps);
+    expect(pending[T]).toBe(-50);
+    expect(pending[3] ?? 0).toBe(0);
+  });
+
   it("hides a derived step: kept for un-hiding, but moves no cash and drops from progress", () => {
     const plan = buildMoneyPlan({
       treasurerId: T,

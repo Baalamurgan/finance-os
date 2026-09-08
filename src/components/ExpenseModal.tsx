@@ -72,6 +72,8 @@ export function ExpenseModal({
   // (treasurer → member, no payback) instead of the member self-funding it. Only offered for the misc
   // bucket + an actual member (not Shared), on create.
   const [poolFund, setPoolFund] = useState(false);
+  // Two-step variant: also add a separate "member → vendor" payment step (independently tickable).
+  const [poolBill, setPoolBill] = useState(false);
   const noteRef = useRef<HTMLInputElement>(null);
   const prevN = useRef(0);
 
@@ -93,6 +95,7 @@ export function ExpenseModal({
   const selectedCat = categoryId != null ? categories.find((c) => c.id === categoryId) : undefined;
   const isMiscCat = newCat ? newCatSection === "Misc" : selectedCat?.section === "Misc";
   const showPool = !initial && isMiscCat && memberId !== "";
+  const memberLabel = members.find((m) => String(m.id) === memberId)?.name ?? "";
   const fullyCovered = coveredTotal >= shortfallAmt - 0.5;
   const toggleFunder = (memberId: number, spare: number) =>
     setPicks((p) => {
@@ -135,6 +138,7 @@ export function ExpenseModal({
         setNewCatName("");
         setNewCatSection(newCategoryDefaultSection);
         setPoolFund(false);
+        setPoolBill(false);
       }
     }
   }, [state.n]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -367,15 +371,29 @@ export function ExpenseModal({
                 {/* Pool-funded misc: treasurer sends the full amount to this member (family money, no
                     repayment) instead of them covering it from their own cash. */}
                 {showPool && (
-                  <label className="flex items-start gap-2 rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-800">
-                    <input type="checkbox" name="poolFund" checked={poolFund} onChange={(e) => setPoolFund(e.target.checked)} className="mt-0.5 h-4 w-4 accent-amber-600" />
-                    <span>
-                      Pay the full amount from the pool
-                      <span className="mt-0.5 block text-xs font-normal text-amber-600">
-                        The treasurer sends the whole ₹{amount || "0"} to this member — family money, no repayment. Shows as a treasurer → member step in the Money Plan.
+                  <div className="rounded-lg bg-amber-50 px-3 py-2">
+                    <label className="flex items-start gap-2 text-sm text-amber-800">
+                      <input type="checkbox" name="poolFund" checked={poolFund} onChange={(e) => { setPoolFund(e.target.checked); if (!e.target.checked) setPoolBill(false); }} className="mt-0.5 h-4 w-4 accent-amber-600" />
+                      <span>
+                        Pay the full amount from the pool
+                        <span className="mt-0.5 block text-xs font-normal text-amber-600">
+                          The treasurer sends the whole ₹{amount || "0"} to this member — family money, no repayment. Shows as a treasurer → member step in the Money Plan.
+                        </span>
                       </span>
-                    </span>
-                  </label>
+                    </label>
+                    {/* Two-step variant: hub → member, THEN member → vendor. Only offered once pool-funding. */}
+                    {poolFund && (
+                      <label className="mt-2 flex items-start gap-2 border-t border-amber-200 pt-2 text-sm text-amber-800">
+                        <input type="checkbox" name="poolBill" checked={poolBill} onChange={(e) => setPoolBill(e.target.checked)} className="mt-0.5 h-4 w-4 accent-amber-600" />
+                        <span>
+                          Also add a separate “{memberLabel || "member"} → vendor” payment step
+                          <span className="mt-0.5 block text-xs font-normal text-amber-600">
+                            Two steps in the Money Plan, ticked independently: the treasurer sends the money, then {memberLabel || "the member"} pays the vendor.
+                          </span>
+                        </span>
+                      </label>
+                    )}
+                  </div>
                 )}
               </div>
 
@@ -389,7 +407,7 @@ export function ExpenseModal({
                   Cancel
                 </button>
                 <button type="submit" disabled={(!categoryId && !newCat) || overBalance || pending || (hasSources && !fullyCovered)} className="btn disabled:opacity-40">
-                  {pending ? "Saving…" : funding ? "Fund & add" : showPool && poolFund ? "Add (pool-funded)" : initial ? "Save" : "Add expense"}
+                  {pending ? "Saving…" : funding ? "Fund & add" : showPool && poolFund ? (poolBill ? "Add (pool-funded, 2-step)" : "Add (pool-funded)") : initial ? "Save" : "Add expense"}
                 </button>
               </div>
               {/* When a save is blocked for a shortfall, offer to fund it from people holding spare cash —

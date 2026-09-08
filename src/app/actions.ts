@@ -17,7 +17,7 @@ import { getSpendShortcuts, getMatcherKeywords, getFrequentSpendItems, getMoneyP
 import { planBillMonth, type FundingStyle } from "@/lib/schedule";
 import { getBillReminders } from "@/lib/billReminders";
 import { applyBudgetShortfall, windDownPeriod } from "@/lib/windDown";
-import { SURPLUS_NOTE, CARRY_NOTE, DEFERRED_NOTE, PIGGY_INCOME_NOTE, POOL_NOTE, REMOVED_NOTE } from "@/lib/notes";
+import { SURPLUS_NOTE, CARRY_NOTE, DEFERRED_NOTE, PIGGY_INCOME_NOTE, POOL_NOTE, POOL_BILL_NOTE, REMOVED_NOTE } from "@/lib/notes";
 import { canActOnStep } from "@/lib/planAuth";
 
 // Record a money-affecting change (who + what + when) for the activity feeds: the Money-Plan
@@ -322,6 +322,9 @@ async function doSaveExpense(formData: FormData): Promise<{ ok: boolean; error?:
     // payback) instead of the member self-funding it. Only valid when a member is actually assigned —
     // otherwise it's just a normal (shared/own) expense. Skips the shortfall gate + funding advances.
     const poolFund = formData.get("poolFund") === "on" && finalMemberId != null && !deferred;
+    // Two-step variant: the hub disburses to the member AND a separate "member → vendor" payment step is
+    // added (independently tickable). Only meaningful when pool-funding, so gate on poolFund.
+    const poolBill = poolFund && formData.get("poolBill") === "on";
     // Guard: a new expense can't exceed the month's current balance (income − expense).
     const [inc, exp] = await Promise.all([
       prisma.incomeEntry.aggregate({ where: { periodId }, _sum: { amount: true } }),
@@ -360,7 +363,7 @@ async function doSaveExpense(formData: FormData): Promise<{ ok: boolean; error?:
     // month; unchecked → one-off (this month only). A deferred line is always one-off.
     const oneOff = deferred || formData.get("repeat") !== "on";
     await prisma.expenseEntry.create({
-      data: { periodId, categoryId, amount, label, memberId: finalMemberId, necessary, oneOff, dueDay, ...(deferred ? { note: DEFERRED_NOTE } : poolFund ? { note: POOL_NOTE } : {}) },
+      data: { periodId, categoryId, amount, label, memberId: finalMemberId, necessary, oneOff, dueDay, ...(deferred ? { note: DEFERRED_NOTE } : poolBill ? { note: POOL_BILL_NOTE } : poolFund ? { note: POOL_NOTE } : {}) },
     });
     if (!oneOff) await promoteToTemplate(periodId, "expense", label, amount, categoryId, finalMemberId);
     // Record the funding advances (one per funder) so each front + payback appears in the plan.
@@ -1387,6 +1390,17 @@ export async function toggleBillPaid(formData: FormData) {
   const actor = { memberId, isHead: await isHead(), canEdit: isEditor };
   if (!canActOnStep({ kind: "bill", payerId: e.memberId, treasurerId, hubLine: isHubLine }, actor)) { log.warn("toggleBillPaid", "blocked", { outcome: "blocked", reason: "not-allowed", memberId, id, periodId: e.periodId }); return; }
   if (!actor.isHead && !(await periodOpen(e.periodId))) { log.warn("toggleBillPaid", "blocked", { outcome: "blocked", reason: "period-closed", memberId, id, periodId: e.periodId }); return; }
+  // leg=vendor → the SECOND leg of a two-step pool-funded misc (member → vendor). It has its own done
+  // flag (vendorPaid) so it ticks independently of leg 1 (the hub → member disbursement, tracked by
+  // `paid`). Same row, same authorization; only which flag flips differs.
+  const vendorLeg = formData.get("leg") === "vendor";
+  if (vendorLeg) {
+    await prisma.expenseEntry.update({ where: { id }, data: { vendorPaid: !e.vendorPaid, vendorPaidAt: e.vendorPaid ? null : new Date() } });
+    log.info("toggleBillPaid", "ok", { outcome: "ok", memberId, id, vendorPaid: !e.vendorPaid, periodId: e.periodId });
+    await logActivity("expense", "updated", `${e.vendorPaid ? "Unmarked" : "Marked"} vendor payment “${e.label}” ${formatINR(e.amount)} paid`, e.periodId);
+    revalidateFamily();
+    return;
+  }
   // Stamp the paid time when marking paid (cleared on un-mark) so the plan can show "paid <day>".
   await prisma.expenseEntry.update({ where: { id }, data: { paid: !e.paid, paidAt: e.paid ? null : new Date() } });
   log.info("toggleBillPaid", "ok", { outcome: "ok", memberId, id, paid: !e.paid, periodId: e.periodId });
