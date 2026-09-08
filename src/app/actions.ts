@@ -84,10 +84,11 @@ export async function doSignOut() {
 // FAMILY_TAG and normally only refresh on a write or the 1h backstop — so after a code deploy a cached
 // result can look stale until someone touches data. This forces an immediate recompute with no data
 // change (read-only, so any signed-in family member may run it), for the "refresh when I want" case.
-export async function refreshData() {
+export async function refreshData(): Promise<{ ok: boolean }> {
   const session = await auth();
-  if (!session?.user) return;
+  if (!session?.user) return { ok: false };
   revalidateFamily();
+  return { ok: true };
 }
 
 // App-lock: when the household has a shared PIN, every mutation also requires the

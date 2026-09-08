@@ -1,12 +1,13 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { startRegistration } from "@simplewebauthn/browser";
 import { doSignOut, setViewAs, refreshData } from "@/app/actions";
 import { lockNow, removeMyBiometric } from "@/app/lock/actions";
 import { ThemeMenuRow } from "@/components/ThemeToggle";
+import { useToast } from "@/components/Toast";
 
 export function UserMenu({
   name,
@@ -42,10 +43,31 @@ export function UserMenu({
     { key: "users", label: "Settings · members & lock", href: "/users", icon: "🔧", show: isHead },
   ].filter((l) => l.show);
   const router = useRouter();
+  const toast = useToast();
   const [open, setOpen] = useState(false);
+  const [refreshing, startRefresh] = useTransition();
   const [bioBusy, setBioBusy] = useState(false);
   const [bioMsg, setBioMsg] = useState<string | null>(null);
   const ref = useRef<HTMLDivElement>(null);
+
+  // On-demand cache bust. No visible change when data was already fresh, so a toast is the only signal
+  // it worked — and it explicitly reports failure (e.g. session expired) instead of silently no-op'ing.
+  const doRefresh = () => {
+    setOpen(false);
+    startRefresh(async () => {
+      try {
+        const r = await refreshData();
+        if (r?.ok) {
+          toast("Data refreshed", "success");
+          router.refresh(); // re-pull the freshly-recomputed figures into the current view
+        } else {
+          toast("Couldn’t refresh — try signing in again", "error");
+        }
+      } catch {
+        toast("Refresh failed — check your connection", "error");
+      }
+    });
+  };
 
   const enrollBiometric = async () => {
     setBioBusy(true);
@@ -149,16 +171,18 @@ export function UserMenu({
           <div className="border-b border-slate-100">
             <ThemeMenuRow />
           </div>
-          <form action={refreshData} className="border-b border-slate-100">
+          <div className="border-b border-slate-100">
             <button
-              onClick={() => setOpen(false)}
+              type="button"
+              onClick={doRefresh}
+              disabled={refreshing}
               title="Force a fresh recompute of every family figure now — use if a number looks stale after an update"
-              className="flex w-full items-center gap-2 px-4 py-3 text-left text-sm text-slate-700 hover:bg-slate-50"
+              className="flex w-full items-center gap-2 px-4 py-3 text-left text-sm text-slate-700 hover:bg-slate-50 disabled:opacity-50"
             >
-              <span className="text-base leading-none">🔄</span>
-              Refresh data
+              <span className={`text-base leading-none ${refreshing ? "animate-spin" : ""}`}>🔄</span>
+              {refreshing ? "Refreshing…" : "Refresh data"}
             </button>
-          </form>
+          </div>
           {actualIsHead && (
             <form action={setViewAs} className="border-b border-slate-100">
               <input type="hidden" name="mode" value={viewingAsMember ? "head" : "member"} />
