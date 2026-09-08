@@ -11,6 +11,7 @@ import { ExpenseModal } from "@/components/ExpenseModal";
 import { StepDayEditor } from "@/components/StepDayEditor";
 import { useToast } from "@/components/Toast";
 import type { MoneyPlanResult } from "@/lib/queries";
+import { canActOnStep, canActInMonth } from "@/lib/planAuth";
 
 // The shared, everyone-visible Money Plan: the month's transfers + bill payments as one ordered,
 // dated checklist. Ticking a step writes through to the real record (settlement / bill paid) — the
@@ -174,15 +175,17 @@ export function MoneyPlan({
             const isIncome = s.kind === "income";
             const isManual = s.kind === "manual";
             const isPoolHandover = s.kind === "pool-handover";
-            // A manual move is peer-to-peer (net-zero to the household), so it never touches a closed
-            // month's carry-over — safe for the HEAD to correct after wind-down (e.g. a move that really
-            // happened but was never ticked). Non-heads stay open-only. Mirrors toggleManualStepDone's
-            // server rule: (canEdit || party) && (isHead || periodOpen).
-            const canActManual = (canEdit || currentMemberId === s.fromId || currentMemberId === s.toId) && (open || isHead);
-            const canActTransfer = open && (isHead || currentMemberId === s.fromId || currentMemberId === s.toId);
-            const canActBill = open && (canEdit || currentMemberId === s.payerId);
-            const canActAllowance = open && (canEdit || currentMemberId === s.fromId || currentMemberId === s.toId);
-            const canActIncome = open && (isHead || currentMemberId === s.toId); // owner of the income (or head) ticks it received
+            // Actor permission comes from the SHARED canActOnStep (src/lib/planAuth) that the server
+            // actions also call — so the button we show can never disagree with what the server accepts.
+            // The month gate is layered on here per kind (a manual peer-move is net-zero, so the HEAD may
+            // correct it in a closed month via canActInMonth; transfers/bills/allowances/income stay
+            // open-only in the UI). See each server action for the matching enforcement.
+            const actor = { memberId: currentMemberId, isHead, canEdit };
+            const canActManual = canActOnStep({ kind: "manual", fromId: s.fromId, toId: s.toId }, actor) && canActInMonth(open, isHead);
+            const canActTransfer = open && canActOnStep({ kind: s.kind, fromId: s.fromId, toId: s.toId }, actor);
+            const canActBill = open && canActOnStep({ kind: "bill", payerId: s.payerId }, actor);
+            const canActAllowance = open && canActOnStep({ kind: "allowance", fromId: s.fromId, toId: s.toId }, actor);
+            const canActIncome = open && canActOnStep({ kind: "income", ownerId: s.toId }, actor); // owner (or head/manager) ticks it received
             // Allowance = hub → member; the "personal · from hub" tag beside the title conveys the
             // kind, so the title just shows the money flow (sender → recipient) like every other step.
             // Income = a member's own money landing (recipient · source), an inflow row.

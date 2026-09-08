@@ -18,6 +18,7 @@ import { planBillMonth, type FundingStyle } from "@/lib/schedule";
 import { getBillReminders } from "@/lib/billReminders";
 import { applyBudgetShortfall, windDownPeriod } from "@/lib/windDown";
 import { SURPLUS_NOTE, CARRY_NOTE, DEFERRED_NOTE, PIGGY_INCOME_NOTE, POOL_NOTE, REMOVED_NOTE } from "@/lib/notes";
+import { canActOnStep } from "@/lib/planAuth";
 
 // Record a money-affecting change (who + what + when) for the activity feeds: the Money-Plan
 // activity (In-Hand) and the Spend activity (Spends tab), both visible to everyone.
@@ -1363,34 +1364,29 @@ export async function toggleBillPaid(formData: FormData) {
   const id = Number(formData.get("id"));
   const e = await prisma.expenseEntry.findUnique({ where: { id }, include: { category: { select: { isAllowance: true, householdId: true } } } });
   if (!e) { log.warn("toggleBillPaid", "blocked", { outcome: "blocked", reason: "not-found", memberId, id }); return; }
-  // Marking a bill paid TRACKS REALITY — it doesn't change the planned sheet, so the settlement
-  // lock (which freezes planned numbers) must NOT apply here, or a manager gets blocked while a
-  // member-payer isn't. Head + manager + the bill's own payer may toggle it; head may do any
-  // month, everyone else only while the month is still open.
+  // Marking a bill paid TRACKS REALITY — it doesn't change the planned sheet, so the settlement lock
+  // (which freezes planned numbers) must NOT apply here. Authorization goes through the SHARED
+  // canActOnStep the UI uses, so button and enforcement can't drift. A HUB-DISBURSED line is paid/sent
+  // by the TREASURER, not whoever it's stored against — an allowance ("personal · from hub", stored
+  // against the recipient), pool-funded misc (note=__pool__, a plain Misc category), or a shared/pool
+  // bill (memberId null, paid from the pool). We map all bill/allowance/pool ticks to the same "bill"
+  // decision: payer = the stored member, plus the treasurer via `hubLine`. Resolve the treasurer only
+  // when it could actually unblock (non-editor, non-payer, and a hub line).
   const isEditor = await canEdit(); // head or manager (and unlocked)
   const isPayer = memberId != null && memberId === e.memberId;
-  // A HUB-DISBURSED line is paid/sent by the TREASURER, not by whoever it's stored against — so the
-  // treasurer must be able to tick it, matching the UI, which shows them the button (the Money Plan
-  // makes the treasurer the payer/sender of all of these). Three shapes ride the hub:
-  //   • an allowance ("personal · from hub") — stored against the RECIPIENT (isAllowance category);
-  //   • pool-funded misc (note=__pool__) — also stored against the recipient, but a plain Misc category;
-  //   • a shared/pool bill (memberId == null) — paid from the pool the treasurer holds.
-  // For all three the person it's stored against is NOT the payer, so `isPayer` is false/irrelevant; the
-  // treasurer is the real actor. Without this the treasurer sees the button but the toggle silently
-  // no-ops (a UI/server permission mismatch). Resolve the treasurer only when it could actually unblock.
-  let isTreasurerDisbursed = false;
-  const isHubLine = e.category?.isAllowance || e.note === POOL_NOTE || e.memberId == null;
+  const isHubLine = !!e.category?.isAllowance || e.note === POOL_NOTE || e.memberId == null;
+  let treasurerId: number | null = null;
   if (!isEditor && !isPayer && isHubLine && memberId != null) {
     const [period, household, headMember] = await Promise.all([
       prisma.period.findUnique({ where: { id: e.periodId }, select: { treasurerMemberId: true } }),
       prisma.household.findUnique({ where: { id: e.category.householdId }, select: { treasurerMemberId: true } }),
       prisma.member.findFirst({ where: { householdId: e.category.householdId, role: "head" }, select: { id: true } }),
     ]);
-    const treasurerId = period?.treasurerMemberId ?? household?.treasurerMemberId ?? headMember?.id ?? null;
-    isTreasurerDisbursed = memberId === treasurerId;
+    treasurerId = period?.treasurerMemberId ?? household?.treasurerMemberId ?? headMember?.id ?? null;
   }
-  if (!isEditor && !isPayer && !isTreasurerDisbursed) { log.warn("toggleBillPaid", "blocked", { outcome: "blocked", reason: "not-allowed", memberId, id, periodId: e.periodId }); return; }
-  if (!(await isHead()) && !(await periodOpen(e.periodId))) { log.warn("toggleBillPaid", "blocked", { outcome: "blocked", reason: "period-closed", memberId, id, periodId: e.periodId }); return; }
+  const actor = { memberId, isHead: await isHead(), canEdit: isEditor };
+  if (!canActOnStep({ kind: "bill", payerId: e.memberId, treasurerId, hubLine: isHubLine }, actor)) { log.warn("toggleBillPaid", "blocked", { outcome: "blocked", reason: "not-allowed", memberId, id, periodId: e.periodId }); return; }
+  if (!actor.isHead && !(await periodOpen(e.periodId))) { log.warn("toggleBillPaid", "blocked", { outcome: "blocked", reason: "period-closed", memberId, id, periodId: e.periodId }); return; }
   // Stamp the paid time when marking paid (cleared on un-mark) so the plan can show "paid <day>".
   await prisma.expenseEntry.update({ where: { id }, data: { paid: !e.paid, paidAt: e.paid ? null : new Date() } });
   log.info("toggleBillPaid", "ok", { outcome: "ok", memberId, id, paid: !e.paid, periodId: e.periodId });
@@ -1483,10 +1479,9 @@ export async function toggleIncomeReceived(formData: FormData) {
   const id = Number(formData.get("id"));
   const e = await prisma.incomeEntry.findUnique({ where: { id } });
   if (!e) { log.warn("toggleIncomeReceived", "blocked", { outcome: "blocked", reason: "not-found", memberId, id }); return; }
-  const isEditor = await canEdit();
-  const isOwner = memberId != null && memberId === e.ownerId;
-  if (!isEditor && !isOwner) { log.warn("toggleIncomeReceived", "blocked", { outcome: "blocked", reason: "not-allowed", memberId, id, periodId: e.periodId }); return; }
-  if (!(await isHead()) && !(await periodOpen(e.periodId))) { log.warn("toggleIncomeReceived", "blocked", { outcome: "blocked", reason: "period-closed", memberId, id, periodId: e.periodId }); return; }
+  const actor = { memberId, isHead: await isHead(), canEdit: await canEdit() };
+  if (!canActOnStep({ kind: "income", ownerId: e.ownerId }, actor)) { log.warn("toggleIncomeReceived", "blocked", { outcome: "blocked", reason: "not-allowed", memberId, id, periodId: e.periodId }); return; }
+  if (!actor.isHead && !(await periodOpen(e.periodId))) { log.warn("toggleIncomeReceived", "blocked", { outcome: "blocked", reason: "period-closed", memberId, id, periodId: e.periodId }); return; }
   await prisma.incomeEntry.update({ where: { id }, data: { receivedAt: e.receivedAt ? null : new Date() } });
   log.info("toggleIncomeReceived", "ok", { outcome: "ok", memberId, id, received: !e.receivedAt, periodId: e.periodId });
   await logActivity("income", "updated", `${e.receivedAt ? "Unmarked" : "Marked"} income “${e.source}” ${formatINR(e.amount)} received`, e.periodId);
@@ -1535,9 +1530,9 @@ export async function toggleManualStepDone(formData: FormData) {
   const id = Number(formData.get("id"));
   const m = await prisma.manualPlanStep.findUnique({ where: { id } });
   if (!m) return;
-  const isParty = memberId != null && (memberId === m.fromMemberId || memberId === m.toMemberId);
-  if (!(await canEdit()) && !isParty) return;
-  if (!(await isHead()) && !(await periodOpen(m.periodId))) return;
+  const actor = { memberId, isHead: await isHead(), canEdit: await canEdit() };
+  if (!canActOnStep({ kind: "manual", fromId: m.fromMemberId, toId: m.toMemberId }, actor)) return;
+  if (!actor.isHead && !(await periodOpen(m.periodId))) return;
   await prisma.manualPlanStep.update({ where: { id }, data: { done: !m.done } });
   await logActivity("settlement", "updated", `${m.done ? "Unmarked" : "Marked"} a manual move ${formatINR(m.amount)} done`, m.periodId);
   revalidateFamily();
@@ -1554,9 +1549,12 @@ export async function togglePoolHandover(formData: FormData) {
   const rows = await prisma.poolHandover.findMany({ where: { id: { in: ids } }, select: { id: true, periodId: true, fromMemberId: true, handedOverAt: true } });
   if (rows.length === 0) return;
   const periodId = rows[0].periodId;
-  const isHolder = memberId != null && rows.every((r) => r.fromMemberId === memberId);
-  if (!(await canEdit()) && !isHolder) return;
-  if (!(await isHead()) && !(await periodOpen(periodId))) return;
+  // A combined hand-over is one holder's rows; if they all share a holder, that's the actor allowed to
+  // tick it (else only head/manager). Same rule as before, via the shared canActOnStep.
+  const holderId = rows.every((r) => r.fromMemberId === rows[0].fromMemberId) ? rows[0].fromMemberId : null;
+  const actor = { memberId, isHead: await isHead(), canEdit: await canEdit() };
+  if (!canActOnStep({ kind: "pool-handover", fromId: holderId }, actor)) return;
+  if (!actor.isHead && !(await periodOpen(periodId))) return;
   const allDone = rows.every((r) => r.handedOverAt != null);
   await prisma.poolHandover.updateMany({ where: { id: { in: ids } }, data: { handedOverAt: allDone ? null : new Date() } });
   await logActivity("settlement", "updated", allDone ? "Undid a pool hand-over to the treasurer" : "Marked a pool hand-over received by the treasurer", periodId);
@@ -1740,10 +1738,9 @@ export async function markSettled(formData: FormData) {
   const key = String(formData.get("key") ?? "").trim() || `pair-${fromMemberId}-${toMemberId}`;
   if (!householdId || !periodId || !fromMemberId || !toMemberId || !amount) return;
   await requireUnlocked("markSettled");
-  // head, OR the payer/receiver of THIS transfer, may mark it settled
-  const me = session?.user?.memberId;
-  const allowed = session?.user?.role === "head" || me === fromMemberId || me === toMemberId;
-  if (!allowed) return;
+  // head, OR the payer/receiver of THIS transfer, may mark it settled (shared canActOnStep)
+  const me = session?.user?.memberId ?? null;
+  if (!canActOnStep({ kind: "transfer-out", fromId: fromMemberId, toId: toMemberId }, { memberId: me, isHead: session?.user?.role === "head", canEdit: false })) return;
 
   // Upsert on (periodId, key): ticking a piece records EXACTLY its own slice as one payment, and a
   // double-click updates the same row instead of double-recording. A creditor's total paid is the SUM
@@ -1776,10 +1773,9 @@ export async function unsettle(formData: FormData) {
   const rec = await prisma.settlementRecord.findUnique({ where: { id } });
   if (!rec) return;
   await requireUnlocked("unsettle");
-  const me = session?.user?.memberId;
-  // head, OR the payer/receiver of this transfer, may undo it
-  const allowed = session?.user?.role === "head" || me === rec.fromMemberId || me === rec.toMemberId;
-  if (!allowed) return;
+  // head, OR the payer/receiver of this transfer, may undo it (shared canActOnStep)
+  const me = session?.user?.memberId ?? null;
+  if (!canActOnStep({ kind: "transfer-out", fromId: rec.fromMemberId, toId: rec.toMemberId }, { memberId: me, isHead: session?.user?.role === "head", canEdit: false })) return;
   await prisma.settlementRecord.delete({ where: { id } });
   await logActivity("settlement", "deleted", `Undid a settlement (${formatINR(rec.amount)})`, rec.periodId);
   revalidateFamily();
@@ -1794,9 +1790,8 @@ export async function markAdvanceSettled(formData: FormData) {
   await requireUnlocked("markAdvanceSettled");
   const adv = await prisma.advance.findUnique({ where: { id } });
   if (!adv) return;
-  const me = session?.user?.memberId;
-  const allowed = session?.user?.role === "head" || me === adv.fromMemberId || me === adv.toMemberId;
-  if (!allowed) return;
+  const me = session?.user?.memberId ?? null;
+  if (!canActOnStep({ kind: "advance", fromId: adv.fromMemberId, toId: adv.toMemberId }, { memberId: me, isHead: session?.user?.role === "head", canEdit: false })) return;
   const payback = formData.get("leg") === "payback";
   await prisma.advance.update({ where: { id }, data: payback ? { paybackSettled: true, paybackSettledAt: new Date() } : { settled: true, settledAt: new Date() } });
   await logActivity("settlement", "created", `Marked an advance ${payback ? "repaid" : "paid"} (${formatINR(adv.amount)})`, adv.periodId);
@@ -1811,9 +1806,8 @@ export async function unsettleAdvance(formData: FormData) {
   await requireUnlocked("unsettleAdvance");
   const adv = await prisma.advance.findUnique({ where: { id } });
   if (!adv) return;
-  const me = session?.user?.memberId;
-  const allowed = session?.user?.role === "head" || me === adv.fromMemberId || me === adv.toMemberId;
-  if (!allowed) return;
+  const me = session?.user?.memberId ?? null;
+  if (!canActOnStep({ kind: "advance", fromId: adv.fromMemberId, toId: adv.toMemberId }, { memberId: me, isHead: session?.user?.role === "head", canEdit: false })) return;
   if (formData.get("delete") === "1") await prisma.advance.delete({ where: { id } });
   else if (formData.get("leg") === "payback") await prisma.advance.update({ where: { id }, data: { paybackSettled: false, paybackSettledAt: null } });
   else await prisma.advance.update({ where: { id }, data: { settled: false, settledAt: null } });
