@@ -79,6 +79,16 @@ export async function doSignOut() {
   await signOut({ redirectTo: "/signin" });
 }
 
+// On-demand cache bust. All family reads (getInHand / getRollup / getSettlement) are memoized under
+// FAMILY_TAG and normally only refresh on a write or the 1h backstop — so after a code deploy a cached
+// result can look stale until someone touches data. This forces an immediate recompute with no data
+// change (read-only, so any signed-in family member may run it), for the "refresh when I want" case.
+export async function refreshData() {
+  const session = await auth();
+  if (!session?.user) return;
+  revalidateFamily();
+}
+
 // App-lock: when the household has a shared PIN, every mutation also requires the
 // device to be unlocked — this closes the direct-API bypass of the /lock gate
 // (the gate itself only protects page reads via loadCommon).
@@ -1359,20 +1369,27 @@ export async function toggleBillPaid(formData: FormData) {
   // month, everyone else only while the month is still open.
   const isEditor = await canEdit(); // head or manager (and unlocked)
   const isPayer = memberId != null && memberId === e.memberId;
-  // An allowance ("personal · from hub") is stored against the RECIPIENT, but it's SENT by the
-  // treasurer — so the treasurer (the step's sender) must be able to tick it, matching the UI which
-  // already shows them the "✓ sent" button. Resolve the treasurer only when it could unblock.
-  let isAllowanceSender = false;
-  if (!isEditor && !isPayer && e.category?.isAllowance && memberId != null) {
+  // A HUB-DISBURSED line is paid/sent by the TREASURER, not by whoever it's stored against — so the
+  // treasurer must be able to tick it, matching the UI, which shows them the button (the Money Plan
+  // makes the treasurer the payer/sender of all of these). Three shapes ride the hub:
+  //   • an allowance ("personal · from hub") — stored against the RECIPIENT (isAllowance category);
+  //   • pool-funded misc (note=__pool__) — also stored against the recipient, but a plain Misc category;
+  //   • a shared/pool bill (memberId == null) — paid from the pool the treasurer holds.
+  // For all three the person it's stored against is NOT the payer, so `isPayer` is false/irrelevant; the
+  // treasurer is the real actor. Without this the treasurer sees the button but the toggle silently
+  // no-ops (a UI/server permission mismatch). Resolve the treasurer only when it could actually unblock.
+  let isTreasurerDisbursed = false;
+  const isHubLine = e.category?.isAllowance || e.note === POOL_NOTE || e.memberId == null;
+  if (!isEditor && !isPayer && isHubLine && memberId != null) {
     const [period, household, headMember] = await Promise.all([
       prisma.period.findUnique({ where: { id: e.periodId }, select: { treasurerMemberId: true } }),
       prisma.household.findUnique({ where: { id: e.category.householdId }, select: { treasurerMemberId: true } }),
       prisma.member.findFirst({ where: { householdId: e.category.householdId, role: "head" }, select: { id: true } }),
     ]);
     const treasurerId = period?.treasurerMemberId ?? household?.treasurerMemberId ?? headMember?.id ?? null;
-    isAllowanceSender = memberId === treasurerId;
+    isTreasurerDisbursed = memberId === treasurerId;
   }
-  if (!isEditor && !isPayer && !isAllowanceSender) { log.warn("toggleBillPaid", "blocked", { outcome: "blocked", reason: "not-allowed", memberId, id, periodId: e.periodId }); return; }
+  if (!isEditor && !isPayer && !isTreasurerDisbursed) { log.warn("toggleBillPaid", "blocked", { outcome: "blocked", reason: "not-allowed", memberId, id, periodId: e.periodId }); return; }
   if (!(await isHead()) && !(await periodOpen(e.periodId))) { log.warn("toggleBillPaid", "blocked", { outcome: "blocked", reason: "period-closed", memberId, id, periodId: e.periodId }); return; }
   // Stamp the paid time when marking paid (cleared on un-mark) so the plan can show "paid <day>".
   await prisma.expenseEntry.update({ where: { id }, data: { paid: !e.paid, paidAt: e.paid ? null : new Date() } });

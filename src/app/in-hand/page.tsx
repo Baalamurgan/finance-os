@@ -127,6 +127,13 @@ export default async function InHandPage({
                 selYear={c.selYear}
                 selMonth={c.selMonth}
                 poolIncoming={g.memberId === inHand.treasurerId ? inHand.poolIncoming : []}
+                poolDisbursements={
+                  g.memberId === inHand.treasurerId
+                    ? inHand.allowances
+                        .filter((a) => !a.done && a.recipientId !== inHand.treasurerId)
+                        .map((a) => ({ recipientId: a.recipientId, recipientName: a.recipientName, label: a.label, amount: a.amount }))
+                    : []
+                }
                 treasurerOwnLeftover={g.memberId === inHand.treasurerId ? inHand.treasurerOwnLeftover : 0}
               />
             ))}

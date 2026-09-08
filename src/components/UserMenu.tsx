@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { startRegistration } from "@simplewebauthn/browser";
-import { doSignOut, setViewAs } from "@/app/actions";
+import { doSignOut, setViewAs, refreshData } from "@/app/actions";
 import { lockNow, removeMyBiometric } from "@/app/lock/actions";
 import { ThemeMenuRow } from "@/components/ThemeToggle";
 
@@ -149,6 +149,16 @@ export function UserMenu({
           <div className="border-b border-slate-100">
             <ThemeMenuRow />
           </div>
+          <form action={refreshData} className="border-b border-slate-100">
+            <button
+              onClick={() => setOpen(false)}
+              title="Force a fresh recompute of every family figure now — use if a number looks stale after an update"
+              className="flex w-full items-center gap-2 px-4 py-3 text-left text-sm text-slate-700 hover:bg-slate-50"
+            >
+              <span className="text-base leading-none">🔄</span>
+              Refresh data
+            </button>
+          </form>
           {actualIsHead && (
             <form action={setViewAs} className="border-b border-slate-100">
               <input type="hidden" name="mode" value={viewingAsMember ? "head" : "member"} />

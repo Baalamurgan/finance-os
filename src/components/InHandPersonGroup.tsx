@@ -26,6 +26,7 @@ export function InHandPersonGroup({
   selYear,
   selMonth,
   poolIncoming = [],
+  poolDisbursements = [],
   treasurerOwnLeftover = 0,
 }: {
   group: InHand["byPerson"][number];
@@ -46,6 +47,7 @@ export function InHandPersonGroup({
   selYear: number;
   selMonth: number;
   poolIncoming?: { fromId: number; fromName: string; amount: number; kind: "leftover" | "piggy"; detail: string | null }[];
+  poolDisbursements?: { recipientId: number; recipientName: string; label: string; amount: number }[];
   treasurerOwnLeftover?: number;
 }) {
   const { name, cats, unpaidBills, paidBills, earmarked, sinkingFunds, sinkingHeld, unpaidPeriodic, paidPeriodic, carried, carriedDue, miscSpent, net, pendingPiggyHeld, yetToReceive, selfFundsBills } = group;
@@ -244,6 +246,18 @@ export function InHandPersonGroup({
                 <span className="shrink-0 tabular-nums text-slate-500">{formatINR(billsHeldForMembers)}</span>
               </li>
             )}
+            {/* Pool money you're HOLDING now to hand out this month — allowances + pool-funded misc.
+                The month-end pool above is net of these (the expense is booked), so each rides here as
+                a positive add-back: it's the cash in your holding-now that sits ABOVE month-end, and
+                leaves as its plan step is ticked. Rendered as a plain in-hand row, not a callout. */}
+            {poolDisbursements.map((d, i) => (
+              <li key={`disb${d.recipientId}-${i}`} className="flex items-center justify-between gap-2 text-xs">
+                <span className="truncate text-violet-600" title="Held in your pool now for this member's pool-funded expense — leaves at month-end when you send it">
+                  📤 Held for {d.recipientName} <span className="text-[10px] text-slate-400">{d.label} · sends this month</span>
+                </span>
+                <span className="shrink-0 tabular-nums font-medium text-violet-700">{formatINR(d.amount)}</span>
+              </li>
+            ))}
           </>
         )}
         {isPiggyHolder && piggyAmt !== 0 && (
