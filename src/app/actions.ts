@@ -17,7 +17,7 @@ import { getSpendShortcuts, getMatcherKeywords, getFrequentSpendItems, getMoneyP
 import { planBillMonth, type FundingStyle } from "@/lib/schedule";
 import { getBillReminders } from "@/lib/billReminders";
 import { applyBudgetShortfall, windDownPeriod } from "@/lib/windDown";
-import { SURPLUS_NOTE, CARRY_NOTE, DEFERRED_NOTE, PIGGY_INCOME_NOTE, POOL_NOTE, POOL_BILL_NOTE, REMOVED_NOTE } from "@/lib/notes";
+import { SURPLUS_NOTE, CARRY_NOTE, DEFERRED_NOTE, PIGGY_INCOME_NOTE, POOL_NOTE, POOL_BILL_NOTE, REMOVED_NOTE, isPoolNote } from "@/lib/notes";
 import { canActOnStep } from "@/lib/planAuth";
 
 // Record a money-affecting change (who + what + when) for the activity feeds: the Money-Plan
@@ -1395,7 +1395,7 @@ export async function toggleBillPaid(formData: FormData) {
   // when it could actually unblock (non-editor, non-payer, and a hub line).
   const isEditor = await canEdit(); // head or manager (and unlocked)
   const isPayer = memberId != null && memberId === e.memberId;
-  const isHubLine = !!e.category?.isAllowance || e.note === POOL_NOTE || e.memberId == null;
+  const isHubLine = !!e.category?.isAllowance || isPoolNote(e.note) || e.memberId == null;
   let treasurerId: number | null = null;
   if (!isEditor && !isPayer && isHubLine && memberId != null) {
     const [period, household, headMember] = await Promise.all([

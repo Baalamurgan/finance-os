@@ -25,6 +25,12 @@ export const PIGGY_INCOME_NOTE = "__piggy_income__";
 // variant (a separate member→vendor step is also shown) uses POOL_BILL_NOTE.
 export const POOL_NOTE = "__pool__";
 export const POOL_BILL_NOTE = "__poolbill__";
+// Both pool variants ride the hub: the treasurer disburses to the member. Anything deciding "is this a
+// pool-funded line?" MUST cover BOTH — checking only POOL_NOTE was the bug that blocked the treasurer
+// from marking a two-step (POOL_BILL_NOTE) disbursement sent. Use this so a new pool note can't be missed.
+export function isPoolNote(note: string | null | undefined): boolean {
+  return note === POOL_NOTE || note === POOL_BILL_NOTE;
+}
 // A Setup-generated line (income / recurring expense / budget envelope / bill) the head DELETED for
 // this month. Instead of a hard delete we keep the row as a TOMBSTONE (amount 0, pinned, oneOff so a
 // rebuild's clearGeneratedRows won't wipe it) so the removal is a persistent, intentional override:

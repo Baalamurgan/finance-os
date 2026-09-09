@@ -2,7 +2,7 @@ import { unstable_cache } from "next/cache";
 import { prisma } from "@/lib/prisma";
 import { FAMILY_TAG } from "@/lib/revalidate";
 import { MISC_SUBCATEGORIES } from "@/lib/misc";
-import { LEFTOVER_NOTE, POOL_NOTE, POOL_BILL_NOTE, REMOVED_NOTE } from "@/lib/notes";
+import { LEFTOVER_NOTE, POOL_NOTE, POOL_BILL_NOTE, REMOVED_NOTE, isPoolNote } from "@/lib/notes";
 import { computeSettlement } from "@/lib/settlement-core";
 import { planBillMonth, isLumpDue, monthsUntilNextDue, type FundingStyle } from "@/lib/schedule";
 import { suggestCategoryName, normalizeItem, resolveCategoryId } from "@/lib/spendCategorize";
@@ -528,7 +528,7 @@ async function _getSettlement(
   // paid transfers never shift — they settle separately at wind-down, paid by their assignee.
   // Pool-funded misc (POOL_NOTE / POOL_BILL_NOTE) is borne by the pool, not the assigned member — so
   // keep it OUT of the settlement net (like allowances) or the member would be wrongly debited for it.
-  const expenses = allExpenses.filter((e) => e.note !== "__carry__" && e.note !== "__deferred__" && e.note !== POOL_NOTE && e.note !== POOL_BILL_NOTE && e.note !== REMOVED_NOTE && !e.category.isAllowance);
+  const expenses = allExpenses.filter((e) => e.note !== "__carry__" && e.note !== "__deferred__" && !isPoolNote(e.note) && e.note !== REMOVED_NOTE && !e.category.isAllowance);
   const prevLabel = prevPeriod?.label ?? null;
 
   // pure math (unit-tested in settlement-core.test.ts)
