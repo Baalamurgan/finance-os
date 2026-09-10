@@ -49,11 +49,28 @@ describe("buildMoneyPlan", () => {
     const last = plan.steps[plan.steps.length - 1];
     expect(last.balancesAfter?.[3] ?? 0).toBe(0);
     expect(plan.total).toBe(3); // collection + both legs are tasks
-    // In-Hand holding-now: only the treasurer (sender) is adjusted for leg 1; the member isn't, and the
-    // vendor bill isn't a cash-move → C stays unaffected, exactly like the single-step pool disbursement.
+    // In-Hand holding-now, BOTH legs pending: treasurer still holds the pool (−50); the member has neither
+    // received nor paid, so leg 1 (+50) and leg 2 (−50) cancel → net 0 (nothing in hand yet).
     const pending = pendingCashMoveByMember(plan.steps);
     expect(pending[T]).toBe(-50);
     expect(pending[3] ?? 0).toBe(0);
+  });
+
+  it("two-step pool misc, INTERIM (leg 1 sent, vendor unpaid): the member holds the cash", () => {
+    const plan = buildMoneyPlan({
+      treasurerId: T,
+      treasurerName: "A",
+      transfers: [xfer({ fromId: 2, toId: T, amount: 50, settled: true })],
+      bills: [],
+      // leg 1 done (disbursed), leg 2 pending (vendor not yet paid)
+      allowances: [{ key: "allow-9", recipientId: 3, recipientName: "C", label: "Thatha chit", amount: 50, done: true, billId: 9, day: 5, vendorLeg: { vendor: "Thatha chit", vendorPaid: false, day: 5 } }],
+      incomeDayByMember: { 2: 1 },
+    });
+    const pending = pendingCashMoveByMember(plan.steps);
+    // Treasurer: leg 1 is done, so nothing pending from it. Member C: only leg 2 pending (−50) → subtracted
+    // from C's net-zero projection, holding-now = 0 − (−50) = +50. C is holding the received cash. ✓
+    expect(pending[T] ?? 0).toBe(0);
+    expect(pending[3]).toBe(-50);
   });
 
   it("hides a derived step: kept for un-hiding, but moves no cash and drops from progress", () => {

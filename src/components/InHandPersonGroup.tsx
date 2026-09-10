@@ -266,6 +266,17 @@ export function InHandPersonGroup({
             <span className="shrink-0 tabular-nums font-medium text-pink-700">{formatINR(piggyAmt)}</span>
           </li>
         )}
+        {/* Two-step pool misc received but not yet paid to the vendor: the member is holding this cash now
+            (leg 1 done, leg 2 pending). It's why their holding-now sits above their net; leaves when they
+            tick the "→ vendor" step in the Money Plan. */}
+        {(group.poolHeld ?? 0) > 0.005 && (
+          <li className="flex items-center justify-between gap-2 text-xs">
+            <span className="truncate text-violet-600" title={`Received from the pool — pay: ${(group.poolHeldVendors ?? []).join(", ")}`}>
+              📥 Held from pool <span className="text-[10px] text-slate-400">to pay the vendor</span>
+            </span>
+            <span className="shrink-0 tabular-nums font-medium text-violet-700">{formatINR(group.poolHeld ?? 0)}</span>
+          </li>
+        )}
         {/* Owner still holding last month's Piggy leftover, to hand to the holder (this IS in their total). */}
         {pendingPiggyHeld > 0.005 && (
           <li className="flex items-center justify-between gap-2 text-xs">

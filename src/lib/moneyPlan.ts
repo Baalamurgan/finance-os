@@ -43,6 +43,7 @@ export type PlanStep = {
   incomeId?: number; // the IncomeEntry id — lets the head edit the arrival day from the plan
   handoverPeriodId?: number; // piggy hand-over step: the wound-down period whose leftover is being handed over (ticking marks it handed over)
   // transfer
+  poolTwoStep?: boolean; // leg 1 of a two-step pool-funded misc: the member RETAINS this until they pay the vendor (leg 2), so unlike a plain allowance the receiver's holding IS adjusted
   poolVendorLeg?: boolean; // leg 2 of a two-step pool-funded misc: the member → vendor payment (ticked separately)
   fromId?: number; toId?: number; fromName?: string; toName?: string; recordId?: number | null; feedsBills?: boolean;
   fundsMember?: boolean; // a disbursement piece timed to fund the recipient's own bills below
@@ -162,7 +163,7 @@ export function buildMoneyPlan(input: {
       // dated → sent on that day (in order, liquidity-checked); undated → after collection (last day)
       id: a.key, kind: "allowance", day: a.day ?? lastDay, amount: a.amount, done: a.done,
       fromId: treasurerId ?? undefined, toId: a.recipientId, fromName: treasurerName, toName: a.recipientName, source: a.label,
-      billId: a.billId, status: a.status ?? null, days: a.days ?? null,
+      billId: a.billId, status: a.status ?? null, days: a.days ?? null, poolTwoStep: !!a.vendorLeg,
     });
     // Two-step pool-funded misc: leg 2 — the member pays the vendor with the cash just disbursed. Emitted
     // as a bill step so it reads "member → vendor" and is tickable (via toggleBillPaid leg=vendor →
@@ -507,11 +508,14 @@ const CASH_MOVE_KINDS = new Set(["income", "transfer-in", "transfer-out", "allow
 // done the sum is 0 (holding-now == projection); at month start it backs the total down to the carried
 // stock. Excludes hidden and already-done steps.
 //
-// ALLOWANCES (personal-expense money the treasurer sends a member) are special. A member's In-Hand net
-// never includes their own allowance — it's spending money, not retained holding — so the RECEIVER
-// must NOT be adjusted for it (adjusting would double-count it downward). The treasurer, though, still
-// physically holds every undisbursed allowance in the pool, so the SENDER keeps the −amount — except a
-// self-allowance (the treasurer's OWN personal expense, from == to), which is excluded for everyone.
+// ALLOWANCES (personal-expense money the treasurer sends a member) are special. A plain allowance is
+// spending money, not retained holding, so the RECEIVER is NOT adjusted (adjusting would double-count it
+// downward); the treasurer still physically holds every undisbursed allowance, so the SENDER keeps the
+// −amount (except a self-allowance, from == to, excluded for everyone). A TWO-STEP pool-funded misc is
+// different: the member RECEIVES the cash (leg 1) and holds it until they pay the vendor (leg 2), so the
+// receiver IS credited for leg 1 and debited for leg 2 (a poolVendorLeg bill) — which is why bills, though
+// normally excluded, are counted for that one case. Both legs undone cancel (nothing received yet); leg 1
+// done + leg 2 pending leaves the member holding the amount, exactly as they physically do.
 export function pendingCashMoveByMember(steps: PlanStep[]): Record<number, number> {
   const out = new Map<number, number>();
   const bump = (id: number | null | undefined, d: number) => {
@@ -519,12 +523,16 @@ export function pendingCashMoveByMember(steps: PlanStep[]): Record<number, numbe
     out.set(id, Math.round(((out.get(id) ?? 0) + d) * 100) / 100);
   };
   for (const s of steps) {
-    if (s.done || s.hidden || !CASH_MOVE_KINDS.has(s.kind)) continue;
+    if (s.done || s.hidden) continue;
+    const isVendorLeg = s.kind === "bill" && s.poolVendorLeg; // leg 2: member → vendor (a bill, but a real cash move here)
+    if (!CASH_MOVE_KINDS.has(s.kind) && !isVendorLeg) continue;
     if (s.kind === "income") { bump(s.toId, s.amount); continue; }
     if (s.kind === "allowance") {
-      if (s.fromId != null && s.fromId !== s.toId) bump(s.fromId, -s.amount); // sender holds it; receiver doesn't count it
+      if (s.fromId != null && s.fromId !== s.toId) bump(s.fromId, -s.amount); // sender holds it
+      if (s.poolTwoStep) bump(s.toId, s.amount); // two-step: the receiver RETAINS it until they pay the vendor
       continue;
     }
+    if (isVendorLeg) { bump(s.payerId, -s.amount); continue; } // member → vendor: leaves the member's hand
     bump(s.fromId, -s.amount);
     bump(s.toId, s.amount);
   }

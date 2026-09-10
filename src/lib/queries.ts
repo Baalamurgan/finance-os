@@ -1213,6 +1213,18 @@ async function _getInHand(householdId: number, periodId: number) {
     prisma.incomeEntry.aggregate({ where: { periodId, note: LEFTOVER_NOTE }, _sum: { amount: true } }),
   ]);
 
+  // Two-step pool misc a member is currently HOLDING: leg 1 disbursed (paid) but the vendor not paid yet
+  // (vendorPaid false). This is the interim cash the member physically holds — surfaced so their card can
+  // show a row for it (it's why their holding-now sits above their net; see pendingCashMoveByMember).
+  const poolHeldByMember = new Map<number, { amount: number; vendors: string[] }>();
+  for (const e of allowanceLines) {
+    if (e.note !== POOL_BILL_NOTE || !e.paid || e.vendorPaid || e.memberId == null) continue;
+    const cur = poolHeldByMember.get(e.memberId) ?? { amount: 0, vendors: [] };
+    cur.amount = Math.round((cur.amount + e.amount) * 100) / 100;
+    cur.vendors.push(e.label);
+    poolHeldByMember.set(e.memberId, cur);
+  }
+
   // Show EVERY member's In-Hand card — even at ₹0 — so the family sees a complete picture (the
   // total is "what they hold right now", and 0 is a real, meaningful answer).
   const byPerson = members.map((m) => {
@@ -1220,7 +1232,8 @@ async function _getInHand(householdId: number, periodId: number) {
     const handovers = poolHandovers
       .filter((p) => p.fromMemberId === m.id && p.handedOverAt == null)
       .map((p) => ({ id: p.id, kind: p.kind as "leftover" | "piggy", amount: p.amount, detail: p.detail }));
-    return { ...g, handovers };
+    const ph = poolHeldByMember.get(m.id);
+    return { ...g, handovers, poolHeld: ph?.amount ?? 0, poolHeldVendors: ph?.vendors ?? [] };
   });
   const shared = build(null, "Shared / pool");
   const piggyTotal = piggy.generalTotal + piggy.sinking.reduce((s, x) => s + x.hold, 0);
