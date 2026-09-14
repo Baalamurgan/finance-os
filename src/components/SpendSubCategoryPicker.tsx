@@ -34,8 +34,13 @@ export function SpendSubCategoryPicker({
     );
   }
 
+  // A native <select> always sizes to its WIDEST option, not the selected one — that's the gap.
+  // So we show the selected value (icon + name + caret) as a snug pill and overlay a transparent
+  // full-size <select> on top purely for the picker interaction.
   return (
-    <span className={`relative inline-flex max-w-[9rem] items-center rounded-full ${optimistic ? "bg-indigo-50" : "bg-amber-50"}`}>
+    <span className={`relative inline-flex max-w-[9rem] items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-medium ${optimistic ? "bg-indigo-50 text-indigo-600" : "bg-amber-50 text-amber-700"}`}>
+      <span className="truncate">{optimistic ? `${icon ?? ""} ${optimistic}`.trim() : "uncategorized"}</span>
+      <span aria-hidden className={`text-[7px] ${optimistic ? "text-indigo-400" : "text-amber-500"}`}>▼</span>
       <select
         value={optimistic}
         onChange={(e) => {
@@ -49,14 +54,13 @@ export function SpendSubCategoryPicker({
           });
         }}
         aria-label="Kind of spend"
-        className={`w-full appearance-none truncate rounded-full border-0 bg-transparent py-0.5 pl-1.5 pr-4 text-[10px] font-medium outline-none ${optimistic ? "text-indigo-600" : "text-amber-700"}`}
+        className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
       >
         <option value="">uncategorized</option>
         {options.map((o) => (
           <option key={o.name} value={o.name}>{o.icon} {o.name}</option>
         ))}
       </select>
-      <span aria-hidden className={`pointer-events-none absolute right-1.5 text-[7px] ${optimistic ? "text-indigo-400" : "text-amber-500"}`}>▼</span>
     </span>
   );
 }
