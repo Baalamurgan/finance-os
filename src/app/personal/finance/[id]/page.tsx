@@ -234,7 +234,7 @@ export default async function CreditCardDetail({
                     {formatINR(t.amount)}
                   </span>
                   {t.source === "family" || t.personalSpendId != null ? (
-                    <span className="w-4 text-center text-slate-200" title={t.source === "family" ? "Family spend — edit or remove it from the Family view" : "Your spend — edit or remove it from the Expenses tab"}>🔒</span>
+                    <span className="w-4 text-center text-slate-200" title={t.source === "family" ? "Family spend — edit or remove it from the Family view" : "Your spend — edit or remove it from the Spends tab"}>🔒</span>
                   ) : (
                     <ConfirmForm action={deleteTransaction} successMessage="Transaction removed" message="Remove this transaction?">
                       <input type="hidden" name="id" value={t.id} />

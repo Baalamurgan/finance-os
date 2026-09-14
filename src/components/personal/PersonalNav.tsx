@@ -13,7 +13,7 @@ const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "
 
 const TABS = [
   { key: "today", label: "Today", href: "/personal/today", icon: "🌤️" },
-  { key: "expenses", label: "Expenses", href: "/personal/expenses", icon: "🧾" },
+  { key: "expenses", label: "Spends", href: "/personal/expenses", icon: "🧾" },
   { key: "sheet", label: "Sheet", href: "/personal/sheet", icon: "📋" },
   { key: "loans", label: "Lending", href: "/personal/loans", icon: "🤝" },
   { key: "finance", label: "Finance", href: "/personal/finance", icon: "💳" },
@@ -21,7 +21,7 @@ const TABS = [
   { key: "setup", label: "Setup", href: "/personal/setup", icon: "⚙️" },
 ] as const;
 
-const PRIMARY = TABS.slice(0, 4); // Today · Expenses · Sheet · Lending (bottom bar)
+const PRIMARY = TABS.slice(0, 4); // Today · Spends · Sheet · Lending (bottom bar)
 const MORE = TABS.slice(4); // Finance · Analysis · Setup (overflow)
 
 export function PersonalNav({

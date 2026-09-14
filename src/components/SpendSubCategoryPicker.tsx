@@ -35,25 +35,28 @@ export function SpendSubCategoryPicker({
   }
 
   return (
-    <select
-      value={optimistic}
-      onChange={(e) => {
-        const next = e.target.value;
-        startTransition(async () => {
-          setOptimistic(next);
-          const fd = new FormData();
-          fd.set("id", String(id));
-          fd.set("subCategory", next);
-          await setSpendSubCategory(fd);
-        });
-      }}
-      aria-label="Kind of spend"
-      className={`max-w-[9rem] truncate rounded-full border-0 px-1.5 py-0.5 text-[10px] font-medium outline-none ${optimistic ? "bg-indigo-50 text-indigo-600" : "bg-amber-50 text-amber-700"}`}
-    >
-      <option value="">uncategorized</option>
-      {options.map((o) => (
-        <option key={o.name} value={o.name}>{o.icon} {o.name}</option>
-      ))}
-    </select>
+    <span className={`relative inline-flex max-w-[9rem] items-center rounded-full ${optimistic ? "bg-indigo-50" : "bg-amber-50"}`}>
+      <select
+        value={optimistic}
+        onChange={(e) => {
+          const next = e.target.value;
+          startTransition(async () => {
+            setOptimistic(next);
+            const fd = new FormData();
+            fd.set("id", String(id));
+            fd.set("subCategory", next);
+            await setSpendSubCategory(fd);
+          });
+        }}
+        aria-label="Kind of spend"
+        className={`w-full appearance-none truncate rounded-full border-0 bg-transparent py-0.5 pl-1.5 pr-4 text-[10px] font-medium outline-none ${optimistic ? "text-indigo-600" : "text-amber-700"}`}
+      >
+        <option value="">uncategorized</option>
+        {options.map((o) => (
+          <option key={o.name} value={o.name}>{o.icon} {o.name}</option>
+        ))}
+      </select>
+      <span aria-hidden className={`pointer-events-none absolute right-1.5 text-[7px] ${optimistic ? "text-indigo-400" : "text-amber-500"}`}>▼</span>
+    </span>
   );
 }

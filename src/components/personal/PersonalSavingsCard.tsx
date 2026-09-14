@@ -163,7 +163,7 @@ function UseModal({ onClose, periodId, periodLabel, balance }: { onClose: () => 
           <input name="note" placeholder="e.g. Topped up this month" className="input mt-1.5 w-full" />
         </div>
         <p className="rounded-lg bg-slate-50 px-3 py-2 text-[11px] text-slate-500">
-          Adds the amount as <b>income</b> to <b>{periodLabel}</b> and reduces the pot. Spend it from any category on the Sheet or Expenses.
+          Adds the amount as <b>income</b> to <b>{periodLabel}</b> and reduces the pot. Spend it from any category on the Sheet or Spends.
         </p>
         <div className="flex items-center gap-3 pt-1">
           <button type="button" onClick={onClose} className="min-h-12 flex-1 rounded-xl border-2 border-slate-200 px-4 py-3 text-base font-medium text-slate-600">Cancel</button>
