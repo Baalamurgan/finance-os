@@ -1,6 +1,7 @@
 import { prisma } from "@/lib/prisma";
 import { currentCycle } from "@/lib/finance/cycle";
 import { computeCreditDashboard } from "@/lib/finance/creditDashboard";
+import { computeBalance } from "@/lib/finance/balance";
 
 // Cash math for a personal month. Every spend counts AT SPEND TIME — a credit-card spend
 // (or card fixed bill) reduces your spendable in the month you make it, exactly like cash,
@@ -95,6 +96,46 @@ export type CardDue = {
 };
 
 const midnight = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate());
+
+// ── Balance cards (debit/prepaid) — no bill; a running balance + the spends drawn from it ──
+export type BalanceCardView = {
+  cardId: number;
+  cardName: string;
+  color: string;
+  prepaid: boolean; // true = prepaid/wallet, false = debit
+  balance: number; // current available balance (opening + top-ups − spends…)
+  spends: CardDueItem[]; // spends on the card, newest first, family-tagged (same shape as credit items)
+};
+
+// Every active debit/prepaid card the member owns, with its derived balance and spend line items
+// (personal + family, tagged). Shown alongside the credit dues so ALL cards live in one place.
+export async function getBalanceCards(memberId: number): Promise<BalanceCardView[]> {
+  const cards = await prisma.financeAccount.findMany({
+    where: { memberId, type: { in: ["debit_card", "prepaid_card"] }, active: true },
+    orderBy: [{ sortOrder: "asc" }, { id: "asc" }],
+  });
+  if (cards.length === 0) return [];
+  const cardIds = cards.map((c) => c.id);
+  const txns = await prisma.accountTransaction.findMany({
+    where: { accountId: { in: cardIds } },
+    select: { accountId: true, amount: true, date: true, merchant: true, type: true, source: true },
+    orderBy: { date: "desc" },
+  });
+  const byCard = new Map<number, typeof txns>();
+  for (const t of txns) {
+    const arr = byCard.get(t.accountId) ?? [];
+    arr.push(t);
+    byCard.set(t.accountId, arr);
+  }
+  return cards.map((c) => {
+    const ct = byCard.get(c.id) ?? [];
+    const balance = computeBalance(c.openingBalance, ct.map((t) => ({ date: t.date, amount: t.amount, type: t.type })));
+    const spends = ct
+      .filter((t) => t.type === "spend")
+      .map((t) => ({ label: t.merchant, amount: t.amount, dateISO: t.date.toISOString(), family: t.source === "family" }));
+    return { cardId: c.id, cardName: c.name, color: c.color, prepaid: c.type === "prepaid_card", balance, spends };
+  });
+}
 
 export async function getCardDues(memberId: number): Promise<CardDue[]> {
   const cards = await prisma.financeAccount.findMany({

@@ -8,7 +8,7 @@ import { PersonalSpendsView } from "@/components/personal/PersonalSpendsView";
 import { PersonalEmpty } from "@/components/personal/PersonalEmpty";
 import { CardDuesStrip } from "@/components/personal/CardDuesStrip";
 import { CardBillReminderBanner } from "@/components/personal/CardBillReminderBanner";
-import { getPersonalCash, getCardDues, getPersonalLending } from "@/lib/personal/cash";
+import { getPersonalCash, getCardDues, getBalanceCards, getPersonalLending } from "@/lib/personal/cash";
 import { MoneyFlowDonut } from "@/components/Charts";
 import { addPersonalCategory, archivePersonalCategory } from "@/app/personal/actions";
 
@@ -36,9 +36,10 @@ export default async function PersonalExpenses({
   const cats = new Map(c.categories.map((cat) => [cat.id, cat]));
   const catList = c.categories.map((cat) => ({ id: cat.id, name: cat.name, icon: cat.icon }));
 
-  const [cash, cardDues, spends, lending] = await Promise.all([
+  const [cash, cardDues, balanceCards, spends, lending] = await Promise.all([
     getPersonalCash(period),
     getCardDues(c.member.id),
+    getBalanceCards(c.member.id),
     prisma.personalSpend.findMany({ where: { periodId: period.id }, orderBy: [{ date: "desc" }, { id: "desc" }] }),
     getPersonalLending(c.member.id),
   ]);
@@ -108,8 +109,8 @@ export default async function PersonalExpenses({
           </div>
         </div>
 
-        {/* credit-card dues — deferred spends waiting for the bill */}
-        <CardDuesStrip dues={cardDues} />
+        {/* all cards — credit bills (deferred spends) + debit/prepaid balances, with their spends */}
+        <CardDuesStrip dues={cardDues} balances={balanceCards} />
 
         {spends.length > 0 && segments.length > 0 && (
           <div className="rounded-xl border border-slate-200 bg-white p-5">

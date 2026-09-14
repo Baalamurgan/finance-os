@@ -1,7 +1,7 @@
 import { formatINR } from "@/lib/format";
 import { unmarkCardBillPaid } from "@/app/personal/actions";
 import { MarkBillPaidButton } from "@/components/personal/MarkBillPaidButton";
-import type { CardDue, CardDueItem } from "@/lib/personal/cash";
+import type { CardDue, CardDueItem, BalanceCardView } from "@/lib/personal/cash";
 
 const fmtDate = (iso: string | null) =>
   iso ? new Date(iso).toLocaleDateString("en-IN", { day: "numeric", month: "short" }) : "—";
@@ -89,39 +89,70 @@ function CardBlock({ d }: { d: CardDue }) {
   );
 }
 
-// Per credit card: the spends on the card that haven't left your cash yet (personal + family), grouped
-// into billing cycles. "Mark bill paid" settles that cycle; undo reverses it. Collapsible (seamless) —
-// the summary always lists every card + its full bill, so you see them all even when collapsed.
-export function CardDuesStrip({ dues }: { dues: CardDue[] }) {
+// One debit/prepaid card block: its current balance + the spends drawn from it (incl. family, tagged).
+function BalanceBlock({ b }: { b: BalanceCardView }) {
+  return (
+    <div className="rounded-xl border border-slate-200 bg-white p-3">
+      <div className="flex items-center gap-2">
+        <span className="h-2.5 w-2.5 rounded-full" style={{ background: b.color }} />
+        <span className="text-sm font-semibold text-slate-800">💳 {b.cardName}</span>
+        <span className="rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-500">{b.prepaid ? "prepaid" : "debit"}</span>
+        <span className="ml-auto text-sm tabular-nums text-slate-500">
+          Balance <b className={b.balance < 0 ? "text-red-600" : "text-emerald-700"}>{formatINR(b.balance)}</b>
+        </span>
+      </div>
+      <div className="mt-2 rounded-lg bg-slate-50 px-3 py-2">
+        {b.spends.length === 0
+          ? <p className="text-xs text-slate-400">No spends on this card yet.</p>
+          : <ItemList items={b.spends} />}
+      </div>
+    </div>
+  );
+}
+
+// All of the member's cards in one place: credit cards show the full unpaid bill + cycles; debit/prepaid
+// show their balance + spends. Both list family-used spends with a tag. "Mark bill paid" settles a credit
+// cycle. Collapsible (seamless) — the summary always lists every card even when collapsed.
+export function CardDuesStrip({ dues, balances = [] }: { dues: CardDue[]; balances?: BalanceCardView[] }) {
   const active = dues.filter((d) => fullUnpaid(d) > 0 || d.paid.length > 0);
-  if (active.length === 0) return null;
-  const grandTotal = active.reduce((s, d) => s + fullUnpaid(d), 0);
+  const count = active.length + balances.length;
+  if (count === 0) return null;
+  const grandTotal = active.reduce((s, d) => s + fullUnpaid(d), 0); // "to pay" = credit bills only (balance cards owe nothing)
 
   return (
     <details className="group rounded-xl border border-slate-200 bg-slate-50/60" open>
       <summary className="flex cursor-pointer list-none flex-wrap items-center gap-x-2 gap-y-1 p-3 [&::-webkit-details-marker]:hidden">
         <span className="text-sm font-semibold text-slate-800">💳 Cards</span>
-        <span className="text-xs text-slate-500">· {active.length} card{active.length === 1 ? "" : "s"}</span>
-        <span className="ml-auto text-sm tabular-nums text-slate-500">
-          to pay <b className="text-slate-800">{formatINR(grandTotal)}</b>
-        </span>
-        <svg width="16" height="16" viewBox="0 0 20 20" className="shrink-0 text-slate-400 transition-transform group-open:rotate-90" aria-hidden>
+        <span className="text-xs text-slate-500">· {count} card{count === 1 ? "" : "s"}</span>
+        {grandTotal > 0 && (
+          <span className="ml-auto text-sm tabular-nums text-slate-500">
+            to pay <b className="text-slate-800">{formatINR(grandTotal)}</b>
+          </span>
+        )}
+        <svg width="16" height="16" viewBox="0 0 20 20" className={`shrink-0 text-slate-400 transition-transform group-open:rotate-90 ${grandTotal > 0 ? "" : "ml-auto"}`} aria-hidden>
           <path fill="currentColor" d="M7 5l6 5-6 5z" />
         </svg>
-        {/* collapsed glance: every card + its full bill */}
+        {/* collapsed glance: every card — credit shows its full bill, balance cards show their balance */}
         <span className="w-full group-open:hidden">
           <span className="mt-1 flex flex-wrap gap-1.5">
             {active.map((d) => (
-              <span key={d.cardId} className="inline-flex items-center gap-1 rounded-full bg-white px-2 py-0.5 text-[11px] text-slate-600">
+              <span key={`d-${d.cardId}`} className="inline-flex items-center gap-1 rounded-full bg-white px-2 py-0.5 text-[11px] text-slate-600">
                 <span className="h-2 w-2 rounded-full" style={{ background: d.color }} />
                 {d.cardName} <b className="tabular-nums text-slate-800">{formatINR(fullUnpaid(d))}</b>
+              </span>
+            ))}
+            {balances.map((b) => (
+              <span key={`b-${b.cardId}`} className="inline-flex items-center gap-1 rounded-full bg-white px-2 py-0.5 text-[11px] text-slate-600">
+                <span className="h-2 w-2 rounded-full" style={{ background: b.color }} />
+                {b.cardName} <b className="tabular-nums text-emerald-700">{formatINR(b.balance)}</b>
               </span>
             ))}
           </span>
         </span>
       </summary>
       <div className="space-y-2 p-3 pt-0">
-        {active.map((d) => <CardBlock key={d.cardId} d={d} />)}
+        {active.map((d) => <CardBlock key={`d-${d.cardId}`} d={d} />)}
+        {balances.map((b) => <BalanceBlock key={`b-${b.cardId}`} b={b} />)}
       </div>
     </details>
   );
