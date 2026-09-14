@@ -15,8 +15,9 @@ function ItemList({ items }: { items: CardDueItem[] }) {
       <ul className="mt-1 divide-y divide-slate-100 rounded-lg bg-white px-2">
         {items.map((it, i) => (
           <li key={i} className="flex items-center justify-between gap-2 py-1.5 text-xs">
-            <span className="min-w-0 truncate text-slate-600">
-              {it.label} <span className="text-slate-400">· {fmtDate(it.dateISO)}</span>
+            <span className="flex min-w-0 items-center gap-1.5 truncate text-slate-600">
+              <span className="truncate">{it.label} <span className="text-slate-400">· {fmtDate(it.dateISO)}</span></span>
+              {it.family && <span className="shrink-0 rounded-full bg-violet-100 px-1.5 py-0.5 text-[10px] font-medium text-violet-700">Family</span>}
             </span>
             <span className="tabular-nums text-slate-700">{formatINR(it.amount)}</span>
           </li>
@@ -31,7 +32,7 @@ function ItemList({ items }: { items: CardDueItem[] }) {
 // exact amount you paid) and settles that cycle; undo reverses it. Each cycle expands to
 // show its individual spends.
 export function CardDuesStrip({ dues }: { dues: CardDue[] }) {
-  const active = dues.filter((d) => d.unpaidTotal > 0 || d.paid.length > 0);
+  const active = dues.filter((d) => d.unpaidTotal > 0 || d.familyUnpaidTotal > 0 || d.paid.length > 0);
   if (active.length === 0) return null;
   return (
     <section className="space-y-2">
@@ -40,8 +41,13 @@ export function CardDuesStrip({ dues }: { dues: CardDue[] }) {
           <div className="flex items-center gap-2">
             <span className="h-2.5 w-2.5 rounded-full" style={{ background: d.color }} />
             <span className="text-sm font-semibold text-slate-800">💳 {d.cardName}</span>
-            <span className="ml-auto text-sm tabular-nums text-slate-500">
+            <span className="ml-auto text-right text-sm tabular-nums text-slate-500">
               On card, unpaid <b className="text-slate-800">{formatINR(d.unpaidTotal)}</b>
+              {d.familyUnpaidTotal > 0 && (
+                <span className="block text-[11px] text-violet-600">
+                  + {formatINR(d.familyUnpaidTotal)} family · full bill {formatINR(d.unpaidTotal + d.familyUnpaidTotal)}
+                </span>
+              )}
             </span>
           </div>
 
@@ -63,6 +69,7 @@ export function CardDuesStrip({ dues }: { dues: CardDue[] }) {
                       Bill {fmtDate(c.cycleEndISO)}
                       {c.dueISO ? <> · due {fmtDate(c.dueISO)}</> : null} ·{" "}
                       <b className="tabular-nums text-slate-800">{formatINR(c.total)}</b>
+                      {c.familyTotal > 0 && <span className="text-[11px] text-violet-600"> + {formatINR(c.familyTotal)} family</span>}
                     </span>
                     <MarkBillPaidButton cardId={d.cardId} cardName={d.cardName} cycleEndISO={c.cycleEndISO} cycleTotal={c.total} />
                   </div>

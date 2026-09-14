@@ -77,14 +77,18 @@ export async function getUnpaidCardDues(memberId: number): Promise<number> {
 }
 
 // ── "On card, unpaid" — per credit card, the CC-tagged items grouped into billing cycles ──
-export type CardDueItem = { label: string; amount: number; dateISO: string };
-export type CardDueCycle = { cycleEndISO: string; dueISO: string | null; total: number; items: CardDueItem[] };
+// `family` items are family-view spends mirrored onto this card (the family reimburses them), shown
+// for visibility with a tag. They are counted in `familyTotal` / `familyUnpaidTotal` ONLY — never in
+// `total` / `unpaidTotal`, which stay personal-only so the month spendable & cash-in-hand are unchanged.
+export type CardDueItem = { label: string; amount: number; dateISO: string; family: boolean };
+export type CardDueCycle = { cycleEndISO: string; dueISO: string | null; total: number; familyTotal: number; items: CardDueItem[] };
 export type CardDue = {
   cardId: number;
   cardName: string;
   color: string;
   needsStatementDay: boolean; // true → can't derive cycles; prompt to set one
-  unpaidTotal: number; // Σ across all unpaid cycles
+  unpaidTotal: number; // Σ personal across all unpaid cycles (drives cash-in-hand)
+  familyUnpaidTotal: number; // Σ family (reimbursed) across all unpaid cycles — display only
   cycles: CardDueCycle[]; // unpaid, oldest first — each carries its line items
   ungrouped: CardDueItem[]; // items shown when no statement day (can't derive cycles)
   paid: { billId: number; cycleEndISO: string; amount: number }[]; // for undo
@@ -100,18 +104,25 @@ export async function getCardDues(memberId: number): Promise<CardDue[]> {
   });
   if (cards.length === 0) return [];
 
-  const [spends, fixed, bills, categories] = await Promise.all([
+  const cardIds = cards.map((c) => c.id);
+  const [spends, fixed, bills, categories, familyTxns] = await Promise.all([
     prisma.personalSpend.findMany({ where: { memberId, cardAccountId: { not: null } }, select: { cardAccountId: true, amount: true, date: true, note: true, categoryId: true } }),
     prisma.personalExpense.findMany({ where: { memberId, cardAccountId: { not: null } }, select: { cardAccountId: true, amount: true, date: true, label: true } }),
     prisma.personalCardBill.findMany({ where: { memberId }, select: { id: true, cardAccountId: true, cycleEnd: true, amount: true } }),
     prisma.personalCategory.findMany({ where: { memberId }, select: { id: true, name: true } }),
+    // Family-view spends mirrored onto these cards (owner = this member). Shown tagged for visibility;
+    // the family reimburses them, so they never touch the personal totals (see familyTotal below).
+    prisma.accountTransaction.findMany({ where: { accountId: { in: cardIds }, source: "family", type: "spend" }, select: { accountId: true, amount: true, date: true, merchant: true } }),
   ]);
   const catName = new Map(categories.map((c) => [c.id, c.name]));
 
-  // Normalise both spends and fixed lines to a common tagged-item shape with a display label.
-  const items: { cardAccountId: number | null; amount: number; date: Date; label: string }[] = [
-    ...spends.map((s) => ({ cardAccountId: s.cardAccountId, amount: s.amount, date: s.date, label: s.note?.trim() || catName.get(s.categoryId) || "Spend" })),
-    ...fixed.map((e) => ({ cardAccountId: e.cardAccountId, amount: e.amount, date: e.date, label: e.label?.trim() || "Fixed bill" })),
+  // Normalise personal spends + fixed lines (family:false) and family mirror lines (family:true) to a
+  // common shape with a display label.
+  type Item = { cardAccountId: number | null; amount: number; date: Date; label: string; family: boolean };
+  const items: Item[] = [
+    ...spends.map((s) => ({ cardAccountId: s.cardAccountId, amount: s.amount, date: s.date, label: s.note?.trim() || catName.get(s.categoryId) || "Spend", family: false })),
+    ...fixed.map((e) => ({ cardAccountId: e.cardAccountId, amount: e.amount, date: e.date, label: e.label?.trim() || "Fixed bill", family: false })),
+    ...familyTxns.map((t) => ({ cardAccountId: t.accountId, amount: t.amount, date: t.date, label: t.merchant, family: true })),
   ];
   const out: CardDue[] = [];
 
@@ -120,35 +131,38 @@ export async function getCardDues(memberId: number): Promise<CardDue[]> {
     const dueOffset = card.credit?.dueOffsetDays ?? null;
     const mine = items.filter((it) => it.cardAccountId === card.id);
     const myBills = bills.filter((b) => b.cardAccountId === card.id);
-    const unpaidTotalAll = mine.reduce((s, it) => s + it.amount, 0);
-    if (mine.length === 0 && myBills.length === 0) continue; // nothing tagged, ever
+    // Totals: personal drives the cash engine; family is reimbursed → tracked separately, display only.
+    const personalAll = mine.filter((it) => !it.family).reduce((s, it) => s + it.amount, 0);
+    const familyAll = mine.filter((it) => it.family).reduce((s, it) => s + it.amount, 0);
+    if (mine.length === 0 && myBills.length === 0) continue; // nothing on this card, ever
 
-    const toItem = (it: (typeof mine)[number]): CardDueItem => ({ label: it.label, amount: it.amount, dateISO: it.date.toISOString() });
+    const toItem = (it: Item): CardDueItem => ({ label: it.label, amount: it.amount, dateISO: it.date.toISOString(), family: it.family });
     const byDateDesc = (a: CardDueItem, b: CardDueItem) => b.dateISO.localeCompare(a.dateISO);
 
     if (statementDay == null) {
-      // Can't derive cycles without a statement day — show the total, the items, and prompt to configure.
-      out.push({ cardId: card.id, cardName: card.name, color: card.color, needsStatementDay: true, unpaidTotal: unpaidTotalAll, cycles: [], ungrouped: mine.map(toItem).sort(byDateDesc), paid: [] });
+      // Can't derive cycles without a statement day — show the totals, the items, and prompt to configure.
+      out.push({ cardId: card.id, cardName: card.name, color: card.color, needsStatementDay: true, unpaidTotal: personalAll, familyUnpaidTotal: familyAll, cycles: [], ungrouped: mine.map(toItem).sort(byDateDesc), paid: [] });
       continue;
     }
 
-    // Group tagged items into billing cycles by their date; a cycle with a matching
-    // PersonalCardBill is settled (its cash already left) and drops off the unpaid list.
+    // Group items into billing cycles by their date; a cycle with a matching PersonalCardBill is settled
+    // (its cash already left) and drops off. Personal → total; family → familyTotal (kept apart).
     const paidKeys = new Set(myBills.map((b) => midnight(b.cycleEnd).getTime()));
-    const byCycle = new Map<number, { end: Date; due: Date | null; total: number; items: CardDueItem[] }>();
+    const byCycle = new Map<number, { end: Date; due: Date | null; total: number; familyTotal: number; items: CardDueItem[] }>();
     for (const it of mine) {
       const cyc = currentCycle(statementDay, it.date, dueOffset);
       const key = midnight(cyc.end).getTime();
-      const g = byCycle.get(key) ?? { end: midnight(cyc.end), due: cyc.dueDate, total: 0, items: [] };
-      g.total += it.amount;
+      const g = byCycle.get(key) ?? { end: midnight(cyc.end), due: cyc.dueDate, total: 0, familyTotal: 0, items: [] };
+      if (it.family) g.familyTotal += it.amount; else g.total += it.amount;
       g.items.push(toItem(it));
       byCycle.set(key, g);
     }
     const cycles = [...byCycle.entries()]
       .filter(([key]) => !paidKeys.has(key))
       .sort((a, b) => a[0] - b[0])
-      .map(([, g]) => ({ cycleEndISO: g.end.toISOString(), dueISO: g.due ? g.due.toISOString() : null, total: g.total, items: g.items.sort(byDateDesc) }));
+      .map(([, g]) => ({ cycleEndISO: g.end.toISOString(), dueISO: g.due ? g.due.toISOString() : null, total: g.total, familyTotal: g.familyTotal, items: g.items.sort(byDateDesc) }));
     const unpaidTotal = cycles.reduce((s, c) => s + c.total, 0);
+    const familyUnpaidTotal = cycles.reduce((s, c) => s + c.familyTotal, 0);
 
     out.push({
       cardId: card.id,
@@ -156,6 +170,7 @@ export async function getCardDues(memberId: number): Promise<CardDue[]> {
       color: card.color,
       needsStatementDay: false,
       unpaidTotal,
+      familyUnpaidTotal,
       cycles,
       ungrouped: [],
       paid: myBills.map((b) => ({ billId: b.id, cycleEndISO: midnight(b.cycleEnd).toISOString(), amount: b.amount })),
