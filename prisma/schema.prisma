@@ -456,7 +456,11 @@ model AccountTransaction {
   bucket       String?  // need | want | invest (optional)
   confidence   Float?   // 0–1 from extraction; low → needsReview
   needsReview  Boolean  @default(false)
-  source       String   @default("manual") // manual | import
+  source       String   @default("manual") // manual | import | family (mirrored from a family credit-card spend)
+  // When this line was auto-created from a family credit-card Spend, it links back to it (1:1). Cascade
+  // delete keeps the credit dashboard in sync when the family spend is removed. Null = a normal personal line.
+  familySpend   Spend?  @relation("SpendMirrorTxn", fields: [familySpendId], references: [id], onDelete: Cascade)
+  familySpendId Int?    @unique
   createdAt    DateTime @default(now())
 
   @@index([memberId, date])
@@ -719,6 +723,10 @@ model Spend {
   // paid. onDelete: SetNull so removing a card leaves past spends intact (they keep memberId).
   cardAccount   FinanceAccount? @relation("FamilySpendCard", fields: [cardAccountId], references: [id], onDelete: SetNull)
   cardAccountId Int?
+  // Mirror ledger line on the card OWNER's personal credit dashboard, created when this spend is paid
+  // with a CREDIT family card (so the owner's card outstanding reflects it). Debit/cash spends have none.
+  // Cascade: deleting the spend removes the mirror; editing the spend keeps the mirror's amount in sync.
+  mirrorTxn  AccountTransaction? @relation("SpendMirrorTxn")
   label      String
   amount     Float
   subCategory String? // reporting-only tag for Personal/Misc spends (Food, Travel…); null = uncategorized

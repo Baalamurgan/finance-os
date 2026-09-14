@@ -595,7 +595,7 @@ async function doAddSpend(formData: FormData): Promise<boolean> {
   // Misc (Personal/Misc) spends must carry a reporting sub-category (Food, Travel…);
   // other categories already are a category, so it stays null there.
   const subCategoryRaw = String(formData.get("subCategory") ?? "").trim();
-  const cat = await prisma.category.findUnique({ where: { id: categoryId }, select: { section: true, tracked: true, householdId: true } });
+  const cat = await prisma.category.findUnique({ where: { id: categoryId }, select: { section: true, tracked: true, householdId: true, name: true } });
   const misc = cat ? isMiscBucket(cat) : false;
   if (misc && !subCategoryRaw) return false; // mandatory for misc
   const subCategory = misc && subCategoryRaw ? subCategoryRaw : null;
@@ -608,11 +608,13 @@ async function doAddSpend(formData: FormData): Promise<boolean> {
   // can only ever attribute to that card's owner, so it can't fabricate someone else's cash spend.
   const cardAccountId = Number(formData.get("cardAccountId")) || 0;
   let cardId: number | null = null;
+  let cardOwnerId: number | null = null; // set for any valid family card → mirror to the owner's card ledger
   if (cardAccountId) {
-    const card = await prisma.financeAccount.findUnique({ where: { id: cardAccountId }, select: { memberId: true, active: true, member: { select: { householdId: true } } } });
+    const card = await prisma.financeAccount.findUnique({ where: { id: cardAccountId }, select: { memberId: true, active: true, type: true, member: { select: { householdId: true } } } });
     if (card && card.active && cat && card.member.householdId === cat.householdId) {
       memberId = card.memberId; // card owner bore the cost
       cardId = cardAccountId;
+      cardOwnerId = card.memberId;
     }
   }
 
@@ -631,9 +633,29 @@ async function doAddSpend(formData: FormData): Promise<boolean> {
   }
 
   const imagePath = await saveUpload(formData.get("image"));
-  await prisma.spend.create({
+  const spend = await prisma.spend.create({
     data: { periodId: targetPeriodId, categoryId, memberId, label, amount, subCategory, imagePath, cardAccountId: cardId },
   });
+  // Paid with a family card? Mirror it onto the card OWNER's personal card ledger as a linked line, so
+  // their personal view reflects the family spend (a member may use another member's card). For CREDIT
+  // it drives the dashboard/outstanding; for DEBIT it's informational (no bill, no liability — see
+  // getNetWorth/getWalletAccounts, which only compute outstanding for credit cards). Cash/UPI never
+  // mirrors. The link (familySpendId) keeps edits in sync and cascades on delete.
+  if (cardOwnerId != null && cardId != null) {
+    await prisma.accountTransaction.create({
+      data: {
+        memberId: cardOwnerId,
+        accountId: cardId,
+        date: spend.createdAt,
+        merchant: label,
+        amount,
+        type: "spend",
+        category: cat?.name ?? null,
+        source: "family",
+        familySpendId: spend.id,
+      },
+    });
+  }
   // Learn the item→category so future entries of the same thing get suggested. Only
   // deliberate tracked (non-misc) categorisations teach the app — misc is ambiguous
   // (the same item can be "for someone else"), so we never learn from it.
@@ -666,22 +688,34 @@ export type SpendAssist = {
   chips: { icon: string | null; label: string; categoryId: number }[];
   keywords: { keyword: string; category: string; hits: number }[];
   cards: { id: number; name: string; ownerId: number; ownerName: string; last4: string | null; type: string; color: string }[];
+  topCardId: number | null; // most-used card family-wide → featured as a quick chip in "Paid with"
 };
 export async function getSpendAssist(): Promise<SpendAssist> {
   const session = await auth();
-  if (!session?.user) return { chips: [], keywords: [], cards: [] };
+  if (!session?.user) return { chips: [], keywords: [], cards: [], topCardId: null };
   const household = await prisma.household.findFirst({ select: { id: true } });
-  if (!household) return { chips: [], keywords: [], cards: [] };
-  const [shortcuts, keywords, cardRows] = await Promise.all([
+  if (!household) return { chips: [], keywords: [], cards: [], topCardId: null };
+  const [shortcuts, keywords, cardRows, topCard] = await Promise.all([
     getSpendShortcuts(household.id),
     getMatcherKeywords(household.id),
     getFamilyCards(household.id), // active family cards for the "Paid with" picker
+    // Most-used card across the household — surfaced as the one quick chip beside Cash.
+    prisma.spend.groupBy({
+      by: ["cardAccountId"],
+      where: { cardAccountId: { not: null }, category: { householdId: household.id } },
+      _count: { cardAccountId: true },
+      orderBy: { _count: { cardAccountId: "desc" } },
+      take: 1,
+    }),
   ]);
   const chips = shortcuts.length
     ? shortcuts.map((s) => ({ icon: s.icon, label: s.label, categoryId: s.categoryId }))
     : (await getFrequentSpendItems(household.id)).map((f) => ({ icon: f.icon, label: f.label, categoryId: f.categoryId }));
   const cards = cardRows.map((c) => ({ id: c.id, name: c.name, ownerId: c.memberId, ownerName: c.member.name, last4: c.last4, type: c.type, color: c.color }));
-  return { chips, keywords, cards };
+  // Only feature it if it's still an active card in the list; else fall back to the first card.
+  const rawTop = topCard[0]?.cardAccountId ?? null;
+  const topCardId = cards.some((c) => c.id === rawTop) ? rawTop : (cards[0]?.id ?? null);
+  return { chips, keywords, cards, topCardId };
 }
 
 // ── Quick-add chip management (head + managers) ──────────────────────────────
@@ -835,6 +869,8 @@ export async function deleteSpend(formData: FormData) {
   if (session.user.role !== "head" && !isOwner) return;
 
   // (Receipt files are deferred/cloud-stored — nothing to unlink locally.)
+  // Any credit-dashboard mirror line (family credit-card spend) is removed by the DB cascade
+  // (AccountTransaction.familySpendId ON DELETE CASCADE) — no manual cleanup needed here.
   await prisma.spend.delete({ where: { id } });
   await logActivity("spend", "deleted", `Removed spend “${spend.label}” ${formatINR(spend.amount)}`, spend.periodId);
   revalidateFamily();
@@ -845,6 +881,19 @@ export async function deleteSpend(formData: FormData) {
 // the card's owner or the head. A card spend is attributed to the owner (see doAddSpend), so the
 // owner dropdown is the family member whose cash the card draws.
 export type CardFormState = { ok: boolean; error?: string; n: number };
+
+// Validate + parse a credit card's billing-cycle fields from the form. statement day and due-after days
+// are required (the dashboard needs them to date the bill); credit limit is optional.
+function parseCreditFields(formData: FormData): { statementDay: number; dueOffsetDays: number; creditLimit: number | null } | { error: string } {
+  const statementDay = Number(formData.get("statementDay"));
+  const dueOffsetDays = Number(formData.get("dueOffsetDays"));
+  const limitRaw = String(formData.get("creditLimit") ?? "").trim();
+  if (!Number.isInteger(statementDay) || statementDay < 1 || statementDay > 28) return { error: "Statement day must be 1–28." };
+  if (!Number.isInteger(dueOffsetDays) || dueOffsetDays < 1 || dueOffsetDays > 60) return { error: "Days until due must be 1–60." };
+  const creditLimit = limitRaw ? Number(limitRaw) : null;
+  if (creditLimit != null && (!Number.isFinite(creditLimit) || creditLimit < 0)) return { error: "Credit limit looks off." };
+  return { statementDay, dueOffsetDays, creditLimit };
+}
 
 async function householdMemberIds(): Promise<Set<number>> {
   const hh = await prisma.household.findFirst({ select: { id: true } });
@@ -864,6 +913,13 @@ export async function addFamilyCard(prev: CardFormState, formData: FormData): Pr
   if (!name) return { ok: false, error: "Name the card.", n };
   if (type !== "credit_card" && type !== "debit_card") return { ok: false, error: "Pick a card type.", n };
   if (!(await householdMemberIds()).has(ownerId)) return { ok: false, error: "Pick the card owner.", n };
+  // Credit cards carry the billing cycle (statement + due day) so the dashboard can date the bill.
+  let credit: { statementDay: number; dueOffsetDays: number; creditLimit: number | null } | null = null;
+  if (type === "credit_card") {
+    const parsed = parseCreditFields(formData);
+    if ("error" in parsed) return { ok: false, error: parsed.error, n };
+    credit = parsed;
+  }
   const account = await prisma.financeAccount.create({
     data: {
       memberId: ownerId, // the owner — the family member whose cash this card draws
@@ -875,7 +931,7 @@ export async function addFamilyCard(prev: CardFormState, formData: FormData): Pr
       color: String(formData.get("color") ?? "").trim() || "#6366f1",
     },
   });
-  if (type === "credit_card") await prisma.creditCardDetail.create({ data: { accountId: account.id } });
+  if (credit) await prisma.creditCardDetail.create({ data: { accountId: account.id, ...credit } });
   await logActivity("spend", "created", `Added card “${name}”`, null);
   revalidateFamily();
   return { ok: true, n };
@@ -894,6 +950,13 @@ export async function updateFamilyCard(formData: FormData) {
   if (!head && account.memberId !== session.user.memberId) return; // owner or head only
   const newOwner = Number(formData.get("ownerId")) || 0;
   const ownerOk = head && newOwner && (await householdMemberIds()).has(newOwner);
+  // Billing-cycle edits apply to credit cards only (type can't change on edit). Skip silently if the form
+  // omits/misvalidates them so a plain rename never wipes the cycle.
+  let credit: { statementDay: number; dueOffsetDays: number; creditLimit: number | null } | null = null;
+  if (account.type === "credit_card") {
+    const parsed = parseCreditFields(formData);
+    if (!("error" in parsed)) credit = parsed;
+  }
   await prisma.financeAccount.update({
     where: { id },
     data: {
@@ -906,6 +969,13 @@ export async function updateFamilyCard(formData: FormData) {
       ...(ownerOk ? { memberId: newOwner } : {}),
     },
   });
+  if (credit) {
+    await prisma.creditCardDetail.upsert({
+      where: { accountId: id },
+      update: credit,
+      create: { accountId: id, ...credit },
+    });
+  }
   revalidateFamily();
 }
 
@@ -1034,6 +1104,19 @@ export async function editSpendAction(
 
   // createdAt is intentionally left untouched — the date of spend stays as it was.
   await prisma.spend.update({ where: { id }, data: { label, amount, subCategory, memberId } });
+  // Keep the card-ledger mirror in sync (see doAddSpend) — both credit and debit cards. The card can't
+  // change on edit, so we only reconcile amount/merchant. upsert covers spends made before this feature
+  // existed (create if missing).
+  if (spend.cardAccountId != null) {
+    const card = await prisma.financeAccount.findUnique({ where: { id: spend.cardAccountId }, select: { memberId: true } });
+    if (card) {
+      await prisma.accountTransaction.upsert({
+        where: { familySpendId: id },
+        update: { amount, merchant: label },
+        create: { memberId: card.memberId, accountId: spend.cardAccountId, date: spend.createdAt, merchant: label, amount, type: "spend", source: "family", familySpendId: id },
+      });
+    }
+  }
   await logActivity("spend", "updated", `Edited spend “${label}” ${formatINR(amount)}`, spend.periodId);
   revalidateFamily();
   return { ok: true, n: prev.n + 1 };

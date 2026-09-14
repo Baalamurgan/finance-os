@@ -150,6 +150,7 @@ export async function deleteTransaction(formData: FormData) {
   const id = Number(formData.get("id"));
   const t = await prisma.accountTransaction.findUnique({ where: { id } });
   if (!t || t.memberId !== member.id) return;
+  if (t.familySpendId != null) return; // mirror of a family credit-card spend — edit/remove it from Family spends
   await prisma.accountTransaction.delete({ where: { id } });
   rev();
 }

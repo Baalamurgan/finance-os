@@ -145,6 +145,7 @@ export default async function CreditCardDetail({
                   <div className="truncate font-medium text-slate-800">
                     {t.merchant}
                     {t.needsReview && <span className="ml-2 rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium text-amber-700">review</span>}
+                    {t.source === "family" && <span className="ml-2 rounded-full bg-violet-100 px-1.5 py-0.5 text-[10px] font-medium text-violet-700">Family</span>}
                   </div>
                   <div className="text-[11px] text-slate-400">
                     {fmtDate(t.date)} · {t.type}{t.rewardPoints ? ` · ${t.rewardPoints} pts` : ""}
@@ -154,10 +155,14 @@ export default async function CreditCardDetail({
                   <span className={`tabular-nums ${t.type === "payment" || t.type === "refund" || t.type === "cashback" ? "text-emerald-600" : "text-slate-700"}`}>
                     {formatINR(t.amount)}
                   </span>
-                  <ConfirmForm action={deleteTransaction} message="Remove this transaction?">
-                    <input type="hidden" name="id" value={t.id} />
-                    <button className="text-slate-300 hover:text-red-600">✕</button>
-                  </ConfirmForm>
+                  {t.source === "family" ? (
+                    <span className="w-4 text-center text-slate-200" title="Family spend — edit or remove it from the Family view">🔒</span>
+                  ) : (
+                    <ConfirmForm action={deleteTransaction} message="Remove this transaction?">
+                      <input type="hidden" name="id" value={t.id} />
+                      <button className="text-slate-300 hover:text-red-600">✕</button>
+                    </ConfirmForm>
+                  )}
                 </div>
               </li>
             ))}

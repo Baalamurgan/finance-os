@@ -108,7 +108,7 @@ function CardForm({
 }) {
   const toast = useToast();
   const editing = !!card;
-  const [type, setType] = useState<string>(card?.type ?? "debit_card");
+  const [type, setType] = useState<string>(card?.type ?? "credit_card");
   const [color, setColor] = useState<string>(card?.color ?? COLORS[0]);
   const [state, formAction, pending] = useActionState<CardFormState, FormData>(addFamilyCard, { ok: false, n: 0 });
   const prevN = useRef(0);
@@ -131,14 +131,15 @@ function CardForm({
       className="space-y-3 rounded-xl border border-indigo-200 bg-indigo-50/40 p-4"
     >
       {editing && <input type="hidden" name="id" value={card!.id} />}
+      <p className="text-[11px] text-slate-400"><span className="text-red-500">*</span> required</p>
       <div className="grid grid-cols-2 gap-3">
         <label className="col-span-2 block text-sm">
-          <span className="font-medium text-slate-600">Card name</span>
+          <span className="font-medium text-slate-600">Card name <span className="text-red-500">*</span></span>
           <input name="name" required defaultValue={card?.name ?? ""} placeholder="e.g. SBI SimplyClick" className={field} />
         </label>
 
         <label className="block text-sm">
-          <span className="font-medium text-slate-600">Type</span>
+          <span className="font-medium text-slate-600">Type <span className="text-red-500">*</span></span>
           <select name="type" value={type} onChange={(e) => setType(e.target.value)} disabled={editing} className={`${field} ${editing ? "bg-slate-100 text-slate-500" : ""}`}>
             <option value="debit_card">Debit</option>
             <option value="credit_card">Credit</option>
@@ -146,7 +147,7 @@ function CardForm({
         </label>
 
         <label className="block text-sm">
-          <span className="font-medium text-slate-600">Owner</span>
+          <span className="font-medium text-slate-600">Owner <span className="text-red-500">*</span></span>
           {ownerLocked ? (
             <>
               <input className={`${field} bg-slate-100 text-slate-500`} value={members.find((m) => m.id === defaultOwnerId)?.name ?? ""} disabled />
@@ -179,6 +180,28 @@ function CardForm({
           <span className="font-medium text-slate-600">Last 4 digits</span>
           <input name="last4" inputMode="numeric" maxLength={4} defaultValue={card?.last4 ?? ""} placeholder="1234" className={field} />
         </label>
+
+        {/* Credit-only billing cycle. Statement day + days-until-due let the dashboard date the bill and
+            reminders; the credit limit powers the utilisation gauge. Hidden for debit (no bill). */}
+        {type === "credit_card" && (
+          <div className="col-span-2 grid grid-cols-2 gap-3 rounded-lg border border-indigo-100 bg-white/60 p-3">
+            <p className="col-span-2 text-xs font-medium text-slate-500">Billing cycle</p>
+            <label className="block text-sm">
+              <span className="font-medium text-slate-600">Statement day <span className="text-red-500">*</span></span>
+              <input name="statementDay" type="number" inputMode="numeric" min={1} max={28} required defaultValue={card?.credit?.statementDay ?? ""} placeholder="1–28" className={field} />
+              <span className="mt-1 block text-[11px] text-slate-400">Day the bill is generated.</span>
+            </label>
+            <label className="block text-sm">
+              <span className="font-medium text-slate-600">Days until due <span className="text-red-500">*</span></span>
+              <input name="dueOffsetDays" type="number" inputMode="numeric" min={1} max={60} required defaultValue={card?.credit?.dueOffsetDays ?? ""} placeholder="e.g. 18" className={field} />
+              <span className="mt-1 block text-[11px] text-slate-400">Days after the statement.</span>
+            </label>
+            <label className="col-span-2 block text-sm">
+              <span className="font-medium text-slate-600">Credit limit (₹)</span>
+              <input name="creditLimit" type="number" inputMode="numeric" min={0} defaultValue={card?.credit?.creditLimit ?? ""} placeholder="optional" className={field} />
+            </label>
+          </div>
+        )}
 
         <div className="col-span-2 text-sm">
           <span className="font-medium text-slate-600">Colour</span>

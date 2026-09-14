@@ -44,11 +44,16 @@ export function AddSpendModal({
   const [chips, setChips] = useState<Chip[]>([]); // head shortcuts, or frequent items
   const [learned, setLearned] = useState<LearnedKeyword[]>([]); // household's taught items
   const [cards, setCards] = useState<Card[]>([]); // family cards for the "Paid with" picker
+  const [topCardId, setTopCardId] = useState<number | null>(null); // most-used card → featured chip
   const [cardId, setCardId] = useState<number | null>(null); // null = Cash / UPI
   const [confirmOpen, setConfirmOpen] = useState(false); // on-save "did you mean" popup
   const [submitTick, setSubmitTick] = useState(0); // bump to submit after a state update
 
   const selectedCard = cardId != null ? cards.find((c) => c.id === cardId) : undefined;
+  // "Paid with": Cash + the one most-used card as quick chips; every other card lives in a dropdown.
+  const featuredCard = cards.find((c) => c.id === topCardId) ?? cards[0];
+  const otherCards = cards.filter((c) => c.id !== featuredCard?.id);
+  const cardLabel = (c: Card) => `${c.name}${c.last4 ? ` ··${c.last4}` : ""} — ${c.ownerName} · ${c.type === "credit_card" ? "credit" : "debit"}`;
   // Misc (Personal/Misc) spends must carry a reporting sub-category (Food, Travel…).
   const selectedCat = fixedCategory ?? categories?.find((c) => c.id === categoryId);
   const isMiscSelected = !!selectedCat?.misc && !!subCategories?.length;
@@ -93,6 +98,7 @@ export function AddSpendModal({
           setChips(a.chips);
           setLearned(a.keywords);
           setCards(a.cards);
+          setTopCardId(a.topCardId);
         })
         .catch(() => {});
     }
@@ -327,21 +333,33 @@ export function AddSpendModal({
                         >
                           💵 Cash / UPI
                         </button>
-                        {cards.map((c) => (
+                        {featuredCard && (
                           <button
-                            key={c.id}
                             type="button"
-                            onClick={() => setCardId(c.id)}
-                            className={`min-h-12 rounded-xl border-2 px-3 py-2.5 text-left transition ${cardId === c.id ? "border-indigo-500 bg-indigo-50" : "border-slate-200 active:border-slate-400"}`}
+                            onClick={() => setCardId(featuredCard.id)}
+                            className={`min-h-12 rounded-xl border-2 px-3 py-2.5 text-left transition ${cardId === featuredCard.id ? "border-indigo-500 bg-indigo-50" : "border-slate-200 active:border-slate-400"}`}
                           >
                             <span className="flex items-center gap-1.5 text-sm font-medium text-slate-700">
-                              <span className="inline-block h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: c.color }} />
-                              <span className="truncate">💳 {c.name}{c.last4 ? ` ··${c.last4}` : ""}</span>
+                              <span className="inline-block h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: featuredCard.color }} />
+                              <span className="truncate">💳 {featuredCard.name}{featuredCard.last4 ? ` ··${featuredCard.last4}` : ""}</span>
                             </span>
-                            <span className="mt-0.5 block truncate text-[11px] text-slate-400">{c.ownerName} · {c.type === "credit_card" ? "credit" : "debit"}</span>
+                            <span className="mt-0.5 block truncate text-[11px] text-slate-400">{featuredCard.ownerName} · {featuredCard.type === "credit_card" ? "credit" : "debit"}</span>
                           </button>
-                        ))}
+                        )}
                       </div>
+                      {/* Every other card in a dropdown so the two common choices stay one tap away. */}
+                      {otherCards.length > 0 && (
+                        <select
+                          value={cardId != null && cardId !== featuredCard?.id ? cardId : ""}
+                          onChange={(e) => setCardId(e.target.value ? Number(e.target.value) : null)}
+                          className={`mt-2 w-full rounded-xl border-2 px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-indigo-100 ${cardId != null && cardId !== featuredCard?.id ? "border-indigo-500 bg-indigo-50 text-indigo-700" : "border-slate-200 text-slate-600"}`}
+                        >
+                          <option value="">More cards…</option>
+                          {otherCards.map((c) => (
+                            <option key={c.id} value={c.id}>💳 {cardLabel(c)}</option>
+                          ))}
+                        </select>
+                      )}
                       {selectedCard && (
                         <p className="mt-1.5 text-xs text-violet-600">Counts as {selectedCard.ownerName}&apos;s spend (card owner).</p>
                       )}
