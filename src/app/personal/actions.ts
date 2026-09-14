@@ -5,7 +5,6 @@ import { redirect } from "next/navigation";
 import { headers } from "next/headers";
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
-import { BALANCE_ACCOUNT_TYPES } from "@/lib/finance/types";
 import { auth } from "@/auth";
 import { parseAmount } from "@/lib/format";
 import { log } from "@/lib/log";
@@ -99,15 +98,16 @@ async function anyCardId(memberId: number, formData: FormData): Promise<{ id: nu
   return acc && acc.memberId === memberId && acc.active ? { id: raw, type: acc.type } : null;
 }
 
-// Keep a debit/prepaid card's LEDGER line in sync with a personal spend, so the card balance is correct
-// (credit cards stay tag-only — their dues run through getCardDues). Idempotent: upserts on the spend
-// link, or removes the line if the spend moved to cash/a credit card. Deleting the spend cascades the
-// line away via the FK, so no delete path is needed here.
+// Keep a card's LEDGER line in sync with a personal spend, so the spend shows as a line item under that
+// card (and drives its balance for debit/prepaid, its outstanding for credit). This is a VIEW layer:
+// the month's spendable, cash-in-hand and credit dues still run through the card TAG (getPersonalCash /
+// getCardDues) unchanged — the ledger line is additive. Idempotent: upserts on the spend link, or removes
+// the line if the spend moved to cash. Deleting the spend cascades the line away via the FK.
 async function syncPersonalSpendLedger(
   tx: Prisma.TransactionClient,
   a: { spendId: number; memberId: number; card: { id: number; type: string } | null; amount: number; label: string; date: Date; categoryName: string | null },
 ) {
-  if (a.card && BALANCE_ACCOUNT_TYPES.has(a.card.type)) {
+  if (a.card) {
     await tx.accountTransaction.upsert({
       where: { personalSpendId: a.spendId },
       update: { amount: a.amount, merchant: a.label, accountId: a.card.id },
