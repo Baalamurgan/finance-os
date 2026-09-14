@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { formatINR } from "@/lib/format";
 import { depositPersonalSavings, withdrawPersonalSavings } from "@/app/personal/actions";
+import { useToastAction } from "@/components/Toast";
 
 type HistoryItem = { id: number; amount: number; note: string | null; periodLabel: string | null; createdAtISO: string };
 
@@ -97,11 +98,12 @@ function Shell({ title, onClose, children }: { title: string; onClose: () => voi
 }
 
 function AddModal({ onClose }: { onClose: () => void }) {
+  const withToast = useToastAction();
   const [amount, setAmount] = useState("");
   const amountNum = Number(amount) || 0;
   return (
     <Shell title="Add to savings" onClose={onClose}>
-      <form action={depositPersonalSavings} onSubmit={() => setTimeout(onClose, 0)} className="space-y-4 px-5 py-5">
+      <form action={withToast(depositPersonalSavings, { success: "Saved to pot" })} onSubmit={() => setTimeout(onClose, 0)} className="space-y-4 px-5 py-5">
         <div>
           <label className="text-sm font-medium text-slate-600">Amount (₹)</label>
           <input
@@ -127,13 +129,14 @@ function AddModal({ onClose }: { onClose: () => void }) {
 }
 
 function UseModal({ onClose, periodId, periodLabel, balance }: { onClose: () => void; periodId: number; periodLabel: string; balance: number }) {
+  const withToast = useToastAction();
   const [amount, setAmount] = useState("");
   const amountNum = Number(amount) || 0;
   const overdraw = amountNum > balance;
   return (
     <Shell title={`Use savings in ${periodLabel}`} onClose={onClose}>
       <form
-        action={withdrawPersonalSavings}
+        action={withToast(withdrawPersonalSavings, { success: "Brought into the month" })}
         onSubmit={(e) => {
           if (!e.currentTarget.checkValidity()) return;
           if (overdraw) { e.preventDefault(); return; }

@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { useToastAction } from "@/components/Toast";
 
 // A compact "⋯" kebab menu for a row, replacing the tiny adjacent edit/delete
 // icons (too small + too close on phones). The menu is rendered in a portal so
@@ -15,6 +16,7 @@ export function RowActions({
   deleteAction: (formData: FormData) => void;
   onEdit?: () => void; // when set, an "Edit" item is shown
 }) {
+  const withToast = useToastAction();
   const [open, setOpen] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
@@ -95,7 +97,7 @@ export function RowActions({
                 Delete
               </button>
             ) : (
-              <form action={deleteAction} className="flex items-center justify-between gap-2 px-4 py-2.5">
+              <form action={withToast(deleteAction, { success: "Deleted" })} className="flex items-center justify-between gap-2 px-4 py-2.5">
                 <input type="hidden" name="id" value={id} />
                 <span className="text-xs text-slate-500">Delete?</span>
                 <span className="flex gap-1.5">

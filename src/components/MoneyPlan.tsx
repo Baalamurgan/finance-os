@@ -9,7 +9,7 @@ import { PayBillModal } from "@/components/PayBillModal";
 import { MiscPayModal } from "@/components/MiscPayModal";
 import { ExpenseModal } from "@/components/ExpenseModal";
 import { StepDayEditor } from "@/components/StepDayEditor";
-import { useToast } from "@/components/Toast";
+import { useToast, useToastAction } from "@/components/Toast";
 import type { MoneyPlanResult } from "@/lib/queries";
 import { canActOnStep, canActInMonth } from "@/lib/planAuth";
 
@@ -39,6 +39,7 @@ export function MoneyPlan({
 }) {
   const router = useRouter();
   const toast = useToast();
+  const withToast = useToastAction();
   const [pending, startTransition] = useTransition();
   // Default the filter to the viewer's OWN steps (they mostly care about what they must do), falling
   // back to Everyone if they're not part of any step this month. They can switch to Everyone any time.
@@ -314,7 +315,7 @@ export function MoneyPlan({
                     <span className="mt-1 inline-flex items-center rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-medium text-emerald-700 no-underline">✓ handed over</span>
                   )}
                   {isHandover && !s.done && canEdit && (
-                    <form action={markPiggyHandedOver} className="mt-1">
+                    <form action={withToast(markPiggyHandedOver, { success: "Marked handed over" })} className="mt-1">
                       <input type="hidden" name="periodId" value={s.handoverPeriodId} />
                       <MiniBtn primary>✓ mark handed over</MiniBtn>
                     </form>
@@ -327,7 +328,7 @@ export function MoneyPlan({
                     <span className="mt-1 inline-flex items-center rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-medium text-emerald-700 no-underline">✓ handed to {s.toName}</span>
                   )}
                   {isPoolHandover && !s.done && (canEdit || currentMemberId === s.fromId) && s.recordIds && s.recordIds.length > 0 && (
-                    <form action={togglePoolHandover} className="mt-1">
+                    <form action={withToast(togglePoolHandover, { success: "Marked handed over" })} className="mt-1">
                       <input type="hidden" name="ids" value={s.recordIds.join(",")} />
                       <MiniBtn primary>✓ mark handed over</MiniBtn>
                     </form>
@@ -372,7 +373,7 @@ export function MoneyPlan({
                     <span className="text-[9px] text-slate-300">est.</span>
                   ) : isAdvance ? (
                     s.advanceId != null && canActTransfer ? (
-                      <form action={s.done ? unsettleAdvance : markAdvanceSettled} onSubmit={confirmFront}>
+                      <form action={withToast(s.done ? unsettleAdvance : markAdvanceSettled, { success: "Updated" })} onSubmit={confirmFront}>
                         <input type="hidden" name="id" value={s.advanceId} />
                         {s.payback && <input type="hidden" name="leg" value="payback" />}
                         <MiniBtn primary={!s.done}>{s.done ? "undo" : s.payback ? "✓ repaid" : "✓ sent"}</MiniBtn>
@@ -380,15 +381,15 @@ export function MoneyPlan({
                     ) : null
                   ) : isAllowance ? (
                     s.billId != null && canActAllowance ? (
-                      <form action={toggleBillPaid} onSubmit={confirmFront}><input type="hidden" name="id" value={s.billId} /><MiniBtn primary={!s.done}>{s.done ? "undo" : "✓ sent"}</MiniBtn></form>
+                      <form action={withToast(toggleBillPaid, { success: "Updated" })} onSubmit={confirmFront}><input type="hidden" name="id" value={s.billId} /><MiniBtn primary={!s.done}>{s.done ? "undo" : "✓ sent"}</MiniBtn></form>
                     ) : null
                   ) : isTransfer ? (
                     s.done ? (
                       canActTransfer && s.recordId != null ? (
-                        <form action={unsettle}><input type="hidden" name="id" value={s.recordId} /><MiniBtn>undo</MiniBtn></form>
+                        <form action={withToast(unsettle, { success: "Updated" })}><input type="hidden" name="id" value={s.recordId} /><MiniBtn>undo</MiniBtn></form>
                       ) : null
                     ) : canActTransfer ? (
-                      <form action={markSettled} onSubmit={confirmFront}>
+                      <form action={withToast(markSettled, { success: "Marked done" })} onSubmit={confirmFront}>
                         <input type="hidden" name="householdId" value={householdId} />
                         <input type="hidden" name="periodId" value={periodId} />
                         <input type="hidden" name="fromMemberId" value={s.fromId} />
@@ -400,11 +401,11 @@ export function MoneyPlan({
                     ) : null
                   ) : isManual ? (
                     s.manualId != null && canActManual ? (
-                      <form action={toggleManualStepDone} onSubmit={confirmClosed}><input type="hidden" name="id" value={s.manualId} /><MiniBtn primary={!s.done}>{s.done ? "undo" : "✓ done"}</MiniBtn></form>
+                      <form action={withToast(toggleManualStepDone, { success: "Updated" })} onSubmit={confirmClosed}><input type="hidden" name="id" value={s.manualId} /><MiniBtn primary={!s.done}>{s.done ? "undo" : "✓ done"}</MiniBtn></form>
                     ) : null
                   ) : isIncome ? (
                     s.incomeId != null && canActIncome ? (
-                      <form action={toggleIncomeReceived}><input type="hidden" name="id" value={s.incomeId} /><MiniBtn primary={!s.done}>{s.done ? "undo" : "✓ received"}</MiniBtn></form>
+                      <form action={withToast(toggleIncomeReceived, { success: "Updated" })}><input type="hidden" name="id" value={s.incomeId} /><MiniBtn primary={!s.done}>{s.done ? "undo" : "✓ received"}</MiniBtn></form>
                     ) : null
                   ) : (s.fund || s.billId != null) ? (
                     // Bill steps only become payable once the month is OPEN and you're the head or the
@@ -417,12 +418,12 @@ export function MoneyPlan({
                     ) : s.misc && s.billId != null ? (
                       // Planned misc = estimate → actual-amount + Piggy-reconcile popup (undo reverses it).
                       s.done ? (
-                        <form action={unpayMiscBill}><input type="hidden" name="id" value={s.billId} /><MiniBtn>undo</MiniBtn></form>
+                        <form action={withToast(unpayMiscBill, { success: "Updated" })}><input type="hidden" name="id" value={s.billId} /><MiniBtn>undo</MiniBtn></form>
                       ) : (
                         <MiscPayModal id={s.billId} name={s.vendor!} estimate={s.amount} generalPiggy={generalPiggy} />
                       )
                     ) : s.billId != null ? (
-                      <form action={toggleBillPaid} onSubmit={confirmFront}>
+                      <form action={withToast(toggleBillPaid, { success: "Updated" })} onSubmit={confirmFront}>
                         <input type="hidden" name="id" value={s.billId} />
                         {s.poolVendorLeg && <input type="hidden" name="leg" value="vendor" />}
                         <MiniBtn primary={!s.done}>{s.done ? "undo" : "✓ paid"}</MiniBtn>
@@ -435,9 +436,9 @@ export function MoneyPlan({
                 {/* delete: manual steps are removed outright; derived steps are hidden from the plan view */}
                 {canEdit && open && who == null && (
                   isManual ? (
-                    <form action={deleteManualStep} className="shrink-0"><input type="hidden" name="id" value={s.manualId} /><button title="Delete this step" className="px-0.5 text-sm text-slate-300 hover:text-red-600">✕</button></form>
+                    <form action={withToast(deleteManualStep, { success: "Step deleted" })} className="shrink-0"><input type="hidden" name="id" value={s.manualId} /><button title="Delete this step" className="px-0.5 text-sm text-slate-300 hover:text-red-600">✕</button></form>
                   ) : (
-                    <form action={hideStep} className="shrink-0"><input type="hidden" name="periodId" value={periodId} /><input type="hidden" name="stepKey" value={s.id} /><button title="Remove from plan (keeps the underlying bill/income)" className="px-0.5 text-sm text-slate-300 hover:text-red-600">✕</button></form>
+                    <form action={withToast(hideStep, { success: "Removed from plan" })} className="shrink-0"><input type="hidden" name="periodId" value={periodId} /><input type="hidden" name="stepKey" value={s.id} /><button title="Remove from plan (keeps the underlying bill/income)" className="px-0.5 text-sm text-slate-300 hover:text-red-600">✕</button></form>
                   )
                 )}
               </li>
@@ -458,7 +459,7 @@ export function MoneyPlan({
                   <span className="flex shrink-0 items-center gap-2">
                     <span className="tabular-nums">{formatINR(s.amount)}</span>
                     {canEdit && open && (
-                      <form action={unhideStep}><input type="hidden" name="periodId" value={periodId} /><input type="hidden" name="stepKey" value={s.id} /><button className="font-medium text-emerald-600 hover:underline">un-hide</button></form>
+                      <form action={withToast(unhideStep, { success: "Restored to plan" })}><input type="hidden" name="periodId" value={periodId} /><input type="hidden" name="stepKey" value={s.id} /><button className="font-medium text-emerald-600 hover:underline">un-hide</button></form>
                     )}
                   </span>
                 </li>
@@ -474,7 +475,7 @@ export function MoneyPlan({
         <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 sm:items-center sm:p-4" onClick={() => setInsert(null)}>
           <div className="w-full max-w-sm rounded-t-2xl bg-white p-4 shadow-xl sm:rounded-2xl" onClick={(e) => e.stopPropagation()} style={{ paddingBottom: "max(1rem, env(safe-area-inset-bottom))" }}>
             <h3 className="mb-3 text-sm font-semibold text-slate-900">Add a step</h3>
-            <form action={addManualStep} onSubmit={() => setInsert(null)} className="space-y-2.5">
+            <form action={withToast(addManualStep, { success: "Step added" })} onSubmit={() => setInsert(null)} className="space-y-2.5">
               <input type="hidden" name="periodId" value={periodId} />
               <input type="hidden" name="afterStepKey" value={insert.anchor ?? ""} />
               <label className="block text-[11px] font-medium text-slate-500">From

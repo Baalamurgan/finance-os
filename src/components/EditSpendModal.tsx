@@ -3,6 +3,7 @@
 import { useActionState, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { editSpendAction, type EditSpendState } from "@/app/actions";
+import { useToast } from "@/components/Toast";
 
 type Mem = { id: number; name: string };
 type Card = { id: number; name: string; ownerId: number; ownerName: string; last4: string | null; type: string; color: string };
@@ -26,6 +27,7 @@ export function EditSpendModal({
   members?: Mem[];
   cards?: Card[];
 }) {
+  const toast = useToast();
   const [open, setOpen] = useState(false);
   const [mounted, setMounted] = useState(false);
   const [subCategory, setSubCategory] = useState(spend.subCategory ?? "");
@@ -46,9 +48,10 @@ export function EditSpendModal({
   useEffect(() => {
     if (state.n > prevN.current) {
       prevN.current = state.n;
+      toast("Spend updated", "success");
       setOpen(false);
     }
-  }, [state.n]);
+  }, [state.n, toast]);
 
   const needSub = isMisc && !!subCategories?.length && !subCategory;
 

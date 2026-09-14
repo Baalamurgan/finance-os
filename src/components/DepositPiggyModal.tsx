@@ -3,11 +3,13 @@
 import { useEffect, useState } from "react";
 import { depositPiggy } from "@/app/actions";
 import { formatINR } from "@/lib/format";
+import { useToastAction } from "@/components/Toast";
 
 type Fund = { id: number; name: string };
 
 // Head-only: add money into the general Piggy or a specific sinking fund.
 export function DepositPiggyModal({ sinkingFunds }: { sinkingFunds: Fund[] }) {
+  const withToast = useToastAction();
   const [open, setOpen] = useState(false);
   const [amount, setAmount] = useState("");
   const [target, setTarget] = useState("general");
@@ -46,7 +48,7 @@ export function DepositPiggyModal({ sinkingFunds }: { sinkingFunds: Fund[] }) {
             </div>
 
             <form
-              action={depositPiggy}
+              action={withToast(depositPiggy, { success: "Added to Piggy" })}
               onSubmit={(e) => {
                 if (!e.currentTarget.checkValidity()) return;
                 const verb = amountNum < 0 ? "Remove" : "Add";

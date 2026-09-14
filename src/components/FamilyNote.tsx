@@ -2,6 +2,7 @@
 
 import { useActionState, useEffect, useRef, useState } from "react";
 import { saveFamilyNote, type NoteState } from "@/app/actions";
+import { useToast } from "@/components/Toast";
 
 // The shared family note editor. One common note, editable by any member (behind the app
 // lock). Explicit Save (clearer for everyone than autosave, and avoids surprise overwrites);
@@ -15,6 +16,7 @@ export function FamilyNote({
   lastEditedBy: string | null;
   lastEditedAtISO: string | null;
 }) {
+  const toast = useToast();
   const [value, setValue] = useState(initial);
   const [state, formAction, pending] = useActionState<NoteState, FormData>(saveFamilyNote, { ok: false, n: 0 });
   const [savedAt, setSavedAt] = useState<string | null>(null);
@@ -27,6 +29,7 @@ export function FamilyNote({
       prevN.current = state.n;
       setBaseline(value);
       setSavedAt(new Date().toLocaleTimeString("en-IN", { hour: "numeric", minute: "2-digit" }));
+      toast("Note saved", "success");
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state.n]);

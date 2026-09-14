@@ -10,6 +10,7 @@ import { ConfirmForm } from "@/components/ConfirmForm";
 import { setCreditConfig, deleteTransaction, addManualTransaction, topUpCard, updateAccount, deleteAccount } from "@/app/personal/finance/actions";
 import { TXN_TYPES, BALANCE_ACCOUNT_TYPES, CARD_NETWORKS } from "@/lib/finance/types";
 import { CardColorPicker } from "@/components/CardColorPicker";
+import { ToastForm } from "@/components/ToastForm";
 
 const fmtDate = (d: Date | null) =>
   d ? d.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" }) : "—";
@@ -61,7 +62,7 @@ export default async function CreditCardDetail({
               </div>
               <div className="mt-1 text-xs text-slate-400">Opening {formatINR(account.openingBalance ?? 0)} · every top-up and spend adjusts it.</div>
             </div>
-            <form action={topUpCard} className="flex flex-wrap items-end gap-3 rounded-xl border border-slate-200 bg-white p-4">
+            <ToastForm action={topUpCard} successMessage="Topped up" className="flex flex-wrap items-end gap-3 rounded-xl border border-slate-200 bg-white p-4">
               <input type="hidden" name="accountId" value={account.id} />
               <label className="text-xs font-medium text-slate-500">Top up (₹)
                 <input name="amount" inputMode="numeric" required placeholder="0" className="input mt-1 w-32" />
@@ -70,7 +71,7 @@ export default async function CreditCardDetail({
                 <input name="note" placeholder="e.g. Salary load" className="input mt-1 w-40" />
               </label>
               <button className="rounded-lg bg-emerald-600 px-4 py-1.5 text-sm font-semibold text-white hover:bg-emerald-700">+ Top up</button>
-            </form>
+            </ToastForm>
           </>
         )}
 
@@ -127,7 +128,7 @@ export default async function CreditCardDetail({
           <summary className="cursor-pointer list-none px-4 py-3 text-sm font-semibold text-slate-800 [&::-webkit-details-marker]:hidden">
             ⚙️ Configure card
           </summary>
-          <form action={setCreditConfig} className="grid grid-cols-1 gap-3 border-t border-slate-100 p-4 sm:grid-cols-3">
+          <ToastForm action={setCreditConfig} successMessage="Card settings saved" className="grid grid-cols-1 gap-3 border-t border-slate-100 p-4 sm:grid-cols-3">
             <input type="hidden" name="id" value={account.id} />
             <label className="text-xs font-medium text-slate-500">Credit limit (₹)
               <input name="creditLimit" defaultValue={cfg?.creditLimit ?? ""} inputMode="numeric" className="input mt-1 w-full" />
@@ -144,7 +145,7 @@ export default async function CreditCardDetail({
             <div className="sm:col-span-3">
               <button className="rounded-lg bg-emerald-600 px-4 py-1.5 text-sm font-semibold text-white hover:bg-emerald-700">Save</button>
             </div>
-          </form>
+          </ToastForm>
         </details>
         </>)}
 
@@ -153,7 +154,7 @@ export default async function CreditCardDetail({
           <summary className="cursor-pointer list-none px-4 py-3 text-sm font-semibold text-slate-800 [&::-webkit-details-marker]:hidden">
             ✏️ Edit card
           </summary>
-          <form action={updateAccount} className="grid grid-cols-1 gap-3 border-t border-slate-100 p-4 sm:grid-cols-2">
+          <ToastForm action={updateAccount} successMessage="Card updated" className="grid grid-cols-1 gap-3 border-t border-slate-100 p-4 sm:grid-cols-2">
             <input type="hidden" name="id" value={account.id} />
             <label className="text-xs font-medium text-slate-500 sm:col-span-2">Card name
               <input name="name" defaultValue={account.name} required className="input mt-1 w-full" />
@@ -186,9 +187,9 @@ export default async function CreditCardDetail({
             <div className="flex items-center justify-between sm:col-span-2">
               <button className="rounded-lg bg-emerald-600 px-4 py-1.5 text-sm font-semibold text-white hover:bg-emerald-700">Save</button>
             </div>
-          </form>
+          </ToastForm>
           <div className="border-t border-slate-100 p-4">
-            <ConfirmForm action={deleteAccount} message={`Delete “${account.name}”? Its transactions are removed too. Family spends made on it keep their attribution.`}>
+            <ConfirmForm action={deleteAccount} successMessage="Card deleted" message={`Delete “${account.name}”? Its transactions are removed too. Family spends made on it keep their attribution.`}>
               <input type="hidden" name="id" value={account.id} />
               <button className="rounded-lg border border-red-200 px-3 py-1.5 text-sm font-medium text-red-600 hover:bg-red-50">Delete card</button>
             </ConfirmForm>
@@ -202,7 +203,7 @@ export default async function CreditCardDetail({
           </div>
 
           {/* quick manual add */}
-          <form action={addManualTransaction} className="flex flex-wrap items-end gap-2 border-b border-slate-100 p-3 text-sm">
+          <ToastForm action={addManualTransaction} successMessage="Transaction added" className="flex flex-wrap items-end gap-2 border-b border-slate-100 p-3 text-sm">
             <input type="hidden" name="accountId" value={account.id} />
             <input name="date" type="date" required className="input" />
             <input name="merchant" required placeholder="Merchant" className="input flex-1" />
@@ -211,7 +212,7 @@ export default async function CreditCardDetail({
               {TXN_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
             </select>
             <button className="rounded-lg bg-emerald-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-emerald-700">Add</button>
-          </form>
+          </ToastForm>
 
           <ul className="divide-y divide-slate-100">
             {txns.length === 0 && <li className="px-4 py-6 text-center text-sm text-slate-400">No transactions yet.</li>}
@@ -235,7 +236,7 @@ export default async function CreditCardDetail({
                   {t.source === "family" || t.personalSpendId != null ? (
                     <span className="w-4 text-center text-slate-200" title={t.source === "family" ? "Family spend — edit or remove it from the Family view" : "Your spend — edit or remove it from the Expenses tab"}>🔒</span>
                   ) : (
-                    <ConfirmForm action={deleteTransaction} message="Remove this transaction?">
+                    <ConfirmForm action={deleteTransaction} successMessage="Transaction removed" message="Remove this transaction?">
                       <input type="hidden" name="id" value={t.id} />
                       <button className="text-slate-300 hover:text-red-600">✕</button>
                     </ConfirmForm>

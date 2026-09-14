@@ -1,6 +1,7 @@
 "use client";
 
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from "react";
+import { unstable_rethrow } from "next/navigation";
 
 type ToastType = "success" | "error";
 type Toast = { id: number; message: string; type: ToastType };
@@ -10,6 +11,30 @@ const ToastCtx = createContext<(message: string, type?: ToastType) => void>(() =
 /** Fire a toast from any client component: const toast = useToast(); toast("Saved"). */
 export function useToast() {
   return useContext(ToastCtx);
+}
+
+/**
+ * Wrap a server action so it fires a success/error toast when it finishes — the easy way to give any
+ * server-action <form> feedback. Redirect/notFound framework errors pass through (unstable_rethrow) so
+ * navigation still works; anything else shows the error toast.
+ *   const withToast = useToastAction();
+ *   <form action={withToast(deleteThing, { success: "Deleted" })}>…</form>
+ */
+export function useToastAction() {
+  const toast = useToast();
+  return useCallback(
+    (action: (formData: FormData) => void | Promise<unknown>, opts?: { success?: string | null; error?: string }) =>
+      async (formData: FormData) => {
+        try {
+          await action(formData);
+          if (opts?.success !== null) toast(opts?.success ?? "Saved", "success");
+        } catch (e) {
+          unstable_rethrow(e); // let redirect()/notFound() do their thing
+          toast(opts?.error ?? "Something went wrong", "error");
+        }
+      },
+    [toast],
+  );
 }
 
 export function ToastProvider({ children }: { children: ReactNode }) {

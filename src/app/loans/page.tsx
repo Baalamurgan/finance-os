@@ -4,6 +4,7 @@ import { loadCommon } from "@/lib/load";
 import { getLoans } from "@/lib/queries";
 import { NavHeader } from "@/components/NavHeader";
 import { ConfirmForm } from "@/components/ConfirmForm";
+import { ToastForm } from "@/components/ToastForm";
 import { LoanPaymentForm } from "@/components/LoanPaymentForm";
 import { createLoan, closeLoan, deleteLoan } from "../actions";
 
@@ -147,13 +148,13 @@ function LoanCard({
       {isHead && (
         <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-slate-100 pt-3">
           <LoanPaymentForm loanId={l.id} periodId={periodId} kind={l.kind} outstanding={l.outstanding} />
-          <ConfirmForm action={closeLoan} message={`Close ${l.name}? It moves to the Closed list.`}>
+          <ConfirmForm action={closeLoan} successMessage="Loan closed" message={`Close ${l.name}? It moves to the Closed list.`}>
             <input type="hidden" name="loanId" value={l.id} />
             <button className="rounded-md px-2 py-1.5 text-xs text-slate-500 hover:bg-slate-100">
               Close
             </button>
           </ConfirmForm>
-          <ConfirmForm action={deleteLoan} message={`Delete ${l.name} permanently? This removes its payment history.`}>
+          <ConfirmForm action={deleteLoan} successMessage="Loan deleted" message={`Delete ${l.name} permanently? This removes its payment history.`}>
             <input type="hidden" name="loanId" value={l.id} />
             <button className="rounded-md px-2 py-1.5 text-xs text-slate-300 hover:text-red-600">
               Delete
@@ -192,7 +193,7 @@ function AddLoan({
       <summary className="cursor-pointer text-sm font-medium text-indigo-600">
         + Add a loan or chit
       </summary>
-      <form action={createLoan} className="mt-3 flex flex-wrap items-end gap-3">
+      <ToastForm action={createLoan} successMessage="Loan added" className="mt-3 flex flex-wrap items-end gap-3">
         <input type="hidden" name="householdId" value={householdId} />
         <label className="text-xs text-slate-500">
           Name
@@ -233,7 +234,7 @@ function AddLoan({
           </select>
         </label>
         <button className="btn">Add</button>
-      </form>
+      </ToastForm>
     </details>
   );
 }

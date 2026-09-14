@@ -2,6 +2,7 @@
 
 import { useActionState, useEffect, useRef, useState } from "react";
 import { addIncomeAction, updateIncome, type SaveState } from "@/app/actions";
+import { useToast } from "@/components/Toast";
 
 type Mem = { id: number; name: string };
 type IncomeInitial = { id: number; source: string; amount: number; ownerId: number | null; dueDay?: number | null };
@@ -24,6 +25,7 @@ export function IncomeModal({
   onOpenChange?: (v: boolean) => void;
 }) {
   const isEdit = !!initial;
+  const toast = useToast();
   const [uncontrolled, setUncontrolled] = useState(false);
   const open = controlledOpen ?? uncontrolled;
   const setOpen = (v: boolean) => {
@@ -50,6 +52,7 @@ export function IncomeModal({
   useEffect(() => {
     if (state.n > prevN.current) {
       prevN.current = state.n;
+      toast(isEdit ? "Income updated" : "Income added", "success");
       if (!isEdit) formRef.current?.reset();
       setOpen(false);
     }

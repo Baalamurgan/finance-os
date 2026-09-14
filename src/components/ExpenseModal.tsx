@@ -3,6 +3,7 @@
 import { useActionState, useEffect, useRef, useState } from "react";
 import { saveExpenseAction, type SaveState } from "@/app/actions";
 import { formatINR } from "@/lib/format";
+import { useToast } from "@/components/Toast";
 
 type Cat = { id: number; name: string; section?: string };
 type Mem = { id: number; name: string };
@@ -52,6 +53,7 @@ export function ExpenseModal({
   const [openState, setOpenState] = useState(false);
   const open = controlledOpen ?? openState;
   const setOpen = onOpenChange ?? setOpenState;
+  const toast = useToast();
   const [categoryId, setCategoryId] = useState<number | null>(
     initial?.categoryId ?? null
   );
@@ -131,6 +133,7 @@ export function ExpenseModal({
   useEffect(() => {
     if (state.n > prevN.current) {
       prevN.current = state.n;
+      toast(initial ? "Expense updated" : "Expense added", "success");
       setOpen(false);
       setPicks({});
       if (!initial) {

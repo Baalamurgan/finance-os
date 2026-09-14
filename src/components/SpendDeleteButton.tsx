@@ -2,11 +2,13 @@
 
 import { useState } from "react";
 import { deleteSpend } from "@/app/actions";
+import { useToastAction } from "@/components/Toast";
 
 // Two-tap delete so a parent can't wipe an entry by accident: the ✕ first asks
 // "Delete?" with explicit Yes / No before the server action runs.
 export function SpendDeleteButton({ id }: { id: number }) {
   const [confirming, setConfirming] = useState(false);
+  const withToast = useToastAction();
 
   if (!confirming) {
     return (
@@ -22,7 +24,7 @@ export function SpendDeleteButton({ id }: { id: number }) {
   }
 
   return (
-    <form action={deleteSpend} className="flex items-center gap-1">
+    <form action={withToast(deleteSpend, { success: "Spend deleted" })} className="flex items-center gap-1">
       <input type="hidden" name="id" value={id} />
       <span className="text-xs text-slate-500">Delete?</span>
       <button

@@ -3,10 +3,12 @@
 import { useEffect, useState } from "react";
 import { setFundBalance } from "@/app/actions";
 import { formatINR } from "@/lib/format";
+import { useToastAction } from "@/components/Toast";
 
 // Head-only: correct a fund's CURRENT balance to an exact amount (records an
 // "Adjustment" entry). target = "general" | sinking categoryId (as string).
 export function SetFundModal({ target, name, current }: { target: string; name: string; current: number }) {
+  const withToast = useToastAction();
   const [open, setOpen] = useState(false);
   const [amount, setAmount] = useState(String(Math.round(current)));
 
@@ -36,7 +38,7 @@ export function SetFundModal({ target, name, current }: { target: string; name: 
               <button type="button" onClick={() => setOpen(false)} aria-label="Close" className="rounded-md px-2 text-2xl leading-none text-slate-400 hover:bg-slate-100">✕</button>
             </div>
             <form
-              action={setFundBalance}
+              action={withToast(setFundBalance, { success: "Fund updated" })}
               onSubmit={(e) => {
                 if (!e.currentTarget.checkValidity()) return;
                 if (!confirm(`Set ${name} to ${formatINR(Number(amount) || 0)}? (currently ${formatINR(current)})`)) {

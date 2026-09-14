@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { recordLoanPayment } from "@/app/actions";
 import { formatINR } from "@/lib/format";
+import { useToastAction } from "@/components/Toast";
 
 // Record a loan/chit payment with a confirm step and an overdraw guard
 // (principal paid can't exceed the outstanding balance).
@@ -17,6 +18,7 @@ export function LoanPaymentForm({
   kind: string;
   outstanding: number;
 }) {
+  const withToast = useToastAction();
   const [principal, setPrincipal] = useState(kind === "loan" ? "" : "0");
   const principalNum = Number(principal) || 0;
   const over = principalNum > outstanding;
@@ -25,7 +27,7 @@ export function LoanPaymentForm({
     <details className="text-sm">
       <summary className="cursor-pointer text-indigo-600">+ Record payment</summary>
       <form
-        action={recordLoanPayment}
+        action={withToast(recordLoanPayment, { success: "Payment recorded" })}
         className="mt-2 flex flex-wrap items-end gap-2"
         onSubmit={(e) => {
           if (!e.currentTarget.checkValidity()) return;

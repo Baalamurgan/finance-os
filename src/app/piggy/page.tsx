@@ -6,6 +6,7 @@ import { WithdrawPiggyModal } from "@/components/WithdrawPiggyModal";
 import { DepositPiggyModal } from "@/components/DepositPiggyModal";
 import { SetFundModal } from "@/components/SetFundModal";
 import { setPiggyHolder } from "@/app/actions";
+import { ToastForm } from "@/components/ToastForm";
 
 export default async function PiggyPage({
   searchParams,
@@ -117,7 +118,7 @@ export default async function PiggyPage({
             <p className="mt-0.5 text-xs text-slate-400">
               Whose &quot;budget left in hand&quot; the Piggy bank shows under, in the Expenses tab. Default: head of the family. Only head &amp; manager can change this.
             </p>
-            <form action={setPiggyHolder} className="mt-2 flex flex-wrap items-center gap-2">
+            <ToastForm action={setPiggyHolder} successMessage="Piggy holder updated" className="mt-2 flex flex-wrap items-center gap-2">
               <select
                 name="memberId"
                 defaultValue={piggyHolderId ?? ""}
@@ -136,7 +137,7 @@ export default async function PiggyPage({
               >
                 Save holder
               </button>
-            </form>
+            </ToastForm>
           </div>
         )}
 

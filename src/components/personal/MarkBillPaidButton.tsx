@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { formatINR } from "@/lib/format";
 import { markCardBillPaid } from "@/app/personal/actions";
+import { useToastAction } from "@/components/Toast";
 
 // "Mark bill paid" with the EXACT amount you actually paid (defaults to the cycle total,
 // but you can edit it — e.g. you paid the full statement, a partial amount, or it differs
@@ -18,6 +19,7 @@ export function MarkBillPaidButton({
   cycleEndISO: string;
   cycleTotal: number;
 }) {
+  const withToast = useToastAction();
   const [open, setOpen] = useState(false);
   const [amount, setAmount] = useState(String(Math.round(cycleTotal)));
   const amountNum = Number(amount) || 0;
@@ -49,7 +51,7 @@ export function MarkBillPaidButton({
               <h2 className="text-lg font-bold text-slate-900">Pay {cardName} bill</h2>
               <button type="button" onClick={() => setOpen(false)} aria-label="Close" className="rounded-md px-2 text-2xl leading-none text-slate-400 hover:bg-slate-100">✕</button>
             </div>
-            <form action={markCardBillPaid} onSubmit={() => setTimeout(() => setOpen(false), 0)} className="space-y-4 px-5 py-5">
+            <form action={withToast(markCardBillPaid, { success: "Bill marked paid" })} onSubmit={() => setTimeout(() => setOpen(false), 0)} className="space-y-4 px-5 py-5">
               <input type="hidden" name="cardAccountId" value={cardId} />
               <input type="hidden" name="cycleEnd" value={cycleEndISO} />
               <input type="hidden" name="cycleTotal" value={cycleTotal} />

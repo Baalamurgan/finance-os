@@ -5,6 +5,7 @@ import { loadCommon } from "@/lib/load";
 import { getLoanDetail } from "@/lib/queries";
 import { NavHeader } from "@/components/NavHeader";
 import { ConfirmForm } from "@/components/ConfirmForm";
+import { ToastForm } from "@/components/ToastForm";
 import { recordLoanPayment, setChitWon, deleteLoanPayment, closeLoan } from "@/app/actions";
 
 export default async function LoanDetailPage({
@@ -107,7 +108,7 @@ export default async function LoanDetailPage({
               <p className="mt-1 text-sm text-slate-500">Not won yet.</p>
             )}
             {canEdit && (
-              <form action={setChitWon} className="mt-3 flex flex-wrap items-end gap-2">
+              <ToastForm action={setChitWon} successMessage="Saved" className="mt-3 flex flex-wrap items-end gap-2">
                 <input type="hidden" name="loanId" value={loan.id} />
                 <label className="text-xs text-slate-500">
                   Installment #
@@ -118,7 +119,7 @@ export default async function LoanDetailPage({
                   <input name="potAmount" type="number" step="0.01" defaultValue={loan.chitPotAmount ?? ""} className="input mt-0.5 block w-32" />
                 </label>
                 <button className="rounded-md bg-emerald-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-emerald-700">Save</button>
-              </form>
+              </ToastForm>
             )}
           </section>
         )}
@@ -127,7 +128,7 @@ export default async function LoanDetailPage({
         {canEdit && loan.status !== "closed" && (
           <section className="rounded-xl border border-slate-200 bg-white p-4">
             <h2 className="text-sm font-semibold text-slate-900">Record a {isChit ? "monthly installment" : "payment"}</h2>
-            <form action={recordLoanPayment} className="mt-3 flex flex-wrap items-end gap-2">
+            <ToastForm action={recordLoanPayment} successMessage="Payment recorded" className="mt-3 flex flex-wrap items-end gap-2">
               <input type="hidden" name="loanId" value={loan.id} />
               {c.selected && <input type="hidden" name="periodId" value={c.selected.id} />}
               <label className="text-xs text-slate-500">
@@ -150,7 +151,7 @@ export default async function LoanDetailPage({
                 <input name="note" className="input mt-0.5 block w-32" />
               </label>
               <button className="rounded-md bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-indigo-700">Add</button>
-            </form>
+            </ToastForm>
           </section>
         )}
 
@@ -175,7 +176,7 @@ export default async function LoanDetailPage({
                     </div>
                   </div>
                   {canEdit && (
-                    <ConfirmForm action={deleteLoanPayment} message="Remove this payment?">
+                    <ConfirmForm action={deleteLoanPayment} successMessage="Payment removed" message="Remove this payment?">
                       <input type="hidden" name="id" value={p.id} />
                       <button className="text-xs text-slate-300 hover:text-red-600">Delete</button>
                     </ConfirmForm>
@@ -187,7 +188,7 @@ export default async function LoanDetailPage({
         </section>
 
         {canEdit && loan.status !== "closed" && (
-          <ConfirmForm action={closeLoan} message={`Close ${loan.name}?`}>
+          <ConfirmForm action={closeLoan} successMessage="Loan closed" message={`Close ${loan.name}?`}>
             <input type="hidden" name="loanId" value={loan.id} />
             <button className="text-sm text-slate-500 hover:text-slate-800">Mark as closed</button>
           </ConfirmForm>

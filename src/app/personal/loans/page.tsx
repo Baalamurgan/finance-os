@@ -2,6 +2,7 @@ import { formatINR } from "@/lib/format";
 import { prisma } from "@/lib/prisma";
 import { loadPersonal } from "@/lib/loadPersonal";
 import { PersonalNav } from "@/components/personal/PersonalNav";
+import { ToastForm } from "@/components/ToastForm";
 import {
   addPersonalLoan,
   recordPersonalLoanPayment,
@@ -48,7 +49,7 @@ export default async function PersonalLoans({
         {/* add */}
         <section className="rounded-xl border border-slate-200 bg-white p-4">
           <h2 className="mb-3 text-sm font-semibold text-slate-900">Record lending / borrowing</h2>
-          <form action={addPersonalLoan} className="grid grid-cols-2 gap-2 sm:grid-cols-5">
+          <ToastForm action={addPersonalLoan} successMessage="Added" className="grid grid-cols-2 gap-2 sm:grid-cols-5">
             <select name="direction" className="input" defaultValue="lent">
               <option value="lent">I lent</option>
               <option value="borrowed">I borrowed</option>
@@ -57,7 +58,7 @@ export default async function PersonalLoans({
             <input name="amount" type="number" step="0.01" placeholder="₹ *" required className="input" />
             <input name="note" placeholder="Note" className="input" />
             <button className="rounded-md bg-emerald-600 px-3 py-2 text-sm font-medium text-white hover:bg-emerald-700">Add</button>
-          </form>
+          </ToastForm>
         </section>
 
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
@@ -128,12 +129,12 @@ function LoanList({
                   </summary>
                   <div className="space-y-2 px-3 pb-3">
                     {/* rename the whole person (applies to every entry, open or settled) */}
-                    <form action={renamePersonalLoanParty} className="flex items-center gap-1 pt-1">
+                    <ToastForm action={renamePersonalLoanParty} successMessage="Renamed" className="flex items-center gap-1 pt-1">
                       <input type="hidden" name="oldName" value={g.name} />
                       <input type="hidden" name="direction" value={direction} />
                       <input name="newName" defaultValue={g.name} aria-label="Rename person" className="input flex-1 py-1 text-xs" />
                       <button className="rounded-md bg-slate-100 px-2 py-1 text-xs font-medium text-slate-600 hover:bg-slate-200">Rename</button>
-                    </form>
+                    </ToastForm>
                     <ul className="divide-y divide-slate-100">
                       {g.items.map((l) => (
                         <li key={l.id} className="py-2">
@@ -151,23 +152,23 @@ function LoanList({
                           <div className="mt-1.5 flex items-center gap-2">
                             {l.status === "open" ? (
                               <>
-                                <form action={recordPersonalLoanPayment} className="flex items-center gap-1">
+                                <ToastForm action={recordPersonalLoanPayment} successMessage="Payment recorded" className="flex items-center gap-1">
                                   <input type="hidden" name="id" value={l.id} />
                                   <input name="amount" type="number" step="0.01" placeholder="₹ recd" className="input w-24 py-1 text-xs" />
                                   <button className="rounded-md bg-slate-100 px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-200">Record</button>
-                                </form>
-                                <form action={settlePersonalLoan}>
+                                </ToastForm>
+                                <ToastForm action={settlePersonalLoan} successMessage="Settled">
                                   <input type="hidden" name="id" value={l.id} />
                                   <button className="text-xs font-medium text-emerald-700">{l.sharedPaid != null ? "Mark received" : "Settle"}</button>
-                                </form>
+                                </ToastForm>
                               </>
                             ) : (
                               <span className="text-[11px] font-medium text-emerald-600">✓ settled</span>
                             )}
-                            <form action={deletePersonalLoan}>
+                            <ToastForm action={deletePersonalLoan} successMessage="Deleted">
                               <input type="hidden" name="id" value={l.id} />
                               <button className="text-xs text-slate-400 hover:text-red-600">Delete</button>
-                            </form>
+                            </ToastForm>
                           </div>
                         </li>
                       ))}

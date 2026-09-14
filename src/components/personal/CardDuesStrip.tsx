@@ -1,6 +1,7 @@
 import { formatINR } from "@/lib/format";
 import { unmarkCardBillPaid } from "@/app/personal/actions";
 import { MarkBillPaidButton } from "@/components/personal/MarkBillPaidButton";
+import { ToastForm } from "@/components/ToastForm";
 import type { CardDue, CardDueItem, BalanceCardView } from "@/lib/personal/cash";
 
 const fmtDate = (iso: string | null) =>
@@ -77,10 +78,10 @@ function CardBlock({ d }: { d: CardDue }) {
           {d.paid.map((p) => (
             <li key={p.billId} className="flex items-center justify-between gap-2 px-3 py-1 text-xs text-slate-400">
               <span>✓ Paid — bill {fmtDate(p.cycleEndISO)} · {formatINR(p.amount)}</span>
-              <form action={unmarkCardBillPaid}>
+              <ToastForm action={unmarkCardBillPaid} successMessage="Bill payment undone">
                 <input type="hidden" name="id" value={p.billId} />
                 <button className="font-medium text-slate-400 hover:text-red-600">undo</button>
-              </form>
+              </ToastForm>
             </li>
           ))}
         </ul>

@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { withdrawPiggy } from "@/app/actions";
 import { formatINR } from "@/lib/format";
+import { useToastAction } from "@/components/Toast";
 
 type Cat = { id: number; name: string; sinking?: boolean };
 
@@ -17,6 +18,7 @@ export function WithdrawPiggyModal({
   categories: Cat[];
   available: { general: number; sinking: Record<number, number> };
 }) {
+  const withToast = useToastAction();
   const [open, setOpen] = useState(false);
   const [amount, setAmount] = useState("");
   const [source, setSource] = useState("general");
@@ -61,7 +63,7 @@ export function WithdrawPiggyModal({
             </div>
 
             <form
-              action={withdrawPiggy}
+              action={withToast(withdrawPiggy, { success: "Withdrawn from Piggy" })}
               onSubmit={(e) => {
                 if (!e.currentTarget.checkValidity()) return;
                 if (overdraw) {
