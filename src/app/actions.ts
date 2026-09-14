@@ -221,12 +221,26 @@ async function checkAddExpenseFeasible(
   const treasurerId = period.treasurerMemberId ?? household?.treasurerMemberId ?? headMember?.id ?? null;
   const treasurerName = members.find((m) => m.id === treasurerId)?.name ?? "Treasurer";
   const hypBill = { key: "__hyp__", payerId: hyp.payerId, payerName, vendor: hyp.label, amount: hyp.amount, done: false, day: hyp.dueDay, status: null, days: null };
-  const [base, withHyp] = await Promise.all([getMoneyPlan(hh, periodId), getMoneyPlan(hh, periodId, undefined, [hypBill])]);
+  // A NON-misc bill assigned to a member is pool-funded: saving it makes the pool OWE that member, so
+  // the plan disburses treasurer→member to cover it. Fold it into the settlement side of the preview so
+  // the gate sees that funding (and only flags a genuine collection-timing problem). Misc lines keep the
+  // old pool-or-peer prompt (they're not settlement-funded unless the user picks pool).
+  const hypExpense =
+    !hyp.isMisc && hyp.payerId != null
+      ? [{ memberId: hyp.payerId, amount: hyp.amount, label: hyp.label, category: { name: hyp.label, section: "Monthly" } }]
+      : undefined;
+  const [base, withHyp] = await Promise.all([getMoneyPlan(hh, periodId), getMoneyPlan(hh, periodId, undefined, [hypBill], hypExpense)]);
   const inr = (n: number) => formatINR(Math.round(n));
   // 1. the expense's own payer can't cover it by its due day → offer to fund it from whoever holds
   //    spare cash right before that step (the dropdown of sources the user picks from).
   const hypStep = withHyp.steps.find((s) => s.id === "__hyp__");
   if (hypStep?.senderShort != null && hypStep.senderShort > 0.5) {
+    // A member's own (non-misc) bill is pool-funded — the pool now owes them for it (folded in above),
+    // so a remaining shortfall means the pool can't COLLECT the cash by the due day. Block and ask for a
+    // later date rather than offering a peer advance (the treasurer funds it once collected).
+    if (!hyp.isMisc) {
+      return { ok: false, reason: `The pool can't gather ${inr(hypStep.senderShort)} for ${payerName} by day ${hyp.dueDay} — the money isn't collected by then. Try a later due date.` };
+    }
     // Peer funders = anyone (NOT the payer, NOT the treasurer) holding spare cash right before the step;
     // each fronts part of the gap as an advance. The treasurer is handled separately as the pool option.
     const peers: FundSource[] =

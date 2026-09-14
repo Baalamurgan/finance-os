@@ -3,7 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { FAMILY_TAG } from "@/lib/revalidate";
 import { MISC_SUBCATEGORIES } from "@/lib/misc";
 import { LEFTOVER_NOTE, POOL_NOTE, POOL_BILL_NOTE, REMOVED_NOTE, isPoolNote } from "@/lib/notes";
-import { computeSettlement } from "@/lib/settlement-core";
+import { computeSettlement, type SettleTagged } from "@/lib/settlement-core";
 import { planBillMonth, isLumpDue, monthsUntilNextDue, type FundingStyle } from "@/lib/schedule";
 import { suggestCategoryName, normalizeItem, resolveCategoryId } from "@/lib/spendCategorize";
 import { withShareCount } from "@/lib/format";
@@ -512,7 +512,11 @@ export type Settlement = Awaited<ReturnType<typeof getSettlement>>;
 async function _getSettlement(
   householdId: number,
   periodId: number,
-  treasurerId: number | null
+  treasurerId: number | null,
+  // Feasibility preview only: hypothetical not-yet-saved expenses folded into the net, so the
+  // add-expense gate sees that saving a member's bill makes the pool OWE them for it (and thus
+  // fund it via a treasurer→member disbursement) — instead of under-funding them and offering peers.
+  extraExpenses?: SettleTagged[],
 ) {
   // Settlement is a START-of-month activity (salaries → hub). Daily spends + misc
   // logged during a month are credited to the spender in the NEXT month's
@@ -546,19 +550,24 @@ async function _getSettlement(
   // keep it OUT of the settlement net (like allowances) or the member would be wrongly debited for it.
   const expenses = allExpenses.filter((e) => e.note !== "__carry__" && e.note !== "__deferred__" && !isPoolNote(e.note) && e.note !== REMOVED_NOTE && !e.category.isAllowance);
   const prevLabel = prevPeriod?.label ?? null;
+  const expensesForCalc = extraExpenses?.length ? [...expenses, ...extraExpenses] : expenses;
 
   // pure math (unit-tested in settlement-core.test.ts)
-  return computeSettlement({ members, incomes, expenses, spends, records, treasurerId, prevLabel });
+  return computeSettlement({ members, incomes, expenses: expensesForCalc, spends, records, treasurerId, prevLabel });
 }
 
 // The Money Plan for a month: the settlement transfers + dated bill payments, ordered into one
 // executable checklist. Pure ordering/feasibility lives in buildMoneyPlan (unit-tested); this
 // just gathers the inputs from the existing In-Hand + settlement computations (one source of truth).
 export type MoneyPlanResult = Awaited<ReturnType<typeof getMoneyPlan>>;
-export async function getMoneyPlan(householdId: number, periodId: number, inhandArg?: InHand, extraBills?: import("./moneyPlan").PlanBill[]) {
+export async function getMoneyPlan(householdId: number, periodId: number, inhandArg?: InHand, extraBills?: import("./moneyPlan").PlanBill[], extraExpenses?: SettleTagged[]) {
   const inhand = inhandArg ?? (await getInHand(householdId, periodId));
   const [settlement, incomes, period, household, dayOverrideRows, manualStepRows, hiddenRows] = await Promise.all([
-    getSettlement(householdId, periodId, inhand.treasurerId),
+    // Preview gate passes extraExpenses → uncached fresh settlement WITH the hypothetical expense
+    // folded in; every real caller uses the cached settlement unchanged.
+    extraExpenses?.length
+      ? _getSettlement(householdId, periodId, inhand.treasurerId, extraExpenses)
+      : getSettlement(householdId, periodId, inhand.treasurerId),
     prisma.incomeEntry.findMany({ where: { periodId }, select: { id: true, ownerId: true, dueDay: true, amount: true, source: true, receivedAt: true } }),
     prisma.period.findUnique({ where: { id: periodId }, select: { year: true, month: true, status: true } }),
     prisma.household.findUnique({ where: { id: householdId }, select: { windDownDay: true } }),
