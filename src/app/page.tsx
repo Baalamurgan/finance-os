@@ -1,5 +1,5 @@
 import { redirect } from "next/navigation";
-import { formatINR } from "@/lib/format";
+import { formatINR, withShareCount } from "@/lib/format";
 import { categoryEmoji } from "@/lib/categoryEmoji";
 import { loadCommon } from "@/lib/load";
 import { getRollup, getWindDownPreview, getSkippedSetAsides, getProjectedPiggy, getInHand } from "@/lib/queries";
@@ -143,7 +143,7 @@ function ExpenseRow({
         : `This was the last set-aside before the bill — the shortfall will be paid out-of-pocket on the due month.`) +
       `\n\nIt won't come back on a rebuild; Setup stays the template.`;
   return (
-    <Row label={e.label} sub={e.category.name} emoji={categoryEmoji(e.category.name)} tag={e.member?.name} amount={e.amount} pinnedControl={e.pinned ? <PinnedBadge kind="expense" id={e.id} canEdit={canEditHere} /> : sheetSection(e) === "Misc" && e.note !== CARRY_NOTE ? <KeptTag title="Planned / added this month — kept through a Sheet refresh" /> : null}>
+    <Row label={withShareCount(e.label, e.category.billEveryMonths)} sub={e.category.name} emoji={categoryEmoji(e.category.name)} tag={e.member?.name} amount={e.amount} pinnedControl={e.pinned ? <PinnedBadge kind="expense" id={e.id} canEdit={canEditHere} /> : sheetSection(e) === "Misc" && e.note !== CARRY_NOTE ? <KeptTag title="Planned / added this month — kept through a Sheet refresh" /> : null}>
       {canEditHere && isSetAside && (
         <ConfirmForm action={skipSetAside} message={removeMsg}>
           <input type="hidden" name="categoryId" value={e.categoryId} />

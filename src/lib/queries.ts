@@ -6,6 +6,7 @@ import { LEFTOVER_NOTE, POOL_NOTE, POOL_BILL_NOTE, REMOVED_NOTE, isPoolNote } fr
 import { computeSettlement } from "@/lib/settlement-core";
 import { planBillMonth, isLumpDue, monthsUntilNextDue, type FundingStyle } from "@/lib/schedule";
 import { suggestCategoryName, normalizeItem, resolveCategoryId } from "@/lib/spendCategorize";
+import { withShareCount } from "@/lib/format";
 
 // Keywords that drive the on-save category suggestion: the household's LEARNED words
 // (SpendKeyword) plus its head-curated shortcuts (SpendShortcut, weighted high since
@@ -1557,7 +1558,7 @@ export async function getCategoryTrendRange(
 function diffKey(label: string): string {
   return label
     .replace(/\s*\d+\s*\/\s*\d+\s*$/, "") // installment counter "N/M"
-    .replace(/\((?:saving|monthly share)\)$/, "(share)") // set-aside variants
+    .replace(/\((?:saving|(?:\d+ )?monthly share)\)$/, "(share)") // set-aside variants (with/without cadence count)
     .trim();
 }
 
@@ -1615,8 +1616,8 @@ export async function getMonthChanges(householdId: number, periodId: number) {
   // Misc is one-off and churns every month, so it gets its own block rather than
   // flooding the main expense diff.
   const expense = diffByKey(
-    curExp.filter((e) => !isMisc(e)).map((e) => ({ label: e.label, amount: e.amount })),
-    prevExp.filter((e) => !isMisc(e)).map((e) => ({ label: e.label, amount: e.amount })),
+    curExp.filter((e) => !isMisc(e)).map((e) => ({ label: withShareCount(e.label, e.category?.billEveryMonths), amount: e.amount })),
+    prevExp.filter((e) => !isMisc(e)).map((e) => ({ label: withShareCount(e.label, e.category?.billEveryMonths), amount: e.amount })),
   );
   const misc = diffByKey(
     curExp.filter(isMisc).map((e) => ({ label: e.label, amount: e.amount })),

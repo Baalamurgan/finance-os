@@ -17,6 +17,15 @@ export function pctLabel(pct: number): string {
   return Math.round(pct) === 0 ? "<1%" : `${Math.round(pct)}%`;
 }
 
+// Display-only: annotate a set-aside label with its billing cadence so a fund's monthly
+// share reads "EB (2 monthly share)" / "WiFi (3 monthly share)" — the number is how many
+// months each bill spans (billEveryMonths). The STORED label stays "(monthly share)"
+// (matched by set-aside/settlement math in many places); this only rewrites what's shown.
+export function withShareCount(label: string, everyMonths: number | null | undefined): string {
+  if (everyMonths == null || everyMonths <= 1) return label;
+  return label.replace(/\(monthly share\)$/, `(${everyMonths} monthly share)`);
+}
+
 // Parse a human-typed rupee amount, tolerating Indian formatting: "1,00,000", "₹5,000",
 // spaces, stray commas. Returns NaN for genuinely empty/invalid input so callers keep
 // their existing `!amount` / `isNaN` guards. A strict widening of Number() — identical
