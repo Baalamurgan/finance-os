@@ -31,7 +31,7 @@ export async function generateMonth(
   const [period, items, cats, funds, pending, _skips, openPeriods] = await Promise.all([
     tx.period.findUnique({ where: { id: targetId }, select: { year: true, month: true } }),
     tx.recurringItem.findMany({ where: { householdId, active: true }, orderBy: { sortOrder: "asc" } }),
-    tx.category.findMany({ where: { householdId }, select: { id: true, name: true, tracked: true, sinking: true, onHold: true, necessary: true, monthlyBudget: true, responsibleMemberId: true, payerMemberId: true, billEveryMonths: true, billMonth: true, billAmount: true, fundingStyle: true, saveEveryMonths: true } }),
+    tx.category.findMany({ where: { householdId }, select: { id: true, name: true, tracked: true, sinking: true, onHold: true, necessary: true, monthlyBudget: true, responsibleMemberId: true, payerMemberId: true, billEveryMonths: true, billMonth: true, billAmount: true, fundingStyle: true, saveEveryMonths: true, miscCard: true, repeatYearly: true } }),
     tx.piggyEntry.groupBy({ by: ["categoryId"], where: { householdId, kind: "sinking" }, _sum: { amount: true } }),
     // set-asides in the CURRENT open month(s) that haven't accrued to the fund yet (accrual is at
     // wind-down) — count them so a draft's shares reflect what the fund WILL hold, not what it holds now.
@@ -131,6 +131,9 @@ export async function generateMonth(
   // categories also get a Budget envelope; flat fixed bills get the line only.
   for (const cat of cats) {
     if (cat.onHold || cat.monthlyBudget == null || cat.monthlyBudget <= 0) continue;
+    // Planned-misc spend cards are one-off (they live only in the month they were created) unless
+    // marked repeatYearly — then re-seed ONLY in their billMonth each year, like a yearly bill.
+    if (cat.miscCard && !(cat.repeatYearly && cat.billMonth === period?.month)) continue;
     const label = cat.sinking ? `${cat.name} (monthly share)` : cat.name;
     if (skipExp.has(expKey(cat.id, cat.responsibleMemberId, label))) continue; // head removed/pinned this envelope (Budget skipped too)
     await tx.expenseEntry.create({

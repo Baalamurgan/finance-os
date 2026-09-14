@@ -1421,6 +1421,52 @@ export async function createCategory(
   return { ok: true, n };
 }
 
+// Planned-misc spend card: create a budgeted (tracked, leftover→Piggy) category for THIS month
+// and materialise its envelope now — members then log spends into it like veggies/fuel, with the
+// usual payment-method + out-of-pocket → settlement, remaining → Piggy, overspend → carry. One-off
+// by default (never cloned forward); repeatYearly re-seeds it in this month each year (see
+// periodClone). Distinct from the ad-hoc Misc SPENDS, which are untouched.
+export type MiscCardState = { ok: boolean; n: number; error?: string };
+export async function addMiscSpendCard(prev: MiscCardState, formData: FormData): Promise<MiscCardState> {
+  const n = (prev?.n ?? 0) + 1;
+  const periodId = Number(formData.get("periodId"));
+  if (!periodId || !(await canEditNow(periodId))) return { ok: false, n, error: "This month can’t be edited." };
+  const name = String(formData.get("name") ?? "").trim().slice(0, 40);
+  const amount = parseAmount(formData.get("amount"));
+  if (!name || !amount || amount <= 0) return { ok: false, n, error: "Give the card a name and budget." };
+  const repeatYearly = formData.get("repeatYearly") === "on";
+  const memberRaw = String(formData.get("responsibleMemberId") ?? "").trim();
+  const responsibleMemberId = memberRaw === "" ? null : Number(memberRaw);
+  const period = await prisma.period.findUnique({ where: { id: periodId }, select: { householdId: true, month: true } });
+  if (!period) return { ok: false, n, error: "Month not found." };
+  // Same balance guard as adding an expense: the budget can't exceed the month's income − expense.
+  const [inc, exp] = await Promise.all([
+    prisma.incomeEntry.aggregate({ where: { periodId }, _sum: { amount: true } }),
+    prisma.expenseEntry.aggregate({ where: { periodId }, _sum: { amount: true } }),
+  ]);
+  const bal = (inc._sum.amount ?? 0) - (exp._sum.amount ?? 0);
+  if (amount > bal) return { ok: false, n, error: `That's more than the month's balance (${formatINR(bal)}).` };
+  try {
+    await prisma.$transaction(async (tx) => {
+      const cat = await tx.category.create({
+        data: {
+          householdId: period.householdId, name, section: "Misc", tracked: true,
+          monthlyBudget: amount, responsibleMemberId, miscCard: true, repeatYearly, billMonth: period.month,
+        },
+      });
+      // Materialise into the CURRENT month now (clone only seeds FUTURE months): envelope + budget,
+      // both, so the amount stays in sync (Sheet renders the envelope, spends draw the Budget).
+      await tx.expenseEntry.create({ data: { periodId, label: name, amount, categoryId: cat.id, memberId: responsibleMemberId, necessary: true, oneOff: false } });
+      await tx.budget.create({ data: { periodId, categoryId: cat.id, planned: amount } });
+    });
+  } catch {
+    return { ok: false, n, error: `"${name}" already exists.` };
+  }
+  await logActivity("expense", "created", `Added misc spend card “${name}” (${formatINR(amount)})${repeatYearly ? " · repeats yearly" : ""}`, periodId);
+  revalidateFamily();
+  return { ok: true, n };
+}
+
 // Delete a category — only if it has no expense rows (else suggest Hold). Cleans budgets/spends.
 export async function deleteCategory(formData: FormData) {
   if (!(await isHead())) return;

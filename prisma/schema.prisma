@@ -631,6 +631,11 @@ model Category {
   fundingStyle    String?     // auto | fixed | none  (null = not a bill-with-a-fund)
   saveEveryMonths Int?        // save cadence for auto funding: 1 | 2 | 3 | 6 (null → 1/monthly). Divides billEveryMonths.
   needsReview     Boolean        @default(false) // migrated rolling sinking fund whose due month is a guess — prompt user to confirm
+  // Planned-misc spend card: a budgeted (tracked, leftover→Piggy) category created for ONE month
+  // from the Misc add flow — members log spends into it like veggies/fuel. By default it is one-off
+  // (never cloned forward). If repeatYearly, the clone re-seeds it ONLY in billMonth each year.
+  miscCard     Boolean        @default(false)
+  repeatYearly Boolean        @default(false) // miscCard: re-seed every year in billMonth (else one-off)
   responsibleMemberId Int?     // budget: over-budget excess owner; bill-with-a-fund: the SAVER who sets aside the share & holds it (bears the cost)
   payerMemberId       Int?     // bill-with-a-fund: who physically PAYS the bill on its due month (null → same as the saver). Bill + fund credit tag to them → net ~0.
   onUnpaid    String         @default("carry") // bill-with-a-fund overdue behaviour: "carry" (unpaid share stays in the fund; nag in next month's In-Hand) | "skip" (subscription: release the held share back to general Piggy at wind-down)
