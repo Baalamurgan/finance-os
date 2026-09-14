@@ -3,8 +3,6 @@
 import { useEffect, useRef } from "react";
 import { lockNow } from "@/app/lock/actions";
 
-const KEY = "applock:hiddenAt";
-
 // Auto-lock the app back to the PIN — built for a sensitive finance PWA. Three behaviours:
 //  1. IDLE (foreground): after `thresholdMs` with no interaction the app locks ON ITS OWN — a
 //     running timer, reset on any interaction; no need to re-open the tab.
@@ -16,19 +14,33 @@ const KEY = "applock:hiddenAt";
 //     still can't set a native no-snapshot flag, but this is the strongest a PWA can do.
 //  3. AWAY: on return, if we were backgrounded longer than the threshold, lock. (Background tabs
 //     freeze their timers, so the idle timer can't run there — this covers that gap.)
-// Only active when a PIN is set.
-export function AutoLock({ enabled, thresholdMs = 300_000 }: { enabled: boolean; thresholdMs?: number }) {
+// Only active when a PIN is set. `lockAction` + `storageKey` let the SAME battle-tested locker serve
+// both the family app (default) and the personal app (its own lock action + storage key so the two
+// don't collide). The personal lock reuses this rather than a fresh timer — a naive personal timer
+// previously caused the lock loop (see personal-lock.ts).
+export function AutoLock({
+  enabled,
+  thresholdMs = 300_000,
+  lockAction = lockNow,
+  storageKey = "applock:hiddenAt",
+}: {
+  enabled: boolean;
+  thresholdMs?: number;
+  lockAction?: (next: string) => void | Promise<void>;
+  storageKey?: string;
+}) {
   const coverRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (!enabled) return;
+    const KEY = storageKey;
     const cover = coverRef.current;
     const showCover = () => { if (cover) cover.style.display = "flex"; };
     const hideCover = () => { if (cover) cover.style.display = "none"; };
 
     let timer: ReturnType<typeof setTimeout> | undefined;
     let lastReset = 0;
-    const lock = () => void lockNow(window.location.pathname + window.location.search);
+    const lock = () => void lockAction(window.location.pathname + window.location.search);
     const resetIdle = () => {
       const now = Date.now();
       if (timer && now - lastReset < 1000) return; // throttle chatty events (pointermove/scroll)
@@ -90,7 +102,7 @@ export function AutoLock({ enabled, thresholdMs = 300_000 }: { enabled: boolean;
       window.removeEventListener("blur", showCover);
       window.removeEventListener("focus", hideCover);
     };
-  }, [enabled, thresholdMs]);
+  }, [enabled, thresholdMs, lockAction, storageKey]);
 
   // Always in the DOM (hidden by default) so it can be revealed synchronously — no React re-render
   // between "app backgrounded" and "cover shown". Sits above everything (modals included).

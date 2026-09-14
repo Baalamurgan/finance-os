@@ -3,10 +3,11 @@
 import Link from "next/link";
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { exitToFamily } from "@/app/personal/lock/actions";
+import { exitToFamily, lockPersonalNow } from "@/app/personal/lock/actions";
 import { CardDueHighAlert } from "@/components/personal/CardDueHighAlert";
 import { RemindersBell } from "@/components/personal/RemindersBell";
 import { PersonalDock } from "@/components/personal/PersonalDock";
+import { AutoLock } from "@/components/AutoLock";
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
@@ -48,6 +49,10 @@ export function PersonalNav({
 
   return (
     <>
+      {/* Inactivity auto-lock for the personal app — reuses the family locker but routes to the
+          PERSONAL lock (its own action + storage key). Personal entry always requires the PIN, so
+          it's always enabled here. */}
+      <AutoLock enabled lockAction={lockPersonalNow} storageKey="personal:hiddenAt" />
       <CardDueHighAlert context="personal" />
       <header className="sticky top-0 z-40 border-b border-emerald-100 bg-emerald-50/90 backdrop-blur">
         <div className="mx-auto flex max-w-3xl flex-nowrap items-center gap-x-2 px-4 py-2.5 sm:flex-wrap sm:gap-x-3 sm:py-3 sm:px-6">

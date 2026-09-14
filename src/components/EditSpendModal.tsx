@@ -5,9 +5,10 @@ import { createPortal } from "react-dom";
 import { editSpendAction, type EditSpendState } from "@/app/actions";
 
 type Mem = { id: number; name: string };
+type Card = { id: number; name: string; ownerId: number; ownerName: string; last4: string | null; type: string; color: string };
 
-// Edit a spend in place: same card (category) and same date, just corrected data.
-// A pencil on the spend row opens this; head edits anyone's, owner edits their own.
+// Edit a spend in place: same category and date, corrected data — and now the payment method too
+// (cash/UPI or a family card). A pencil on the spend row opens this; head edits anyone's, owner their own.
 export function EditSpendModal({
   spend,
   categoryName,
@@ -15,19 +16,23 @@ export function EditSpendModal({
   subCategories,
   isHead,
   members,
+  cards = [],
 }: {
-  spend: { id: number; label: string; amount: number; memberId: number | null; subCategory: string | null };
+  spend: { id: number; label: string; amount: number; memberId: number | null; subCategory: string | null; cardAccountId?: number | null };
   categoryName: string;
   isMisc: boolean;
   subCategories?: { name: string; icon: string }[];
   isHead: boolean;
   members?: Mem[];
+  cards?: Card[];
 }) {
   const [open, setOpen] = useState(false);
   const [mounted, setMounted] = useState(false);
   const [subCategory, setSubCategory] = useState(spend.subCategory ?? "");
+  const [cardId, setCardId] = useState<number | null>(spend.cardAccountId ?? null);
   const [state, formAction, pending] = useActionState<EditSpendState, FormData>(editSpendAction, { ok: false, n: 0 });
   const prevN = useRef(0);
+  const selectedCard = cardId != null ? cards.find((c) => c.id === cardId) : undefined;
 
   useEffect(() => setMounted(true), []);
   useEffect(() => {
@@ -51,7 +56,7 @@ export function EditSpendModal({
     <>
       <button
         type="button"
-        onClick={() => { setSubCategory(spend.subCategory ?? ""); setOpen(true); }}
+        onClick={() => { setSubCategory(spend.subCategory ?? ""); setCardId(spend.cardAccountId ?? null); setOpen(true); }}
         aria-label="Edit spend"
         className="flex h-9 w-9 items-center justify-center rounded-lg text-base text-slate-300 hover:bg-indigo-50 hover:text-indigo-600"
       >
@@ -131,7 +136,42 @@ export function EditSpendModal({
                     />
                   </div>
 
-                  {isHead && members && members.length > 0 && (
+                  {/* Paid with — Cash/UPI or a family card. A card re-attributes the spend to its OWNER. */}
+                  <input type="hidden" name="cardAccountId" value={cardId ?? ""} />
+                  {cards.length > 0 && (
+                    <div>
+                      <label className="text-sm font-medium text-slate-600">Paid with</label>
+                      <div className="mt-1.5 grid grid-cols-2 gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setCardId(null)}
+                          className={`min-h-12 rounded-xl border-2 px-3 py-2.5 text-left text-sm font-medium transition ${cardId === null ? "border-indigo-500 bg-indigo-50 text-indigo-700" : "border-slate-200 text-slate-600 active:border-slate-400"}`}
+                        >
+                          💵 Cash / UPI
+                        </button>
+                        {cards.map((cCard) => (
+                          <button
+                            key={cCard.id}
+                            type="button"
+                            onClick={() => setCardId(cCard.id)}
+                            className={`min-h-12 rounded-xl border-2 px-3 py-2.5 text-left transition ${cardId === cCard.id ? "border-indigo-500 bg-indigo-50" : "border-slate-200 active:border-slate-400"}`}
+                          >
+                            <span className="flex items-center gap-1.5 text-sm font-medium text-slate-700">
+                              <span className="inline-block h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: cCard.color }} />
+                              <span className="truncate">💳 {cCard.name}{cCard.last4 ? ` ··${cCard.last4}` : ""}</span>
+                            </span>
+                            <span className="mt-0.5 block truncate text-[11px] text-slate-400">{cCard.ownerName} · {cCard.type === "credit_card" ? "credit" : cCard.type === "prepaid_card" ? "prepaid" : "debit"}</span>
+                          </button>
+                        ))}
+                      </div>
+                      {selectedCard && (
+                        <p className="mt-1.5 text-xs text-violet-600">Counts as {selectedCard.ownerName}&apos;s spend (card owner).</p>
+                      )}
+                    </div>
+                  )}
+
+                  {/* head-only "who spent" — hidden when a card is chosen (the owner is the payer) */}
+                  {cardId == null && isHead && members && members.length > 0 && (
                     <div>
                       <label className="text-sm font-medium text-slate-600">Who spent</label>
                       <select

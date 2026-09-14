@@ -1102,30 +1102,41 @@ export async function editSpendAction(
   if (misc && !(household && (await getMiscSubCategories(household.id)).some((s) => s.name === subRaw))) return prev;
   const subCategory = misc ? subRaw : null;
 
-  // Only the head may reassign who spent (incl. "Shared" = null); the owner's stays put.
-  // Non-head has no selector, so its field is absent → keep the existing attribution.
+  // Payment mode can change on edit: cash/UPI or a family card. A valid card re-attributes the spend to
+  // its OWNER (regardless of who logged it); the field is only present when the household has cards.
+  let cardAccountId: number | null = null;
+  let cardOwnerId: number | null = null;
+  const rawCard = Number(formData.get("cardAccountId")) || 0;
+  if (rawCard) {
+    const card = await prisma.financeAccount.findUnique({ where: { id: rawCard }, select: { memberId: true, active: true, member: { select: { householdId: true } } } });
+    if (card && card.active && household && card.member.householdId === household.id) {
+      cardAccountId = rawCard;
+      cardOwnerId = card.memberId;
+    }
+  }
+
+  // Attribution: a card spend is always the card OWNER's. Cash: the head may reassign who spent
+  // (incl. "Shared" = null); otherwise keep the existing attribution.
   let memberId = spend.memberId;
-  if (isHead && formData.has("memberId")) {
+  if (cardAccountId != null) {
+    memberId = cardOwnerId;
+  } else if (isHead && formData.has("memberId")) {
     const raw = String(formData.get("memberId") ?? "");
     memberId = raw === "" ? null : Number(raw) || null;
   }
-  // A card spend is always the card owner's — don't let an edit reassign it away from the owner.
-  if (spend.cardAccountId != null) memberId = spend.memberId;
 
   // createdAt is intentionally left untouched — the date of spend stays as it was.
-  await prisma.spend.update({ where: { id }, data: { label, amount, subCategory, memberId } });
-  // Keep the card-ledger mirror in sync (see doAddSpend) — both credit and debit cards. The card can't
-  // change on edit, so we only reconcile amount/merchant. upsert covers spends made before this feature
-  // existed (create if missing).
-  if (spend.cardAccountId != null) {
-    const card = await prisma.financeAccount.findUnique({ where: { id: spend.cardAccountId }, select: { memberId: true } });
-    if (card) {
-      await prisma.accountTransaction.upsert({
-        where: { familySpendId: id },
-        update: { amount, merchant: label },
-        create: { memberId: card.memberId, accountId: spend.cardAccountId, date: spend.createdAt, merchant: label, amount, type: "spend", source: "family", familySpendId: id },
-      });
-    }
+  await prisma.spend.update({ where: { id }, data: { label, amount, subCategory, memberId, cardAccountId } });
+  // Re-sync the card-ledger mirror (see doAddSpend). On a card now → upsert on that card/owner; moved to
+  // cash or to a different card → the upsert re-points it, and switching to cash removes it entirely.
+  if (cardAccountId != null && cardOwnerId != null) {
+    await prisma.accountTransaction.upsert({
+      where: { familySpendId: id },
+      update: { amount, merchant: label, accountId: cardAccountId, memberId: cardOwnerId },
+      create: { memberId: cardOwnerId, accountId: cardAccountId, date: spend.createdAt, merchant: label, amount, type: "spend", source: "family", familySpendId: id },
+    });
+  } else {
+    await prisma.accountTransaction.deleteMany({ where: { familySpendId: id } });
   }
   await logActivity("spend", "updated", `Edited spend “${label}” ${formatINR(amount)}`, spend.periodId);
   revalidateFamily();

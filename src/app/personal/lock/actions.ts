@@ -96,6 +96,16 @@ export async function setPersonalPin(
   return { ok: true };
 }
 
+// Auto/manual re-lock the PERSONAL app (mirror of the family lockNow) — clears the personal unlock and
+// routes to /personal/lock, remembering where the user was so unlocking returns them there. `next` is a
+// string from AutoLock (the current path) or FormData from a form button (→ no destination).
+export async function lockPersonalNow(next?: string | FormData): Promise<void> {
+  await clearPersonalUnlock();
+  const raw = typeof next === "string" ? next : null;
+  const safe = raw && raw.startsWith("/") && !raw.startsWith("//") && !raw.startsWith("/personal/lock") ? raw : null;
+  redirect(safe ? `/personal/lock?next=${encodeURIComponent(safe)}` : "/personal/lock");
+}
+
 // Switch back to the Family app — clears the personal unlock so re-entry re-asks.
 export async function exitToFamily(): Promise<void> {
   await clearPersonalUnlock();

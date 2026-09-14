@@ -848,7 +848,7 @@ export async function getTrackedExpenses(householdId: number, periodId: number) 
     prisma.budget.findMany({ where: { periodId } }),
     prisma.spend.findMany({
       where: { periodId },
-      include: { member: true, category: true },
+      include: { member: true, category: true, cardAccount: { select: { name: true, color: true, last4: true, type: true } } },
       orderBy: { createdAt: "desc" },
     }),
     getSinkingBalances(householdId),

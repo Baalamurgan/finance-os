@@ -1,6 +1,6 @@
 import { formatINR } from "@/lib/format";
 import { loadCommon } from "@/lib/load";
-import { getTrackedExpenses, getMiscReview, getSpendActivity } from "@/lib/queries";
+import { getTrackedExpenses, getMiscReview, getSpendActivity, getFamilyCards } from "@/lib/queries";
 import { NavHeader } from "@/components/NavHeader";
 import { SpendActivity } from "@/components/SpendActivity";
 import { AddSpendModal } from "@/components/AddSpendModal";
@@ -68,6 +68,10 @@ export default async function ExpensesPage({
 
   const { cards: rawCards, totalAllocation, totalSpent, totalRemaining, miscSpent } =
     await getTrackedExpenses(c.household.id, c.selected.id);
+  // Family cards for the "Paid with" picker on the edit-spend modal.
+  const familyCards = (await getFamilyCards(c.household.id)).map((fc) => ({
+    id: fc.id, name: fc.name, ownerId: fc.memberId, ownerName: fc.member.name, last4: fc.last4, type: fc.type, color: fc.color,
+  }));
 
   // Apply the chosen sort (and optional per-member filter, e.g. arriving from Settlement)
   // to each card's spend list. Totals above stay on the full month — filtering is view-only.
@@ -188,6 +192,7 @@ export default async function ExpensesPage({
               currentMemberId={c.currentMember?.id}
               subCats={c.miscSubCategories}
               filterMemberName={filterMemberName}
+              cards={familyCards}
             />
           ))}
         </div>
@@ -221,6 +226,7 @@ export default async function ExpensesPage({
                     currentMemberId={c.currentMember?.id}
                     subCats={c.miscSubCategories}
                     filterMemberName={filterMemberName}
+                    cards={familyCards}
                   />
                 ))}
               </div>
@@ -259,6 +265,7 @@ function SpendCard({
   currentMemberId,
   filterMemberName,
   subCats,
+  cards,
 }: {
   card: SpendCardData;
   open: boolean;
@@ -268,6 +275,7 @@ function SpendCard({
   currentMemberId?: number | null;
   filterMemberName?: string | null;
   subCats: { name: string; icon: string }[];
+  cards?: { id: number; name: string; ownerId: number; ownerName: string; last4: string | null; type: string; color: string }[];
 }) {
   const pct = card.allocation > 0 ? Math.min((card.spent / card.allocation) * 100, 100) : 0;
   const owner = card.responsibleMemberId != null ? members.find((m) => m.id === card.responsibleMemberId)?.name ?? null : null;
@@ -400,6 +408,12 @@ function SpendCard({
                     {s.member?.name ?? "Shared"} ·{" "}
                     {new Date(s.createdAt).toLocaleDateString("en-IN", { day: "numeric", month: "short" })}
                   </span>
+                  {s.cardAccount && (
+                    <span className="inline-flex items-center gap-1 text-violet-600">
+                      <span className="inline-block h-2 w-2 rounded-full" style={{ backgroundColor: s.cardAccount.color }} aria-hidden />
+                      💳 {s.cardAccount.name}{s.cardAccount.last4 ? ` ··${s.cardAccount.last4}` : ""}
+                    </span>
+                  )}
                   {isMisc && (
                     <SpendSubCategoryPicker
                       id={s.id}
@@ -415,12 +429,13 @@ function SpendCard({
               <span className="tabular-nums text-slate-700">{formatINR(s.amount)}</span>
               {open && (isHead || s.memberId === currentMemberId) && (
                 <EditSpendModal
-                  spend={{ id: s.id, label: s.label, amount: s.amount, memberId: s.memberId, subCategory: s.subCategory }}
+                  spend={{ id: s.id, label: s.label, amount: s.amount, memberId: s.memberId, subCategory: s.subCategory, cardAccountId: s.cardAccountId }}
                   categoryName={card.name}
                   isMisc={isMisc}
                   subCategories={isMisc ? subCats : undefined}
                   isHead={isHead}
                   members={members}
+                  cards={cards}
                 />
               )}
               {open && <SpendDeleteButton id={s.id} />}

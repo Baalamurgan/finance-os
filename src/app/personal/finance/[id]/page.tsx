@@ -7,8 +7,8 @@ import { getCardDues } from "@/lib/personal/cash";
 import { PersonalNav } from "@/components/personal/PersonalNav";
 import { CardDuesStrip } from "@/components/personal/CardDuesStrip";
 import { ConfirmForm } from "@/components/ConfirmForm";
-import { setCreditConfig, deleteTransaction, addManualTransaction, topUpCard } from "@/app/personal/finance/actions";
-import { TXN_TYPES, BALANCE_ACCOUNT_TYPES } from "@/lib/finance/types";
+import { setCreditConfig, deleteTransaction, addManualTransaction, topUpCard, updateAccount, deleteAccount } from "@/app/personal/finance/actions";
+import { TXN_TYPES, BALANCE_ACCOUNT_TYPES, CARD_NETWORKS } from "@/lib/finance/types";
 
 const fmtDate = (d: Date | null) =>
   d ? d.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" }) : "—";
@@ -40,7 +40,7 @@ export default async function CreditCardDetail({
       <PersonalNav active="finance" name={c.account.name} selYear={c.selYear} selMonth={c.selMonth} financeDue={c.cardReminders.length > 0} />
       <main className="mx-auto max-w-3xl space-y-5 p-4 pb-24 sm:p-6">
         <div>
-          <Link href="/personal/finance" className="text-xs font-medium text-emerald-700 hover:underline">← All cards</Link>
+          <Link href="/personal/finance?tab=cards" className="text-xs font-medium text-emerald-700 hover:underline">← All cards</Link>
           <div className="mt-1 flex items-center gap-2">
             <span className="h-3.5 w-3.5 rounded-full" style={{ background: account.color }} />
             <h1 className="text-xl font-bold text-slate-900">{account.name}</h1>
@@ -146,6 +146,53 @@ export default async function CreditCardDetail({
           </form>
         </details>
         </>)}
+
+        {/* edit / delete card — all card types */}
+        <details className="rounded-xl border border-slate-200 bg-white">
+          <summary className="cursor-pointer list-none px-4 py-3 text-sm font-semibold text-slate-800 [&::-webkit-details-marker]:hidden">
+            ✏️ Edit card
+          </summary>
+          <form action={updateAccount} className="grid grid-cols-1 gap-3 border-t border-slate-100 p-4 sm:grid-cols-2">
+            <input type="hidden" name="id" value={account.id} />
+            <label className="text-xs font-medium text-slate-500 sm:col-span-2">Card name
+              <input name="name" defaultValue={account.name} required className="input mt-1 w-full" />
+            </label>
+            <label className="text-xs font-medium text-slate-500">Bank / issuer
+              <input name="institution" defaultValue={account.institution ?? ""} className="input mt-1 w-full" />
+            </label>
+            <label className="text-xs font-medium text-slate-500">Network
+              <select name="network" defaultValue={account.network ?? ""} className="input mt-1 w-full">
+                <option value="">—</option>
+                {CARD_NETWORKS.map((nw) => <option key={nw} value={nw}>{nw[0].toUpperCase() + nw.slice(1)}</option>)}
+              </select>
+            </label>
+            <label className="text-xs font-medium text-slate-500">Last 4 digits
+              <input name="last4" inputMode="numeric" maxLength={4} defaultValue={account.last4 ?? ""} className="input mt-1 w-full" />
+            </label>
+            <label className="text-xs font-medium text-slate-500">Colour
+              <input name="color" type="color" defaultValue={account.color} className="mt-1 h-9 w-full rounded-lg border border-slate-200" />
+            </label>
+            {isBalance && (
+              <label className="text-xs font-medium text-slate-500 sm:col-span-2">Opening balance (₹)
+                <input name="openingBalance" inputMode="numeric" defaultValue={account.openingBalance ?? 0} className="input mt-1 w-full" />
+                <span className="mt-1 block text-[11px] text-slate-400">A correction to the starting point — top-ups and spends adjust from here.</span>
+              </label>
+            )}
+            <label className="flex items-center gap-2 text-xs font-medium text-slate-600 sm:col-span-2">
+              <input type="checkbox" name="active" defaultChecked={account.active} className="h-4 w-4 accent-emerald-600" />
+              Active (show it in the &ldquo;Paid with&rdquo; picker)
+            </label>
+            <div className="flex items-center justify-between sm:col-span-2">
+              <button className="rounded-lg bg-emerald-600 px-4 py-1.5 text-sm font-semibold text-white hover:bg-emerald-700">Save</button>
+            </div>
+          </form>
+          <div className="border-t border-slate-100 p-4">
+            <ConfirmForm action={deleteAccount} message={`Delete “${account.name}”? Its transactions are removed too. Family spends made on it keep their attribution.`}>
+              <input type="hidden" name="id" value={account.id} />
+              <button className="rounded-lg border border-red-200 px-3 py-1.5 text-sm font-medium text-red-600 hover:bg-red-50">Delete card</button>
+            </ConfirmForm>
+          </div>
+        </details>
 
         {/* transactions */}
         <section className="rounded-xl border border-slate-200 bg-white">
