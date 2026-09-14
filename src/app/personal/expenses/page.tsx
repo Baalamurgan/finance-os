@@ -40,7 +40,7 @@ export default async function PersonalExpenses({
     getPersonalCash(period),
     getCardDues(c.member.id),
     getBalanceCards(c.member.id),
-    prisma.personalSpend.findMany({ where: { periodId: period.id }, orderBy: [{ date: "desc" }, { id: "desc" }] }),
+    prisma.personalSpend.findMany({ where: { periodId: period.id }, orderBy: [{ date: "desc" }, { id: "desc" }], include: { splitLoans: true } }),
     getPersonalLending(c.member.id),
   ]);
   const { personalExpense, netSpent, canSpend } = cash;
@@ -65,14 +65,37 @@ export default async function PersonalExpenses({
     ...(canSpend > 0 ? [{ name: "Can spend", value: canSpend, color: "#22c55e" }] : []),
   ].filter((s) => s.value > 0);
 
-  const spendsForClient = spends.map((s) => ({
-    id: s.id,
-    categoryId: s.categoryId,
-    amount: s.amount,
-    note: s.note,
-    date: s.date.toISOString(),
-    cardAccountId: s.cardAccountId,
-  }));
+  const r2 = (n: number) => Math.round(n * 100) / 100;
+  const spendsForClient = spends.map((s) => {
+    // Split/reimbursement summary (Model A): start at YOUR share, assuming everyone pays. A
+    // receivable that's deleted (they won't pay) is borne back onto your spend; received/settled
+    // ones just drop off the count. `toCome` is what's still expected from the still-open people.
+    let split: { kind: "split" | "reimburse"; youSpent: number; people: number; toCome: number; borne: number } | undefined;
+    if (s.sharedOthers != null) {
+      const myShare = r2(s.amount - s.sharedOthers);
+      const loans = s.splitLoans;
+      const existingTotal = r2(loans.reduce((t, l) => t + l.amount, 0));
+      const borne = Math.max(0, r2(s.sharedOthers - existingTotal)); // receivables that were deleted → you eat them
+      const open = loans.filter((l) => l.status === "open");
+      const toCome = r2(open.reduce((t, l) => t + l.outstanding, 0));
+      split = {
+        kind: myShare <= 0.005 ? "reimburse" : "split",
+        youSpent: r2(myShare + borne),
+        people: open.length,
+        toCome,
+        borne,
+      };
+    }
+    return {
+      id: s.id,
+      categoryId: s.categoryId,
+      amount: s.amount,
+      note: s.note,
+      date: s.date.toISOString(),
+      cardAccountId: s.cardAccountId,
+      split,
+    };
+  });
 
   return (
     <>

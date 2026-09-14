@@ -6,7 +6,8 @@ import { PersonalSpendRowActions } from "@/components/personal/PersonalSpendRowA
 
 type Cat = { id: number; name: string; icon: string | null };
 type Card = { id: number; name: string; color: string };
-type Spend = { id: number; categoryId: number; amount: number; note: string | null; date: string; cardAccountId: number | null };
+type Split = { kind: "split" | "reimburse"; youSpent: number; people: number; toCome: number; borne: number };
+type Spend = { id: number; categoryId: number; amount: number; note: string | null; date: string; cardAccountId: number | null; split?: Split };
 
 export function PersonalSpendsView({
   spends,
@@ -32,6 +33,30 @@ export function PersonalSpendsView({
     );
   }
 
+  // Cute split/reimbursement summary under a spend. For a split it shows what YOU actually
+  // spent (your share, plus any share you had to bear when someone's receivable was dropped)
+  // and how many people still owe you; for a reimbursement, what's still to come back.
+  const SplitBadge = ({ split }: { split: Split }) => {
+    if (split.kind === "reimburse") {
+      const label = split.toCome > 0.005
+        ? `${formatINR(split.toCome)} to receive back`
+        : split.borne > 0.005 ? `not received · you bore ${formatINR(split.borne)}` : "received back ✓";
+      return (
+        <span className="mt-1 inline-flex items-center gap-1 rounded-full bg-sky-50 px-1.5 py-0.5 text-[10px] font-medium text-sky-700">
+          ↩️ {label}
+        </span>
+      );
+    }
+    return (
+      <span className="mt-1 inline-flex items-center gap-1 rounded-full bg-emerald-50 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700">
+        🤝 You {formatINR(split.youSpent)}
+        {split.people > 0 && <span className="text-emerald-500">· split with {split.people}</span>}
+        {split.toCome > 0.005 && <span className="text-emerald-500">· {formatINR(split.toCome)} to come</span>}
+        {split.people === 0 && split.toCome <= 0.005 && <span className="text-emerald-500">· settled</span>}
+      </span>
+    );
+  };
+
   const Row = ({ s, showCat }: { s: Spend; showCat?: boolean }) => {
     const cat = catMap.get(s.categoryId);
     const card = s.cardAccountId != null ? cardMap.get(s.cardAccountId) : undefined;
@@ -50,6 +75,7 @@ export function PersonalSpendsView({
             {showCat && cat ? `${cat.icon ?? ""} ${cat.name} · ` : ""}
             {dateStr(s.date)}
           </div>
+          {s.split && <SplitBadge split={s.split} />}
         </div>
         <div className="flex items-center gap-2 pl-2">
           <span className={`tabular-nums ${card ? "text-slate-400" : "text-slate-700"}`}>{formatINR(s.amount)}</span>

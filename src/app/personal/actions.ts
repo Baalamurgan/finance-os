@@ -305,6 +305,7 @@ export async function addPersonalSpend(
         data: {
           memberId: member.id, direction: "lent", counterparty: s.name,
           amount: s.amount, outstanding: s.amount, note, sharedPaid: amount, sharedShare: myShare,
+          spendId: created.id,
         },
       });
     }
@@ -314,6 +315,7 @@ export async function addPersonalSpend(
         data: {
           memberId: member.id, direction: "lent", counterparty: note,
           amount, outstanding: amount, note, sharedPaid: amount, sharedShare: 0,
+          spendId: created.id,
         },
       });
     }

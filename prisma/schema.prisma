@@ -322,6 +322,9 @@ model PersonalSpend {
   // Ledger mirror on a debit/prepaid card (see AccountTransaction.personalSpendId). Credit-card spends
   // stay tag-only for now (their dues run through getCardDues); balance cards post a real ledger line.
   ledgerTxn  AccountTransaction? @relation("PersonalSpendLedger")
+  // Receivables created from a split/reimbursement of THIS spend (one per person owing, or one for a
+  // full reimbursement). Lets the spend row show your real out-of-pocket as people pay / are dropped.
+  splitLoans PersonalLoan[]  @relation("SpendSplits")
   createdAt  DateTime @default(now())
 }
 
@@ -340,6 +343,10 @@ model PersonalLoan {
   // sharedPaid != null marks such a loan (manual lends leave these null).
   sharedPaid   Float?   // the full amount paid on the shared spend
   sharedShare  Float?   // the member's own share of it
+  // The spend this receivable was split/reimbursed from (null for manual lends). SetNull so
+  // deleting the spend leaves the receivable standing (you're still owed the money).
+  spend        PersonalSpend? @relation("SpendSplits", fields: [spendId], references: [id], onDelete: SetNull)
+  spendId      Int?
   createdAt    DateTime @default(now())
 }
 
