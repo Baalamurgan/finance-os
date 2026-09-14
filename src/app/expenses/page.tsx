@@ -411,7 +411,7 @@ function SpendCard({
                   {s.cardAccount && (
                     <span className="inline-flex items-center gap-1 text-violet-600">
                       <span className="inline-block h-2 w-2 rounded-full" style={{ backgroundColor: s.cardAccount.color }} aria-hidden />
-                      💳 {s.cardAccount.name}{s.cardAccount.last4 ? ` ··${s.cardAccount.last4}` : ""}
+                      💳 {s.cardAccount.name}{s.cardAccount.last4 ? ` XX${s.cardAccount.last4}` : ""}
                     </span>
                   )}
                   {isMisc && (

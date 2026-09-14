@@ -158,7 +158,7 @@ export function EditSpendModal({
                           >
                             <span className="flex items-center gap-1.5 text-sm font-medium text-slate-700">
                               <span className="inline-block h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: cCard.color }} />
-                              <span className="truncate">💳 {cCard.name}{cCard.last4 ? ` ··${cCard.last4}` : ""}</span>
+                              <span className="truncate">💳 {cCard.name}{cCard.last4 ? ` XX${cCard.last4}` : ""}</span>
                             </span>
                             <span className="mt-0.5 block truncate text-[11px] text-slate-400">{cCard.ownerName} · {cCard.type === "credit_card" ? "credit" : cCard.type === "prepaid_card" ? "prepaid" : "debit"}</span>
                           </button>

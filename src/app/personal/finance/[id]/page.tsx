@@ -46,7 +46,7 @@ export default async function CreditCardDetail({
             <h1 className="text-xl font-bold text-slate-900">{account.name}</h1>
           </div>
           <p className="text-xs text-slate-400">
-            {[account.institution, account.network?.toUpperCase(), account.last4 && `•• ${account.last4}`].filter(Boolean).join(" · ") || typeLabel}
+            {[account.institution, account.network?.toUpperCase(), account.last4 && `XX${account.last4}`].filter(Boolean).join(" · ") || typeLabel}
           </p>
         </div>
 

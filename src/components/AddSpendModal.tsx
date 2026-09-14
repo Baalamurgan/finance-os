@@ -53,7 +53,7 @@ export function AddSpendModal({
   // "Paid with": Cash + the one most-used card as quick chips; every other card lives in a dropdown.
   const featuredCard = cards.find((c) => c.id === topCardId) ?? cards[0];
   const otherCards = cards.filter((c) => c.id !== featuredCard?.id);
-  const cardLabel = (c: Card) => `${c.name}${c.last4 ? ` ··${c.last4}` : ""} — ${c.ownerName} · ${c.type === "credit_card" ? "credit" : "debit"}`;
+  const cardLabel = (c: Card) => `${c.name}${c.last4 ? ` XX${c.last4}` : ""} — ${c.ownerName} · ${c.type === "credit_card" ? "credit" : "debit"}`;
   // Misc (Personal/Misc) spends must carry a reporting sub-category (Food, Travel…).
   const selectedCat = fixedCategory ?? categories?.find((c) => c.id === categoryId);
   const isMiscSelected = !!selectedCat?.misc && !!subCategories?.length;
@@ -341,7 +341,7 @@ export function AddSpendModal({
                           >
                             <span className="flex items-center gap-1.5 text-sm font-medium text-slate-700">
                               <span className="inline-block h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: featuredCard.color }} />
-                              <span className="truncate">💳 {featuredCard.name}{featuredCard.last4 ? ` ··${featuredCard.last4}` : ""}</span>
+                              <span className="truncate">💳 {featuredCard.name}{featuredCard.last4 ? ` XX${featuredCard.last4}` : ""}</span>
                             </span>
                             <span className="mt-0.5 block truncate text-[11px] text-slate-400">{featuredCard.ownerName} · {featuredCard.type === "credit_card" ? "credit" : "debit"}</span>
                           </button>

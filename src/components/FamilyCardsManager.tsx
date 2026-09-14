@@ -69,7 +69,7 @@ export function FamilyCardsManager({
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-1.5 text-sm font-semibold text-slate-800">
                     <span className="truncate">{c.name}</span>
-                    {c.last4 && <span className="text-xs font-normal text-slate-400">··{c.last4}</span>}
+                    {c.last4 && <span className="text-xs font-normal text-slate-400">XX{c.last4}</span>}
                     {!c.active && <span className="rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-500">hidden</span>}
                   </div>
                   <div className="truncate text-xs text-slate-500">

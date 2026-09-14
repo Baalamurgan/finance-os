@@ -151,7 +151,7 @@ export default async function FinancePage({
                     <div>
                       <div className="text-sm font-medium text-slate-800">{account.name}</div>
                       <div className="text-[11px] text-slate-400">
-                        {[typeLabel, account.institution, account.last4 && `•• ${account.last4}`].filter(Boolean).join(" · ")}
+                        {[typeLabel, account.institution, account.last4 && `XX${account.last4}`].filter(Boolean).join(" · ")}
                       </div>
                     </div>
                   </div>
