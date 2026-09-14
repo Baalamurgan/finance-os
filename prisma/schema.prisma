@@ -162,7 +162,8 @@ model Member {
   aiModel                  String?   // chosen model id for that provider
   incomes     IncomeEntry[]
   expenses    ExpenseEntry[]
-  spends      Spend[]
+  spends      Spend[]      @relation("SpendMember")
+  spendsLogged Spend[]     @relation("SpendLoggedBy")
   webauthnCreds WebAuthnCredential[]
   personalCategories PersonalCategory[]
   personalPeriods    PersonalPeriod[]
@@ -738,8 +739,13 @@ model Spend {
   periodId   Int
   category   Category @relation(fields: [categoryId], references: [id])
   categoryId Int
-  member     Member?  @relation(fields: [memberId], references: [id])
+  member     Member?  @relation("SpendMember", fields: [memberId], references: [id])
   memberId   Int?
+  // Who actually LOGGED this spend (the authenticated member). The head can log for another member,
+  // and a family-card spend attributes to the card owner — so the logger and `member` (whom it's
+  // filed under) can differ. Null for spends created before this was tracked. SetNull on member delete.
+  loggedBy   Member?  @relation("SpendLoggedBy", fields: [loggedById], references: [id], onDelete: SetNull)
+  loggedById Int?
   // Paid with a family card (a FinanceAccount) instead of cash/UPI. Null = cash/UPI. When set, the spend
   // is attributed to the card's OWNER (memberId = account.memberId) — the card is the authority on who
   // paid. onDelete: SetNull so removing a card leaves past spends intact (they keep memberId).

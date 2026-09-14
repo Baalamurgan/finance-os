@@ -1679,16 +1679,17 @@ export async function getMoneyPlanActivity(periodId: number): Promise<MoneyPlanA
 // spends that were seeded/imported or logged before activity-logging existed still show. Shown at the
 // bottom of the Spends tab (this is the per-month spend visibility that used to sit in the head-only
 // "Member activity log", now open to everyone). Scoped to one month, so no cap is needed.
-export type SpendActivityItem = { id: number; memberName: string | null; label: string; category: string; amount: number; at: Date; card: { name: string; last4: string | null; color: string } | null };
+export type SpendActivityItem = { id: number; memberName: string | null; loggedByName: string | null; label: string; category: string; amount: number; at: Date; card: { name: string; last4: string | null; color: string } | null };
 export async function getSpendActivity(periodId: number): Promise<SpendActivityItem[]> {
   const rows = await prisma.spend.findMany({
     where: { periodId },
     orderBy: [{ createdAt: "desc" }, { id: "desc" }],
-    include: { member: { select: { name: true } }, category: { select: { name: true } }, cardAccount: { select: { name: true, last4: true, color: true } } },
+    include: { member: { select: { name: true } }, loggedBy: { select: { name: true } }, category: { select: { name: true } }, cardAccount: { select: { name: true, last4: true, color: true } } },
   });
   return rows.map((s) => ({
     id: s.id,
     memberName: s.member?.name ?? null,
+    loggedByName: s.loggedBy?.name ?? null, // who actually logged it (null for pre-tracking spends)
     label: s.label,
     category: s.category?.name ?? "",
     amount: s.amount,

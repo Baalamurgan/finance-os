@@ -36,6 +36,12 @@ export function SpendActivity({ items }: { items: SpendActivityItem[] }) {
                     💳 {it.card.name}{it.card.last4 ? ` XX${it.card.last4}` : ""}
                   </span>
                 )}
+                {/* logged for someone else (head-added, or paid with another member's card) */}
+                {it.loggedByName && it.loggedByName !== it.memberName && (
+                  <span className="ml-1 rounded-full bg-amber-50 px-1.5 py-0.5 align-middle text-[10px] font-medium text-amber-700" title={`Filed under ${it.memberName ?? "someone"}, added by ${it.loggedByName}`}>
+                    added by {it.loggedByName}
+                  </span>
+                )}
               </p>
               <p className="mt-0.5 text-[10px] tabular-nums text-slate-400">{fmtAt.format(it.at)}</p>
             </div>

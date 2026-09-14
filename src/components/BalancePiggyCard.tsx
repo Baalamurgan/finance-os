@@ -1,7 +1,10 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { formatINR } from "@/lib/format";
+
+// One remembered preference across ALL preview months (not per-month) — the user's choice sticks.
+const INCLUDE_PIGGY_KEY = "family:previewIncludeEstimatedPiggy";
 
 // Balance + Piggy summary. On a PREVIEW/provisional month the Piggy is still an ESTIMATE and isn't part
 // of the month's real spendable balance yet, so it's EXCLUDED from the headline total by default — with
@@ -19,6 +22,18 @@ export function BalancePiggyCard({
   pendingLump: number;
 }) {
   const [includePiggy, setIncludePiggy] = useState(!isPreview);
+  // Restore the remembered choice on mount (preview only); open months always include the real Piggy.
+  useEffect(() => {
+    if (!isPreview) return;
+    try {
+      const saved = localStorage.getItem(INCLUDE_PIGGY_KEY);
+      if (saved != null) setIncludePiggy(saved === "1");
+    } catch { /* ignore */ }
+  }, [isPreview]);
+  const toggleInclude = (v: boolean) => {
+    setIncludePiggy(v);
+    try { localStorage.setItem(INCLUDE_PIGGY_KEY, v ? "1" : "0"); } catch { /* ignore */ }
+  };
   const showSum = !isPreview || includePiggy;
   const total = balance + (showSum ? piggy : 0);
 
@@ -40,7 +55,7 @@ export function BalancePiggyCard({
           <input
             type="checkbox"
             checked={includePiggy}
-            onChange={(e) => setIncludePiggy(e.target.checked)}
+            onChange={(e) => toggleInclude(e.target.checked)}
             className="h-4 w-4 accent-indigo-600"
           />
           Add the estimated Piggy to the total

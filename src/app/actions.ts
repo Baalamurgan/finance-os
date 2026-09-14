@@ -640,7 +640,7 @@ async function doAddSpend(formData: FormData): Promise<boolean> {
 
   const imagePath = await saveUpload(formData.get("image"));
   const spend = await prisma.spend.create({
-    data: { periodId: targetPeriodId, categoryId, memberId, label, amount, subCategory, imagePath, cardAccountId: cardId },
+    data: { periodId: targetPeriodId, categoryId, memberId, label, amount, subCategory, imagePath, cardAccountId: cardId, loggedById: selfId },
   });
   // Paid with a family card? Mirror it onto the card OWNER's personal card ledger as a linked line, so
   // their personal view reflects the family spend (a member may use another member's card). For CREDIT
