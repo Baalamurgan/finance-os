@@ -880,13 +880,18 @@ export async function getTrackedExpenses(householdId: number, periodId: number) 
       remaining: allocation - spent,
       overBudget: allocation > 0 && spent > allocation,
       sinking: cat.sinking,
+      miscCard: cat.miscCard, // month-scoped planned-misc spend card
       responsibleMemberId: cat.responsibleMemberId, // who holds this budget (null = shared)
       fund: sinkBal[cat.id] ?? 0, // current accumulated sinking-fund balance
       // spends are fetched newest-first, so rows[0] is the latest for this card
       lastSpentAt: rows[0]?.createdAt ?? null,
       spends: rows,
     };
-  });
+  })
+    // A month-scoped misc spend card only belongs to months where it's active (has a budget this
+    // month or a spend). Its persistent category would otherwise surface as an empty card in every
+    // later month (and fall into "misc · unplanned"); hide it where it isn't active.
+    .filter((c) => !(c.miscCard && c.allocation === 0 && c.spends.length === 0));
 
   // Most-recently-used category first (cards with no spends fall to the bottom).
   cards.sort((a, b) => (b.lastSpentAt?.getTime() ?? 0) - (a.lastSpentAt?.getTime() ?? 0));
