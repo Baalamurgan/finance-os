@@ -1479,7 +1479,9 @@ async function doAddMiscSpendCard(formData: FormData): Promise<{ ok: boolean; er
       });
       // Materialise into the CURRENT month now (clone only seeds FUTURE months): envelope + budget,
       // both, so the amount stays in sync (Sheet renders the envelope, spends draw the Budget).
-      await tx.expenseEntry.create({ data: { periodId, label: name, amount, categoryId: cat.id, memberId: responsibleMemberId, necessary: true, oneOff: false } });
+      // pinned=true so a draft rebuild (clearGeneratedRows) keeps the line AND its budget — the clone
+      // won't regenerate a one-off misc card, so without the pin a rebuild would wipe the whole card.
+      await tx.expenseEntry.create({ data: { periodId, label: name, amount, categoryId: cat.id, memberId: responsibleMemberId, necessary: true, oneOff: false, pinned: true } });
       await tx.budget.create({ data: { periodId, categoryId: cat.id, planned: amount } });
     });
   } catch {
