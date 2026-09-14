@@ -9,6 +9,7 @@ import { CardDuesStrip } from "@/components/personal/CardDuesStrip";
 import { ConfirmForm } from "@/components/ConfirmForm";
 import { setCreditConfig, deleteTransaction, addManualTransaction, topUpCard, updateAccount, deleteAccount } from "@/app/personal/finance/actions";
 import { TXN_TYPES, BALANCE_ACCOUNT_TYPES, CARD_NETWORKS } from "@/lib/finance/types";
+import { CardColorPicker } from "@/components/CardColorPicker";
 
 const fmtDate = (d: Date | null) =>
   d ? d.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" }) : "—";
@@ -169,9 +170,9 @@ export default async function CreditCardDetail({
             <label className="text-xs font-medium text-slate-500">Last 4 digits
               <input name="last4" inputMode="numeric" maxLength={4} defaultValue={account.last4 ?? ""} className="input mt-1 w-full" />
             </label>
-            <label className="text-xs font-medium text-slate-500">Colour
-              <input name="color" type="color" defaultValue={account.color} className="mt-1 h-9 w-full rounded-lg border border-slate-200" />
-            </label>
+            <div className="text-xs font-medium text-slate-500">Colour
+              <CardColorPicker defaultValue={account.color} />
+            </div>
             {isBalance && (
               <label className="text-xs font-medium text-slate-500 sm:col-span-2">Opening balance (₹)
                 <input name="openingBalance" inputMode="numeric" defaultValue={account.openingBalance ?? 0} className="input mt-1 w-full" />

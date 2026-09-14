@@ -4,10 +4,10 @@ import { useActionState, useEffect, useRef, useState } from "react";
 import { addFamilyCard, updateFamilyCard, deleteFamilyCard, type CardFormState } from "@/app/actions";
 import type { FamilyCard } from "@/lib/queries";
 import { useToast } from "@/components/Toast";
+import { CardColorPicker } from "@/components/CardColorPicker";
 
 type Mem = { id: number; name: string };
 const NETWORKS = ["", "visa", "mastercard", "rupay", "amex", "diners"];
-const COLORS = ["#6366f1", "#0ea5e9", "#10b981", "#f59e0b", "#ef4444", "#8b5cf6", "#ec4899", "#111827"];
 
 // Family Cards section: shared list (reuses each member's FinanceAccounts). Any member can add; a card's
 // owner or the head can edit/delete. A card spend is attributed to the owner (chosen here), so the owner
@@ -109,7 +109,6 @@ function CardForm({
   const toast = useToast();
   const editing = !!card;
   const [type, setType] = useState<string>(card?.type ?? "credit_card");
-  const [color, setColor] = useState<string>(card?.color ?? COLORS[0]);
   const [state, formAction, pending] = useActionState<CardFormState, FormData>(addFamilyCard, { ok: false, n: 0 });
   const prevN = useRef(0);
 
@@ -215,19 +214,7 @@ function CardForm({
 
         <div className="col-span-2 text-sm">
           <span className="font-medium text-slate-600">Colour</span>
-          <div className="mt-1.5 flex flex-wrap gap-2">
-            {COLORS.map((col) => (
-              <button
-                key={col}
-                type="button"
-                onClick={() => setColor(col)}
-                aria-label={`colour ${col}`}
-                className={`h-7 w-7 rounded-full ring-2 ring-offset-2 ${color === col ? "ring-slate-700" : "ring-transparent"}`}
-                style={{ backgroundColor: col }}
-              />
-            ))}
-          </div>
-          <input type="hidden" name="color" value={color} />
+          <CardColorPicker defaultValue={card?.color} />
         </div>
       </div>
 

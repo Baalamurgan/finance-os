@@ -3,6 +3,7 @@
 import { useActionState, useEffect, useRef, useState } from "react";
 import { addAccount, type AccountFormState } from "@/app/personal/finance/actions";
 import { CARD_NETWORKS } from "@/lib/finance/types";
+import { CardColorPicker } from "@/components/CardColorPicker";
 import { useToast } from "@/components/Toast";
 
 const INIT: AccountFormState = { ok: false, n: 0 };
@@ -81,6 +82,10 @@ export function AddAccountModal() {
                       <option key={nw} value={nw}>{nw[0].toUpperCase() + nw.slice(1)}</option>
                     ))}
                   </select>
+                </Field>
+
+                <Field label="Colour">
+                  <CardColorPicker />
                 </Field>
 
                 {!isCredit && (
