@@ -6,7 +6,12 @@ import type { CardDue, CardDueItem } from "@/lib/personal/cash";
 const fmtDate = (iso: string | null) =>
   iso ? new Date(iso).toLocaleDateString("en-IN", { day: "numeric", month: "short" }) : "—";
 
-// The line items behind a cycle total — "view the spends done on this specific card".
+// A card's full unpaid bill = your personal dues + any family spends on the card (the bank bills you
+// for both; the family reimburses their share separately). This is the number you pay the card.
+const fullUnpaid = (d: CardDue) => d.unpaidTotal + d.familyUnpaidTotal;
+
+// The line items behind a cycle total — "view the spends done on this specific card". Family-used
+// spends carry a tag so you can see the card was used by the family (still on your bill).
 function ItemList({ items }: { items: CardDueItem[] }) {
   if (items.length === 0) return null;
   return (
@@ -27,71 +32,97 @@ function ItemList({ items }: { items: CardDueItem[] }) {
   );
 }
 
-// Per credit card: the CC-tagged spends that haven't left your cash yet, grouped into
-// billing cycles. "Mark bill paid" posts the one real cash deduction (this month, with the
-// exact amount you paid) and settles that cycle; undo reverses it. Each cycle expands to
-// show its individual spends.
-export function CardDuesStrip({ dues }: { dues: CardDue[] }) {
-  const active = dues.filter((d) => d.unpaidTotal > 0 || d.familyUnpaidTotal > 0 || d.paid.length > 0);
-  if (active.length === 0) return null;
+// One card's dues block: the full bill you owe the card, its cycles, and the line items (incl. family).
+function CardBlock({ d }: { d: CardDue }) {
   return (
-    <section className="space-y-2">
-      {active.map((d) => (
-        <div key={d.cardId} className="rounded-xl border border-slate-200 bg-white p-3">
-          <div className="flex items-center gap-2">
-            <span className="h-2.5 w-2.5 rounded-full" style={{ background: d.color }} />
-            <span className="text-sm font-semibold text-slate-800">💳 {d.cardName}</span>
-            <span className="ml-auto text-right text-sm tabular-nums text-slate-500">
-              On card, unpaid <b className="text-slate-800">{formatINR(d.unpaidTotal)}</b>
-              {d.familyUnpaidTotal > 0 && (
-                <span className="block text-[11px] text-violet-600">
-                  + {formatINR(d.familyUnpaidTotal)} family · full bill {formatINR(d.unpaidTotal + d.familyUnpaidTotal)}
-                </span>
-              )}
-            </span>
-          </div>
+    <div className="rounded-xl border border-slate-200 bg-white p-3">
+      <div className="flex items-center gap-2">
+        <span className="h-2.5 w-2.5 rounded-full" style={{ background: d.color }} />
+        <span className="text-sm font-semibold text-slate-800">💳 {d.cardName}</span>
+        <span className="ml-auto text-sm tabular-nums text-slate-500">
+          On card, unpaid <b className="text-slate-800">{formatINR(fullUnpaid(d))}</b>
+        </span>
+      </div>
 
-          {d.needsStatementDay ? (
-            <>
-              <p className="mt-2 text-xs text-amber-600">
-                Set a <b>statement day</b> on this card (Finance → open the card) to track its bill cycle &amp; due date.
-              </p>
-              <div className="mt-2 rounded-lg bg-slate-50 px-3 py-2">
-                <ItemList items={d.ungrouped} />
-              </div>
-            </>
-          ) : (
-            <ul className="mt-2 space-y-1.5">
-              {d.cycles.map((c) => (
-                <li key={c.cycleEndISO} className="rounded-lg bg-slate-50 px-3 py-2 text-sm">
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <span className="text-slate-600">
-                      Bill {fmtDate(c.cycleEndISO)}
-                      {c.dueISO ? <> · due {fmtDate(c.dueISO)}</> : null} ·{" "}
-                      <b className="tabular-nums text-slate-800">{formatINR(c.total)}</b>
-                      {c.familyTotal > 0 && <span className="text-[11px] text-violet-600"> + {formatINR(c.familyTotal)} family</span>}
-                    </span>
-                    <MarkBillPaidButton cardId={d.cardId} cardName={d.cardName} cycleEndISO={c.cycleEndISO} cycleTotal={c.total} />
-                  </div>
-                  <ItemList items={c.items} />
-                </li>
-              ))}
-              {d.cycles.length === 0 && (
-                <li className="px-1 py-1 text-xs text-slate-400">All bills settled 🎉</li>
-              )}
-              {d.paid.map((p) => (
-                <li key={p.billId} className="flex items-center justify-between gap-2 px-3 py-1 text-xs text-slate-400">
-                  <span>✓ Paid — bill {fmtDate(p.cycleEndISO)} · {formatINR(p.amount)}</span>
-                  <form action={unmarkCardBillPaid}>
-                    <input type="hidden" name="id" value={p.billId} />
-                    <button className="font-medium text-slate-400 hover:text-red-600">undo</button>
-                  </form>
-                </li>
-              ))}
-            </ul>
+      {d.needsStatementDay ? (
+        <>
+          <p className="mt-2 text-xs text-amber-600">
+            Set a <b>statement day</b> on this card (Finance → open the card) to track its bill cycle &amp; due date.
+          </p>
+          <div className="mt-2 rounded-lg bg-slate-50 px-3 py-2">
+            <ItemList items={d.ungrouped} />
+          </div>
+        </>
+      ) : (
+        <ul className="mt-2 space-y-1.5">
+          {d.cycles.map((c) => {
+            const cycleFull = c.total + c.familyTotal;
+            return (
+              <li key={c.cycleEndISO} className="rounded-lg bg-slate-50 px-3 py-2 text-sm">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="text-slate-600">
+                    Bill {fmtDate(c.cycleEndISO)}
+                    {c.dueISO ? <> · due {fmtDate(c.dueISO)}</> : null} ·{" "}
+                    <b className="tabular-nums text-slate-800">{formatINR(cycleFull)}</b>
+                  </span>
+                  <MarkBillPaidButton cardId={d.cardId} cardName={d.cardName} cycleEndISO={c.cycleEndISO} cycleTotal={cycleFull} />
+                </div>
+                <ItemList items={c.items} />
+              </li>
+            );
+          })}
+          {d.cycles.length === 0 && (
+            <li className="px-1 py-1 text-xs text-slate-400">All bills settled 🎉</li>
           )}
-        </div>
-      ))}
-    </section>
+          {d.paid.map((p) => (
+            <li key={p.billId} className="flex items-center justify-between gap-2 px-3 py-1 text-xs text-slate-400">
+              <span>✓ Paid — bill {fmtDate(p.cycleEndISO)} · {formatINR(p.amount)}</span>
+              <form action={unmarkCardBillPaid}>
+                <input type="hidden" name="id" value={p.billId} />
+                <button className="font-medium text-slate-400 hover:text-red-600">undo</button>
+              </form>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+// Per credit card: the spends on the card that haven't left your cash yet (personal + family), grouped
+// into billing cycles. "Mark bill paid" settles that cycle; undo reverses it. Collapsible (seamless) —
+// the summary always lists every card + its full bill, so you see them all even when collapsed.
+export function CardDuesStrip({ dues }: { dues: CardDue[] }) {
+  const active = dues.filter((d) => fullUnpaid(d) > 0 || d.paid.length > 0);
+  if (active.length === 0) return null;
+  const grandTotal = active.reduce((s, d) => s + fullUnpaid(d), 0);
+
+  return (
+    <details className="group rounded-xl border border-slate-200 bg-slate-50/60" open>
+      <summary className="flex cursor-pointer list-none flex-wrap items-center gap-x-2 gap-y-1 p-3 [&::-webkit-details-marker]:hidden">
+        <span className="text-sm font-semibold text-slate-800">💳 Cards</span>
+        <span className="text-xs text-slate-500">· {active.length} card{active.length === 1 ? "" : "s"}</span>
+        <span className="ml-auto text-sm tabular-nums text-slate-500">
+          to pay <b className="text-slate-800">{formatINR(grandTotal)}</b>
+        </span>
+        <svg width="16" height="16" viewBox="0 0 20 20" className="shrink-0 text-slate-400 transition-transform group-open:rotate-90" aria-hidden>
+          <path fill="currentColor" d="M7 5l6 5-6 5z" />
+        </svg>
+        {/* collapsed glance: every card + its full bill */}
+        <span className="w-full group-open:hidden">
+          <span className="mt-1 flex flex-wrap gap-1.5">
+            {active.map((d) => (
+              <span key={d.cardId} className="inline-flex items-center gap-1 rounded-full bg-white px-2 py-0.5 text-[11px] text-slate-600">
+                <span className="h-2 w-2 rounded-full" style={{ background: d.color }} />
+                {d.cardName} <b className="tabular-nums text-slate-800">{formatINR(fullUnpaid(d))}</b>
+              </span>
+            ))}
+          </span>
+        </span>
+      </summary>
+      <div className="space-y-2 p-3 pt-0">
+        {active.map((d) => <CardBlock key={d.cardId} d={d} />)}
+      </div>
+    </details>
   );
 }
