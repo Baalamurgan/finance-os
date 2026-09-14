@@ -118,7 +118,7 @@ export default async function PersonalExpenses({
           </div>
         )}
 
-        <PersonalSpendsView spends={spendsForClient} categories={catList} cards={c.creditCards} periodId={period.id} />
+        <PersonalSpendsView spends={spendsForClient} categories={catList} cards={c.spendCards} periodId={period.id} />
 
         {/* manage spend categories */}
         <section className="rounded-xl border border-slate-200 bg-white p-4">
@@ -141,7 +141,7 @@ export default async function PersonalExpenses({
         </section>
       </main>
 
-      <PersonalSpendFab periodId={period.id} categories={catList} cards={c.creditCards} remaining={canSpend} autoOpen={sp.add === "1"} showButton={false} />
+      <PersonalSpendFab periodId={period.id} categories={catList} cards={c.spendCards} remaining={canSpend} autoOpen={sp.add === "1"} showButton={false} />
     </>
   );
 }

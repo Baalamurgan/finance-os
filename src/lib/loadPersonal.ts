@@ -69,6 +69,16 @@ export async function loadPersonal(params?: { y?: string; m?: string }) {
     })
   ).map((a) => ({ id: a.id, name: a.name, color: a.color }));
 
+  // All active cards for the day-to-day spend picker (any card can pay a spend). Credit stays tag-only
+  // (its dues run through getCardDues); debit/prepaid post to the card ledger and move the balance.
+  const spendCards = (
+    await prisma.financeAccount.findMany({
+      where: { memberId: member.id, active: true },
+      orderBy: [{ sortOrder: "asc" }, { id: "asc" }],
+      select: { id: true, name: true, color: true, type: true },
+    })
+  ).map((a) => ({ id: a.id, name: a.name, color: a.color, type: a.type }));
+
   // Due-bill reminders (soon/overdue) — drives the landing banner + the Finance-tab badge.
   const cardReminders = creditCards.length > 0 ? await getCardBillReminders(member.id) : [];
 
@@ -81,6 +91,7 @@ export async function loadPersonal(params?: { y?: string; m?: string }) {
     selMonth: m ?? selected?.month ?? anchor.month,
     categories,
     creditCards,
+    spendCards,
     cardReminders,
     hasBiometric,
   };

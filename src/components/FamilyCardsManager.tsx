@@ -73,7 +73,7 @@ export function FamilyCardsManager({
                     {!c.active && <span className="rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-500">hidden</span>}
                   </div>
                   <div className="truncate text-xs text-slate-500">
-                    {c.member.name} · {c.type === "credit_card" ? "Credit" : "Debit"}
+                    {c.member.name} · {c.type === "credit_card" ? "Credit" : c.type === "prepaid_card" ? "Prepaid" : "Debit"}
                     {c.institution ? ` · ${c.institution}` : ""}
                     {c.network ? ` · ${c.network}` : ""}
                   </div>
@@ -141,8 +141,9 @@ function CardForm({
         <label className="block text-sm">
           <span className="font-medium text-slate-600">Type <span className="text-red-500">*</span></span>
           <select name="type" value={type} onChange={(e) => setType(e.target.value)} disabled={editing} className={`${field} ${editing ? "bg-slate-100 text-slate-500" : ""}`}>
-            <option value="debit_card">Debit</option>
             <option value="credit_card">Credit</option>
+            <option value="debit_card">Debit</option>
+            <option value="prepaid_card">Prepaid / wallet</option>
           </select>
         </label>
 
@@ -201,6 +202,15 @@ function CardForm({
               <input name="creditLimit" type="number" inputMode="numeric" min={0} defaultValue={card?.credit?.creditLimit ?? ""} placeholder="optional" className={field} />
             </label>
           </div>
+        )}
+
+        {/* Debit/prepaid: the balance already on the card. Top-ups and spends adjust it from here. */}
+        {(type === "debit_card" || type === "prepaid_card") && (
+          <label className="col-span-2 block text-sm">
+            <span className="font-medium text-slate-600">Available balance now (₹)</span>
+            <input name="openingBalance" type="number" inputMode="numeric" min={0} defaultValue={card?.openingBalance ?? ""} placeholder="0" className={field} />
+            <span className="mt-1 block text-[11px] text-slate-400">Money on the card today. Top up from the owner&apos;s personal view.</span>
+          </label>
         )}
 
         <div className="col-span-2 text-sm">

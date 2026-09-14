@@ -911,7 +911,7 @@ export async function addFamilyCard(prev: CardFormState, formData: FormData): Pr
   const type = String(formData.get("type") ?? "");
   const ownerId = Number(formData.get("ownerId")) || 0;
   if (!name) return { ok: false, error: "Name the card.", n };
-  if (type !== "credit_card" && type !== "debit_card") return { ok: false, error: "Pick a card type.", n };
+  if (type !== "credit_card" && type !== "debit_card" && type !== "prepaid_card") return { ok: false, error: "Pick a card type.", n };
   if (!(await householdMemberIds()).has(ownerId)) return { ok: false, error: "Pick the card owner.", n };
   // Credit cards carry the billing cycle (statement + due day) so the dashboard can date the bill.
   let credit: { statementDay: number; dueOffsetDays: number; creditLimit: number | null } | null = null;
@@ -920,6 +920,9 @@ export async function addFamilyCard(prev: CardFormState, formData: FormData): Pr
     if ("error" in parsed) return { ok: false, error: parsed.error, n };
     credit = parsed;
   }
+  // Debit/prepaid carry a starting balance (money already on the card).
+  const isBalanceCard = type === "debit_card" || type === "prepaid_card";
+  const openingBalance = isBalanceCard ? (Number(String(formData.get("openingBalance") ?? "").replace(/[, ]/g, "")) || 0) : 0;
   const account = await prisma.financeAccount.create({
     data: {
       memberId: ownerId, // the owner — the family member whose cash this card draws
@@ -929,6 +932,7 @@ export async function addFamilyCard(prev: CardFormState, formData: FormData): Pr
       network: String(formData.get("network") ?? "").trim() || null,
       last4: String(formData.get("last4") ?? "").trim().slice(0, 4) || null,
       color: String(formData.get("color") ?? "").trim() || "#6366f1",
+      openingBalance,
     },
   });
   if (credit) await prisma.creditCardDetail.create({ data: { accountId: account.id, ...credit } });
@@ -957,6 +961,11 @@ export async function updateFamilyCard(formData: FormData) {
     const parsed = parseCreditFields(formData);
     if (!("error" in parsed)) credit = parsed;
   }
+  // Opening balance is editable for debit/prepaid (a starting-point correction).
+  const isBalanceCard = account.type === "debit_card" || account.type === "prepaid_card";
+  const openingBalance = isBalanceCard && formData.get("openingBalance") != null
+    ? (Number(String(formData.get("openingBalance") ?? "").replace(/[, ]/g, "")) || 0)
+    : null;
   await prisma.financeAccount.update({
     where: { id },
     data: {
@@ -967,6 +976,7 @@ export async function updateFamilyCard(formData: FormData) {
       color: String(formData.get("color") ?? "").trim() || account.color,
       active: formData.get("active") == null ? account.active : formData.get("active") === "on",
       ...(ownerOk ? { memberId: newOwner } : {}),
+      ...(openingBalance != null ? { openingBalance } : {}),
     },
   });
   if (credit) {

@@ -7,8 +7,8 @@ import { getCardDues } from "@/lib/personal/cash";
 import { PersonalNav } from "@/components/personal/PersonalNav";
 import { CardDuesStrip } from "@/components/personal/CardDuesStrip";
 import { ConfirmForm } from "@/components/ConfirmForm";
-import { setCreditConfig, deleteTransaction, addManualTransaction } from "@/app/personal/finance/actions";
-import { TXN_TYPES } from "@/lib/finance/types";
+import { setCreditConfig, deleteTransaction, addManualTransaction, topUpCard } from "@/app/personal/finance/actions";
+import { TXN_TYPES, BALANCE_ACCOUNT_TYPES } from "@/lib/finance/types";
 
 const fmtDate = (d: Date | null) =>
   d ? d.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" }) : "—";
@@ -24,13 +24,16 @@ export default async function CreditCardDetail({
   const sp = await searchParams;
   const c = await loadPersonal(sp);
   const detail = await getAccountDetail(c.member.id, Number(id));
-  if (!detail || detail.account.type !== "credit_card") redirect("/personal/finance");
+  if (!detail) redirect("/personal/finance");
 
-  const { account, txns, dashboard: d } = detail;
+  const { account, txns, dashboard: d, balance } = detail;
+  const isCredit = account.type === "credit_card";
+  const isBalance = BALANCE_ACCOUNT_TYPES.has(account.type);
+  const typeLabel = isCredit ? "credit card" : account.type === "prepaid_card" ? "prepaid card / wallet" : "debit card";
   const cfg = account.credit;
   // The in-app spends/fixed lines tagged to THIS card that are still deferred from cash
-  // (grouped into bill cycles), so you can view exactly what's riding on this card.
-  const dues = (await getCardDues(c.member.id)).filter((due) => due.cardId === account.id);
+  // (grouped into bill cycles), so you can view exactly what's riding on this card. Credit-only.
+  const dues = isCredit ? (await getCardDues(c.member.id)).filter((due) => due.cardId === account.id) : [];
 
   return (
     <>
@@ -43,11 +46,35 @@ export default async function CreditCardDetail({
             <h1 className="text-xl font-bold text-slate-900">{account.name}</h1>
           </div>
           <p className="text-xs text-slate-400">
-            {[account.institution, account.network?.toUpperCase(), account.last4 && `•• ${account.last4}`].filter(Boolean).join(" · ") || "credit card"}
+            {[account.institution, account.network?.toUpperCase(), account.last4 && `•• ${account.last4}`].filter(Boolean).join(" · ") || typeLabel}
           </p>
         </div>
 
+        {/* Debit/prepaid: available balance + top up */}
+        {isBalance && (
+          <>
+            <div className="rounded-2xl border border-slate-200 bg-gradient-to-br from-emerald-50 to-white p-5">
+              <div className="text-[11px] font-medium uppercase tracking-wide text-slate-500">Available balance</div>
+              <div className={`mt-1 text-4xl font-extrabold tabular-nums ${(balance ?? 0) < 0 ? "text-red-600" : "text-emerald-700"}`}>
+                {formatINR(balance ?? 0)}
+              </div>
+              <div className="mt-1 text-xs text-slate-400">Opening {formatINR(account.openingBalance ?? 0)} · every top-up and spend adjusts it.</div>
+            </div>
+            <form action={topUpCard} className="flex flex-wrap items-end gap-3 rounded-xl border border-slate-200 bg-white p-4">
+              <input type="hidden" name="accountId" value={account.id} />
+              <label className="text-xs font-medium text-slate-500">Top up (₹)
+                <input name="amount" inputMode="numeric" required placeholder="0" className="input mt-1 w-32" />
+              </label>
+              <label className="text-xs font-medium text-slate-500">Note
+                <input name="note" placeholder="e.g. Salary load" className="input mt-1 w-40" />
+              </label>
+              <button className="rounded-lg bg-emerald-600 px-4 py-1.5 text-sm font-semibold text-white hover:bg-emerald-700">+ Top up</button>
+            </form>
+          </>
+        )}
+
         {/* headline: outstanding / available / utilisation */}
+        {isCredit && (<>
         {d.hasLimit ? (
           <div className="grid grid-cols-3 gap-3">
             <Stat label="Outstanding" value={formatINR(d.outstanding)} big />
@@ -118,6 +145,7 @@ export default async function CreditCardDetail({
             </div>
           </form>
         </details>
+        </>)}
 
         {/* transactions */}
         <section className="rounded-xl border border-slate-200 bg-white">
@@ -146,6 +174,7 @@ export default async function CreditCardDetail({
                     {t.merchant}
                     {t.needsReview && <span className="ml-2 rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium text-amber-700">review</span>}
                     {t.source === "family" && <span className="ml-2 rounded-full bg-violet-100 px-1.5 py-0.5 text-[10px] font-medium text-violet-700">Family</span>}
+                    {t.personalSpendId != null && <span className="ml-2 rounded-full bg-sky-100 px-1.5 py-0.5 text-[10px] font-medium text-sky-700">Spend</span>}
                   </div>
                   <div className="text-[11px] text-slate-400">
                     {fmtDate(t.date)} · {t.type}{t.rewardPoints ? ` · ${t.rewardPoints} pts` : ""}
@@ -155,8 +184,8 @@ export default async function CreditCardDetail({
                   <span className={`tabular-nums ${t.type === "payment" || t.type === "refund" || t.type === "cashback" ? "text-emerald-600" : "text-slate-700"}`}>
                     {formatINR(t.amount)}
                   </span>
-                  {t.source === "family" ? (
-                    <span className="w-4 text-center text-slate-200" title="Family spend — edit or remove it from the Family view">🔒</span>
+                  {t.source === "family" || t.personalSpendId != null ? (
+                    <span className="w-4 text-center text-slate-200" title={t.source === "family" ? "Family spend — edit or remove it from the Family view" : "Your spend — edit or remove it from the Expenses tab"}>🔒</span>
                   ) : (
                     <ConfirmForm action={deleteTransaction} message="Remove this transaction?">
                       <input type="hidden" name="id" value={t.id} />

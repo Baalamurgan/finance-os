@@ -176,7 +176,7 @@ export async function getFamilyCards(householdId: number, activeOnly = true) {
     where: { member: { householdId }, ...(activeOnly ? { active: true } : {}) },
     select: {
       id: true, name: true, type: true, institution: true, network: true, last4: true, color: true,
-      active: true, memberId: true, member: { select: { name: true } },
+      active: true, memberId: true, openingBalance: true, member: { select: { name: true } },
       credit: { select: { creditLimit: true, statementDay: true, dueOffsetDays: true } },
     },
     orderBy: [{ memberId: "asc" }, { sortOrder: "asc" }, { name: "asc" }],

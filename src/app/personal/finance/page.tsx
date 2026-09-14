@@ -97,7 +97,10 @@ export default async function FinancePage({
             {nw.lentOutstanding > 0 && (
               <AutoRow icon="🤝" name="Money lent to others" sub="from Lending & borrowing" value={nw.lentOutstanding} href="/personal/loans" tone="emerald" />
             )}
-            {nw.assetItems.length === 0 && nw.lentOutstanding === 0 && (
+            {nw.balanceAccounts.filter((b) => b.balance > 0).map((b) => (
+              <AutoRow key={b.id} icon="💳" name={b.name} sub="card balance" value={b.balance} href={`/personal/finance/${b.id}`} tone="emerald" dot={b.color} />
+            ))}
+            {nw.assetItems.length === 0 && nw.lentOutstanding === 0 && nw.cardBalances === 0 && (
               <li className="px-4 py-5 text-center text-sm text-slate-400">No assets yet — add stocks, MF, FDs, PF, property…</li>
             )}
           </ul>
@@ -139,7 +142,8 @@ export default async function FinancePage({
             <AddAccountModal />
           </div>
           <div className="space-y-2 p-4">
-            {wallet.map(({ account, summary }) => {
+            {wallet.map(({ account, summary, balance }) => {
+              const typeLabel = account.type === "credit_card" ? "Credit" : account.type === "prepaid_card" ? "Prepaid" : "Debit";
               const inner = (
                 <div className="flex items-center justify-between rounded-lg border border-slate-200 p-3">
                   <div className="flex items-center gap-2">
@@ -147,18 +151,21 @@ export default async function FinancePage({
                     <div>
                       <div className="text-sm font-medium text-slate-800">{account.name}</div>
                       <div className="text-[11px] text-slate-400">
-                        {[account.type === "credit_card" ? "Credit" : "Debit", account.institution, account.last4 && `•• ${account.last4}`].filter(Boolean).join(" · ")}
+                        {[typeLabel, account.institution, account.last4 && `•• ${account.last4}`].filter(Boolean).join(" · ")}
                       </div>
                     </div>
                   </div>
-                  {account.type === "credit_card"
-                    ? <span className="text-xs tabular-nums text-slate-500">{summary?.hasLimit ? `${Math.round(summary.utilPct ?? 0)}% used ›` : "set up ›"}</span>
-                    : <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] text-slate-400">info</span>}
+                  {account.type === "credit_card" ? (
+                    <span className="text-xs tabular-nums text-slate-500">{summary?.hasLimit ? `${Math.round(summary.utilPct ?? 0)}% used ›` : "set up ›"}</span>
+                  ) : (
+                    <span className="text-right">
+                      <span className="block text-sm font-semibold tabular-nums text-emerald-700">{formatINR(balance ?? 0)}</span>
+                      <span className="block text-[10px] text-slate-400">balance ›</span>
+                    </span>
+                  )}
                 </div>
               );
-              return account.type === "credit_card"
-                ? <Link key={account.id} href={`/personal/finance/${account.id}`} className="block hover:opacity-80">{inner}</Link>
-                : <div key={account.id}>{inner}</div>;
+              return <Link key={account.id} href={`/personal/finance/${account.id}`} className="block hover:opacity-80">{inner}</Link>;
             })}
             {wallet.length === 0 && <p className="text-center text-sm text-slate-400">No cards yet.</p>}
           </div>

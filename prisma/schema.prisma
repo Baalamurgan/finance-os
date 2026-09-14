@@ -319,6 +319,9 @@ model PersonalSpend {
   // Shared spend: `amount` is the FULL amount paid (so card dues stay correct); sharedOthers
   // is the portion OTHERS owe, so your NET spend = amount − sharedOthers. null = not shared.
   sharedOthers  Float?
+  // Ledger mirror on a debit/prepaid card (see AccountTransaction.personalSpendId). Credit-card spends
+  // stay tag-only for now (their dues run through getCardDues); balance cards post a real ledger line.
+  ledgerTxn  AccountTransaction? @relation("PersonalSpendLedger")
   createdAt  DateTime @default(now())
 }
 
@@ -367,7 +370,7 @@ model FinanceAccount {
   id          Int      @id @default(autoincrement())
   member      Member   @relation(fields: [memberId], references: [id], onDelete: Cascade)
   memberId    Int
-  type        String   // credit_card | debit_card  (future: bank | loan | investment)
+  type        String   // credit_card | debit_card | prepaid_card  (future: bank | loan | investment)
   name        String   // "SBI SimplyClick"
   institution String?  // bank / issuer, e.g. "SBI"
   network     String?  // visa | mastercard | rupay | amex | diners
@@ -375,6 +378,9 @@ model FinanceAccount {
   color       String   @default("#6366f1")
   active      Boolean  @default(true)
   sortOrder   Int      @default(0)
+  // Debit/prepaid only: the balance when tracking started. Current balance = openingBalance + top-ups
+  // + refunds − spends − fees (see src/lib/finance/balance.ts). Null/0 for credit cards.
+  openingBalance Float? @default(0)
   credit      CreditCardDetail?
   txns        AccountTransaction[]
   taggedSpends   PersonalSpend[]   @relation("PersonalSpendCard")
@@ -461,6 +467,10 @@ model AccountTransaction {
   // delete keeps the credit dashboard in sync when the family spend is removed. Null = a normal personal line.
   familySpend   Spend?  @relation("SpendMirrorTxn", fields: [familySpendId], references: [id], onDelete: Cascade)
   familySpendId Int?    @unique
+  // When this line mirrors a PERSONAL spend logged on a debit/prepaid card (1:1). Cascade delete keeps the
+  // card balance in sync when the personal spend is removed. Null = not a personal-spend mirror.
+  personalSpend   PersonalSpend? @relation("PersonalSpendLedger", fields: [personalSpendId], references: [id], onDelete: Cascade)
+  personalSpendId Int?           @unique
   createdAt    DateTime @default(now())
 
   @@index([memberId, date])

@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/prisma";
 import { auth } from "@/auth";
-import { ACCOUNT_TYPES, TXN_TYPES, type TxnType } from "@/lib/finance/types";
+import { ACCOUNT_TYPES, TXN_TYPES, BALANCE_ACCOUNT_TYPES, type TxnType } from "@/lib/finance/types";
 
 async function me() {
   const session = await auth();
@@ -48,6 +48,7 @@ export async function addAccount(
       network: String(formData.get("network") ?? "").trim() || null,
       last4: String(formData.get("last4") ?? "").trim().slice(0, 4) || null,
       color: String(formData.get("color") ?? "").trim() || "#6366f1",
+      openingBalance: BALANCE_ACCOUNT_TYPES.has(type) ? (num(formData.get("openingBalance")) ?? 0) : 0,
     },
   });
   if (type === "credit_card") {
@@ -79,6 +80,35 @@ export async function updateAccount(formData: FormData) {
       last4: String(formData.get("last4") ?? "").trim().slice(0, 4) || null,
       color: String(formData.get("color") ?? "").trim() || account.color,
       active: formData.get("active") == null ? account.active : formData.get("active") === "on",
+      // Opening balance is editable for debit/prepaid (a correction to the starting point).
+      ...(BALANCE_ACCOUNT_TYPES.has(account.type) && formData.get("openingBalance") != null
+        ? { openingBalance: num(formData.get("openingBalance")) ?? account.openingBalance }
+        : {}),
+    },
+  });
+  rev();
+}
+
+// Load money onto a debit/prepaid card — a "topup" ledger line that raises its balance.
+export async function topUpCard(formData: FormData) {
+  const member = await me();
+  if (!member) return;
+  const accountId = Number(formData.get("accountId"));
+  const account = await prisma.financeAccount.findFirst({ where: { id: accountId, memberId: member.id } });
+  if (!account || !BALANCE_ACCOUNT_TYPES.has(account.type)) return;
+  const amount = num(formData.get("amount"));
+  if (!amount || amount <= 0) return;
+  const rawDate = String(formData.get("date") ?? "");
+  const date = rawDate ? new Date(rawDate) : new Date();
+  await prisma.accountTransaction.create({
+    data: {
+      memberId: member.id,
+      accountId,
+      date: isNaN(date.getTime()) ? new Date() : date,
+      merchant: String(formData.get("note") ?? "").trim().slice(0, 120) || "Top-up",
+      amount: Math.round(amount * 100) / 100,
+      type: "topup",
+      source: "manual",
     },
   });
   rev();
@@ -150,7 +180,9 @@ export async function deleteTransaction(formData: FormData) {
   const id = Number(formData.get("id"));
   const t = await prisma.accountTransaction.findUnique({ where: { id } });
   if (!t || t.memberId !== member.id) return;
-  if (t.familySpendId != null) return; // mirror of a family credit-card spend — edit/remove it from Family spends
+  // Mirror lines are owned by their source spend — edit/remove them there (Family spends / Expenses tab),
+  // so the card balance stays in sync. Manual ledger lines (no link) delete normally.
+  if (t.familySpendId != null || t.personalSpendId != null) return;
   await prisma.accountTransaction.delete({ where: { id } });
   rev();
 }

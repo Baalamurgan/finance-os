@@ -8,7 +8,7 @@ import { formatINR } from "@/lib/format";
 import { PersonalSplitModal, type SplitPerson } from "@/components/personal/PersonalSplitModal";
 
 type Cat = { id: number; name: string; icon: string | null };
-type Card = { id: number; name: string; color: string };
+type Card = { id: number; name: string; color: string; type?: string };
 type Initial = { id: number; categoryId: number; amount: number; note: string | null; cardAccountId?: number | null };
 const INIT: PersonalSaveState = { ok: false, n: 0 };
 
@@ -177,11 +177,13 @@ export function PersonalSpendModal({
                     <select name="cardAccountId" defaultValue={isEdit ? String(initial!.cardAccountId ?? "") : ""} className="input mt-1 w-full">
                       <option value="">Cash / UPI (from this month)</option>
                       {cards.map((c) => (
-                        <option key={c.id} value={c.id}>{c.name} — pay at card bill</option>
+                        <option key={c.id} value={c.id}>
+                          {c.name}{c.type === "credit_card" ? " — pay at card bill" : c.type === "prepaid_card" ? " — from wallet balance" : c.type === "debit_card" ? " — from card balance" : ""}
+                        </option>
                       ))}
                     </select>
                     <p className="mt-1 text-[11px] text-slate-400">
-                      {shared ? "On a card, it still counts this month; you pay the actual cash at the card's bill. Others owe you their shares." : "On a card, it still counts against this month — you just pay the cash later at the card's bill."}
+                      It counts against this month either way. A credit card is paid later at its bill; a debit/prepaid card comes off the card&apos;s balance now.{shared ? " Others owe you their shares." : ""}
                     </p>
                   </div>
                 )}

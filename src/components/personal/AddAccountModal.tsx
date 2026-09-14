@@ -10,7 +10,7 @@ const INIT: AccountFormState = { ok: false, n: 0 };
 export function AddAccountModal() {
   const toast = useToast();
   const [open, setOpen] = useState(false);
-  const [type, setType] = useState<"credit_card" | "debit_card">("credit_card");
+  const [type, setType] = useState<"credit_card" | "debit_card" | "prepaid_card">("credit_card");
   const formRef = useRef<HTMLFormElement>(null);
   const prevN = useRef(0);
   const [state, formAction] = useActionState(addAccount, INIT);
@@ -50,15 +50,15 @@ export function AddAccountModal() {
                 <input type="hidden" name="type" value={type} />
 
                 {/* type toggle */}
-                <div className="grid grid-cols-2 gap-2">
-                  {(["credit_card", "debit_card"] as const).map((t) => (
+                <div className="grid grid-cols-3 gap-2">
+                  {(["credit_card", "debit_card", "prepaid_card"] as const).map((t) => (
                     <button
                       key={t}
                       type="button"
                       onClick={() => setType(t)}
-                      className={`rounded-lg border-2 px-3 py-2 text-sm font-medium ${type === t ? "border-emerald-500 bg-emerald-50 text-emerald-700" : "border-slate-200 text-slate-500"}`}
+                      className={`rounded-lg border-2 px-2 py-2 text-xs font-medium ${type === t ? "border-emerald-500 bg-emerald-50 text-emerald-700" : "border-slate-200 text-slate-500"}`}
                     >
-                      {t === "credit_card" ? "Credit card" : "Debit card"}
+                      {t === "credit_card" ? "Credit" : t === "debit_card" ? "Debit" : "Prepaid"}
                     </button>
                   ))}
                 </div>
@@ -82,6 +82,15 @@ export function AddAccountModal() {
                     ))}
                   </select>
                 </Field>
+
+                {!isCredit && (
+                  <div className="rounded-lg bg-slate-50 p-3">
+                    <Field label={`Available balance now (₹)${type === "prepaid_card" ? "" : ""}`}>
+                      <input name="openingBalance" inputMode="numeric" placeholder="0" className="input w-full" />
+                    </Field>
+                    <p className="mt-1 text-[11px] text-slate-400">Money on the card today. Top-ups and spends adjust it from here.</p>
+                  </div>
+                )}
 
                 {isCredit && (
                   <div className="space-y-3 rounded-lg bg-slate-50 p-3">

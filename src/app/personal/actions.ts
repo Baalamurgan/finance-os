@@ -3,7 +3,9 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { headers } from "next/headers";
+import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
+import { BALANCE_ACCOUNT_TYPES } from "@/lib/finance/types";
 import { auth } from "@/auth";
 import { parseAmount } from "@/lib/format";
 import { log } from "@/lib/log";
@@ -86,6 +88,34 @@ async function ccCardId(memberId: number, formData: FormData): Promise<number | 
   if (!raw) return null;
   const acc = await prisma.financeAccount.findUnique({ where: { id: raw }, select: { memberId: true, type: true } });
   return acc && acc.memberId === memberId && acc.type === "credit_card" ? raw : null;
+}
+
+// Resolve "cardAccountId" to ANY active card the member owns (credit/debit/prepaid) — day-to-day spends
+// can be paid with any card. Returns the card's id + type, or null (cash/UPI).
+async function anyCardId(memberId: number, formData: FormData): Promise<{ id: number; type: string } | null> {
+  const raw = Number(formData.get("cardAccountId"));
+  if (!raw) return null;
+  const acc = await prisma.financeAccount.findUnique({ where: { id: raw }, select: { memberId: true, type: true, active: true } });
+  return acc && acc.memberId === memberId && acc.active ? { id: raw, type: acc.type } : null;
+}
+
+// Keep a debit/prepaid card's LEDGER line in sync with a personal spend, so the card balance is correct
+// (credit cards stay tag-only — their dues run through getCardDues). Idempotent: upserts on the spend
+// link, or removes the line if the spend moved to cash/a credit card. Deleting the spend cascades the
+// line away via the FK, so no delete path is needed here.
+async function syncPersonalSpendLedger(
+  tx: Prisma.TransactionClient,
+  a: { spendId: number; memberId: number; card: { id: number; type: string } | null; amount: number; label: string; date: Date; categoryName: string | null },
+) {
+  if (a.card && BALANCE_ACCOUNT_TYPES.has(a.card.type)) {
+    await tx.accountTransaction.upsert({
+      where: { personalSpendId: a.spendId },
+      update: { amount: a.amount, merchant: a.label, accountId: a.card.id },
+      create: { memberId: a.memberId, accountId: a.card.id, date: a.date, merchant: a.label, amount: a.amount, type: "spend", category: a.categoryName, source: "personal", personalSpendId: a.spendId },
+    });
+  } else {
+    await tx.accountTransaction.deleteMany({ where: { personalSpendId: a.spendId } });
+  }
 }
 
 export type PersonalSaveState = { ok: boolean; error?: string; n: number };
@@ -242,7 +272,8 @@ export async function addPersonalSpend(
   // card, deferred as usual); each other person's share becomes its own lent receivable
   // that posts back as income when received. "myShare" is what's left for you.
   const shared = formData.get("shared") === "on";
-  const cardAccountId = await ccCardId(member.id, formData); // CC + shared allowed
+  const card = await anyCardId(member.id, formData); // any owned card; shared allowed
+  const cardAccountId = card?.id ?? null;
   let splits: { name: string; amount: number }[] = [];
   let myShare = 0;
   if (shared) {
@@ -261,7 +292,9 @@ export async function addPersonalSpend(
   }
   const sharedOthers = shared ? Math.round((amount - myShare) * 100) / 100 : null; // others' total share
   await prisma.$transaction(async (tx) => {
-    await tx.personalSpend.create({ data: { memberId: member.id, periodId, categoryId, amount, note, cardAccountId, sharedOthers } });
+    const created = await tx.personalSpend.create({ data: { memberId: member.id, periodId, categoryId, amount, note, cardAccountId, sharedOthers } });
+    // A debit/prepaid card spend posts the FULL amount to the card ledger (that's what left the card).
+    await syncPersonalSpendLedger(tx, { spendId: created.id, memberId: member.id, card, amount, label: note, date: created.date, categoryName: cat.name });
     for (const s of splits) {
       await tx.personalLoan.create({
         data: {
@@ -290,8 +323,14 @@ export async function updatePersonalSpend(
   if (!s || s.memberId !== member.id) return { ok: false, error: "Not found.", n };
   if (!amount || amount <= 0 || !categoryId || !note)
     return { ok: false, error: "Enter a name, category and amount.", n };
-  const cardAccountId = await ccCardId(member.id, formData);
-  await prisma.personalSpend.update({ where: { id }, data: { categoryId, amount, note, cardAccountId } });
+  const cat = await prisma.personalCategory.findUnique({ where: { id: categoryId }, select: { memberId: true, name: true } });
+  if (!cat || cat.memberId !== member.id) return { ok: false, error: "Unknown category.", n };
+  const card = await anyCardId(member.id, formData);
+  const cardAccountId = card?.id ?? null;
+  await prisma.$transaction(async (tx) => {
+    await tx.personalSpend.update({ where: { id }, data: { categoryId, amount, note, cardAccountId } });
+    await syncPersonalSpendLedger(tx, { spendId: id, memberId: member.id, card, amount, label: note, date: s.date, categoryName: cat.name });
+  });
   rev();
   return { ok: true, n };
 }
