@@ -1476,6 +1476,19 @@ async function doAddMiscSpendCard(formData: FormData): Promise<{ ok: boolean; er
   return { ok: true };
 }
 
+// Setup control: stop a yearly misc spend card from re-seeding in future years. Keeps the current
+// month's card (it has spends/an envelope) — just clears the repeat so it won't come back.
+export async function stopMiscCardRepeat(formData: FormData) {
+  if (!(await isHead())) return;
+  const id = Number(formData.get("categoryId"));
+  if (!id) return;
+  const cat = await prisma.category.findUnique({ where: { id }, select: { miscCard: true, name: true } });
+  if (!cat?.miscCard) return;
+  await prisma.category.update({ where: { id }, data: { repeatYearly: false } });
+  await logActivity("expense", "updated", `Stopped misc card “${cat.name}” repeating yearly`);
+  revalidateFamily();
+}
+
 export type MiscCardState = { ok: boolean; n: number; error?: string };
 export async function addMiscSpendCard(prev: MiscCardState, formData: FormData): Promise<MiscCardState> {
   const n = (prev?.n ?? 0) + 1;
