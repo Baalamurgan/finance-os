@@ -184,6 +184,9 @@ export function InHandPersonGroup({
           <li key={`sf${f.name}`} className="flex items-center justify-between gap-2 text-xs">
             <span className="truncate text-indigo-600">
               🏦 Sinking · {f.name} <span className="text-[10px] text-slate-400">fund held</span>
+              {f.afterWindDown && f.projected > 0 && (
+                <span className="text-[10px] text-violet-400"> · +{formatINR(f.projected)} after {f.afterWindDown} winds down</span>
+              )}
             </span>
             <span className="shrink-0 tabular-nums font-medium text-indigo-700">{formatINR(f.amount)}</span>
           </li>

@@ -1146,8 +1146,14 @@ async function _getInHand(householdId: number, periodId: number) {
     // Piggy (which sits with the Piggy holder). Shown as its own "held for the bill" line.
     const sinkingFunds = sinkCats
       .filter((c) => (c.responsibleMemberId ?? piggyHolderId) === key)
-      .map((c) => ({ name: c.name, amount: Math.round((sinkBal[c.id] ?? 0) * 100) / 100 }))
-      .filter((f) => Math.abs(f.amount) > 0.005);
+      // `amount` = accrued fund (drives the in-hand total). `projected` = the prior OPEN month's
+      // set-aside that accrues into this fund at that month's wind-down — shown (not added) so a
+      // PREVIEW month reflects the full periodic-bill fund the family is really holding.
+      .map((c) => {
+        const projected = Math.max(0, Math.round((projectedByCat.get(c.id) ?? 0) * 100) / 100);
+        return { name: c.name, amount: Math.round((sinkBal[c.id] ?? 0) * 100) / 100, projected, afterWindDown: projected > 0.005 ? projectionLabel : null };
+      })
+      .filter((f) => Math.abs(f.amount) > 0.005 || f.projected > 0.005);
     const sinkingHeld = sinkingFunds.reduce((s, f) => s + f.amount, 0);
 
     const budgetRemaining = cats.reduce((s, r) => s + r.remaining, 0);
