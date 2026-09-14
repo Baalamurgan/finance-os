@@ -272,6 +272,10 @@ export async function addPersonalSpend(
   // card, deferred as usual); each other person's share becomes its own lent receivable
   // that posts back as income when received. "myShare" is what's left for you.
   const shared = formData.get("shared") === "on";
+  // Reimbursement: the WHOLE spend comes back (not a split). Same accounting as a split
+  // where others owe 100% — it doesn't eat this month's budget, and a single "lent"
+  // receivable drops cash-in-hand until it's marked received. Mutually exclusive with split.
+  const reimburse = !shared && formData.get("reimburse") === "on";
   const card = await anyCardId(member.id, formData); // any owned card; shared allowed
   const cardAccountId = card?.id ?? null;
   let splits: { name: string; amount: number }[] = [];
@@ -290,7 +294,8 @@ export async function addPersonalSpend(
     if (splits.length === 0 || othersSum > amount + 0.01 || myShare < -0.01)
       return { ok: false, error: "Check the split — the shares must add up to what you paid.", n };
   }
-  const sharedOthers = shared ? Math.round((amount - myShare) * 100) / 100 : null; // others' total share
+  // others' total share — full amount when it's a reimbursement (nothing is your expense)
+  const sharedOthers = shared ? Math.round((amount - myShare) * 100) / 100 : reimburse ? amount : null;
   await prisma.$transaction(async (tx) => {
     const created = await tx.personalSpend.create({ data: { memberId: member.id, periodId, categoryId, amount, note, cardAccountId, sharedOthers } });
     // A debit/prepaid card spend posts the FULL amount to the card ledger (that's what left the card).
@@ -300,6 +305,15 @@ export async function addPersonalSpend(
         data: {
           memberId: member.id, direction: "lent", counterparty: s.name,
           amount: s.amount, outstanding: s.amount, note, sharedPaid: amount, sharedShare: myShare,
+        },
+      });
+    }
+    if (reimburse) {
+      // one receivable for the full amount, filed under the spend name; sharedShare 0 marks it a reimbursement
+      await tx.personalLoan.create({
+        data: {
+          memberId: member.id, direction: "lent", counterparty: note,
+          amount, outstanding: amount, note, sharedPaid: amount, sharedShare: 0,
         },
       });
     }

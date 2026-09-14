@@ -146,7 +146,9 @@ function LoanList({
                           </div>
                           {l.sharedPaid != null && (
                             <div className="mt-0.5 inline-flex flex-wrap items-center gap-1.5 rounded-md bg-emerald-50 px-2 py-0.5 text-[11px] text-emerald-700">
-                              🤝 Shared spend · you paid {formatINR(l.sharedPaid)} · your share {formatINR(l.sharedShare ?? 0)}
+                              {l.sharedShare === 0
+                                ? `↩️ To receive back · you paid ${formatINR(l.sharedPaid)}`
+                                : `🤝 Shared spend · you paid ${formatINR(l.sharedPaid)} · your share ${formatINR(l.sharedShare ?? 0)}`}
                             </div>
                           )}
                           <div className="mt-1.5 flex items-center gap-2">

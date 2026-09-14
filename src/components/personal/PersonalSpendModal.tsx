@@ -49,6 +49,7 @@ export function PersonalSpendModal({
   const [splits, setSplits] = useState<SplitPerson[] | null>(null); // others' shares (shared spend)
   const [myShare, setMyShare] = useState(0);
   const [splitOpen, setSplitOpen] = useState(false);
+  const [reimburse, setReimburse] = useState(false); // whole spend to receive back (not a split)
   const shared = splits != null;
   const amountNum = Number(amount) || 0;
   const [state, formAction, pending] = useActionState(isEdit ? updatePersonalSpend : addPersonalSpend, INIT);
@@ -60,7 +61,7 @@ export function PersonalSpendModal({
       prevN.current = state.n;
       if (state.ok) {
         toast(isEdit ? "Updated" : "Spend added", "success");
-        if (!isEdit) { formRef.current?.reset(); setAmount(""); setNote(""); setCategoryId(""); setCatTouched(false); resetShared(); }
+        if (!isEdit) { formRef.current?.reset(); setAmount(""); setNote(""); setCategoryId(""); setCatTouched(false); resetShared(); setReimburse(false); }
         setOpen(false);
       } else toast(state.error ?? "Couldn't save", "error");
     }
@@ -70,7 +71,13 @@ export function PersonalSpendModal({
   const toggleShared = (checked: boolean) => {
     if (!checked) { resetShared(); return; }
     if (amountNum <= 0) { toast("Enter the amount you paid first", "error"); return; }
+    setReimburse(false); // split and reimburse are mutually exclusive
     setSplitOpen(true);
+  };
+
+  const toggleReimburse = (checked: boolean) => {
+    if (checked) resetShared(); // split and reimburse are mutually exclusive
+    setReimburse(checked);
   };
 
   return (
@@ -104,6 +111,7 @@ export function PersonalSpendModal({
                     <input type="hidden" name="myShare" value={myShare} />
                   </>
                 )}
+                {reimburse && <input type="hidden" name="reimburse" value="on" />}
                 <div>
                   <label className="text-xs font-medium text-slate-500">{shared ? "You paid (₹)" : "Amount (₹)"}</label>
                   <input
@@ -167,6 +175,15 @@ export function PersonalSpendModal({
                         </ul>
                         <button type="button" onClick={() => setSplitOpen(true)} className="mt-2 text-xs font-medium text-emerald-700">Edit split</button>
                       </div>
+                    )}
+                    <label className="mt-2 flex cursor-pointer items-center gap-2 border-t border-slate-200 pt-2 text-sm font-medium text-slate-700">
+                      <input type="checkbox" checked={reimburse} onChange={(e) => toggleReimburse(e.target.checked)} className="h-4 w-4 rounded border-slate-300" />
+                      ↩️ I&apos;ll get this back (reimbursement)
+                    </label>
+                    {reimburse && (
+                      <p className="mt-1.5 pl-6 text-xs text-slate-500">
+                        Adds a “{note.trim() || "this spend"}” receivable for {formatINR(amountNum)} to Lending. It won&apos;t reduce this month&apos;s budget — mark it received when the money comes back.
+                      </p>
                     )}
                   </div>
                 )}
