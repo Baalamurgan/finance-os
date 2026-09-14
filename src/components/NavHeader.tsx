@@ -57,7 +57,8 @@ export function NavHeader({
     | "settlement"
     | "wind-down"
     | "setup"
-    | "users";
+    | "users"
+    | "cards";
   householdName: string;
   selYear: number;
   selMonth: number;

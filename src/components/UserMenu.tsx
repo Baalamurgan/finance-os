@@ -38,6 +38,7 @@ export function UserMenu({
   // Admin-ish destinations moved out of the nav bar: Wind Down (everyone), Setup
   // (head + manager), Settings = members + app lock (head only).
   const adminLinks = [
+    { key: "cards", label: "Cards", href: "/cards", icon: "💳", show: true },
     { key: "wind-down", label: "Wind Down", href: "/wind-down", icon: "🌙", show: true },
     { key: "setup", label: "Setup · budgets & bills", href: "/setup", icon: "⚙️", show: canEdit },
     { key: "users", label: "Settings · members & lock", href: "/users", icon: "🔧", show: isHead },

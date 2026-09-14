@@ -13,7 +13,7 @@ import { formatINR, parseAmount } from "@/lib/format";
 import { generateMonth } from "@/lib/periodClone";
 import { isMiscBucket, MISC_SUBCATEGORIES } from "@/lib/misc";
 import { isLearnable } from "@/lib/spendCategorize";
-import { getSpendShortcuts, getMatcherKeywords, getFrequentSpendItems, getMoneyPlan, getMiscSubCategories } from "@/lib/queries";
+import { getSpendShortcuts, getMatcherKeywords, getFrequentSpendItems, getMoneyPlan, getMiscSubCategories, getFamilyCards } from "@/lib/queries";
 import { planBillMonth, type FundingStyle } from "@/lib/schedule";
 import { getBillReminders } from "@/lib/billReminders";
 import { applyBudgetShortfall, windDownPeriod } from "@/lib/windDown";
@@ -602,7 +602,19 @@ async function doAddSpend(formData: FormData): Promise<boolean> {
 
   // Only the head may log a spend on behalf of another member; everyone else = self.
   const overrideId = Number(formData.get("memberId")) || 0;
-  const memberId = overrideId && session?.user?.role === "head" ? overrideId : selfId;
+  let memberId = overrideId && session?.user?.role === "head" ? overrideId : selfId;
+  // Paid with a family card? The card is the authority on who paid — attribute the spend to the card's
+  // OWNER (regardless of who logged it), and record the card. Any member may pick any family card; it
+  // can only ever attribute to that card's owner, so it can't fabricate someone else's cash spend.
+  const cardAccountId = Number(formData.get("cardAccountId")) || 0;
+  let cardId: number | null = null;
+  if (cardAccountId) {
+    const card = await prisma.financeAccount.findUnique({ where: { id: cardAccountId }, select: { memberId: true, active: true, member: { select: { householdId: true } } } });
+    if (card && card.active && cat && card.member.householdId === cat.householdId) {
+      memberId = card.memberId; // card owner bore the cost
+      cardId = cardAccountId;
+    }
+  }
 
   // Phase 2: a spend belongs to the CALENDAR month it happened in (IST), not whichever month is still
   // "working". Route it to today's month so a spend logged in the new month can never backfill a month
@@ -620,7 +632,7 @@ async function doAddSpend(formData: FormData): Promise<boolean> {
 
   const imagePath = await saveUpload(formData.get("image"));
   await prisma.spend.create({
-    data: { periodId: targetPeriodId, categoryId, memberId, label, amount, subCategory, imagePath },
+    data: { periodId: targetPeriodId, categoryId, memberId, label, amount, subCategory, imagePath, cardAccountId: cardId },
   });
   // Learn the item→category so future entries of the same thing get suggested. Only
   // deliberate tracked (non-misc) categorisations teach the app — misc is ambiguous
@@ -653,20 +665,23 @@ async function learnSpendItem(householdId: number, label: string, categoryId: nu
 export type SpendAssist = {
   chips: { icon: string | null; label: string; categoryId: number }[];
   keywords: { keyword: string; category: string; hits: number }[];
+  cards: { id: number; name: string; ownerId: number; ownerName: string; last4: string | null; type: string; color: string }[];
 };
 export async function getSpendAssist(): Promise<SpendAssist> {
   const session = await auth();
-  if (!session?.user) return { chips: [], keywords: [] };
+  if (!session?.user) return { chips: [], keywords: [], cards: [] };
   const household = await prisma.household.findFirst({ select: { id: true } });
-  if (!household) return { chips: [], keywords: [] };
-  const [shortcuts, keywords] = await Promise.all([
+  if (!household) return { chips: [], keywords: [], cards: [] };
+  const [shortcuts, keywords, cardRows] = await Promise.all([
     getSpendShortcuts(household.id),
     getMatcherKeywords(household.id),
+    getFamilyCards(household.id), // active family cards for the "Paid with" picker
   ]);
   const chips = shortcuts.length
     ? shortcuts.map((s) => ({ icon: s.icon, label: s.label, categoryId: s.categoryId }))
     : (await getFrequentSpendItems(household.id)).map((f) => ({ icon: f.icon, label: f.label, categoryId: f.categoryId }));
-  return { chips, keywords };
+  const cards = cardRows.map((c) => ({ id: c.id, name: c.name, ownerId: c.memberId, ownerName: c.member.name, last4: c.last4, type: c.type, color: c.color }));
+  return { chips, keywords, cards };
 }
 
 // ── Quick-add chip management (head + managers) ──────────────────────────────
@@ -825,6 +840,88 @@ export async function deleteSpend(formData: FormData) {
   revalidateFamily();
 }
 
+// ── Family Cards (Phase 1) ───────────────────────────────────────────────────────────────────────
+// Shared card list reusing FinanceAccount (owner = memberId). Add: any family member. Edit/Delete:
+// the card's owner or the head. A card spend is attributed to the owner (see doAddSpend), so the
+// owner dropdown is the family member whose cash the card draws.
+export type CardFormState = { ok: boolean; error?: string; n: number };
+
+async function householdMemberIds(): Promise<Set<number>> {
+  const hh = await prisma.household.findFirst({ select: { id: true } });
+  if (!hh) return new Set();
+  const members = await prisma.member.findMany({ where: { householdId: hh.id }, select: { id: true } });
+  return new Set(members.map((m) => m.id));
+}
+
+export async function addFamilyCard(prev: CardFormState, formData: FormData): Promise<CardFormState> {
+  const n = (prev?.n ?? 0) + 1;
+  const session = await auth();
+  if (!session?.user?.memberId) return { ok: false, error: "Signed out.", n };
+  if (!(await unlocked())) return { ok: false, error: "Unlock the app first.", n };
+  const name = String(formData.get("name") ?? "").trim();
+  const type = String(formData.get("type") ?? "");
+  const ownerId = Number(formData.get("ownerId")) || 0;
+  if (!name) return { ok: false, error: "Name the card.", n };
+  if (type !== "credit_card" && type !== "debit_card") return { ok: false, error: "Pick a card type.", n };
+  if (!(await householdMemberIds()).has(ownerId)) return { ok: false, error: "Pick the card owner.", n };
+  const account = await prisma.financeAccount.create({
+    data: {
+      memberId: ownerId, // the owner — the family member whose cash this card draws
+      type,
+      name,
+      institution: String(formData.get("institution") ?? "").trim() || null,
+      network: String(formData.get("network") ?? "").trim() || null,
+      last4: String(formData.get("last4") ?? "").trim().slice(0, 4) || null,
+      color: String(formData.get("color") ?? "").trim() || "#6366f1",
+    },
+  });
+  if (type === "credit_card") await prisma.creditCardDetail.create({ data: { accountId: account.id } });
+  await logActivity("spend", "created", `Added card “${name}”`, null);
+  revalidateFamily();
+  return { ok: true, n };
+}
+
+// Owner or head. Owner reassignment (ownerId) is head-only — it only affects FUTURE spends; past
+// spends keep their own attribution.
+export async function updateFamilyCard(formData: FormData) {
+  const session = await auth();
+  if (!session?.user?.memberId) return;
+  if (!(await unlocked())) return;
+  const id = Number(formData.get("id"));
+  const account = await prisma.financeAccount.findUnique({ where: { id } });
+  if (!account) return;
+  const head = await isHead();
+  if (!head && account.memberId !== session.user.memberId) return; // owner or head only
+  const newOwner = Number(formData.get("ownerId")) || 0;
+  const ownerOk = head && newOwner && (await householdMemberIds()).has(newOwner);
+  await prisma.financeAccount.update({
+    where: { id },
+    data: {
+      name: String(formData.get("name") ?? account.name).trim() || account.name,
+      institution: String(formData.get("institution") ?? "").trim() || null,
+      network: String(formData.get("network") ?? "").trim() || null,
+      last4: String(formData.get("last4") ?? "").trim().slice(0, 4) || null,
+      color: String(formData.get("color") ?? "").trim() || account.color,
+      active: formData.get("active") == null ? account.active : formData.get("active") === "on",
+      ...(ownerOk ? { memberId: newOwner } : {}),
+    },
+  });
+  revalidateFamily();
+}
+
+export async function deleteFamilyCard(formData: FormData) {
+  const session = await auth();
+  if (!session?.user?.memberId) return;
+  if (!(await unlocked())) return;
+  const id = Number(formData.get("id"));
+  const account = await prisma.financeAccount.findUnique({ where: { id } });
+  if (!account) return;
+  if (!(await isHead()) && account.memberId !== session.user.memberId) return; // owner or head only
+  await prisma.financeAccount.delete({ where: { id } }); // cascades detail/txns; Spend.cardAccountId → SET NULL
+  await logActivity("spend", "deleted", `Removed card “${account.name}”`, null);
+  revalidateFamily();
+}
+
 // Re-tag a misc spend's reporting sub-category (Food, Travel…). Reporting only — no
 // effect on settlement or budgets. Owner or head, on an open month.
 export async function setSpendSubCategory(formData: FormData) {
@@ -932,6 +1029,8 @@ export async function editSpendAction(
     const raw = String(formData.get("memberId") ?? "");
     memberId = raw === "" ? null : Number(raw) || null;
   }
+  // A card spend is always the card owner's — don't let an edit reassign it away from the owner.
+  if (spend.cardAccountId != null) memberId = spend.memberId;
 
   // createdAt is intentionally left untouched — the date of spend stays as it was.
   await prisma.spend.update({ where: { id }, data: { label, amount, subCategory, memberId } });

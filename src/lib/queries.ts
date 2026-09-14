@@ -168,6 +168,21 @@ export async function getMembers(householdId: number) {
   });
 }
 
+// Family Cards (Phase 1): the shared card list = every household member's FinanceAccounts, each with its
+// owner. `activeOnly` for the Add-Spend picker; the Cards management page passes false to show all.
+export type FamilyCard = Awaited<ReturnType<typeof getFamilyCards>>[number];
+export async function getFamilyCards(householdId: number, activeOnly = true) {
+  return prisma.financeAccount.findMany({
+    where: { member: { householdId }, ...(activeOnly ? { active: true } : {}) },
+    select: {
+      id: true, name: true, type: true, institution: true, network: true, last4: true, color: true,
+      active: true, memberId: true, member: { select: { name: true } },
+      credit: { select: { creditLimit: true, statementDay: true, dueOffsetDays: true } },
+    },
+    orderBy: [{ memberId: "asc" }, { sortOrder: "asc" }, { name: "asc" }],
+  });
+}
+
 // general Piggy balance only (variable categories); excludes sinking-fund holds
 export async function getPiggyBalance(householdId: number) {
   const agg = await prisma.piggyEntry.aggregate({
@@ -1657,12 +1672,12 @@ export async function getMoneyPlanActivity(periodId: number): Promise<MoneyPlanA
 // spends that were seeded/imported or logged before activity-logging existed still show. Shown at the
 // bottom of the Spends tab (this is the per-month spend visibility that used to sit in the head-only
 // "Member activity log", now open to everyone). Scoped to one month, so no cap is needed.
-export type SpendActivityItem = { id: number; memberName: string | null; label: string; category: string; amount: number; at: Date };
+export type SpendActivityItem = { id: number; memberName: string | null; label: string; category: string; amount: number; at: Date; card: { name: string; last4: string | null; color: string } | null };
 export async function getSpendActivity(periodId: number): Promise<SpendActivityItem[]> {
   const rows = await prisma.spend.findMany({
     where: { periodId },
     orderBy: [{ createdAt: "desc" }, { id: "desc" }],
-    include: { member: { select: { name: true } }, category: { select: { name: true } } },
+    include: { member: { select: { name: true } }, category: { select: { name: true } }, cardAccount: { select: { name: true, last4: true, color: true } } },
   });
   return rows.map((s) => ({
     id: s.id,
@@ -1671,6 +1686,7 @@ export async function getSpendActivity(periodId: number): Promise<SpendActivityI
     category: s.category?.name ?? "",
     amount: s.amount,
     at: s.createdAt,
+    card: s.cardAccount ? { name: s.cardAccount.name, last4: s.cardAccount.last4, color: s.cardAccount.color } : null,
   }));
 }
 

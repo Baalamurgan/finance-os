@@ -379,6 +379,7 @@ model FinanceAccount {
   txns        AccountTransaction[]
   taggedSpends   PersonalSpend[]   @relation("PersonalSpendCard")
   taggedExpenses PersonalExpense[] @relation("PersonalExpenseCard")
+  familySpends   Spend[]           @relation("FamilySpendCard")
   cardBills      PersonalCardBill[]
   createdAt   DateTime @default(now())
 
@@ -713,6 +714,11 @@ model Spend {
   categoryId Int
   member     Member?  @relation(fields: [memberId], references: [id])
   memberId   Int?
+  // Paid with a family card (a FinanceAccount) instead of cash/UPI. Null = cash/UPI. When set, the spend
+  // is attributed to the card's OWNER (memberId = account.memberId) — the card is the authority on who
+  // paid. onDelete: SetNull so removing a card leaves past spends intact (they keep memberId).
+  cardAccount   FinanceAccount? @relation("FamilySpendCard", fields: [cardAccountId], references: [id], onDelete: SetNull)
+  cardAccountId Int?
   label      String
   amount     Float
   subCategory String? // reporting-only tag for Personal/Misc spends (Food, Travel…); null = uncategorized

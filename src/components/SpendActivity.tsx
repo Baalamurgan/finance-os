@@ -30,6 +30,12 @@ export function SpendActivity({ items }: { items: SpendActivityItem[] }) {
                 {" — "}
                 {it.label}
                 <span className="text-slate-400"> · {it.category}</span>
+                {it.card && (
+                  <span className="ml-1 inline-flex items-center gap-1 align-middle text-[10px] text-violet-600">
+                    <span className="inline-block h-2 w-2 rounded-full" style={{ backgroundColor: it.card.color }} aria-hidden />
+                    💳 {it.card.name}{it.card.last4 ? ` ··${it.card.last4}` : ""}
+                  </span>
+                )}
               </p>
               <p className="mt-0.5 text-[10px] tabular-nums text-slate-400">{fmtAt.format(it.at)}</p>
             </div>

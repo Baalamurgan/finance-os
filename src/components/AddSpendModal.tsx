@@ -11,6 +11,7 @@ type Cat = { id: number; name: string; misc?: boolean }; // misc = the Personal/
 type Mem = { id: number; name: string };
 
 type Chip = { icon: string | null; label: string; categoryId: number };
+type Card = { id: number; name: string; ownerId: number; ownerName: string; last4: string | null; type: string; color: string };
 
 export function AddSpendModal({
   periodId,
@@ -42,9 +43,12 @@ export function AddSpendModal({
   const [labelText, setLabelText] = useState(""); // controlled so chips can drive it
   const [chips, setChips] = useState<Chip[]>([]); // head shortcuts, or frequent items
   const [learned, setLearned] = useState<LearnedKeyword[]>([]); // household's taught items
+  const [cards, setCards] = useState<Card[]>([]); // family cards for the "Paid with" picker
+  const [cardId, setCardId] = useState<number | null>(null); // null = Cash / UPI
   const [confirmOpen, setConfirmOpen] = useState(false); // on-save "did you mean" popup
   const [submitTick, setSubmitTick] = useState(0); // bump to submit after a state update
 
+  const selectedCard = cardId != null ? cards.find((c) => c.id === cardId) : undefined;
   // Misc (Personal/Misc) spends must carry a reporting sub-category (Food, Travel…).
   const selectedCat = fixedCategory ?? categories?.find((c) => c.id === categoryId);
   const isMiscSelected = !!selectedCat?.misc && !!subCategories?.length;
@@ -82,12 +86,13 @@ export function AddSpendModal({
 
   // Fetch the quick chips + learned words the first time the modal opens (picker mode).
   useEffect(() => {
-    if (open && !fetchedKw.current && !fixedCategory) {
+    if (open && !fetchedKw.current) {
       fetchedKw.current = true;
       getSpendAssist()
         .then((a) => {
           setChips(a.chips);
           setLearned(a.keywords);
+          setCards(a.cards);
         })
         .catch(() => {});
     }
@@ -308,8 +313,44 @@ export function AddSpendModal({
                     </div>
                   )}
 
-                  {/* head-only: log a spend on behalf of another family member */}
-                  {isHead && members && members.length > 0 && (
+                  {/* Paid with — Cash/UPI (default) or a family card. A card attributes the spend to its
+                      OWNER (the card's cash), regardless of who's logging it. */}
+                  <input type="hidden" name="cardAccountId" value={cardId ?? ""} />
+                  {cards.length > 0 && (
+                    <div>
+                      <label className="text-sm font-medium text-slate-600">Paid with</label>
+                      <div className="mt-1.5 grid grid-cols-2 gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setCardId(null)}
+                          className={`min-h-12 rounded-xl border-2 px-3 py-2.5 text-left text-sm font-medium transition ${cardId === null ? "border-indigo-500 bg-indigo-50 text-indigo-700" : "border-slate-200 text-slate-600 active:border-slate-400"}`}
+                        >
+                          💵 Cash / UPI
+                        </button>
+                        {cards.map((c) => (
+                          <button
+                            key={c.id}
+                            type="button"
+                            onClick={() => setCardId(c.id)}
+                            className={`min-h-12 rounded-xl border-2 px-3 py-2.5 text-left transition ${cardId === c.id ? "border-indigo-500 bg-indigo-50" : "border-slate-200 active:border-slate-400"}`}
+                          >
+                            <span className="flex items-center gap-1.5 text-sm font-medium text-slate-700">
+                              <span className="inline-block h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: c.color }} />
+                              <span className="truncate">💳 {c.name}{c.last4 ? ` ··${c.last4}` : ""}</span>
+                            </span>
+                            <span className="mt-0.5 block truncate text-[11px] text-slate-400">{c.ownerName} · {c.type === "credit_card" ? "credit" : "debit"}</span>
+                          </button>
+                        ))}
+                      </div>
+                      {selectedCard && (
+                        <p className="mt-1.5 text-xs text-violet-600">Counts as {selectedCard.ownerName}&apos;s spend (card owner).</p>
+                      )}
+                    </div>
+                  )}
+
+                  {/* head-only: log a spend on behalf of another member — hidden when a card is chosen
+                      (the card owner is the payer, so a manual "who spent" would be ignored). */}
+                  {cardId == null && isHead && members && members.length > 0 && (
                     <div>
                       <label className="text-sm font-medium text-slate-600">Who spent</label>
                       <select
