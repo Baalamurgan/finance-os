@@ -76,6 +76,11 @@ export function ExpenseModal({
   const [poolFund, setPoolFund] = useState(false);
   // Two-step variant: also add a separate "member → vendor" payment step (independently tickable).
   const [poolBill, setPoolBill] = useState(false);
+  // "Make it a spend card": create a budgeted Misc category members spend into (like veggies),
+  // instead of a one-shot bill line. Mutually exclusive with pool-funding. `repeatYearly` re-seeds
+  // it this month each year. Only offered for a misc expense on create.
+  const [spendCard, setSpendCard] = useState(false);
+  const [repeatYearly, setRepeatYearly] = useState(false);
   const noteRef = useRef<HTMLInputElement>(null);
   const prevN = useRef(0);
 
@@ -96,7 +101,9 @@ export function ExpenseModal({
   // Offer pool-funding only for the misc bucket assigned to a real member, on create.
   const selectedCat = categoryId != null ? categories.find((c) => c.id === categoryId) : undefined;
   const isMiscCat = newCat ? newCatSection === "Misc" : selectedCat?.section === "Misc";
-  const showPool = !initial && isMiscCat && memberId !== "";
+  const showPool = !initial && isMiscCat && memberId !== "" && !spendCard;
+  // Offer "make it a spend card" for a misc expense on create (a reusable budget, not a bill).
+  const showCardToggle = !initial && isMiscCat;
   const memberLabel = members.find((m) => String(m.id) === memberId)?.name ?? "";
   const fullyCovered = coveredTotal >= shortfallAmt - 0.5;
   const toggleFunder = (memberId: number, spare: number) => {
@@ -133,7 +140,7 @@ export function ExpenseModal({
   useEffect(() => {
     if (state.n > prevN.current) {
       prevN.current = state.n;
-      toast(initial ? "Expense updated" : "Expense added", "success");
+      toast(initial ? "Expense updated" : spendCard ? "Spend card added" : "Expense added", "success");
       setOpen(false);
       setPicks({});
       if (!initial) {
@@ -148,6 +155,8 @@ export function ExpenseModal({
         setNewCatSection(newCategoryDefaultSection);
         setPoolFund(false);
         setPoolBill(false);
+        setSpendCard(false);
+        setRepeatYearly(false);
       }
     }
   }, [state.n]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -347,8 +356,34 @@ export function ExpenseModal({
                   />
                 </div>
 
+                {/* Make it a spend card: a reusable Misc budget members log spends into, instead of
+                    a one-shot bill line. The note above becomes the card name. */}
+                {showCardToggle && (
+                  <div className="rounded-lg bg-indigo-50 px-3 py-2">
+                    <label className="flex items-start gap-2 text-sm text-indigo-800">
+                      <input type="checkbox" checked={spendCard} onChange={(e) => { setSpendCard(e.target.checked); if (e.target.checked) { setPoolFund(false); setPoolBill(false); } }} className="mt-0.5 h-4 w-4 accent-indigo-600" />
+                      <span>
+                        Make it a spend card
+                        <span className="mt-0.5 block text-xs font-normal text-indigo-600">
+                          A budget members spend into (like veggies) — logged with payment method &amp; buyer, reimbursed at settlement. Leftover → Piggy, overspend → next month. The note above is the card name.
+                        </span>
+                      </span>
+                    </label>
+                    {spendCard && (
+                      <>
+                        <input type="hidden" name="spendCard" value="on" />
+                        <label className="mt-2 flex items-center gap-2 border-t border-indigo-100 pt-2 text-sm text-indigo-800">
+                          <input type="checkbox" name="repeatYearly" checked={repeatYearly} onChange={(e) => setRepeatYearly(e.target.checked)} className="h-4 w-4 accent-indigo-600" />
+                          Repeat every year
+                          <span className="text-xs text-indigo-500">(auto-added this month next year)</span>
+                        </label>
+                      </>
+                    )}
+                  </div>
+                )}
+
                 {/* optional due day — drives Money-plan ordering / overdue tags */}
-                {showDueDay && (
+                {showDueDay && !spendCard && (
                   <div>
                     <label className="text-xs font-medium text-slate-500">Due day (optional)</label>
                     <input
@@ -368,8 +403,8 @@ export function ExpenseModal({
                   </div>
                 )}
 
-                {/* recurring vs one-time — create mode only */}
-                {!initial && (
+                {/* recurring vs one-time — create mode only (a spend card uses "repeat every year" instead) */}
+                {!initial && !spendCard && (
                   <label className="flex items-center gap-2 rounded-lg bg-slate-50 px-3 py-2 text-sm text-slate-700">
                     <input type="checkbox" name="repeat" checked={repeat} onChange={(e) => setRepeat(e.target.checked)} className="h-4 w-4 accent-indigo-600" />
                     Repeat every month

@@ -35,7 +35,9 @@ export async function getBillReminders(householdId: number, now = new Date()): P
   const [members, categories, periods, billPayments] = await Promise.all([
     prisma.member.findMany({ where: { householdId }, select: { id: true, role: true } }),
     prisma.category.findMany({
-      where: { householdId, remind: true, onHold: false, kind: "expense" },
+      // miscCard categories carry a billMonth (for yearly re-seeding) but are budgets, not bills —
+      // exclude them so they never nag as a "due bill".
+      where: { householdId, remind: true, onHold: false, kind: "expense", miscCard: false },
       select: {
         id: true, name: true, fixed: true, billEveryMonths: true, billMonth: true, billDay: true,
         billAmount: true, responsibleMemberId: true, payerMemberId: true, reminderDays: true,

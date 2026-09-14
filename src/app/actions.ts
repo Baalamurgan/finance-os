@@ -270,6 +270,12 @@ async function doSaveExpense(formData: FormData): Promise<{ ok: boolean; error?:
 
   const id = formData.get("id") ? Number(formData.get("id")) : null;
   const periodId = Number(formData.get("periodId"));
+  // "Make it a spend card": a NEW misc line the household budgets and members spend into (like
+  // veggies), not a one-shot bill. Delegates to the budgeted-card path — no funding/pool/dueDay.
+  if (!id && formData.get("spendCard") === "on") {
+    if (!(await canEditNow(periodId))) return { ok: false };
+    return doAddMiscSpendCard(formData);
+  }
   let categoryId = Number(formData.get("categoryId")) || 0;
   const amount = parseAmount(formData.get("amount"));
   const label = String(formData.get("label") ?? "").trim();
@@ -1426,32 +1432,35 @@ export async function createCategory(
 // usual payment-method + out-of-pocket → settlement, remaining → Piggy, overspend → carry. One-off
 // by default (never cloned forward); repeatYearly re-seeds it in this month each year (see
 // periodClone). Distinct from the ad-hoc Misc SPENDS, which are untouched.
-export type MiscCardState = { ok: boolean; n: number; error?: string };
-export async function addMiscSpendCard(prev: MiscCardState, formData: FormData): Promise<MiscCardState> {
-  const n = (prev?.n ?? 0) + 1;
+// Core: create the card + materialise its envelope. Shared by the standalone action and the
+// ExpenseModal's "make it a spend card" branch (which sends `label` for the name). Assumes the
+// caller already checked canEdit/canEditNow.
+async function doAddMiscSpendCard(formData: FormData): Promise<{ ok: boolean; error?: string }> {
   const periodId = Number(formData.get("periodId"));
-  if (!periodId || !(await canEditNow(periodId))) return { ok: false, n, error: "This month can’t be edited." };
-  const name = String(formData.get("name") ?? "").trim().slice(0, 40);
+  const name = String(formData.get("name") ?? formData.get("label") ?? "").trim().slice(0, 40);
   const amount = parseAmount(formData.get("amount"));
-  if (!name || !amount || amount <= 0) return { ok: false, n, error: "Give the card a name and budget." };
+  if (!periodId || !name || !amount || amount <= 0) return { ok: false, error: "Give the card a name and budget." };
   const repeatYearly = formData.get("repeatYearly") === "on";
-  const memberRaw = String(formData.get("responsibleMemberId") ?? "").trim();
+  const memberRaw = String(formData.get("responsibleMemberId") ?? formData.get("memberId") ?? "").trim();
   const responsibleMemberId = memberRaw === "" ? null : Number(memberRaw);
   const period = await prisma.period.findUnique({ where: { id: periodId }, select: { householdId: true, month: true } });
-  if (!period) return { ok: false, n, error: "Month not found." };
+  if (!period) return { ok: false, error: "Month not found." };
   // Same balance guard as adding an expense: the budget can't exceed the month's income − expense.
   const [inc, exp] = await Promise.all([
     prisma.incomeEntry.aggregate({ where: { periodId }, _sum: { amount: true } }),
     prisma.expenseEntry.aggregate({ where: { periodId }, _sum: { amount: true } }),
   ]);
   const bal = (inc._sum.amount ?? 0) - (exp._sum.amount ?? 0);
-  if (amount > bal) return { ok: false, n, error: `That's more than the month's balance (${formatINR(bal)}).` };
+  if (amount > bal) return { ok: false, error: `That's more than the month's balance (${formatINR(bal)}).` };
   try {
     await prisma.$transaction(async (tx) => {
+      // section "Monthly" + tracked (+ no sinking/fund/periodic) = a "Budgeted · leftover → Piggy"
+      // card, exactly like veggies/fuel — so it renders and settles like them with no misc-bucket
+      // special-casing. `miscCard` only tags it (clone gating + Setup); it never keys misc behaviour.
       const cat = await tx.category.create({
         data: {
-          householdId: period.householdId, name, section: "Misc", tracked: true,
-          monthlyBudget: amount, responsibleMemberId, miscCard: true, repeatYearly, billMonth: period.month,
+          householdId: period.householdId, name, section: "Monthly", tracked: true,
+          monthlyBudget: amount, responsibleMemberId, miscCard: true, repeatYearly, billMonth: repeatYearly ? period.month : null,
         },
       });
       // Materialise into the CURRENT month now (clone only seeds FUTURE months): envelope + budget,
@@ -1460,11 +1469,20 @@ export async function addMiscSpendCard(prev: MiscCardState, formData: FormData):
       await tx.budget.create({ data: { periodId, categoryId: cat.id, planned: amount } });
     });
   } catch {
-    return { ok: false, n, error: `"${name}" already exists.` };
+    return { ok: false, error: `"${name}" already exists.` };
   }
   await logActivity("expense", "created", `Added misc spend card “${name}” (${formatINR(amount)})${repeatYearly ? " · repeats yearly" : ""}`, periodId);
   revalidateFamily();
-  return { ok: true, n };
+  return { ok: true };
+}
+
+export type MiscCardState = { ok: boolean; n: number; error?: string };
+export async function addMiscSpendCard(prev: MiscCardState, formData: FormData): Promise<MiscCardState> {
+  const n = (prev?.n ?? 0) + 1;
+  const periodId = Number(formData.get("periodId"));
+  if (!periodId || !(await canEditNow(periodId))) return { ok: false, n, error: "This month can’t be edited." };
+  const res = await doAddMiscSpendCard(formData);
+  return { ok: res.ok, n: res.ok ? n : n, error: res.error };
 }
 
 // Delete a category — only if it has no expense rows (else suggest Hold). Cleans budgets/spends.
