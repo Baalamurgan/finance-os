@@ -67,6 +67,9 @@ function isPiggyBudget(cat: ExpRow["category"]): boolean {
 // sits together under Yearly / periodic bills; tracked leftover→Piggy budgets get their own
 // section; everything else follows its category's section.
 function sheetSection(e: ExpRow): string {
+  // Planned-misc spend cards are budgeted under the hood (section "Monthly" so they dodge the misc-
+  // bucket special-casing), but they ARE miscellaneous — display them under Misc, not Budgeted.
+  if (e.category.miscCard) return "Misc";
   // Any bill-with-a-fund (EB, WiFi, insurance…) — its share, due-month bill and fund credit — sits
   // under Yearly / periodic bills, so a periodic bill is never buried in "Monthly" (even a monthly
   // one, billEveryMonths 1). Plain multi-month bills (no fund) go there too.
