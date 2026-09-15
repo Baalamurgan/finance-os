@@ -22,6 +22,7 @@ export function AddSpendModal({
   members,
   currentMemberId,
   subCategories,
+  triggerLabel,
 }: {
   periodId: number;
   trigger: "primary" | "card" | "fab";
@@ -31,6 +32,7 @@ export function AddSpendModal({
   members?: Mem[];
   currentMemberId?: number | null;
   subCategories?: { name: string; icon: string }[]; // shown & required for misc spends
+  triggerLabel?: string; // override the "card" trigger button text (e.g. "Pay")
 }) {
   const toast = useToast();
   const [open, setOpen] = useState(false);
@@ -176,7 +178,7 @@ export function AddSpendModal({
           onClick={openModal}
           className="rounded-md px-2 py-1 text-xs font-medium text-indigo-600 hover:bg-indigo-50"
         >
-          + Add spend
+          {triggerLabel ?? "+ Add spend"}
         </button>
       )}
       {trigger === "fab" && <Fab onOpen={openModal} />}

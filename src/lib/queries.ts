@@ -845,6 +845,29 @@ export async function getSettlementHistory(householdId: number) {
 
 export type TrackedExpenses = Awaited<ReturnType<typeof getTrackedExpenses>>;
 
+// Planned-misc spend cards active in this period (have a budget), for the Money Plan checklist. Each
+// is "paid" by logging a spend against its category (from here or the Spends tab) — done = ≥1 spend.
+// Net-neutral to the funding engine: it's the payer's own held budget, drawn by the spend, reimbursed
+// at settlement like any budgeted category — so it's a checklist item, not a hub-funded transfer.
+export type MiscCardStep = { categoryId: number; name: string; amount: number; payerId: number | null; payerName: string; done: boolean };
+export async function getMiscCardSteps(householdId: number, periodId: number): Promise<MiscCardStep[]> {
+  const cats = await prisma.category.findMany({ where: { householdId, miscCard: true, onHold: false }, select: { id: true, name: true, responsibleMemberId: true } });
+  if (cats.length === 0) return [];
+  const ids = cats.map((c) => c.id);
+  const [budgets, spendGroups, members] = await Promise.all([
+    prisma.budget.findMany({ where: { periodId, categoryId: { in: ids } }, select: { categoryId: true, planned: true } }),
+    prisma.spend.groupBy({ by: ["categoryId"], where: { periodId, categoryId: { in: ids } }, _count: { _all: true } }),
+    prisma.member.findMany({ where: { householdId }, select: { id: true, name: true } }),
+  ]);
+  const planned = new Map(budgets.map((b) => [b.categoryId, b.planned]));
+  const spentCount = new Map(spendGroups.map((g) => [g.categoryId, g._count._all]));
+  const nameOf = (id: number | null) => members.find((m) => m.id === id)?.name ?? "Shared";
+  return cats
+    .filter((c) => (planned.get(c.id) ?? 0) > 0) // only cards materialised (budgeted) this month
+    .map((c) => ({ categoryId: c.id, name: c.name, amount: Math.round((planned.get(c.id) ?? 0) * 100) / 100, payerId: c.responsibleMemberId, payerName: nameOf(c.responsibleMemberId), done: (spentCount.get(c.id) ?? 0) > 0 }))
+    .sort((a, b) => Number(a.done) - Number(b.done) || b.amount - a.amount); // unpaid first, then largest
+}
+
 /**
  * Per tracked category for a period: the allocation (Budget), actual spent
  * (sum of Spends), remaining, over-budget flag, and the list of spends.

@@ -8,6 +8,7 @@ import { markSettled, unsettle, toggleBillPaid, markAdvanceSettled, unsettleAdva
 import { PayBillModal } from "@/components/PayBillModal";
 import { MiscPayModal } from "@/components/MiscPayModal";
 import { ExpenseModal } from "@/components/ExpenseModal";
+import { AddSpendModal } from "@/components/AddSpendModal";
 import { StepDayEditor } from "@/components/StepDayEditor";
 import { useToast, useToastAction } from "@/components/Toast";
 import type { MoneyPlanResult } from "@/lib/queries";
@@ -20,7 +21,7 @@ import { canActOnStep, canActInMonth } from "@/lib/planAuth";
 // Refresh re-pulls due dates + amounts from Setup into this month, then re-orders the plan.
 export function MoneyPlan({
   plan, householdId, periodId, isHead, currentMemberId, canEdit, open, datesEditable = false, generalPiggy,
-  billCategories, members, monthBalance,
+  billCategories, members, monthBalance, miscCards = [],
 }: {
   plan: MoneyPlanResult;
   householdId: number;
@@ -36,6 +37,9 @@ export function MoneyPlan({
   billCategories: { id: number; name: string; section?: string }[];
   members: { id: number; name: string }[];
   monthBalance: number;
+  // Planned-misc spend cards — a checklist paid by logging a spend (Pay opens the spend modal with the
+  // card's category pre-filled). Net-neutral to the plan's liquidity engine (see getMiscCardSteps).
+  miscCards?: import("@/lib/queries").MiscCardStep[];
 }) {
   const router = useRouter();
   const toast = useToast();
@@ -447,6 +451,43 @@ export function MoneyPlan({
             );
           })}
         </ol>
+
+        {/* Planned-misc spend cards — paid by logging a spend (Pay opens the spend modal with the card's
+            category pre-filled). Done once ≥1 spend exists for the card (from here or the Spends tab). */}
+        {miscCards.filter((mc) => who == null || mc.payerId === who).length > 0 && (
+          <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50/50 p-3">
+            <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-amber-700">🧾 Misc extras · pay by logging the spend</div>
+            <ul className="space-y-1.5">
+              {miscCards.filter((mc) => who == null || mc.payerId === who).map((mc) => (
+                <li key={mc.categoryId} className="flex items-center justify-between gap-2 text-sm">
+                  <span className="min-w-0 truncate text-slate-700">
+                    {mc.done && <span className="text-emerald-600">✓ </span>}
+                    {mc.name}
+                    <span className="text-xs text-slate-400"> · {mc.payerName}</span>
+                  </span>
+                  <span className="flex shrink-0 items-center gap-2">
+                    <span className={`tabular-nums ${mc.done ? "text-slate-400 line-through" : "text-slate-700"}`}>{formatINR(mc.amount)}</span>
+                    {open && !mc.done ? (
+                      <AddSpendModal
+                        trigger="card"
+                        triggerLabel="Pay"
+                        periodId={periodId}
+                        fixedCategory={{ id: mc.categoryId, name: mc.name, misc: false }}
+                        isHead={isHead}
+                        members={members}
+                        currentMemberId={currentMemberId}
+                      />
+                    ) : mc.done ? (
+                      <span className="text-[10px] font-medium text-emerald-600">logged</span>
+                    ) : (
+                      <span className="text-[9px] text-slate-300">to be paid</span>
+                    )}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
 
         {/* hidden (removed) steps — listed so they can be brought back; they move no cash while hidden */}
         {plan.steps.some((s) => s.hidden) && (
