@@ -259,20 +259,20 @@ export function AddSpendModal({
                     </div>
                   )}
 
-                  {/* category chips (picker mode only) — big tap targets */}
+                  {/* category chips (picker mode only) — compact wrapping pills */}
                   {!fixedCategory && categories && (
                     <div>
                       <label className="text-sm font-medium text-slate-600">Category</label>
-                      <div className="mt-1.5 grid grid-cols-2 gap-2">
+                      <div className="mt-1.5 flex flex-wrap gap-1.5">
                         {categories.map((cat) => (
                           <button
                             key={cat.id}
                             type="button"
                             onClick={() => setCategoryId(cat.id)}
-                            className={`min-h-12 rounded-xl border-2 px-3 py-3 text-base font-medium transition ${
+                            className={`rounded-full border px-3 py-1.5 text-sm font-medium transition ${
                               categoryId === cat.id
                                 ? "border-indigo-500 bg-indigo-50 text-indigo-700"
-                                : "border-slate-200 text-slate-600 active:border-slate-400"
+                                : "border-slate-200 text-slate-600 hover:border-slate-300 active:border-slate-400"
                             }`}
                           >
                             {cat.name}
