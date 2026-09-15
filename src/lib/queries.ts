@@ -777,6 +777,18 @@ export async function getMoneyPlan(householdId: number, periodId: number, inhand
     else if ((s.kind === "transfer-in" || s.kind === "transfer-out") && s.recordId != null) s.paidDay = settlementPaidDay.get(s.recordId) ?? null;
     else if (s.kind === "advance" && s.advanceId != null) { const a = advancePaidDay.get(s.advanceId); s.paidDay = (s.payback ? a?.payback : a?.front) ?? null; }
   }
+  // Planned-misc spend cards → inline plan steps (paid by logging a spend; done once ≥1 spend exists).
+  // Display-only: their full amount is ALREADY in the payer's held budget/settlement, so they carry no
+  // extra liquidity here — they just show as ordinary steps with a Pay button (see the MoneyPlan render).
+  const miscCardSteps = await getMiscCardSteps(householdId, periodId);
+  for (const mc of miscCardSteps) {
+    plan.steps.push({
+      id: `misccard-${mc.categoryId}`, kind: "bill", day: null, amount: mc.amount, done: mc.done,
+      payerId: mc.payerId, payerName: mc.payerName, vendor: mc.name, categoryId: mc.categoryId, miscCard: true,
+    });
+  }
+  plan.total += miscCardSteps.length;
+  plan.done += miscCardSteps.filter((mc) => mc.done).length;
   // reimburseByMember (prior-month out-of-pocket each member fronted) is surfaced so the balance walk
   // can explain a contributor's end-of-month leftover: it ≈ what they're repaid for last month's spends.
   return { ...plan, treasurerId: inhand.treasurerId, periodId, reimburseByMember };

@@ -54,6 +54,7 @@ export type PlanStep = {
   infeasibleFrom?: number | null; // this piece can't be funded by its due day; earliest day it becomes fundable (null = never this month)
   // bill
   payerId?: number | null; payerName?: string; vendor?: string; billId?: number; categoryId?: number; fund?: boolean; fundAvail?: number; misc?: boolean; deferred?: boolean;
+  miscCard?: boolean; // a planned-misc spend card: paid by logging a spend against its category (categoryId)
   status?: "overdue" | "soon" | "normal" | null;
   days?: number | null; // days until due (negative = overdue), for the urgency tag
   short?: number; // hub is short this much when this step runs (funds not in yet)
