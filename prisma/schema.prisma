@@ -510,6 +510,7 @@ model Period {
   settlements  SettlementRecord[]
   advances     Advance[]
   stepDayOverrides StepDayOverride[]
+  stepOrderOverrides StepOrderOverride[]
   manualPlanSteps  ManualPlanStep[]
   hiddenPlanSteps  HiddenPlanStep[]
   poolHandovers    PoolHandover[]
@@ -701,6 +702,18 @@ model StepDayOverride {
   periodId Int
   stepKey  String // e.g. "fund-<categoryId>", "piggyho-<priorPeriodId>-<ownerId>"
   day      Int
+  @@unique([periodId, stepKey])
+}
+
+// Head-set MANUAL ordering of Money-Plan steps (move up/down). Keyed by the step's id; sortIndex overrides
+// the derived (day/rank) order in the plan's final sort. A move renumbers every step for this period, so
+// the set stays consistent; steps with no row here fall back to their derived position.
+model StepOrderOverride {
+  id        Int    @id @default(autoincrement())
+  period    Period @relation(fields: [periodId], references: [id])
+  periodId  Int
+  stepKey   String // the PlanStep.id (e.g. "bill-123", "disb-3-1-20-52631", "xfer-2-1")
+  sortIndex Float
   @@unique([periodId, stepKey])
 }
 

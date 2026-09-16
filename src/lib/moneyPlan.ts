@@ -10,6 +10,7 @@ export type PlanBill = {
   key: string; payerId: number | null; payerName: string; vendor: string; amount: number; done: boolean;
   day: number | null; status: "overdue" | "soon" | "normal" | null; days?: number | null; billId?: number; categoryId?: number; fund?: boolean; fundAvail?: number;
   misc?: boolean; // a planned misc bill (estimated) → paid via the actual-amount + Piggy-reconcile popup
+  miscCard?: boolean; // a planned-misc spend card: an ordinary dated bill whose Pay button logs a spend
   deferred?: boolean; // a wind-down-overhang expense: paid by its assignee at wind-down, out of the settlement
 };
 // An allowance = personal money the treasurer SENDS a member (not a bill they owe). Disbursed after
@@ -51,7 +52,10 @@ export type PlanStep = {
   payback?: boolean; // this advance step is the PAYBACK leg (borrower → funder), not the front
   reimbursement?: boolean; // a disbursement that pays a member back for prior-month out-of-pocket spends (scheduled early)
   reroute?: boolean; // a disbursement paid DIRECT by a debtor (not via the hub) because the hub couldn't fund it in time
-  infeasibleFrom?: number | null; // this piece can't be funded by its due day; earliest day it becomes fundable (null = never this month)
+  budgetLoan?: boolean; // a member lends their RETAINED BUDGET (beyond their net) to fund a bill early — a round-trip loan
+  budgetPayback?: boolean; // the hub returns a budget loan to its lender, once later income leaves the hub a surplus
+  returnBy?: number | null; // on a budgetLoan front: the day the hub repays it (shown as "returned by the Nth")
+  infeasibleFrom?: number | null; // on a short BILL: the earliest day its payer can actually settle it ("payable from day Y"); null = not this month
   // bill
   payerId?: number | null; payerName?: string; vendor?: string; billId?: number; categoryId?: number; fund?: boolean; fundAvail?: number; misc?: boolean; deferred?: boolean;
   miscCard?: boolean; // a planned-misc spend card: paid by logging a spend against its category (categoryId)
@@ -65,7 +69,7 @@ export type PlanStep = {
   senderShort?: number; // the step's sender can't cover it from cash-in-hand yet — short by this much
 };
 
-export type MoneyPlan = { steps: PlanStep[]; done: number; total: number; hubShortfall: number };
+export type MoneyPlan = { steps: PlanStep[]; done: number; total: number; hubShortfall: number; shortBills: number };
 
 export function buildMoneyPlan(input: {
   treasurerId: number | null;
@@ -84,8 +88,9 @@ export function buildMoneyPlan(input: {
   manualSteps?: { id: number; fromId: number; toId: number; fromName?: string; toName?: string; amount: number; day?: number | null; done: boolean; afterStepKey?: string | null }[]; // head-added ad-hoc moves
   poolHandovers?: { fromId: number; fromName: string; toId: number; toName: string; amount: number; detail: string; recordIds: number[]; done: boolean; day: number | null; status?: "overdue" | "soon" | "normal" | null; days?: number | null }[]; // prior-month cash (leftover→income and/or Piggy→income) a holder hands to the treasurer
   hiddenKeys?: string[]; // step ids the head has hidden from the plan view
+  orderOverrides?: Record<string, number>; // head "move up/down": step id → manual sort index (overrides day/rank order)
 }): MoneyPlan {
-  const { treasurerId, treasurerName, transfers, bills, allowances = [], piggyReturns = [], advances = [], incomeDayByMember, incomeByMember = {}, incomeArrivals, reimburseByMember = {}, reimburseDay, piggyHandover, manualSteps = [], poolHandovers = [], hiddenKeys = [] } = input;
+  const { treasurerId, treasurerName, transfers, bills, allowances = [], piggyReturns = [], advances = [], incomeDayByMember, incomeByMember = {}, incomeArrivals, reimburseByMember = {}, reimburseDay, piggyHandover, manualSteps = [], poolHandovers = [], hiddenKeys = [], orderOverrides = {} } = input;
 
   const inbound = transfers.filter((t) => t.toId === treasurerId);
   const outbound = transfers.filter((t) => t.toId !== treasurerId && t.fromId === treasurerId); // hub → creditor
@@ -154,7 +159,7 @@ export function buildMoneyPlan(input: {
   for (const b of bills) {
     steps.push({
       id: b.key, kind: "bill", day: b.day, amount: b.amount, done: b.done,
-      payerId: b.payerId, payerName: b.payerName, vendor: b.vendor, billId: b.billId, categoryId: b.categoryId, fund: b.fund, fundAvail: b.fundAvail, misc: b.misc, status: b.status, days: b.days ?? null, deferred: b.deferred,
+      payerId: b.payerId, payerName: b.payerName, vendor: b.vendor, billId: b.billId, categoryId: b.categoryId, fund: b.fund, fundAvail: b.fundAvail, misc: b.misc, miscCard: b.miscCard, status: b.status, days: b.days ?? null, deferred: b.deferred,
     });
   }
   // Allowances: the treasurer disburses these AFTER collection (like a payout), never dated/overdue.
@@ -280,11 +285,19 @@ export function buildMoneyPlan(input: {
   const hubCashBy = cashBy([
     ...incomeOf(treasurerId ?? -1),
     ...inbound.map((t) => ({ day: inboundDay.get(t.fromId) ?? null, amount: t.amount })),
-    ...bills.filter((b) => !b.fund && b.payerId === treasurerId).map((b) => ({ day: b.day, amount: -b.amount })),
+    // An UNDATED bill has no deadline, so it can't pull the hub's cash early — treat it as month-end
+    // (matches cashBillsOf and the "no date sorts last" display). Without this it counted at day 0.
+    ...bills.filter((b) => !b.fund && b.payerId === treasurerId).map((b) => ({ day: b.day ?? lastDay, amount: -b.amount })),
     ...outbound.filter((o) => o.settled).map((o) => ({ day: 0 as number | null, amount: -paidOf(o) })), // only what actually left the hub
   ]);
+  // A debtor's collection that is instead paid DIRECT to a creditor (see the direct-match pass) never
+  // reaches the hub — so the hub's available cash from a given day on must EXCLUDE it. Keyed by the
+  // debtor's collection day, since that's when the hub would otherwise have received it.
+  const directedByCD = new Map<number, number>();
+  const directedUpto = (day: number) => { let s = 0; for (const [cd, a] of directedByCD) if (cd <= day) s += a; return s; };
+  const hubAvailBy = (day: number) => hubCashBy(day) - directedUpto(day);
   const hubCanCoverBy = (need: number, from: number, used: number): number | null => {
-    for (let d = from; d <= 31; d++) if (hubCashBy(d) - used >= need - 0.005) return d;
+    for (let d = from; d <= 31; d++) if (hubAvailBy(d) - used >= need - 0.005) return d;
     return null;
   };
 
@@ -294,8 +307,33 @@ export function buildMoneyPlan(input: {
   const debtorState = inbound.map((t) => ({
     id: t.fromId, name: t.from, netRemaining: t.amount,
     cashBy: cashBy(incomeOf(t.fromId)), ownBills: cashBillsOf(t.fromId).filter((b) => !b.done).reduce((s, b) => s + b.amount, 0), // negative sum, unpaid only
+    // The day this debtor's cash is COLLECTED to the hub. Reroute only draws cash they still hold —
+    // once collected (need.day ≥ this), the money is the hub's and step 1 already funds from it. Without
+    // this cap, cash the hub counted (hubCashBy) would be rerouted a SECOND time, over-emitting the hub.
+    collectionDay: inboundDay.get(t.fromId) ?? Infinity,
     lent: 0,
   }));
+
+  // Budget lenders (Rule 1: after the hub, peers): a debtor's RETAINED BUDGET = the cash they hold BEYOND
+  // their net + own bills (income they'd keep for their own spends). It can be lent to fund a bill EARLY
+  // as a round-trip — they pay the creditor directly now; the hub repays them once later income leaves it
+  // a surplus (Rule 2). Unlike a reroute (which is net cash and shrinks their collection), a budget loan
+  // is beyond their net: they still pay their full net, and the hub owes them the loan back.
+  const budgetState = inbound.map((t) => {
+    const cash = cashBy(incomeOf(t.fromId));
+    const ownB = cashBillsOf(t.fromId).filter((b) => !b.done).reduce((s, b) => s + b.amount, 0); // negative
+    return {
+      id: t.fromId, name: t.from,
+      // accrued budget by a day = income in hand then − their own bills − their full net owed (clamped ≥0)
+      budgetBy: (day: number) => Math.max(0, Math.round((cash(day) + ownB - t.amount) * 100) / 100),
+      lent: 0,
+    };
+  });
+  // Budget loans made this pass → aggregated into one front per (lender, creditor, day) and one payback
+  // per lender after the loop (Rule 2 timing). Avoids the "two Baala→Harish rows in a row" the raw
+  // per-bill loop produced.
+  const budgetLoans: { lenderId: number; lenderName: string; creditorId: number; creditorName: string; amount: number; day: number }[] = [];
+  let hubReserved = 0; // hub cash reserved for budget paybacks, so two paybacks never claim the same rupee
 
   const owed = new Map<number, number>(unsettledOut.map((o) => [o.toId!, o.amount]));
   const recOf = new Map<number, { name: string; recordId: number | null }>(unsettledOut.map((o) => [o.toId!, { name: o.to, recordId: o.recordId }]));
@@ -338,27 +376,74 @@ export function buildMoneyPlan(input: {
     let amt = Math.min(need.amount, owed.get(need.creditorId) ?? 0);
     if (amt <= 0.005) continue;
     const treasurerName2 = treasurerName ?? "Treasurer";
-    // 1. fund from the hub's collected cash by this day
-    const avail = hubCashBy(need.day) - hubUsed;
-    const fromHub = Math.min(amt, Math.max(0, avail));
-    if (fromHub > 0.005) { emit(need.creditorId, need.day, fromHub, treasurerId!, treasurerName2, false, !need.reimbursement, undefined, need.reimbursement); hubUsed += fromHub; owed.set(need.creditorId, (owed.get(need.creditorId) ?? 0) - fromHub); amt -= fromHub; }
-    // A reimbursement is soft: whatever the hub can't cover by its day just falls through to the month-end
-    // payout below — never rerouted onto a debtor, never flagged infeasible.
-    if (need.reimbursement) continue;
-    // 2. reroute the rest from any debtor holding spare cash by this day
+    // A reimbursement is SOFT (hub-only): fund what the hub holds by its day; the rest slides to the
+    // month-end payout — never routed direct onto a debtor, never a budget loan, never flagged.
+    if (need.reimbursement) {
+      const avail = hubAvailBy(need.day) - hubUsed;
+      const fromHub = Math.min(amt, Math.max(0, avail));
+      if (fromHub > 0.005) { emit(need.creditorId, need.day, fromHub, treasurerId!, treasurerName2, false, false, undefined, true); hubUsed += fromHub; owed.set(need.creditorId, (owed.get(need.creditorId) ?? 0) - fromHub); }
+      continue;
+    }
+    // 1. DIRECT MATCH (fewest transactions): a debtor whose cash is in hand by this day pays the creditor
+    //    DIRECTLY, skipping the hub — but ONLY because this creditor has a need TODAY (else the debtor's
+    //    cash just goes to the hub via their normal collection). Up to the debtor's net; that much of their
+    //    collection then never reaches the hub (tracked in directedByCD so the hub isn't over-credited).
+    //    `need.day <= collectionDay` includes the collection day itself: rather than debtor→hub→creditor,
+    //    pay debtor→creditor. Largest available first.
     if (amt > 0.005) {
-      for (const d of debtorState) {
-        if (d.id === need.creditorId) continue;
-        const spare = Math.min(d.netRemaining, d.cashBy(need.day) + d.ownBills - d.lent); // ownBills is negative
-        const lend = Math.min(amt, Math.max(0, spare), owed.get(need.creditorId) ?? 0);
-        if (lend > 0.005) { emit(need.creditorId, need.day, lend, d.id, d.name, true, true); d.lent += lend; d.netRemaining -= lend; owed.set(need.creditorId, (owed.get(need.creditorId) ?? 0) - lend); amt -= lend; }
+      const canDirect = (d: (typeof debtorState)[number]) =>
+        Math.min(d.netRemaining, Math.max(0, d.cashBy(need.day) + d.ownBills - d.lent)); // ownBills is negative
+      const matchers = debtorState
+        .filter((d) => d.id !== need.creditorId && need.day <= d.collectionDay && canDirect(d) > 0.005)
+        .sort((a, b) => canDirect(b) - canDirect(a));
+      for (const d of matchers) {
         if (amt <= 0.005) break;
+        const lend = Math.min(amt, canDirect(d), owed.get(need.creditorId) ?? 0);
+        if (lend > 0.005) {
+          emit(need.creditorId, need.day, lend, d.id, d.name, true, true);
+          d.lent += lend; d.netRemaining -= lend;
+          directedByCD.set(d.collectionDay, (directedByCD.get(d.collectionDay) ?? 0) + lend);
+          owed.set(need.creditorId, (owed.get(need.creditorId) ?? 0) - lend); amt -= lend;
+        }
       }
     }
-    // 3. genuinely unfundable by this day — still show it (from the hub) but flag the earliest feasible day
+    // 2. HUB: fund the rest from the hub's own income + collections it has actually received by this day
+    //    (hubAvailBy excludes collections that went direct above, so it's never over-credited).
     if (amt > 0.005) {
-      const feasible = hubCanCoverBy(amt, need.day, hubUsed);
-      emit(need.creditorId, need.day, amt, treasurerId!, treasurerName2, false, true, feasible);
+      const avail = hubAvailBy(need.day) - hubUsed;
+      const fromHub = Math.min(amt, Math.max(0, avail));
+      if (fromHub > 0.005) { emit(need.creditorId, need.day, fromHub, treasurerId!, treasurerName2, false, true); hubUsed += fromHub; owed.set(need.creditorId, (owed.get(need.creditorId) ?? 0) - fromHub); amt -= fromHub; }
+    }
+    // 2b. still short → borrow peers' RETAINED BUDGET (beyond their net) to fund the bill by its due day,
+    //     as round-trips (Rule 1: largest spare first). They pay the creditor directly now; the hub repays
+    //     them later (scheduled after all bills, below). This is what lets a bill clear ON TIME when the
+    //     family's TOTAL cash (incl. budgets) covers it — and makes the residual the family's TRUE gap.
+    if (amt > 0.005) {
+      const lenders = budgetState
+        .filter((b) => b.id !== need.creditorId)
+        .map((b) => ({ b, spare: Math.max(0, b.budgetBy(need.day) - b.lent) }))
+        .filter((x) => x.spare > 0.005)
+        .sort((x, y) => y.spare - x.spare);
+      for (const { b } of lenders) {
+        if (amt <= 0.005) break;
+        const spare = Math.max(0, b.budgetBy(need.day) - b.lent);
+        const lend = Math.min(amt, spare, owed.get(need.creditorId) ?? 0);
+        if (lend > 0.005) {
+          // Record the loan intent only — fronts/paybacks are emitted COMBINED after the loop so several
+          // bills funded from the same lender on the same day collapse into one step.
+          budgetLoans.push({ lenderId: b.id, lenderName: b.name, creditorId: need.creditorId, creditorName: recOf.get(need.creditorId)!.name, amount: Math.round(lend * 100) / 100, day: need.day });
+          b.lent += lend; owed.set(need.creditorId, (owed.get(need.creditorId) ?? 0) - lend); amt -= lend;
+        }
+      }
+    }
+    // 3. hub can't cover the rest by this day. DON'T over-emit at the due day — that would paint the
+    //    hub→member funding step "short". Instead disburse it on the earliest day the hub can actually
+    //    afford it, so every hub piece is fundable. The member's own bill step then carries the gap and
+    //    its payable-from day (computed in the balance walk below). Falls back to month-end if nothing
+    //    lands in time (shouldn't happen: sheet income ≥ expense).
+    if (amt > 0.005) {
+      const feasible = hubCanCoverBy(amt, need.day, hubUsed) ?? lastDay;
+      emit(need.creditorId, feasible, amt, treasurerId!, treasurerName2, false, true);
       hubUsed += amt; owed.set(need.creditorId, (owed.get(need.creditorId) ?? 0) - amt);
     }
   }
@@ -367,6 +452,41 @@ export function buildMoneyPlan(input: {
   for (const [creditorId, left] of owed) {
     if (left <= 0.005) continue;
     emit(creditorId, lastDay, left, treasurerId!, treasurerName ?? "Treasurer", false, false);
+  }
+  // Budget-loan FRONTS: one combined "lender → creditor" per (lender, creditor, day). A member funding
+  // several of the same person's bills on one day shows a SINGLE step, not one per bill.
+  const frontAgg = new Map<string, { lenderId: number; lenderName: string; creditorId: number; creditorName: string; day: number; amount: number }>();
+  for (const l of budgetLoans) {
+    const k = `${l.lenderId}-${l.creditorId}-${l.day}`;
+    const e = frontAgg.get(k);
+    if (e) e.amount = Math.round((e.amount + l.amount) * 100) / 100;
+    else frontAgg.set(k, { ...l });
+  }
+  const frontSteps = new Map<number, PlanStep[]>(); // lenderId → its front steps, to tag with returnBy
+  for (const f of frontAgg.values()) {
+    const step: PlanStep = {
+      id: `bloan-${f.creditorId}-${f.lenderId}-${f.day}`, kind: "transfer-out", day: f.day, amount: f.amount, done: false,
+      fromId: f.lenderId, toId: f.creditorId, fromName: f.lenderName, toName: f.creditorName, recordId: null, fundsMember: true, budgetLoan: true,
+    };
+    pieces.push(step);
+    (frontSteps.get(f.lenderId) ?? frontSteps.set(f.lenderId, []).get(f.lenderId)!).push(step);
+  }
+  // Budget-loan PAYBACKS (Rule 2): one combined "hub → lender" per lender, on the earliest later day the
+  // hub has a surplus AFTER funding every bill. Reserve as we go so two paybacks never claim the same rupee.
+  const payAgg = new Map<number, { lenderId: number; lenderName: string; amount: number; day: number }>();
+  for (const l of budgetLoans) {
+    const e = payAgg.get(l.lenderId);
+    if (e) { e.amount = Math.round((e.amount + l.amount) * 100) / 100; e.day = Math.min(e.day, l.day); }
+    else payAgg.set(l.lenderId, { lenderId: l.lenderId, lenderName: l.lenderName, amount: l.amount, day: l.day });
+  }
+  for (const p of payAgg.values()) {
+    const pday = hubCanCoverBy(p.amount, p.day + 1, hubUsed + hubReserved) ?? lastDay;
+    hubReserved += p.amount;
+    pieces.push({
+      id: `bpay-${p.lenderId}`, kind: "transfer-out", day: pday, amount: p.amount, done: false,
+      fromId: treasurerId ?? undefined, toId: p.lenderId, fromName: treasurerName ?? "Treasurer", toName: p.lenderName, recordId: null, budgetPayback: true,
+    });
+    for (const front of frontSteps.get(p.lenderId) ?? []) front.returnBy = pday; // "returned by the Nth"
   }
   steps.push(...pieces);
 
@@ -422,6 +542,14 @@ export function buildMoneyPlan(input: {
     steps.splice(pos, 0, m);
   }
 
+  // Head MANUAL ordering (move up/down): a step with an override sorts by its stored index; every other
+  // step keeps its derived position. So a nudged step slots exactly where the head put it, and the walk
+  // below re-runs in that order (balances/short flags recompute) — same effect as changing a date.
+  if (Object.keys(orderOverrides).length) {
+    const derived = new Map(steps.map((s, i) => [s.id, i]));
+    steps.sort((a, b) => (orderOverrides[a.id] ?? derived.get(a.id)!) - (orderOverrides[b.id] ?? derived.get(b.id)!));
+  }
+
   // Per-actor "still to pay" for the member chip: a pure running sum of that person's own outgoing
   // steps (their transfer to the hub + the bills they pay), decremented as the plan proceeds. Since
   // it's derived only from the plan's own steps it can't drift from anything. The treasurer is shown
@@ -471,8 +599,12 @@ export function buildMoneyPlan(input: {
       const before = bal.get(senderId) ?? 0;
       if (before < s.amount - 0.005) {
         const short = Math.round((s.amount - before) * 100) / 100;
-        if (senderId === treasurerId) { s.short = short; hubShortfall = Math.max(hubShortfall, short); }
-        else s.senderShort = short;
+        // A shortfall is ONLY ever shown on the payer's own BILL step — that's the money they can't yet
+        // cover. A member↔member (or hub→member) TRANSFER never shows "short": a sender can't move cash
+        // they don't hold, so any gap surfaces on the bill it was meant to fund, not on the transfer.
+        // (hubShortfall is kept as an internal safety signal only; it's not rendered on transfers.)
+        if (s.kind === "bill") s.senderShort = short;
+        else if (senderId === treasurerId) hubShortfall = Math.max(hubShortfall, short);
       }
     }
     if (s.kind === "income") {
@@ -490,11 +622,28 @@ export function buildMoneyPlan(input: {
     if (touchesHub(s)) s.hubAfter = bal.get(treasurerId!) ?? 0;
   }
 
+  // Each SHORT bill's payable-from day: the first later step after which the payer's running balance is
+  // back to ≥ 0 — i.e. enough income + hub funding + peer help has landed to clear everything up to and
+  // including that bill. Since sheet income ≥ expense this resolves to some day this month. Reuses
+  // `infeasibleFrom` on the bill = "payable from day Y". `shortBills` counts them — the plan's headline
+  // number, which we want to drive to zero.
+  const shortBillSteps = steps.filter((s) => s.kind === "bill" && !s.fund && !s.done && (s.senderShort ?? 0) > 0.005);
+  for (const bill of shortBillSteps) {
+    const m = bill.payerId;
+    if (m == null) continue;
+    const start = steps.indexOf(bill);
+    let feasible: number | null = null;
+    for (let j = start; j < steps.length; j++) {
+      if ((steps[j].balancesAfter?.[m] ?? 0) >= -0.005) { feasible = steps[j].day ?? null; break; }
+    }
+    bill.infeasibleFrom = feasible;
+  }
+
   // Income rows are informational and Piggy returns are live projections (finalised at wind-down), so
   // neither counts toward the "N/total done" progress — they're context, not tickable settlement steps.
   const counted = steps.filter((s) => s.kind !== "piggy" && s.kind !== "income" && !s.hidden);
   const done = counted.filter((s) => s.done).length;
-  return { steps, done, total: counted.length, hubShortfall: Math.round(hubShortfall) };
+  return { steps, done, total: counted.length, hubShortfall: Math.round(hubShortfall), shortBills: shortBillSteps.length };
 }
 
 // Cash-move step kinds that shift a member's actual holding when completed: income lands in a hand,

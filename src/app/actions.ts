@@ -266,14 +266,21 @@ async function checkAddExpenseFeasible(
       sources,
     };
   }
-  // 2. it makes the treasurer/hub short (money not collected in time)
-  if (withHyp.hubShortfall > base.hubShortfall + 0.5)
-    return { ok: false, reason: `This would leave the treasurer short ${inr(withHyp.hubShortfall)} — the money isn't collected by then. Try a later due date.` };
-  // 3. it pushes some disbursement past its due day (unfundable in time)
-  const baseInf = new Set(base.steps.filter((s) => s.infeasibleFrom !== undefined).map((s) => s.id));
-  const newInf = withHyp.steps.find((s) => s.infeasibleFrom !== undefined && !baseInf.has(s.id));
-  if (newInf)
-    return { ok: false, reason: newInf.infeasibleFrom == null ? `Adding this leaves a payment that can't be funded this month.` : `Adding this pushes a payment past its due day — it can't be funded until day ${newInf.infeasibleFrom}. Try a later due date.` };
+  // 2. it makes some OTHER bill unpayable in time — a knock-on shortfall the plan didn't have before.
+  //    The hyp bill's OWN shortfall is handled in step 1; hub disbursements are now capped to collected
+  //    cash (never over-emitted), so the old hub-short / infeasible-disbursement signals are replaced by
+  //    the per-bill short count: block if adding this expense pushes any other bill into shortfall.
+  if (withHyp.shortBills > base.shortBills) {
+    const baseShort = new Set(base.steps.filter((s) => s.kind === "bill" && (s.senderShort ?? 0) > 0.005).map((s) => s.id));
+    const hit = withHyp.steps.find((s) => s.kind === "bill" && (s.senderShort ?? 0) > 0.005 && s.id !== "__hyp__" && !baseShort.has(s.id));
+    const who = hit?.payerName ?? "another payment";
+    return {
+      ok: false,
+      reason: hit?.infeasibleFrom != null
+        ? `This would leave ${who} short on "${hit.vendor ?? "a bill"}" — payable only from day ${hit.infeasibleFrom}. Try a later due date.`
+        : `This would leave ${who} short on a bill this month. Try a later due date.`,
+    };
+  }
   return { ok: true };
 }
 
@@ -1457,6 +1464,9 @@ async function doAddMiscSpendCard(formData: FormData): Promise<{ ok: boolean; er
   const repeatYearly = formData.get("repeatYearly") === "on";
   const memberRaw = String(formData.get("responsibleMemberId") ?? formData.get("memberId") ?? "").trim();
   const responsibleMemberId = memberRaw === "" ? null : Number(memberRaw);
+  // Optional due day — the card shows as a dated bill in the Money Plan (assume the owner spends it all).
+  const dueNum = Number(String(formData.get("dueDay") ?? "").trim());
+  const dueDay = Number.isFinite(dueNum) && dueNum >= 1 && dueNum <= 31 ? Math.round(dueNum) : null;
   const period = await prisma.period.findUnique({ where: { id: periodId }, select: { householdId: true, month: true } });
   if (!period) return { ok: false, error: "Month not found." };
   // Same balance guard as adding an expense: the budget can't exceed the month's income − expense.
@@ -1481,7 +1491,7 @@ async function doAddMiscSpendCard(formData: FormData): Promise<{ ok: boolean; er
       // both, so the amount stays in sync (Sheet renders the envelope, spends draw the Budget).
       // pinned=true so a draft rebuild (clearGeneratedRows) keeps the line AND its budget — the clone
       // won't regenerate a one-off misc card, so without the pin a rebuild would wipe the whole card.
-      await tx.expenseEntry.create({ data: { periodId, label: name, amount, categoryId: cat.id, memberId: responsibleMemberId, necessary: true, oneOff: false, pinned: true } });
+      await tx.expenseEntry.create({ data: { periodId, label: name, amount, categoryId: cat.id, memberId: responsibleMemberId, necessary: true, oneOff: false, pinned: true, dueDay } });
       await tx.budget.create({ data: { periodId, categoryId: cat.id, planned: amount } });
     });
   } catch {
@@ -2949,6 +2959,77 @@ export async function setStepDay(formData: FormData) {
   } else {
     return { ok: false, error: "This step's date can’t be edited." };
   }
+  revalidateFamily();
+  return { ok: true };
+}
+
+// The setStepDay params that drive a plan step's date (mirrors the Money-Plan date editor): a row-backed
+// step edits its own row; a rowless one (fund/periodic, hand-over) uses a per-month override. null for
+// DERIVED steps (collections/disbursements/budget loans) — they have no date of their own.
+function stepDayParamsFor(s: import("@/lib/moneyPlan").PlanStep, periodId: number): { kind: string; id: number; stepKey?: string } | null {
+  if (s.kind === "manual") return s.manualId != null ? { kind: "manual", id: s.manualId } : null;
+  const rowId = s.kind === "income" ? s.incomeId : (s.kind === "bill" && !s.fund) || s.kind === "allowance" ? s.billId : s.kind === "advance" ? s.advanceId : undefined;
+  if (rowId != null) return { kind: s.kind === "advance" ? (s.payback ? "advance-payback" : "advance") : s.kind, id: rowId };
+  const stepKey =
+    s.kind === "piggy" && s.handoverPeriodId != null && s.fromId != null ? `piggyho-${s.handoverPeriodId}-${s.fromId}`
+      : s.kind === "pool-handover" && s.fromId != null ? `poolho-${s.fromId}`
+        : s.kind === "bill" && s.fund && s.categoryId != null ? `fund-${s.categoryId}`
+          : undefined;
+  return stepKey != null ? { kind: "override", id: periodId, stepKey } : null;
+}
+
+// Head "move up / down". WITHIN a day → a positional swap with the neighbour (persist the whole order so
+// the plan recomputes in it — balances/short flags re-derive). At a DAY BOUNDARY (the step is first/last
+// of its day) → change the step's DATE to the neighbour's day, if its date is editable; otherwise fall
+// back to a positional swap. Keyed by the step's id (PlanStep.id).
+export async function moveStep(formData: FormData): Promise<{ ok: boolean; error?: string }> {
+  if (!(await isHead())) return { ok: false, error: "Only the head can reorder steps." };
+  const periodId = Number(formData.get("periodId"));
+  const stepKey = String(formData.get("stepKey") ?? "");
+  const dir = String(formData.get("dir") ?? "");
+  if (!periodId || !stepKey || (dir !== "up" && dir !== "down")) return { ok: false, error: "Bad request." };
+  const period = await prisma.period.findUnique({ where: { id: periodId }, select: { householdId: true, status: true } });
+  if (!period || period.status === "closed") return { ok: false, error: "This month is closed." };
+
+  const plan = await getMoneyPlan(period.householdId, periodId);
+  const visible = plan.steps.filter((s) => !s.hidden);
+  const vi = visible.findIndex((s) => s.id === stepKey);
+  if (vi < 0) return { ok: false, error: "Step not found." };
+  const vj = dir === "up" ? vi - 1 : vi + 1;
+  if (vj < 0 || vj >= visible.length) return { ok: true }; // top/bottom of the whole plan — no-op
+  const moved = visible[vi];
+  const neighbor = visible[vj];
+
+  // DAY BOUNDARY: moved is first/last of its day (neighbour sits on a different day). Change its date to
+  // the neighbour's day, if editable — that's the "date also changes" behaviour. Clear any stale order
+  // override so it sorts naturally in its new day. (Done/paid steps and derived steps fall through to swap.)
+  const sameDay = (moved.day ?? null) === (neighbor.day ?? null);
+  if (!sameDay && neighbor.day != null && !moved.done) {
+    const p = stepDayParamsFor(moved, periodId);
+    if (p) {
+      const fd = new FormData();
+      fd.set("kind", p.kind);
+      fd.set("id", String(p.id));
+      if (p.stepKey) fd.set("stepKey", p.stepKey);
+      fd.set("day", String(neighbor.day));
+      const r = await setStepDay(fd);
+      if (!r.ok) return r;
+      await prisma.stepOrderOverride.deleteMany({ where: { periodId, stepKey } });
+      revalidateFamily();
+      return { ok: true };
+    }
+  }
+
+  // WITHIN A DAY (or a non-editable boundary cross): swap the two ids in the full order, renumber EVERY
+  // step so the manual order is fully consistent (steps with no row fall back to their derived slot).
+  const order = plan.steps.map((s) => s.id);
+  const ai = order.indexOf(moved.id);
+  const aj = order.indexOf(neighbor.id);
+  [order[ai], order[aj]] = [order[aj], order[ai]];
+  await prisma.$transaction([
+    prisma.stepOrderOverride.deleteMany({ where: { periodId } }),
+    prisma.stepOrderOverride.createMany({ data: order.map((id, idx) => ({ periodId, stepKey: id, sortIndex: idx })) }),
+  ]);
   revalidateFamily();
   return { ok: true };
 }

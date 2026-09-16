@@ -4,7 +4,7 @@ import { Fragment, useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { formatINR } from "@/lib/format";
-import { markSettled, unsettle, toggleBillPaid, markAdvanceSettled, unsettleAdvance, markPiggyHandedOver, toggleIncomeReceived, addManualStep, deleteManualStep, toggleManualStepDone, hideStep, unhideStep, unpayMiscBill, togglePoolHandover } from "@/app/actions";
+import { markSettled, unsettle, toggleBillPaid, markAdvanceSettled, unsettleAdvance, markPiggyHandedOver, toggleIncomeReceived, addManualStep, deleteManualStep, toggleManualStepDone, hideStep, unhideStep, unpayMiscBill, togglePoolHandover, moveStep } from "@/app/actions";
 import { PayBillModal } from "@/components/PayBillModal";
 import { MiscPayModal } from "@/components/MiscPayModal";
 import { ExpenseModal } from "@/components/ExpenseModal";
@@ -89,6 +89,19 @@ export function MoneyPlan({
       toast("Plan refreshed from the Sheet", "success");
     });
 
+  // Head reorder: swap this step one slot with its neighbour (positional, NOT a date change). Persists the
+  // whole order server-side and recomputes the plan in it — the list dims while it recalculates.
+  const move = (stepId: string, dir: "up" | "down") =>
+    startTransition(async () => {
+      const fd = new FormData();
+      fd.set("periodId", String(periodId));
+      fd.set("stepKey", stepId);
+      fd.set("dir", dir);
+      const r = await moveStep(fd);
+      router.refresh();
+      if (!r.ok) toast(r.error ?? "Couldn't move the step", "error");
+    });
+
   return (
     <section className="rounded-xl border border-slate-200 bg-white p-4">
       <div className="mb-3 flex items-center justify-between gap-2">
@@ -150,9 +163,9 @@ export function MoneyPlan({
         newCategoryDefaultSection="Misc"
       />
 
-      {plan.hubShortfall > 0 && who == null && (
+      {plan.shortBills > 0 && who == null && (
         <div className="mb-3 rounded-lg bg-red-50 px-3 py-2 text-xs text-red-700">
-          ⚠️ The treasurer is short about <b>{formatINR(plan.hubShortfall)}</b> when a payment falls due before that money has arrived — plan to carry it from last month, or expect that step to run late.
+          ⚠️ <b>{plan.shortBills}</b> {plan.shortBills === 1 ? "bill can't" : "bills can't"} be paid on time — each shows who's short and the day it becomes payable below. Aim for zero: shift a due date later, or bring income in sooner.
         </div>
       )}
 
@@ -163,7 +176,7 @@ export function MoneyPlan({
       ) : (
         <>
         <p className="mb-1.5 text-[10px] text-slate-400">Tap any step&apos;s number <span className="mx-0.5 inline-grid h-3.5 w-3.5 place-items-center rounded-full ring-1 ring-slate-300 align-middle text-[8px]">1</span> to see everyone&apos;s cash before &amp; after it.</p>
-        <ol className="space-y-1.5">
+        <ol className={`space-y-1.5 transition-opacity ${pending ? "pointer-events-none opacity-50" : ""}`} aria-busy={pending}>
           {canEdit && open && who == null && <InsertHere onClick={() => setInsert({ anchor: null })} />}
           {visibleRows.map(({ s, n }, i) => {
             // A date heading precedes the first step of each new day (income "up front" at the top,
@@ -282,9 +295,11 @@ export function MoneyPlan({
                       <span className="shrink-0 rounded-full bg-emerald-50 px-1.5 py-0.5 text-[10px] font-medium text-emerald-600 no-underline">paid {ordinal(s.paidDay)}</span>
                     )}
                     {s.feedsBills && !s.done && <span className="shrink-0 rounded-full bg-indigo-50 px-1.5 py-0.5 text-[9px] font-medium text-indigo-500">funds bills ↓</span>}
-                    {s.fundsMember && !s.done && !s.reimbursement && <span className="shrink-0 rounded-full bg-emerald-50 px-1.5 py-0.5 text-[9px] font-medium text-emerald-600">funds {s.toName} ↓</span>}
+                    {s.fundsMember && !s.done && !s.reimbursement && !s.budgetLoan && <span className="shrink-0 rounded-full bg-emerald-50 px-1.5 py-0.5 text-[9px] font-medium text-emerald-600">funds {s.toName} ↓</span>}
                     {s.reimbursement && <span className="shrink-0 rounded-full bg-emerald-50 px-1.5 py-0.5 text-[9px] font-medium text-emerald-600" title={`${s.toName} is paid back early for what they spent out of pocket last month`}>reimbursement · last month’s spends</span>}
-                    {s.reroute && !s.done && <span className="shrink-0 rounded-full bg-amber-50 px-1.5 py-0.5 text-[9px] font-medium text-amber-600" title="Paid directly, skipping the treasurer, because the hub can't fund it in time">direct · skips hub</span>}
+                    {s.budgetLoan && !s.done && <span className="shrink-0 rounded-full bg-violet-50 px-1.5 py-0.5 text-[9px] font-medium text-violet-600" title={`${s.fromName} lends their own budget so ${s.toName}'s bill is paid on time — the hub returns it${s.returnBy != null ? ` by the ${ordinal(s.returnBy)}` : " once income lands"}`}>💜 lends budget{s.returnBy != null ? ` · back by ${ordinal(s.returnBy)}` : ""}</span>}
+                    {s.budgetPayback && !s.done && <span className="shrink-0 rounded-full bg-violet-50 px-1.5 py-0.5 text-[9px] font-medium text-violet-600" title={`The hub returns the budget ${s.toName} lent earlier to fund a bill on time`}>↩️ budget returned → {s.toName}</span>}
+                    {s.reroute && !s.done && <span className="shrink-0 rounded-full bg-amber-50 px-1.5 py-0.5 text-[9px] font-medium text-amber-600" title="Paid straight to the person who needs it today, skipping the treasurer — one transfer instead of debtor→hub→creditor">direct · skips hub</span>}
                     {s.deferred && <span className="shrink-0 rounded-full bg-sky-50 px-1.5 py-0.5 text-[9px] font-medium text-sky-600" title="Added during the wind-down window — paid by the assignee at wind-down, kept out of this month's settlement">settles at wind-down</span>}
                     {isAdvance && !s.payback && <span className="shrink-0 rounded-full bg-teal-50 px-1.5 py-0.5 text-[9px] font-medium text-teal-600" title={`${s.fromName} fronts this so ${s.toName} can pay the next step`}>advance · funds {s.toName}</span>}
                     {isAdvance && s.payback && <span className="shrink-0 rounded-full bg-teal-50 px-1.5 py-0.5 text-[9px] font-medium text-teal-600" title={`${s.fromName} repays ${s.toName} the advance, now that their income has landed`}>payback → {s.toName}</span>}
@@ -335,16 +350,20 @@ export function MoneyPlan({
                     </form>
                   )}
                   {!s.done && short != null && short > 0.005 && (
-                    <div className="text-[10px] font-semibold text-red-600">
-                      ⚠ {isPiggy || isTransfer || isAllowance || isAdvance || isPoolHandover ? s.fromName : s.payerName} needs {formatINR(short)} more in hand first
-                    </div>
-                  )}
-                  {!s.done && s.infeasibleFrom !== undefined && (
-                    <div className="text-[10px] font-semibold text-red-600">
-                      {s.infeasibleFrom == null
-                        ? `⚠ can't be funded this month — not enough cash comes in`
-                        : `⚠ can't be funded until day ${s.infeasibleFrom} — this step will run late`}
-                    </div>
+                    s.kind === "bill" ? (
+                      // The shortfall lives on the bill itself: the hub sends the fullest it can; whatever
+                      // the payer still lacks shows here, with the day it becomes payable (funding/income in).
+                      <div className="text-[10px] font-semibold text-red-600">
+                        ⚠ {s.payerName} short {formatINR(short)}
+                        {s.infeasibleFrom == null
+                          ? ` — not payable in full this month`
+                          : ` — payable from ${ordinal(s.infeasibleFrom)}, once funding & income land`}
+                      </div>
+                    ) : (
+                      <div className="text-[10px] font-semibold text-red-600">
+                        ⚠ {isPiggy || isTransfer || isAllowance || isAdvance || isPoolHandover ? s.fromName : s.payerName} needs {formatINR(short)} more in hand first
+                      </div>
+                    )
                   )}
                   {/* Fund bill: paid from the saved-up fund, not cash — so no balance moves above. Show
                       the fund draw here so the payer sees their saved money is what covers it (and a
@@ -443,6 +462,25 @@ export function MoneyPlan({
                 </span>
                 </div>
 
+                {/* head reorder: move this step one slot up/down (positional), then the plan recomputes. */}
+                {isHead && datesEditable && who == null && (
+                  <span className="flex shrink-0 flex-col justify-center leading-none">
+                    <button
+                      type="button"
+                      title="Move up a step"
+                      disabled={pending || i === 0}
+                      onClick={() => move(s.id, "up")}
+                      className="px-0.5 text-[10px] text-slate-300 hover:text-slate-600 disabled:opacity-30"
+                    >▲</button>
+                    <button
+                      type="button"
+                      title="Move down a step"
+                      disabled={pending || i === visibleRows.length - 1}
+                      onClick={() => move(s.id, "down")}
+                      className="px-0.5 text-[10px] text-slate-300 hover:text-slate-600 disabled:opacity-30"
+                    >▼</button>
+                  </span>
+                )}
                 {/* delete: manual steps are removed outright; derived steps are hidden from the plan view */}
                 {canEdit && open && who == null && (
                   isManual ? (

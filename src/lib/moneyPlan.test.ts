@@ -87,17 +87,21 @@ describe("buildMoneyPlan", () => {
     expect(plan.total).toBe(1); // only the bill counts
   });
 
-  it("flags a hub shortfall when an outflow runs before enough has arrived", () => {
-    // treasurer must pay a 50 bill on the 1st, but only 30 arrives (on the 1st)
+  it("puts a shortfall on the payer's own bill, not on a hub step", () => {
+    // treasurer must pay a 50 bill on the 1st, but only 30 arrives (on the 1st). The gap now shows on
+    // his OWN bill (senderShort), never as a hub-short — the hub only ever sends what it actually holds.
     const plan = buildMoneyPlan({
       treasurerId: T,
       transfers: [xfer({ fromId: 2, toId: T, amount: 30 })],
       bills: [bill({ payerId: T, vendor: "Loan", amount: 50, day: 1 })],
       incomeDayByMember: { 2: 1 },
     });
-    expect(plan.hubShortfall).toBe(20);
+    expect(plan.hubShortfall).toBe(0);
     const billStep = plan.steps.find((s) => s.kind === "bill");
-    expect(billStep?.short).toBe(20);
+    expect(billStep?.senderShort).toBe(20);
+    expect(billStep?.short).toBeUndefined();
+    expect(billStep?.infeasibleFrom).toBeNull(); // no more cash comes in → not payable in full this month
+    expect(plan.shortBills).toBe(1);
   });
 
   it("sinks undated bills to the bottom — no due date = lowest priority", () => {
@@ -424,9 +428,9 @@ describe("buildMoneyPlan", () => {
     expect(ho.balancesBefore).toEqual(ho.balancesAfter);
   });
 
-  it("catches a treasurer disbursing before his own income arrives (real August case)", () => {
-    // Treasurer must send 120 on day 1 (to fund a member), but his own income lands day 5 and only
-    // 20 has been collected by day 1 → he's genuinely short 100, not a phantom.
+  it("caps hub disbursement to collected cash — the gap lands on the funded member's bill (real August case)", () => {
+    // Treasurer would fund H's 120 bill on day 1, but only 20 is collected by then and his own income
+    // lands day 5. The hub sends only what it holds; H's bill carries the remaining shortfall + payable day.
     const plan = buildMoneyPlan({
       treasurerId: T,
       transfers: [
@@ -440,7 +444,11 @@ describe("buildMoneyPlan", () => {
         { memberId: T, day: 5, amount: 200 }, // treasurer's own cash only lands day 5
       ],
     });
-    expect(plan.hubShortfall).toBe(100); // 120 needed on day 1 − 20 collected
+    expect(plan.hubShortfall).toBe(0); // hub never over-disburses
+    const hBill = plan.steps.find((s) => s.kind === "bill" && s.payerId === 3)!;
+    expect(hBill.senderShort).toBe(100); // only B's 20 (collected → forwarded) reaches H by day 1 → short 100 of 120
+    expect(hBill.infeasibleFrom).toBe(5); // payable once the treasurer's own income lands day 5
+    expect(plan.shortBills).toBe(1);
   });
 
   it("reroutes a debtor's early cash to a creditor before the debtor's full collection lands", () => {
@@ -467,7 +475,7 @@ describe("buildMoneyPlan", () => {
     expect(bCollection?.amount).toBe(50);
   });
 
-  it("flags a disbursement piece infeasible when nobody can fund it by its due day", () => {
+  it("dates a hub disbursement to when it can afford it; the bill carries the payable-from day", () => {
     // H needs 100 on day 2, but the hub's own cash only lands day 20 and there's no debtor holding cash.
     const plan = buildMoneyPlan({
       treasurerId: T,
@@ -477,7 +485,12 @@ describe("buildMoneyPlan", () => {
       incomeArrivals: [{ memberId: T, day: 20, amount: 500 }], // treasurer's cash only lands day 20
     });
     const piece = plan.steps.find((s) => s.kind === "transfer-out")!;
-    expect(piece.infeasibleFrom).toBe(20); // earliest day the hub can actually cover it
+    expect(piece.day).toBe(20); // hub disburses when it can actually afford it — not over-emitted on day 2
+    expect(piece.infeasibleFrom).toBeUndefined(); // the shortfall no longer sits on the hub step
+    const hBill = plan.steps.find((s) => s.kind === "bill")!;
+    expect(hBill.senderShort).toBe(100);
+    expect(hBill.infeasibleFrom).toBe(20); // H can pay once the hub funds him on day 20
+    expect(plan.shortBills).toBe(1);
   });
 
   it("keeps a deferred bill out of pool funding — assignee pays it, sorted to the very end", () => {
@@ -607,6 +620,163 @@ describe("buildMoneyPlan", () => {
     expect(ho.senderShort ?? 0).toBe(0); // B was seeded with the cash they hold → not flagged short
     expect(ho.balancesAfter?.[T]).toBe(50); // the hand-over credits the hub
     expect(plan.hubShortfall).toBe(0); // …so the hub can fund its 50 disbursement, no shortfall
+  });
+
+  // Budget pooling (round-trip loans). Setup mirrors the real family: Harish (3) has a big day-1 bill and
+  // is a net-receiver; Baala (2) is a debtor with retained BUDGET beyond his net; Lakshmi (4) pays late.
+  // Baala net 48,448 (income 79,000 → budget 30,552). Harish income 81,300 day 1.
+  it("budget pooling: a peer lends retained budget so a bill clears ON TIME, repaid when income lands", () => {
+    // BOB = 1,60,000: day-1 family cash (81,300 + 79,000 = 1,60,300) COVERS it once Baala lends his budget.
+    const plan = buildMoneyPlan({
+      treasurerId: T,
+      treasurerName: "Arumugam",
+      transfers: [
+        xfer({ fromId: 2, from: "Baala", toId: T, amount: 48448 }),
+        xfer({ fromId: 4, from: "Lakshmi", toId: T, amount: 30252 }),
+        xfer({ fromId: T, from: "Arumugam", toId: 3, to: "Harish", amount: 78700 }), // hub owes Harish
+      ],
+      bills: [bill({ payerId: 3, payerName: "Harish", vendor: "BOB", amount: 160000, day: 1 })],
+      incomeDayByMember: { 2: 1, 3: 1, 4: 20 },
+      incomeArrivals: [
+        { memberId: 2, day: 1, amount: 79000 },
+        { memberId: 3, day: 1, amount: 81300 },
+        { memberId: 4, day: 20, amount: 30252 }, // Lakshmi lands day 20
+      ],
+    });
+    const bobBill = plan.steps.find((s) => s.kind === "bill" && s.vendor === "BOB")!;
+    expect(bobBill.senderShort ?? 0).toBe(0); // funded on time — no shortfall
+    expect(plan.shortBills).toBe(0);
+    const loan = plan.steps.find((s) => s.budgetLoan)!;
+    expect(loan.fromId).toBe(2); // Baala lends…
+    expect(loan.toId).toBe(3); // …to Harish
+    expect(loan.day).toBe(1); // on the due day, so the bill clears on time
+    expect(loan.amount).toBe(30252); // exactly the gap the hub can't cover from collected net
+    const pay = plan.steps.find((s) => s.budgetPayback)!;
+    expect(pay.fromId).toBe(T); // the HUB repays the lender (not Harish, who spent it)
+    expect(pay.toId).toBe(2); // Baala gets his budget back
+    expect(pay.amount).toBe(30252);
+    expect(pay.day).toBe(20); // once Lakshmi's income leaves the hub a surplus
+    expect(loan.returnBy).toBe(20);
+  });
+
+  it("budget pooling: when even all cash can't cover the bill, the shortfall is the TRUE family gap", () => {
+    // BOB = 2,70,000: pooling everything (1,60,300) still leaves 1,09,700 — waits for Lakshmi day 20.
+    const plan = buildMoneyPlan({
+      treasurerId: T,
+      treasurerName: "Arumugam",
+      transfers: [
+        xfer({ fromId: 2, from: "Baala", toId: T, amount: 48448 }),
+        xfer({ fromId: 4, from: "Lakshmi", toId: T, amount: 140252 }),
+        xfer({ fromId: T, from: "Arumugam", toId: 3, to: "Harish", amount: 188700 }),
+      ],
+      bills: [bill({ payerId: 3, payerName: "Harish", vendor: "BOB", amount: 270000, day: 1 })],
+      incomeDayByMember: { 2: 1, 3: 1, 4: 20 },
+      incomeArrivals: [
+        { memberId: 2, day: 1, amount: 79000 },
+        { memberId: 3, day: 1, amount: 81300 },
+        { memberId: 4, day: 20, amount: 140252 },
+      ],
+    });
+    const bobBill = plan.steps.find((s) => s.kind === "bill" && s.vendor === "BOB")!;
+    expect(bobBill.senderShort).toBe(109700); // 2,70,000 − day-1 family cash 1,60,300 = the true gap
+    expect(bobBill.infeasibleFrom).toBe(20); // payable once Lakshmi's income lands
+    expect(plan.shortBills).toBe(1);
+    const loan = plan.steps.find((s) => s.budgetLoan)!;
+    expect(loan.fromId).toBe(2);
+    expect(loan.amount).toBe(30552); // Baala's whole budget is pooled toward the gap
+    const pay = plan.steps.find((s) => s.budgetPayback)!;
+    expect(pay.toId).toBe(2);
+    expect(pay.amount).toBe(30552);
+  });
+
+  it("budget pooling: one lender funding several of a creditor's bills shows ONE front and ONE payback", () => {
+    // Harish (3) has TWO day-1 bills; Baala (2) lends his budget toward both. They must COMBINE into a
+    // single Baala→Harish step and a single hub→Baala payback (not one row per bill).
+    const plan = buildMoneyPlan({
+      treasurerId: T,
+      treasurerName: "Arumugam",
+      transfers: [
+        xfer({ fromId: 2, from: "Baala", toId: T, amount: 48448 }),
+        xfer({ fromId: 4, from: "Lakshmi", toId: T, amount: 71552 }),
+        xfer({ fromId: T, from: "Arumugam", toId: 3, to: "Harish", amount: 120000 }),
+      ],
+      bills: [
+        bill({ payerId: 3, payerName: "Harish", vendor: "BOB-A", amount: 100000, day: 1 }),
+        bill({ payerId: 3, payerName: "Harish", vendor: "BOB-B", amount: 50000, day: 1 }),
+      ],
+      incomeDayByMember: { 2: 1, 3: 1, 4: 20 },
+      incomeArrivals: [
+        { memberId: 2, day: 1, amount: 79000 },
+        { memberId: 3, day: 1, amount: 30000 },
+        { memberId: 4, day: 20, amount: 71552 },
+      ],
+    });
+    const loans = plan.steps.filter((s) => s.budgetLoan);
+    expect(loans.length).toBe(1); // combined, not one per bill
+    expect(loans[0].fromId).toBe(2);
+    expect(loans[0].toId).toBe(3);
+    expect(loans[0].amount).toBe(30552); // Baala's whole budget, pooled across both bills
+    const paybacks = plan.steps.filter((s) => s.budgetPayback);
+    expect(paybacks.length).toBe(1); // one combined return
+    expect(paybacks[0].toId).toBe(2);
+    expect(paybacks[0].amount).toBe(30552);
+    // No member↔member transfer ever shows a shortfall — only bills do.
+    expect(plan.steps.filter((s) => s.kind === "transfer-out" && (s.senderShort ?? s.short ?? 0) > 0).length).toBe(0);
+  });
+
+  it("direct routing: a debtor pays a creditor DIRECT when the creditor has a need that same day (no hub hop)", () => {
+    // Lakshmi (4) collects on day 20 (her income lands then); Harish (3) has a bill due day 20. Instead of
+    // Lakshmi→hub + hub→Harish, it must be a single Lakshmi→Harish, and her hub collection disappears.
+    const plan = buildMoneyPlan({
+      treasurerId: T,
+      treasurerName: "Arumugam",
+      transfers: [
+        xfer({ fromId: 4, from: "Lakshmi", toId: T, amount: 100 }),
+        xfer({ fromId: T, from: "Arumugam", toId: 3, to: "Harish", amount: 100 }),
+      ],
+      bills: [bill({ payerId: 3, payerName: "Harish", vendor: "BOB", amount: 100, day: 20 })],
+      incomeDayByMember: { 4: 20 },
+      incomeArrivals: [{ memberId: 4, day: 20, amount: 100 }],
+    });
+    const direct = plan.steps.find((s) => s.reroute && s.fromId === 4 && s.toId === 3);
+    expect(direct?.amount).toBe(100); // Lakshmi → Harish, straight
+    expect(plan.steps.some((s) => s.kind === "transfer-in" && s.fromId === 4)).toBe(false); // no Lakshmi→hub collection
+    expect(plan.steps.some((s) => s.kind === "transfer-out" && s.fromId === T && s.toId === 3)).toBe(false); // no hub→Harish hop
+    const bob = plan.steps.find((s) => s.kind === "bill" && s.vendor === "BOB")!;
+    expect(bob.senderShort ?? 0).toBe(0); // funded on time
+  });
+
+  it("direct routing: with NO creditor need that day, the debtor's cash goes to the hub (not direct)", () => {
+    // Baala (2) collects day 1, but no creditor needs money day 1 (C's bill is later, self-funded). His
+    // net must go to the hub as a normal collection, NOT direct to anyone.
+    const plan = buildMoneyPlan({
+      treasurerId: T,
+      treasurerName: "Arumugam",
+      transfers: [
+        xfer({ fromId: 2, from: "Baala", toId: T, amount: 40 }),
+        xfer({ fromId: T, from: "Arumugam", toId: 3, to: "Harish", amount: 40 }),
+      ],
+      bills: [bill({ payerId: 3, payerName: "Harish", vendor: "Late", amount: 40, day: 20 })],
+      incomeDayByMember: { 2: 1, 3: 20 },
+      incomeArrivals: [{ memberId: 2, day: 1, amount: 40 }, { memberId: 3, day: 20, amount: 200 }],
+    });
+    // Harish's own day-20 income (200) covers his day-20 bill, so he has no NEED → nothing to direct.
+    expect(plan.steps.some((s) => s.reroute)).toBe(false);
+    expect(plan.steps.some((s) => s.kind === "transfer-in" && s.fromId === 2)).toBe(true); // Baala → hub, as normal
+  });
+
+  it("order overrides: a head 'move up/down' index overrides the derived order", () => {
+    const plan = buildMoneyPlan({
+      treasurerId: T,
+      transfers: [xfer({ fromId: 2, toId: T, amount: 100 })],
+      bills: [
+        bill({ key: "billA", vendor: "A", day: 2, payerId: 5, amount: 10 }),
+        bill({ key: "billB", vendor: "B", day: 5, payerId: 5, amount: 20 }),
+      ],
+      incomeDayByMember: { 2: 1 },
+      orderOverrides: { billB: -1 }, // pin B above everything, though it's the latest-dated
+    });
+    expect(plan.steps[0].id).toBe("billB"); // manual index wins over day/rank
   });
 });
 

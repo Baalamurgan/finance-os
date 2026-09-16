@@ -509,7 +509,7 @@ export type Settlement = Awaited<ReturnType<typeof getSettlement>>;
  * attributed to them. Every non-treasurer member settles that net with the treasurer (hub):
  * net > 0 → member pays treasurer; net < 0 → treasurer pays member. (Matches the family sheet.)
  */
-async function _getSettlement(
+export async function _getSettlement(
   householdId: number,
   periodId: number,
   treasurerId: number | null,
@@ -560,20 +560,24 @@ async function _getSettlement(
 // executable checklist. Pure ordering/feasibility lives in buildMoneyPlan (unit-tested); this
 // just gathers the inputs from the existing In-Hand + settlement computations (one source of truth).
 export type MoneyPlanResult = Awaited<ReturnType<typeof getMoneyPlan>>;
-export async function getMoneyPlan(householdId: number, periodId: number, inhandArg?: InHand, extraBills?: import("./moneyPlan").PlanBill[], extraExpenses?: SettleTagged[]) {
+export async function getMoneyPlan(householdId: number, periodId: number, inhandArg?: InHand, extraBills?: import("./moneyPlan").PlanBill[], extraExpenses?: SettleTagged[], settlementArg?: Awaited<ReturnType<typeof _getSettlement>>) {
   const inhand = inhandArg ?? (await getInHand(householdId, periodId));
-  const [settlement, incomes, period, household, dayOverrideRows, manualStepRows, hiddenRows] = await Promise.all([
+  const [settlement, incomes, period, household, dayOverrideRows, manualStepRows, hiddenRows, orderRows] = await Promise.all([
     // Preview gate passes extraExpenses → uncached fresh settlement WITH the hypothetical expense
-    // folded in; every real caller uses the cached settlement unchanged.
-    extraExpenses?.length
-      ? _getSettlement(householdId, periodId, inhand.treasurerId, extraExpenses)
-      : getSettlement(householdId, periodId, inhand.treasurerId),
+    // folded in; every real caller uses the cached settlement unchanged. Standalone scripts (no Next
+    // runtime → unstable_cache throws) pass a pre-fetched uncached settlement via settlementArg.
+    settlementArg
+      ? Promise.resolve(settlementArg)
+      : extraExpenses?.length
+        ? _getSettlement(householdId, periodId, inhand.treasurerId, extraExpenses)
+        : getSettlement(householdId, periodId, inhand.treasurerId),
     prisma.incomeEntry.findMany({ where: { periodId }, select: { id: true, ownerId: true, dueDay: true, amount: true, source: true, receivedAt: true } }),
     prisma.period.findUnique({ where: { id: periodId }, select: { year: true, month: true, status: true } }),
     prisma.household.findUnique({ where: { id: householdId }, select: { windDownDay: true } }),
     prisma.stepDayOverride.findMany({ where: { periodId }, select: { stepKey: true, day: true } }),
     prisma.manualPlanStep.findMany({ where: { periodId }, orderBy: { createdAt: "asc" } }),
     prisma.hiddenPlanStep.findMany({ where: { periodId }, select: { stepKey: true } }),
+    prisma.stepOrderOverride.findMany({ where: { periodId }, select: { stepKey: true, sortIndex: true } }),
   ]);
   // Head-set day overrides for steps with no row of their own (fund/periodic bills, Piggy hand-over).
   const dayOverride = new Map(dayOverrideRows.map((o) => [o.stepKey, o.day]));
@@ -627,6 +631,17 @@ export async function getMoneyPlan(householdId: number, periodId: number, inhand
   for (const e of deferredExp) {
     const payerId = e.memberId ?? inhand.treasurerId;
     bills.push({ key: `defer-${e.id}`, payerId, payerName: nameOf(payerId), vendor: e.label, amount: e.amount, done: e.paid, day: null, status: null, days: null, billId: e.id, deferred: true });
+  }
+  // Planned-misc spend cards → ordinary dated bills. The owner is assumed to spend the whole budget, so
+  // it moves their cash exactly like any bill (dated by its envelope's due day); its money is already
+  // retained via settlement (the envelope is the owner's expense), so this doesn't double-count. Its Pay
+  // button opens the spend modal with the category pre-filled (see the miscCard branch in MoneyPlan).
+  const miscCardSteps = await getMiscCardSteps(householdId, periodId);
+  for (const mc of miscCardSteps) {
+    const st = dayStatus(mc.day ?? undefined);
+    // billId = the envelope id: lets the plan's inline date editor write the due day straight back to the
+    // Sheet line (setStepDay kind="bill"). categoryId drives the Pay button's pre-filled spend modal.
+    bills.push({ key: `misccard-${mc.categoryId}`, payerId: mc.payerId, payerName: mc.payerName, vendor: mc.name, amount: mc.amount, done: mc.done, day: mc.day, status: st?.status ?? null, days: st?.days ?? null, billId: mc.envelopeId ?? undefined, categoryId: mc.categoryId, miscCard: true });
   }
   // Apply the head's per-month day override to fund/periodic bills (which have no line of their own —
   // their date otherwise comes from the category config). Recompute the overdue/soon tag from the new
@@ -727,6 +742,7 @@ export async function getMoneyPlan(householdId: number, periodId: number, inhand
     amount: m.amount, day: m.day, done: m.done, afterStepKey: m.afterStepKey,
   }));
   const hiddenKeys = hiddenRows.map((r) => r.stepKey);
+  const orderOverrides = Object.fromEntries(orderRows.map((r) => [r.stepKey, r.sortIndex]));
 
   // Prior-month cash now booked as this month's pool income but still HELD by a member (their budget
   // leftover routed to income and/or the general Piggy) → one combined tickable "holder → treasurer"
@@ -754,7 +770,7 @@ export async function getMoneyPlan(householdId: number, periodId: number, inhand
   });
 
   const { buildMoneyPlan } = await import("./moneyPlan");
-  const plan = buildMoneyPlan({ treasurerId: inhand.treasurerId, treasurerName: settlement.treasurer?.name, transfers, bills, allowances, piggyReturns, advances, incomeDayByMember, incomeByMember, incomeArrivals, reimburseByMember, reimburseDay, piggyHandover, manualSteps, poolHandovers, hiddenKeys });
+  const plan = buildMoneyPlan({ treasurerId: inhand.treasurerId, treasurerName: settlement.treasurer?.name, transfers, bills, allowances, piggyReturns, advances, incomeDayByMember, incomeByMember, incomeArrivals, reimburseByMember, reimburseDay, piggyHandover, manualSteps, poolHandovers, hiddenKeys, orderOverrides });
 
   // Enrich done steps with the day they were ACTUALLY marked paid (IST), so the plan can show
   // "paid <day>" when it differs from the scheduled/due day. Timestamps live on the underlying record:
@@ -777,18 +793,6 @@ export async function getMoneyPlan(householdId: number, periodId: number, inhand
     else if ((s.kind === "transfer-in" || s.kind === "transfer-out") && s.recordId != null) s.paidDay = settlementPaidDay.get(s.recordId) ?? null;
     else if (s.kind === "advance" && s.advanceId != null) { const a = advancePaidDay.get(s.advanceId); s.paidDay = (s.payback ? a?.payback : a?.front) ?? null; }
   }
-  // Planned-misc spend cards → inline plan steps (paid by logging a spend; done once ≥1 spend exists).
-  // Display-only: their full amount is ALREADY in the payer's held budget/settlement, so they carry no
-  // extra liquidity here — they just show as ordinary steps with a Pay button (see the MoneyPlan render).
-  const miscCardSteps = await getMiscCardSteps(householdId, periodId);
-  for (const mc of miscCardSteps) {
-    plan.steps.push({
-      id: `misccard-${mc.categoryId}`, kind: "bill", day: null, amount: mc.amount, done: mc.done,
-      payerId: mc.payerId, payerName: mc.payerName, vendor: mc.name, categoryId: mc.categoryId, miscCard: true,
-    });
-  }
-  plan.total += miscCardSteps.length;
-  plan.done += miscCardSteps.filter((mc) => mc.done).length;
   // reimburseByMember (prior-month out-of-pocket each member fronted) is surfaced so the balance walk
   // can explain a contributor's end-of-month leftover: it ≈ what they're repaid for last month's spends.
   return { ...plan, treasurerId: inhand.treasurerId, periodId, reimburseByMember };
@@ -857,27 +861,31 @@ export async function getSettlementHistory(householdId: number) {
 
 export type TrackedExpenses = Awaited<ReturnType<typeof getTrackedExpenses>>;
 
-// Planned-misc spend cards active in this period (have a budget), for the Money Plan checklist. Each
-// is "paid" by logging a spend against its category (from here or the Spends tab) — done = ≥1 spend.
-// Net-neutral to the funding engine: it's the payer's own held budget, drawn by the spend, reimbursed
-// at settlement like any budgeted category — so it's a checklist item, not a hub-funded transfer.
-export type MiscCardStep = { categoryId: number; name: string; amount: number; payerId: number | null; payerName: string; done: boolean };
+// Planned-misc spend cards active in this period (have a budget), for the Money Plan. Each is an
+// ORDINARY dated bill: its OWNER is assumed to spend the whole budget, so it moves their cash like any
+// bill — dated by its envelope's due day. Its money is already retained via settlement (the envelope
+// counts as the owner's expense), so treating it as a walk bill doesn't double-count. "Paid" by logging
+// a spend against the category (from the Pay button here or the Spends tab) — done = ≥1 spend.
+export type MiscCardStep = { categoryId: number; envelopeId: number | null; name: string; amount: number; payerId: number | null; payerName: string; done: boolean; day: number | null };
 export async function getMiscCardSteps(householdId: number, periodId: number): Promise<MiscCardStep[]> {
   const cats = await prisma.category.findMany({ where: { householdId, miscCard: true, onHold: false }, select: { id: true, name: true, responsibleMemberId: true } });
   if (cats.length === 0) return [];
   const ids = cats.map((c) => c.id);
-  const [budgets, spendGroups, members] = await Promise.all([
+  const [budgets, envelopes, spendGroups, members] = await Promise.all([
     prisma.budget.findMany({ where: { periodId, categoryId: { in: ids } }, select: { categoryId: true, planned: true } }),
+    // The card's envelope line carries its DUE DAY and IS the row edited on the Sheet — the step is dated
+    // by it and its id rides along so the plan's date editor writes straight back to that same envelope.
+    prisma.expenseEntry.findMany({ where: { periodId, note: null, categoryId: { in: ids } }, select: { id: true, categoryId: true, dueDay: true } }),
     prisma.spend.groupBy({ by: ["categoryId"], where: { periodId, categoryId: { in: ids } }, _count: { _all: true } }),
     prisma.member.findMany({ where: { householdId }, select: { id: true, name: true } }),
   ]);
   const planned = new Map(budgets.map((b) => [b.categoryId, b.planned]));
+  const envOf = new Map(envelopes.map((e) => [e.categoryId, e]));
   const spentCount = new Map(spendGroups.map((g) => [g.categoryId, g._count._all]));
   const nameOf = (id: number | null) => members.find((m) => m.id === id)?.name ?? "Shared";
   return cats
     .filter((c) => (planned.get(c.id) ?? 0) > 0) // only cards materialised (budgeted) this month
-    .map((c) => ({ categoryId: c.id, name: c.name, amount: Math.round((planned.get(c.id) ?? 0) * 100) / 100, payerId: c.responsibleMemberId, payerName: nameOf(c.responsibleMemberId), done: (spentCount.get(c.id) ?? 0) > 0 }))
-    .sort((a, b) => Number(a.done) - Number(b.done) || b.amount - a.amount); // unpaid first, then largest
+    .map((c) => ({ categoryId: c.id, envelopeId: envOf.get(c.id)?.id ?? null, name: c.name, amount: Math.round((planned.get(c.id) ?? 0) * 100) / 100, payerId: c.responsibleMemberId, payerName: nameOf(c.responsibleMemberId), done: (spentCount.get(c.id) ?? 0) > 0, day: envOf.get(c.id)?.dueDay ?? null }));
 }
 
 /**
@@ -956,7 +964,7 @@ export type InHand = Awaited<ReturnType<typeof getInHand>>;
  * expense balance); the piggy-holder's row carries the Piggy bank. Both roles
  * default to the head and always appear even with no personal in-hand.
  */
-async function _getInHand(householdId: number, periodId: number) {
+export async function _getInHand(householdId: number, periodId: number, settlementArg?: Awaited<ReturnType<typeof _getSettlement>>) {
   const [household, period, categories, budgets, spends, billLines, fundLines, fundCats, sinkBal, billPayments, members, piggy, incomeAgg, expenseAgg, carriedRaw, closedPeriods, allPays, allowanceLines, sinkCats] = await Promise.all([
     prisma.household.findUnique({ where: { id: householdId }, select: { treasurerMemberId: true, piggyHolderMemberId: true } }),
     prisma.period.findUnique({ where: { id: periodId }, select: { treasurerMemberId: true, status: true, month: true, year: true } }),
@@ -1244,7 +1252,7 @@ async function _getInHand(householdId: number, periodId: number) {
   // CONTRIBUTOR who funds their own assigned bills from their salary (so they HOLD that cash); net < 0
   // is a RECEIVER whose bills the pool funds ("yet to receive"). `build` uses this to place unpaid-bill
   // cash on the right side. Net is independent of who the treasurer is, so the id passed doesn't matter.
-  const settlementNet = await getSettlement(householdId, periodId, treasurerId);
+  const settlementNet = settlementArg ?? (await getSettlement(householdId, periodId, treasurerId));
   const netByMember = new Map(settlementNet.rows.map((r) => [r.id, r.net]));
 
   // Prior month's PENDING Piggy hand-over: if the immediately-preceding month is CLOSED but its
