@@ -94,7 +94,7 @@ export type CardDue = {
   ungrouped: CardDueItem[]; // items shown when no statement day (can't derive cycles)
   // Settled cycles (for undo + a "paid" pill). familyTotal/total/dueISO come from the cycle's still-present
   // spends, so a paid FAMILY card bill can be shown/undone in the family plan even after it's settled.
-  paid: { billId: number; cycleEndISO: string; amount: number; familyTotal: number; familyBudgeted: number; total: number; dueISO: string | null }[];
+  paid: { billId: number; cycleEndISO: string; amount: number; familyTotal: number; familyBudgeted: number; total: number; dueISO: string | null; items: CardDueItem[] }[];
 };
 
 const midnight = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate());
@@ -228,7 +228,7 @@ export async function getCardDues(memberId: number): Promise<CardDue[]> {
       ungrouped: [],
       paid: myBills.map((b) => {
         const g = byCycle.get(midnight(b.cycleEnd).getTime());
-        return { billId: b.id, cycleEndISO: midnight(b.cycleEnd).toISOString(), amount: b.amount, familyTotal: g?.familyTotal ?? 0, familyBudgeted: g?.familyBudgeted ?? 0, total: g?.total ?? 0, dueISO: g?.due ? g.due.toISOString() : null };
+        return { billId: b.id, cycleEndISO: midnight(b.cycleEnd).toISOString(), amount: b.amount, familyTotal: g?.familyTotal ?? 0, familyBudgeted: g?.familyBudgeted ?? 0, total: g?.total ?? 0, dueISO: g?.due ? g.due.toISOString() : null, items: g ? [...g.items].sort(byDateDesc) : [] };
       }),
     });
   }

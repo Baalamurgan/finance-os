@@ -781,18 +781,25 @@ describe("buildMoneyPlan", () => {
     expect(plan.steps.some((s) => s.kind === "transfer-in" && s.fromId === 2)).toBe(true); // Baala → hub, as normal
   });
 
-  it("order overrides: a head 'move up/down' index overrides the derived order", () => {
+  it("order overrides reorder ONLY within a day — the date is always the primary sort", () => {
+    // Two bills on day 2, one on day 5. An override can flip the two day-2 bills, but must NEVER pull the
+    // day-5 bill above the day-2 bills — date wins, always (the rule: "always sort via the date whatsoever").
     const plan = buildMoneyPlan({
       treasurerId: T,
       transfers: [xfer({ fromId: 2, toId: T, amount: 100 })],
       bills: [
         bill({ key: "billA", vendor: "A", day: 2, payerId: 5, amount: 10 }),
+        bill({ key: "billC", vendor: "C", day: 2, payerId: 5, amount: 30 }),
         bill({ key: "billB", vendor: "B", day: 5, payerId: 5, amount: 20 }),
       ],
       incomeDayByMember: { 2: 1 },
-      orderOverrides: { billB: -1 }, // pin B above everything, though it's the latest-dated
+      // Try to pin the day-5 bill first and flip the two day-2 bills.
+      orderOverrides: { billB: -100, billC: 0, billA: 1 },
     });
-    expect(plan.steps[0].id).toBe("billB"); // manual index wins over day/rank
+    const billIdx = (id: string) => plan.steps.findIndex((s) => s.id === id);
+    expect(billIdx("billB")).toBeGreaterThan(billIdx("billA")); // day 5 stays AFTER day 2 despite the -100 override
+    expect(billIdx("billB")).toBeGreaterThan(billIdx("billC"));
+    expect(billIdx("billC")).toBeLessThan(billIdx("billA")); // within day 2, the override flips C above A
   });
 });
 

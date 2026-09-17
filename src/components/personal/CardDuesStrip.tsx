@@ -76,13 +76,16 @@ function CardBlock({ d }: { d: CardDue }) {
             <li className="px-1 py-1 text-xs text-slate-400">All bills settled 🎉</li>
           )}
           {d.paid.map((p) => (
-            <li key={p.billId} className="flex items-center justify-between gap-2 px-3 py-1 text-xs text-slate-400">
-              <span>✓ Paid — bill {fmtDate(p.cycleEndISO)} · {formatINR(p.amount)}</span>
-              <ToastForm action={unpayFamilyCardBill} successMessage="Bill payment undone">
-                <input type="hidden" name="cardId" value={d.cardId} />
-                <input type="hidden" name="cycleEnd" value={p.cycleEndISO} />
-                <button className="font-medium text-slate-400 hover:text-red-600">undo</button>
-              </ToastForm>
+            <li key={p.billId} className="rounded-lg px-3 py-1 text-xs text-slate-400">
+              <div className="flex items-center justify-between gap-2">
+                <span>✓ Paid — bill {fmtDate(p.cycleEndISO)} · {formatINR(p.amount)}</span>
+                <ToastForm action={unpayFamilyCardBill} successMessage="Bill payment undone">
+                  <input type="hidden" name="cardId" value={d.cardId} />
+                  <input type="hidden" name="cycleEnd" value={p.cycleEndISO} />
+                  <button className="font-medium text-slate-400 hover:text-red-600">undo</button>
+                </ToastForm>
+              </div>
+              <ItemList items={p.items} />
             </li>
           ))}
         </ul>

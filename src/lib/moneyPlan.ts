@@ -552,12 +552,14 @@ export function buildMoneyPlan(input: {
     steps.splice(pos, 0, m);
   }
 
-  // Head MANUAL ordering (move up/down): a step with an override sorts by its stored index; every other
-  // step keeps its derived position. So a nudged step slots exactly where the head put it, and the walk
-  // below re-runs in that order (balances/short flags recompute) — same effect as changing a date.
+  // Head MANUAL ordering (move up/down): reorders steps ONLY WITHIN their day — the DATE is always the
+  // primary sort key (eff), so a step never jumps across dates via an override. Moving up/down past a
+  // day boundary changes the step's date instead (setStepDay), and then eff re-sorts it into that day.
+  // This keeps "always sort by date" true even after a date edit on an overridden step.
   if (Object.keys(orderOverrides).length) {
     const derived = new Map(steps.map((s, i) => [s.id, i]));
-    steps.sort((a, b) => (orderOverrides[a.id] ?? derived.get(a.id)!) - (orderOverrides[b.id] ?? derived.get(b.id)!));
+    const ord = (s: PlanStep) => orderOverrides[s.id] ?? derived.get(s.id)!;
+    steps.sort((a, b) => eff(a) - eff(b) || ord(a) - ord(b));
   }
 
   // Per-actor "still to pay" for the member chip: a pure running sum of that person's own outgoing
