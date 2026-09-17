@@ -7,7 +7,7 @@ import { getCardDues } from "@/lib/personal/cash";
 import { PersonalNav } from "@/components/personal/PersonalNav";
 import { CardDuesStrip } from "@/components/personal/CardDuesStrip";
 import { ConfirmForm } from "@/components/ConfirmForm";
-import { setCreditConfig, deleteTransaction, addManualTransaction, topUpCard, updateAccount, deleteAccount } from "@/app/personal/finance/actions";
+import { setCreditConfig, deleteTransaction, addManualTransaction, addPointsRedemption, topUpCard, updateAccount, deleteAccount } from "@/app/personal/finance/actions";
 import { TXN_TYPES, BALANCE_ACCOUNT_TYPES, CARD_NETWORKS } from "@/lib/finance/types";
 import { CardColorPicker } from "@/components/CardColorPicker";
 import { ToastForm } from "@/components/ToastForm";
@@ -115,12 +115,33 @@ export default async function CreditCardDetail({
           </div>
         )}
 
-        {/* rewards */}
+        {/* rewards + profit/loss */}
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
           <Stat label="Lifetime cashback" value={formatINR(d.lifetimeCashback)} />
+          <Stat label="Lifetime fees" value={formatINR(d.lifetimeFees)} />
           <Stat label="Lifetime points" value={d.lifetimePoints.toLocaleString("en-IN")} />
-          <Stat label="Cashback this cycle" value={formatINR(d.cashbackThisCycle)} />
           <Stat label="Points this cycle" value={d.pointsThisCycle.toLocaleString("en-IN")} />
+        </div>
+
+        {/* Card profit / loss = cashback (incl. redeemed points) − fees. + = the card earns you money. */}
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white p-4">
+          <div>
+            <div className="text-[11px] font-medium uppercase tracking-wide text-slate-500">Card profit / loss</div>
+            <div className={`mt-0.5 text-2xl font-extrabold tabular-nums ${d.netRewards < 0 ? "text-red-600" : "text-emerald-700"}`}>
+              {d.netRewards < 0 ? `− ${formatINR(-d.netRewards)}` : `+ ${formatINR(d.netRewards)}`}
+            </div>
+            <div className="mt-0.5 text-[11px] text-slate-400">cashback {formatINR(d.lifetimeCashback)} − fees {formatINR(d.lifetimeFees)}</div>
+          </div>
+          <ToastForm action={addPointsRedemption} successMessage="Points value added" className="flex items-end gap-2">
+            <input type="hidden" name="accountId" value={account.id} />
+            <label className="text-[11px] font-medium text-slate-500">Redeem points → ₹
+              <input name="amount" inputMode="numeric" required placeholder="0" className="input mt-1 w-24" />
+            </label>
+            <label className="text-[11px] font-medium text-slate-500">Points (opt.)
+              <input name="rewardPoints" inputMode="numeric" placeholder="0" className="input mt-1 w-20" />
+            </label>
+            <button className="rounded-lg bg-emerald-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-emerald-700">+ Add</button>
+          </ToastForm>
         </div>
 
         {/* configure card */}
@@ -141,6 +162,12 @@ export default async function CreditCardDetail({
             </label>
             <label className="text-xs font-medium text-slate-500">Remind me before (days)
               <input name="reminderDays" defaultValue={cfg?.reminderDays ?? ""} inputMode="numeric" placeholder="5" className="input mt-1 w-full" />
+            </label>
+            <label className="text-xs font-medium text-slate-500">Annual fee (₹)
+              <input name="annualFee" defaultValue={cfg?.annualFee ?? ""} inputMode="numeric" placeholder="optional" className="input mt-1 w-full" />
+            </label>
+            <label className="text-xs font-medium text-slate-500">Fee charged in month (1–12)
+              <input name="annualFeeMonth" defaultValue={cfg?.annualFeeMonth ?? ""} inputMode="numeric" min={1} max={12} placeholder="e.g. 4 = Apr" className="input mt-1 w-full" />
             </label>
             <div className="sm:col-span-3">
               <button className="rounded-lg bg-emerald-600 px-4 py-1.5 text-sm font-semibold text-white hover:bg-emerald-700">Save</button>

@@ -82,7 +82,7 @@ export async function getUnpaidCardDues(memberId: number): Promise<number> {
 // for visibility with a tag. They are counted in `familyTotal` / `familyUnpaidTotal` ONLY — never in
 // `total` / `unpaidTotal`, which stay personal-only so the month spendable & cash-in-hand are unchanged.
 export type CardDueItem = { label: string; amount: number; dateISO: string; family: boolean };
-export type CardDueCycle = { cycleEndISO: string; dueISO: string | null; total: number; familyTotal: number; items: CardDueItem[] };
+export type CardDueCycle = { cycleEndISO: string; dueISO: string | null; total: number; familyTotal: number; familyBudgeted: number; annualFee: number; items: CardDueItem[] };
 export type CardDue = {
   cardId: number;
   cardName: string;
@@ -92,7 +92,9 @@ export type CardDue = {
   familyUnpaidTotal: number; // Σ family (reimbursed) across all unpaid cycles — display only
   cycles: CardDueCycle[]; // unpaid, oldest first — each carries its line items
   ungrouped: CardDueItem[]; // items shown when no statement day (can't derive cycles)
-  paid: { billId: number; cycleEndISO: string; amount: number }[]; // for undo
+  // Settled cycles (for undo + a "paid" pill). familyTotal/total/dueISO come from the cycle's still-present
+  // spends, so a paid FAMILY card bill can be shown/undone in the family plan even after it's settled.
+  paid: { billId: number; cycleEndISO: string; amount: number; familyTotal: number; familyBudgeted: number; total: number; dueISO: string | null }[];
 };
 
 const midnight = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate());
@@ -146,24 +148,31 @@ export async function getCardDues(memberId: number): Promise<CardDue[]> {
   if (cards.length === 0) return [];
 
   const cardIds = cards.map((c) => c.id);
-  const [spends, fixed, bills, categories, familyTxns] = await Promise.all([
+  const member = await prisma.member.findUnique({ where: { id: memberId }, select: { householdId: true } });
+  const [spends, fixed, bills, categories, familyTxns, famBudgetedCats] = await Promise.all([
     prisma.personalSpend.findMany({ where: { memberId, cardAccountId: { not: null } }, select: { cardAccountId: true, amount: true, date: true, note: true, categoryId: true } }),
     prisma.personalExpense.findMany({ where: { memberId, cardAccountId: { not: null } }, select: { cardAccountId: true, amount: true, date: true, label: true } }),
     prisma.personalCardBill.findMany({ where: { memberId }, select: { id: true, cardAccountId: true, cycleEnd: true, amount: true } }),
     prisma.personalCategory.findMany({ where: { memberId }, select: { id: true, name: true } }),
     // Family-view spends mirrored onto these cards (owner = this member). Shown tagged for visibility;
-    // the family reimburses them, so they never touch the personal totals (see familyTotal below).
-    prisma.accountTransaction.findMany({ where: { accountId: { in: cardIds }, source: "family", type: "spend" }, select: { accountId: true, amount: true, date: true, merchant: true } }),
+    // the family reimburses them, so they never touch the personal totals (see familyTotal below). The
+    // category name lets us split the family portion into budgeted (from the held budget) vs misc.
+    prisma.accountTransaction.findMany({ where: { accountId: { in: cardIds }, source: "family", type: "spend" }, select: { accountId: true, amount: true, date: true, merchant: true, category: true } }),
+    // Household budgeted (tracked, non-misc) category NAMES — a family mirror line whose category matches
+    // one of these was a budgeted spend (Fuel/provision); anything else is misc/other. Name-matched because
+    // the mirror stores the family category's name (set at spend time).
+    member ? prisma.category.findMany({ where: { householdId: member.householdId, tracked: true, section: { not: "Misc" } }, select: { name: true } }) : Promise.resolve([]),
   ]);
   const catName = new Map(categories.map((c) => [c.id, c.name]));
+  const budgetedNames = new Set(famBudgetedCats.map((c) => c.name));
 
   // Normalise personal spends + fixed lines (family:false) and family mirror lines (family:true) to a
   // common shape with a display label.
-  type Item = { cardAccountId: number | null; amount: number; date: Date; label: string; family: boolean };
+  type Item = { cardAccountId: number | null; amount: number; date: Date; label: string; family: boolean; budgeted: boolean };
   const items: Item[] = [
-    ...spends.map((s) => ({ cardAccountId: s.cardAccountId, amount: s.amount, date: s.date, label: s.note?.trim() || catName.get(s.categoryId) || "Spend", family: false })),
-    ...fixed.map((e) => ({ cardAccountId: e.cardAccountId, amount: e.amount, date: e.date, label: e.label?.trim() || "Fixed bill", family: false })),
-    ...familyTxns.map((t) => ({ cardAccountId: t.accountId, amount: t.amount, date: t.date, label: t.merchant, family: true })),
+    ...spends.map((s) => ({ cardAccountId: s.cardAccountId, amount: s.amount, date: s.date, label: s.note?.trim() || catName.get(s.categoryId) || "Spend", family: false, budgeted: false })),
+    ...fixed.map((e) => ({ cardAccountId: e.cardAccountId, amount: e.amount, date: e.date, label: e.label?.trim() || "Fixed bill", family: false, budgeted: false })),
+    ...familyTxns.map((t) => ({ cardAccountId: t.accountId, amount: t.amount, date: t.date, label: t.merchant, family: true, budgeted: t.category != null && budgetedNames.has(t.category) })),
   ];
   const out: CardDue[] = [];
 
@@ -189,19 +198,22 @@ export async function getCardDues(memberId: number): Promise<CardDue[]> {
     // Group items into billing cycles by their date; a cycle with a matching PersonalCardBill is settled
     // (its cash already left) and drops off. Personal → total; family → familyTotal (kept apart).
     const paidKeys = new Set(myBills.map((b) => midnight(b.cycleEnd).getTime()));
-    const byCycle = new Map<number, { end: Date; due: Date | null; total: number; familyTotal: number; items: CardDueItem[] }>();
+    const byCycle = new Map<number, { end: Date; due: Date | null; total: number; familyTotal: number; familyBudgeted: number; items: CardDueItem[] }>();
     for (const it of mine) {
       const cyc = currentCycle(statementDay, it.date, dueOffset);
       const key = midnight(cyc.end).getTime();
-      const g = byCycle.get(key) ?? { end: midnight(cyc.end), due: cyc.dueDate, total: 0, familyTotal: 0, items: [] };
-      if (it.family) g.familyTotal += it.amount; else g.total += it.amount;
+      const g = byCycle.get(key) ?? { end: midnight(cyc.end), due: cyc.dueDate, total: 0, familyTotal: 0, familyBudgeted: 0, items: [] };
+      if (it.family) { g.familyTotal += it.amount; if (it.budgeted) g.familyBudgeted += it.amount; } else g.total += it.amount;
       g.items.push(toItem(it));
       byCycle.set(key, g);
     }
+    // Annual fee rides a cycle only when its statement (cycle-end) month is the card's fee month.
+    const feeMonth = card.credit?.annualFeeMonth ?? null;
+    const annualFeeOf = (end: Date) => (feeMonth != null && end.getMonth() + 1 === feeMonth ? Math.round((card.credit?.annualFee ?? 0) * 100) / 100 : 0);
     const cycles = [...byCycle.entries()]
       .filter(([key]) => !paidKeys.has(key))
       .sort((a, b) => a[0] - b[0])
-      .map(([, g]) => ({ cycleEndISO: g.end.toISOString(), dueISO: g.due ? g.due.toISOString() : null, total: g.total, familyTotal: g.familyTotal, items: g.items.sort(byDateDesc) }));
+      .map(([, g]) => ({ cycleEndISO: g.end.toISOString(), dueISO: g.due ? g.due.toISOString() : null, total: g.total, familyTotal: g.familyTotal, familyBudgeted: g.familyBudgeted, annualFee: annualFeeOf(g.end), items: g.items.sort(byDateDesc) }));
     const unpaidTotal = cycles.reduce((s, c) => s + c.total, 0);
     const familyUnpaidTotal = cycles.reduce((s, c) => s + c.familyTotal, 0);
 
@@ -214,7 +226,10 @@ export async function getCardDues(memberId: number): Promise<CardDue[]> {
       familyUnpaidTotal,
       cycles,
       ungrouped: [],
-      paid: myBills.map((b) => ({ billId: b.id, cycleEndISO: midnight(b.cycleEnd).toISOString(), amount: b.amount })),
+      paid: myBills.map((b) => {
+        const g = byCycle.get(midnight(b.cycleEnd).getTime());
+        return { billId: b.id, cycleEndISO: midnight(b.cycleEnd).toISOString(), amount: b.amount, familyTotal: g?.familyTotal ?? 0, familyBudgeted: g?.familyBudgeted ?? 0, total: g?.total ?? 0, dueISO: g?.due ? g.due.toISOString() : null };
+      }),
     });
   }
   return out;

@@ -4,8 +4,9 @@ import { Fragment, useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { formatINR } from "@/lib/format";
-import { markSettled, unsettle, toggleBillPaid, markAdvanceSettled, unsettleAdvance, markPiggyHandedOver, toggleIncomeReceived, addManualStep, deleteManualStep, toggleManualStepDone, hideStep, unhideStep, unpayMiscBill, togglePoolHandover, moveStep } from "@/app/actions";
+import { markSettled, unsettle, toggleBillPaid, markAdvanceSettled, unsettleAdvance, markPiggyHandedOver, toggleIncomeReceived, addManualStep, deleteManualStep, toggleManualStepDone, hideStep, unhideStep, unpayMiscBill, togglePoolHandover, moveStep, unpayFamilyCardBill } from "@/app/actions";
 import { PayBillModal } from "@/components/PayBillModal";
+import { PayCardBillModal } from "@/components/PayCardBillModal";
 import { MiscPayModal } from "@/components/MiscPayModal";
 import { ExpenseModal } from "@/components/ExpenseModal";
 import { AddSpendModal } from "@/components/AddSpendModal";
@@ -301,6 +302,7 @@ export function MoneyPlan({
                     {s.budgetPayback && !s.done && <span className="shrink-0 rounded-full bg-violet-50 px-1.5 py-0.5 text-[9px] font-medium text-violet-600" title={`The hub returns the budget ${s.toName} lent earlier to fund a bill on time`}>↩️ budget returned → {s.toName}</span>}
                     {s.reroute && !s.done && <span className="shrink-0 rounded-full bg-amber-50 px-1.5 py-0.5 text-[9px] font-medium text-amber-600" title="Paid straight to the person who needs it today, skipping the treasurer — one transfer instead of debtor→hub→creditor">direct · skips hub</span>}
                     {s.deferred && <span className="shrink-0 rounded-full bg-sky-50 px-1.5 py-0.5 text-[9px] font-medium text-sky-600" title="Added during the wind-down window — paid by the assignee at wind-down, kept out of this month's settlement">settles at wind-down</span>}
+                    {s.cardBill && <span className="shrink-0 rounded-full px-1.5 py-0.5 text-[9px] font-medium" style={{ backgroundColor: `${s.cardColor ?? "#a21caf"}1a`, color: s.cardColor ?? "#a21caf" }} title="Family credit-card bill — paid from cash the owner already holds (carried budget / reimbursed), so no one's cash-in-hand below moves">💳 card bill · from held cash</span>}
                     {isAdvance && !s.payback && <span className="shrink-0 rounded-full bg-teal-50 px-1.5 py-0.5 text-[9px] font-medium text-teal-600" title={`${s.fromName} fronts this so ${s.toName} can pay the next step`}>advance · funds {s.toName}</span>}
                     {isAdvance && s.payback && <span className="shrink-0 rounded-full bg-teal-50 px-1.5 py-0.5 text-[9px] font-medium text-teal-600" title={`${s.fromName} repays ${s.toName} the advance, now that their income has landed`}>payback → {s.toName}</span>}
                   </div>
@@ -435,6 +437,34 @@ export function MoneyPlan({
                       <span className="text-[9px] text-slate-300">to be paid</span>
                     ) : (
                       <AddSpendModal trigger="card" triggerLabel="Pay" periodId={periodId} fixedCategory={{ id: s.categoryId!, name: s.vendor!, misc: false }} isHead={isHead} members={members} currentMemberId={currentMemberId} />
+                    )
+                  ) : s.cardBill ? (
+                    // Family credit-card bill — paid from cash the owner already holds. OWNER-ONLY: only
+                    // the card's owner (payerId) may pay/undo, not the head. Others see a muted placeholder.
+                    currentMemberId === s.payerId && canEdit ? (
+                      s.done ? (
+                        <form action={withToast(unpayFamilyCardBill, { success: "Updated" })}>
+                          <input type="hidden" name="cardId" value={s.cardId} />
+                          <input type="hidden" name="cycleEnd" value={s.cycleEndISO} />
+                          <MiniBtn>undo</MiniBtn>
+                        </form>
+                      ) : (
+                        <PayCardBillModal
+                          cardId={s.cardId!}
+                          cardName={(s.vendor ?? "").replace(/ bill$/, "")}
+                          color={s.cardColor ?? "#a21caf"}
+                          cycleEndISO={s.cycleEndISO!}
+                          dueISO={s.dueISO!}
+                          familyBudgeted={s.cardFamilyBudgeted ?? s.amount}
+                          familyMisc={s.cardFamilyMisc ?? 0}
+                          personalAmount={s.cardPersonal ?? 0}
+                          annualFee={s.cardAnnualFee ?? 0}
+                        />
+                      )
+                    ) : s.done ? (
+                      <span className="text-[10px] font-medium text-emerald-600">✓ paid</span>
+                    ) : (
+                      <span className="text-[9px] text-slate-300">to be paid</span>
                     )
                   ) : (s.fund || s.billId != null) ? (
                     // Bill steps only become payable once the month is OPEN and you're the head or the

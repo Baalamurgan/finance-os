@@ -100,6 +100,8 @@ export type CreditDashboard = {
   paymentsThisCycle: number;
   cashbackThisCycle: number;
   pointsThisCycle: number;
-  lifetimeCashback: number;
+  lifetimeCashback: number; // Σ cashback (bill savings + redeemed-points cash) — the card's rewards realised as money
+  lifetimeFees: number; // Σ fee/charge/interest — the card's costs
+  netRewards: number; // lifetimeCashback − lifetimeFees: + = the card earns you money, − = it costs you (profit/loss)
   lifetimePoints: number;
 };

@@ -14,6 +14,8 @@ import { generateMonth } from "@/lib/periodClone";
 import { isMiscBucket, MISC_SUBCATEGORIES } from "@/lib/misc";
 import { isLearnable } from "@/lib/spendCategorize";
 import { getSpendShortcuts, getMatcherKeywords, getFrequentSpendItems, getMoneyPlan, getMiscSubCategories, getFamilyCards } from "@/lib/queries";
+import { getCardDues } from "@/lib/personal/cash";
+import { ensurePersonalMonth } from "@/lib/personal";
 import { planBillMonth, type FundingStyle } from "@/lib/schedule";
 import { getBillReminders } from "@/lib/billReminders";
 import { applyBudgetShortfall, windDownPeriod } from "@/lib/windDown";
@@ -1168,6 +1170,87 @@ export async function editSpendAction(
   await logActivity("spend", "updated", `Edited spend “${label}” ${formatINR(amount)}`, spend.periodId);
   revalidateFamily();
   return { ok: true, n: prev.n + 1 };
+}
+
+// ── Family credit-card bill: one owner-only payment settles the whole cycle ──────────────────────
+// A family card bill combines family spends (funded from the owner's held budget / in-hand) + the
+// owner's own personal spends (from their Can-spend) + any annual fee — but it's ONE real payment.
+// Settling writes a single PersonalCardBill (keyed by card + cycleEnd), which BOTH the family plan
+// (getPendingCardBills) and the personal dashboard (getCardDues) read to drop the cycle as paid. The
+// amount is what was actually paid (editable in the modal, default = swipes + annual fee); the ±
+// difference vs the summed swipes is derived later for the card's profit/loss. SECURITY: only the
+// card's OWNER may pay — enforced here, not just hidden in the UI.
+export async function payFamilyCardBill(formData: FormData) {
+  const session = await auth();
+  if (!session?.user) return { ok: false, error: "Signed out." };
+  const selfId = session.user.memberId ?? null;
+  const cardAccountId = Number(formData.get("cardId")) || 0;
+  const cycleEndISO = String(formData.get("cycleEnd") ?? "");
+  const amount = parseAmount(formData.get("amount"));
+  if (!cardAccountId || !cycleEndISO || amount == null || amount < 0) return { ok: false, error: "Bad input." };
+  const card = await prisma.financeAccount.findUnique({ where: { id: cardAccountId }, select: { memberId: true, type: true, name: true } });
+  if (!card || card.type !== "credit_card") return { ok: false, error: "Not a credit card." };
+  if (card.memberId !== selfId) { log.warn("payFamilyCardBill", "blocked", { outcome: "blocked", reason: "not-owner", selfId, cardAccountId }); return { ok: false, error: "Only the card owner can pay this bill." }; }
+  const cycleEnd = new Date(cycleEndISO);
+  if (isNaN(cycleEnd.getTime())) return { ok: false, error: "Bad cycle." };
+  // Recompute the cycle's expected total server-side (never trust the client): family + personal swipes
+  // + any annual fee. The ± difference vs what was actually paid is the card's cashback (−) or fee (+),
+  // recorded on the card ledger so each card's profit/loss is visible in the personal Finance section.
+  const dues = await getCardDues(card.memberId);
+  const cyc = dues.find((d) => d.cardId === cardAccountId)?.cycles.find((c) => Math.abs(new Date(c.cycleEndISO).getTime() - cycleEnd.getTime()) < 86400000);
+  const expected = cyc ? Math.round((cyc.total + cyc.familyTotal + cyc.annualFee) * 100) / 100 : amount;
+  const difference = Math.round((amount - expected) * 100) / 100; // + = extra fees/charges, − = cashback/savings
+  const diffMarker = `__cardbilldiff__:${cycleEnd.toISOString()}`;
+  // The payment leaves cash in the OWNER's current personal month (mirrors the personal markCardBillPaid).
+  const period = await ensurePersonalMonth(card.memberId);
+  await prisma.$transaction(async (tx) => {
+    await tx.personalCardBill.upsert({
+      where: { cardAccountId_cycleEnd: { cardAccountId, cycleEnd } },
+      create: { memberId: card.memberId, cardAccountId, cycleEnd, paidPeriodId: period.id, amount },
+      update: { amount, paidPeriodId: period.id, paidAt: new Date() },
+    });
+    // Replace any prior difference row for this cycle (re-paying with a new amount re-derives it).
+    await tx.accountTransaction.deleteMany({ where: { accountId: cardAccountId, category: diffMarker } });
+    if (Math.abs(difference) > 0.005) {
+      await tx.accountTransaction.create({
+        data: {
+          memberId: card.memberId, accountId: cardAccountId, date: new Date(),
+          merchant: difference < 0 ? "Bill savings / cashback" : "Bill fees / charges",
+          amount: Math.abs(difference),
+          type: difference < 0 ? "cashback" : "fee",
+          category: diffMarker, source: "manual",
+        },
+      });
+    }
+  });
+  log.info("payFamilyCardBill", "ok", { outcome: "ok", cardAccountId, amount, difference });
+  revalidateFamily();
+  revalidatePath("/personal", "layout");
+  return { ok: true };
+}
+
+// Undo a family card-bill payment — deletes the settle record so the cycle reappears as unpaid on both
+// the family plan and the personal dashboard. Owner-only, same as paying.
+export async function unpayFamilyCardBill(formData: FormData) {
+  const session = await auth();
+  if (!session?.user) return { ok: false, error: "Signed out." };
+  const selfId = session.user.memberId ?? null;
+  const cardAccountId = Number(formData.get("cardId")) || 0;
+  const cycleEndISO = String(formData.get("cycleEnd") ?? "");
+  if (!cardAccountId || !cycleEndISO) return { ok: false, error: "Bad input." };
+  const card = await prisma.financeAccount.findUnique({ where: { id: cardAccountId }, select: { memberId: true } });
+  if (!card || card.memberId !== selfId) { log.warn("unpayFamilyCardBill", "blocked", { outcome: "blocked", reason: "not-owner", selfId, cardAccountId }); return { ok: false, error: "Only the card owner can undo this." }; }
+  const cycleEnd = new Date(cycleEndISO);
+  if (isNaN(cycleEnd.getTime())) return { ok: false, error: "Bad cycle." };
+  const diffMarker = `__cardbilldiff__:${cycleEnd.toISOString()}`;
+  await prisma.$transaction([
+    prisma.personalCardBill.deleteMany({ where: { cardAccountId, cycleEnd } }),
+    prisma.accountTransaction.deleteMany({ where: { accountId: cardAccountId, category: diffMarker } }),
+  ]);
+  log.info("unpayFamilyCardBill", "ok", { outcome: "ok", cardAccountId });
+  revalidateFamily();
+  revalidatePath("/personal", "layout");
+  return { ok: true };
 }
 
 // Use Piggy money: reduce a Piggy/sinking bucket and add the amount as a ONE-OFF

@@ -450,6 +450,10 @@ model CreditCardDetail {
   statementDay  Int?     // 1–28: day of month the statement generates
   dueOffsetDays Int?     // days after the statement date the payment is due
   reminderDays  Int?     // how many days before the due date the reminder fires (null → default)
+  // Optional annual/joining fee the issuer charges once a year. When a bill's cycle falls in
+  // annualFeeMonth, the card-bill total auto-includes annualFee on top of the summed swipes.
+  annualFee      Float?  // ₹ charged once a year (null/0 = none)
+  annualFeeMonth Int?    // 1–12: calendar month the fee hits the statement
 }
 
 // One ledger line on an account. The dashboard computes ONLY from these confirmed rows.

@@ -50,7 +50,7 @@ export function InHandPersonGroup({
   poolDisbursements?: { recipientId: number; recipientName: string; label: string; amount: number }[];
   treasurerOwnLeftover?: number;
 }) {
-  const { name, cats, unpaidBills, paidBills, earmarked, sinkingFunds, sinkingHeld, unpaidPeriodic, paidPeriodic, carried, carriedDue, miscSpent, net, pendingPiggyHeld, yetToReceive, selfFundsBills } = group;
+  const { name, cats, unpaidBills, paidBills, earmarked, sinkingFunds, sinkingHeld, unpaidPeriodic, paidPeriodic, carried, carriedDue, miscSpent, net, pendingPiggyHeld, pendingCardBills, yetToReceive, selfFundsBills } = group;
   const handovers = group.handovers ?? []; // tolerate a stale cached shape (pre-feature) until it refreshes
   // Per-card toggle: include or exclude this member's own misc/out-of-pocket in their total.
   // Default = include (the true position). Excluding shows "budget + bills + savings" only, so
@@ -406,6 +406,30 @@ export function InHandPersonGroup({
                     <span className="rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-400">to pay</span>
                   )}
                 </span>
+              </li>
+            ))}
+          </>
+        )}
+
+        {/* Family credit-card bills now due — the owner has HELD this cash since the swipe (a credit
+            spend doesn't leave hand until the bill), so it sits in their in-hand and pays down when the
+            card bill is settled. Its own ruled section, like the bills above — it's a bill to pay too. */}
+        {(pendingCardBills ?? []).some((b) => !b.done) && (
+          <>
+            <li className="pt-2">
+              <div className="border-t border-slate-200" />
+              <div className="mt-1.5 flex items-center justify-between gap-2">
+                <span className="text-[10px] font-semibold uppercase tracking-wide text-fuchsia-600">Card bills to pay</span>
+                <span className="text-[9px] text-slate-400">you hold this cash · included in your in-hand</span>
+              </div>
+            </li>
+            {(pendingCardBills ?? []).filter((b) => !b.done).map((b) => (
+              <li key={`cardbill${b.cardId}-${b.cycleEndISO}`} className="flex items-center justify-between gap-2 text-xs">
+                <span className="truncate" style={{ color: b.color }}>
+                  💳 {b.cardName} <span className="text-[10px] opacity-70">card bill</span>
+                  <span className="text-[10px] text-slate-400"> · due {new Date(b.dueISO).toLocaleDateString("en-IN", { day: "numeric", month: "short" })}</span>
+                </span>
+                <span className="shrink-0 tabular-nums font-medium" style={{ color: b.color }}>{formatINR(b.familyAmount)}</span>
               </li>
             ))}
           </>

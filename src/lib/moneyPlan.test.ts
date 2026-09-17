@@ -18,6 +18,22 @@ describe("buildMoneyPlan", () => {
     expect(plan.done).toBe(1); // the settled inbound transfer
   });
 
+  it("card bill: seeded from held cash, visibly reduces the balance, never short", () => {
+    const plan = buildMoneyPlan({
+      treasurerId: T,
+      transfers: [],
+      // Member 2 owes a ₹9,804 family card bill with NO income this month — it's paid from cash they've
+      // HELD since the swipe, so the walk seeds them with it: the step shows 9,804 → 0 and is never short.
+      bills: [bill({ key: "cardbill-7-2026-09-14", payerId: 2, payerName: "Baala", vendor: "RBL bill", amount: 9804, day: 2, cardBill: true, cardId: 7, cycleEndISO: "2026-09-14", dueISO: "2026-10-02" })],
+      incomeDayByMember: {},
+    });
+    const step = plan.steps.find((s) => s.cardBill)!;
+    expect(step.senderShort ?? 0).toBe(0); // never flagged short (self-funded from the seed)
+    expect(plan.shortBills).toBe(0);
+    expect(step.balancesBefore?.[2] ?? 0).toBe(9804); // seeded with the carried card cash
+    expect(step.balancesAfter?.[2] ?? 0).toBe(0); // paying the bill draws it back down — the visible drop
+  });
+
   it("inserts a manual step right after its anchor, moves the balances, and counts it", () => {
     const plan = buildMoneyPlan({
       treasurerId: T,

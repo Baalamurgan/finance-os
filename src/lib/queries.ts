@@ -7,6 +7,7 @@ import { computeSettlement, type SettleTagged } from "@/lib/settlement-core";
 import { planBillMonth, isLumpDue, monthsUntilNextDue, type FundingStyle } from "@/lib/schedule";
 import { suggestCategoryName, normalizeItem, resolveCategoryId } from "@/lib/spendCategorize";
 import { withShareCount } from "@/lib/format";
+import { getCardDues } from "@/lib/personal/cash";
 
 // Keywords that drive the on-save category suggestion: the household's LEARNED words
 // (SpendKeyword) plus its head-curated shortcuts (SpendShortcut, weighted high since
@@ -617,6 +618,14 @@ export async function getMoneyPlan(householdId: number, periodId: number, inhand
     for (const b of g.paidBills) bills.push({ key: `bill-${b.id}`, payerId: g.memberId, payerName: g.name, vendor: b.name, amount: b.amount, done: true, day: b.due?.day ?? null, status: b.due?.status ?? null, days: b.due?.days ?? null, billId: b.id, misc: b.misc });
     for (const p of g.unpaidPeriodic) bills.push({ key: `fund-${p.categoryId}`, payerId: g.memberId, payerName: g.name, vendor: p.name, amount: p.bill, done: false, day: p.due?.day ?? null, status: p.due?.status ?? null, days: p.due?.days ?? null, categoryId: p.categoryId, fund: true, fundAvail: p.fund });
     for (const p of g.paidPeriodic) bills.push({ key: `fund-${p.categoryId}`, payerId: g.memberId, payerName: g.name, vendor: p.name, amount: p.bill, done: true, day: p.due?.day ?? null, status: p.due?.status ?? null, days: p.due?.days ?? null, categoryId: p.categoryId, fund: true, fundAvail: p.fund });
+    // Family credit-card bills now due → a dated step on the statement due date, paid from cash the owner
+    // already HOLDS (cardBill = net-neutral in the walk, never "short"). Amount = the family portion; the
+    // Pay action (owner-only) settles the cycle. done stays false until settled (a PersonalCardBill row).
+    for (const b of g.pendingCardBills ?? []) {
+      const day = new Date(b.dueISO).getDate();
+      const st = dayStatus(day);
+      bills.push({ key: `cardbill-${b.cardId}-${b.cycleEndISO}`, payerId: g.memberId, payerName: g.name, vendor: `${b.cardName} bill`, amount: b.familyAmount, done: b.done, day, status: st?.status ?? null, days: st?.days ?? null, cardBill: true, cardId: b.cardId, cycleEndISO: b.cycleEndISO, dueISO: b.dueISO, cardPersonal: b.personalAmount, cardAnnualFee: b.annualFee, cardColor: b.color, cardFamilyBudgeted: b.familyBudgeted, cardFamilyMisc: b.familyMisc });
+    }
   }
   // Shared (no-payer) bills — e.g. an expense added from the plan with payer "Shared" — are paid from
   // the pool, so the treasurer covers them. Without this they'd land on the Sheet but never show as a step.
@@ -951,6 +960,94 @@ export async function getTrackedExpenses(householdId: number, periodId: number) 
 
 export type InHand = Awaited<ReturnType<typeof getInHand>>;
 
+export type PendingCardBill = {
+  cardId: number;
+  cardName: string;
+  color: string;
+  ownerId: number;
+  ownerName: string;
+  cycleEndISO: string;
+  dueISO: string;
+  familyAmount: number; // family (reimbursed) portion of the cycle — what family money funds
+  familyBudgeted: number; // of the family portion: spends in a budgeted category (Fuel…) → from the held budget
+  familyMisc: number; // of the family portion: misc/other spends → from the owner's in-hand (settlement reimburses)
+  personalAmount: number; // the owner's personal portion of the same bill (paid from their Can-spend)
+  annualFee: number; // the card's annual fee IF this cycle's statement month is its fee month, else 0
+  done: boolean; // already settled (a PersonalCardBill exists) — shown as a "✓ paid · undo" pill this month
+};
+
+/**
+ * Unpaid FAMILY credit-card bills that have come DUE by this plan month. A family credit-card spend
+ * keeps its cash in the owner's hand until the card's bill is paid (see the credit exclusion in
+ * getInHand); once its billing cycle's DUE DATE lands on/before this month's end, it graduates into a
+ * carried "held for the bill" holding on the owner (In-Hand) and a Money-Plan step. Cycles already
+ * settled (a PersonalCardBill row for that card+cycleEnd) are excluded — which is also how the
+ * start-line backfill hides pre-tracking cycles. Reuses getCardDues' proven cycle math, so the family
+ * portion here matches the personal card dashboard exactly. Due date > month end → still riding the
+ * spend month's envelope, not carried yet (avoids double-counting with the live budget).
+ */
+export async function getPendingCardBills(householdId: number, period: { year: number; month: number } | null): Promise<PendingCardBill[]> {
+  if (!period) return [];
+  const cards = await prisma.financeAccount.findMany({
+    where: { type: "credit_card", member: { householdId } },
+    select: { id: true, name: true, color: true, memberId: true, member: { select: { name: true } }, credit: { select: { annualFee: true, annualFeeMonth: true, statementDay: true, dueOffsetDays: true } } },
+  });
+  if (cards.length === 0) return [];
+  const monthEnd = new Date(period.year, period.month, 0, 23, 59, 59).getTime(); // last calendar day of the plan month
+  const cardById = new Map(cards.map((c) => [c.id, c]));
+  const owners = [...new Set(cards.map((c) => c.memberId))];
+  // Split the family portion into budgeted (Fuel/provision → from the held budget) vs misc/other (→ from
+  // in-hand). getCardDues already computes familyBudgeted per cycle, so both views stay consistent.
+  const split = (familyTotal: number, familyBudgeted: number) => ({
+    familyBudgeted: Math.round(familyBudgeted * 100) / 100,
+    familyMisc: Math.round((familyTotal - familyBudgeted) * 100) / 100,
+  });
+  const out: PendingCardBill[] = [];
+  for (const ownerId of owners) {
+    const dues = await getCardDues(ownerId);
+    for (const d of dues) {
+      const card = cardById.get(d.cardId);
+      if (!card) continue;
+      for (const cyc of d.cycles) {
+        if (cyc.familyTotal <= 0.005) continue; // only cycles that carry FAMILY spend
+        if (!cyc.dueISO) continue;
+        if (new Date(cyc.dueISO).getTime() > monthEnd) continue; // not due yet → still on the live envelope
+        const annualFee = cyc.annualFee; // computed per-cycle by getCardDues (fee-month only)
+        out.push({
+          cardId: card.id, cardName: card.name, color: card.color,
+          ownerId, ownerName: card.member.name,
+          cycleEndISO: cyc.cycleEndISO, dueISO: cyc.dueISO,
+          familyAmount: Math.round(cyc.familyTotal * 100) / 100,
+          ...split(cyc.familyTotal, cyc.familyBudgeted),
+          personalAmount: Math.round(cyc.total * 100) / 100,
+          annualFee,
+          done: false,
+        });
+      }
+      // Settled FAMILY cycles due THIS plan month → a "✓ paid · undo" pill (kept to the due month so it
+      // doesn't linger in later months). familyTotal>0 keeps personal-only paid cycles out of the family view.
+      for (const p of d.paid) {
+        if (p.familyTotal <= 0.005 || !p.dueISO) continue;
+        const due = new Date(p.dueISO);
+        if (due.getFullYear() !== period.year || due.getMonth() + 1 !== period.month) continue;
+        const feeMonth = card.credit?.annualFeeMonth ?? null;
+        const annualFee = feeMonth != null && new Date(p.cycleEndISO).getMonth() + 1 === feeMonth ? Math.round((card.credit?.annualFee ?? 0) * 100) / 100 : 0;
+        out.push({
+          cardId: card.id, cardName: card.name, color: card.color,
+          ownerId, ownerName: card.member.name,
+          cycleEndISO: p.cycleEndISO, dueISO: p.dueISO,
+          familyAmount: Math.round(p.familyTotal * 100) / 100,
+          ...split(p.familyTotal, p.familyBudgeted),
+          personalAmount: Math.round(p.total * 100) / 100,
+          annualFee,
+          done: true,
+        });
+      }
+    }
+  }
+  return out;
+}
+
 /**
  * "How much is still in whose hand" for a month. Per person:
  *   net = (budgeted categories still unspent) + (tagged bills still to pay)
@@ -970,7 +1067,9 @@ export async function _getInHand(householdId: number, periodId: number, settleme
     prisma.period.findUnique({ where: { id: periodId }, select: { treasurerMemberId: true, status: true, month: true, year: true } }),
     prisma.category.findMany({ where: { householdId, tracked: true, onHold: false } }),
     prisma.budget.findMany({ where: { periodId } }),
-    prisma.spend.findMany({ where: { periodId } }),
+    // cardAccount.type lets us tell a CREDIT-card spend from cash/UPI/debit: a credit spend doesn't take
+    // cash out of hand until the card's bill is paid, so it must NOT reduce In-Hand at swipe (see below).
+    prisma.spend.findMany({ where: { periodId }, include: { cardAccount: { select: { type: true } } } }),
     // "bills" = tagged Sheet expense lines the person was handed money to pay: loans, chits,
     // interest, fixed bills, plain "pay someone" (cook, milk…), AND hand-added Misc lines — including
     // ones in the tracked "Personal/Misc" bucket (section Misc), so planned misc becomes plan steps.
@@ -1028,10 +1127,16 @@ export async function _getInHand(householdId: number, periodId: number, settleme
   //  • anyone else → the cash came out of THEIR pocket, so it drops off the holder's line and
   //    instead subtracts from the spender's in-hand (folded into their misc line below). This is
   //    the same spender-vs-holder rule the settlement uses, so In-Hand and Settlement agree.
+  // A CREDIT-card spend hasn't taken cash out of anyone's hand yet — the cash leaves only when that
+  // card's bill is paid. So it must NOT reduce In-Hand at swipe (it stays held until the bill). Cash/UPI
+  // and debit spends DO leave immediately, so they reduce as before. The Sheet "Spent/₹budget" display
+  // (getTrackedExpenses) still counts credit spends — only In-Hand's held-cash view excludes them.
+  const isCreditSpend = (s: (typeof spends)[number]) => s.cardAccount?.type === "credit_card";
   const heldSpentByCat = new Map<number, number>();
   const outOfPocketByMember = new Map<number | null, number>();
   for (const s of spends) {
     if (!budgetedIds.has(s.categoryId)) continue;
+    if (isCreditSpend(s)) continue; // credit → cash still held until the card bill is paid
     const holder = catHolder.get(s.categoryId) ?? null;
     const spender = s.memberId ?? null;
     if (spender != null && spender !== holder) {
@@ -1059,6 +1164,7 @@ export async function _getInHand(householdId: number, periodId: number, settleme
   for (const s of spends) {
     if (budgetedIds.has(s.categoryId)) continue;
     if (fundCatIds.has(s.categoryId)) continue; // a spend against a bill's fund isn't misc (it draws the fund)
+    if (isCreditSpend(s)) continue; // credit → cash still held until the card bill is paid
     const k = s.memberId ?? null;
     miscByMember.set(k, (miscByMember.get(k) ?? 0) + s.amount);
   }
@@ -1213,6 +1319,11 @@ export async function _getInHand(householdId: number, periodId: number, settleme
       .filter((f) => Math.abs(f.amount) > 0.005 || f.projected > 0.005);
     const sinkingHeld = sinkingFunds.reduce((s, f) => s + f.amount, 0);
 
+    // Family credit-card bills now due that THIS member owns — they've held this cash since the swipe.
+    // Only UNPAID ones are still held cash; a paid one's cash has already left (it stays in the list only
+    // to render a "✓ paid" pill, so it must not count toward the in-hand total).
+    const pendingCards = (key != null ? pendingCardBillsByOwner.get(key) : null) ?? [];
+    const pendingCardHeld = pendingCards.filter((b) => !b.done).reduce((s, b) => s + b.familyAmount, 0);
     const budgetRemaining = cats.reduce((s, r) => s + r.remaining, 0);
     const unpaidTotal = unpaidBills.reduce((s, b) => s + b.amount, 0);
     const earmarkedTotal = earmarked.reduce((s, e) => s + e.amount, 0);
@@ -1231,7 +1342,7 @@ export async function _getInHand(householdId: number, periodId: number, settleme
     const yetToReceive = selfFunds ? 0 : unpaidTotal;
     return {
       memberId: key, name, cats, unpaidBills, paidBills, earmarked, unpaidPeriodic, paidPeriodic, carried, carriedDue,
-      sinkingFunds, sinkingHeld, pendingPiggyHeld,
+      sinkingFunds, sinkingHeld, pendingPiggyHeld, pendingCardBills: pendingCards,
       budgetRemaining, unpaidTotal, earmarkedTotal, miscSpent,
       // Money still owed TO this member from the pool. For a self-funding contributor this is 0 — they
       // already hold the cash (it's in `net`); a pool-funded receiver still awaits it via the Money plan.
@@ -1241,7 +1352,7 @@ export async function _getInHand(householdId: number, periodId: number, settleme
       // + last month's Piggy leftover they still hold − their own out-of-pocket + any unpaid bills they
       // SELF-FUND (held until paid). Pool-funded bills are excluded (→ "yet to receive"); carried bills
       // aren't here either (settled in their month).
-      net: budgetRemaining + earmarkedTotal - miscSpent + pendingPiggyHeld + heldBills,
+      net: budgetRemaining + earmarkedTotal - miscSpent + pendingPiggyHeld + heldBills + pendingCardHeld,
     };
   };
 
@@ -1302,6 +1413,17 @@ export async function _getInHand(householdId: number, periodId: number, settleme
     cur.amount = Math.round((cur.amount + e.amount) * 100) / 100;
     cur.vendors.push(e.label);
     poolHeldByMember.set(e.memberId, cur);
+  }
+
+  // Family credit-card bills that have come due this month: the owner has been HOLDING their cash since
+  // the swipe (credit spends don't leave hand until the bill — see the exclusion above), so once the
+  // bill is due it rides as a carried "held for the bill" line on the owner until they pay it.
+  const pendingCardBills = await getPendingCardBills(householdId, period ? { year: period.year, month: period.month } : null);
+  const pendingCardBillsByOwner = new Map<number, PendingCardBill[]>();
+  for (const b of pendingCardBills) {
+    const arr = pendingCardBillsByOwner.get(b.ownerId) ?? [];
+    arr.push(b);
+    pendingCardBillsByOwner.set(b.ownerId, arr);
   }
 
   // Show EVERY member's In-Hand card — even at ₹0 — so the family sees a complete picture (the

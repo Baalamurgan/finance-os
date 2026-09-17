@@ -72,6 +72,19 @@ describe("computeCreditDashboard", () => {
     expect(r.lifetimePoints).toBe(20);
   });
 
+  it("net profit/loss = cashback (incl. redeemed points) − fees", () => {
+    const pnl: LedgerTxn[] = [
+      { date: d("2026-06-10"), amount: 150, type: "cashback" }, // bill savings
+      { date: d("2026-06-11"), amount: 500, type: "cashback" }, // redeemed points → cash
+      { date: d("2026-06-12"), amount: 18, type: "fee" }, // bill excess / charge
+      { date: d("2026-06-13"), amount: 32, type: "charge" },
+    ];
+    const r = computeCreditDashboard({ statementDay: 15, txns: pnl, now: d("2026-06-14") });
+    expect(r.lifetimeCashback).toBe(650);
+    expect(r.lifetimeFees).toBe(50);
+    expect(r.netRewards).toBe(600); // 650 − 50 → profit
+  });
+
   it("no limit / no statement day → nulls + flags, never NaN", () => {
     const r = computeCreditDashboard({ txns, now: d("2026-06-12") });
     expect(r.hasLimit).toBe(false);

@@ -12,6 +12,9 @@ export type PlanBill = {
   misc?: boolean; // a planned misc bill (estimated) → paid via the actual-amount + Piggy-reconcile popup
   miscCard?: boolean; // a planned-misc spend card: an ordinary dated bill whose Pay button logs a spend
   deferred?: boolean; // a wind-down-overhang expense: paid by its assignee at wind-down, out of the settlement
+  cardBill?: boolean; cardId?: number; cycleEndISO?: string; dueISO?: string; // a family credit-card bill (paid from held cash; net-neutral like a fund bill)
+  cardPersonal?: number; cardAnnualFee?: number; cardColor?: string; // the owner's personal slice + annual fee (fee-month only) + the card's colour — for the Pay modal
+  cardFamilyBudgeted?: number; cardFamilyMisc?: number; // family portion split: from held budget vs from in-hand
 };
 // An allowance = personal money the treasurer SENDS a member (not a bill they owe). Disbursed after
 // collection, never dated/overdue; completion writes through to the Sheet line's paid flag (billId).
@@ -59,6 +62,12 @@ export type PlanStep = {
   // bill
   payerId?: number | null; payerName?: string; vendor?: string; billId?: number; categoryId?: number; fund?: boolean; fundAvail?: number; misc?: boolean; deferred?: boolean;
   miscCard?: boolean; // a planned-misc spend card: paid by logging a spend against its category (categoryId)
+  // A family credit-card bill: paid from cash the owner already HOLDS (carried budget / reimbursed misc),
+  // so — like a fund bill — it's net-neutral in the walk (never "short"). cardId + cycleEndISO identify
+  // the cycle for the Pay action; dueISO is the statement due date.
+  cardBill?: boolean; cardId?: number; cycleEndISO?: string; dueISO?: string;
+  cardPersonal?: number; cardAnnualFee?: number; cardColor?: string; // the owner's personal slice + annual fee (fee-month only) + the card's colour — for the Pay modal
+  cardFamilyBudgeted?: number; cardFamilyMisc?: number; // family portion split: from held budget vs from in-hand
   status?: "overdue" | "soon" | "normal" | null;
   days?: number | null; // days until due (negative = overdue), for the urgency tag
   short?: number; // hub is short this much when this step runs (funds not in yet)
@@ -160,6 +169,7 @@ export function buildMoneyPlan(input: {
     steps.push({
       id: b.key, kind: "bill", day: b.day, amount: b.amount, done: b.done,
       payerId: b.payerId, payerName: b.payerName, vendor: b.vendor, billId: b.billId, categoryId: b.categoryId, fund: b.fund, fundAvail: b.fundAvail, misc: b.misc, miscCard: b.miscCard, status: b.status, days: b.days ?? null, deferred: b.deferred,
+      cardBill: b.cardBill, cardId: b.cardId, cycleEndISO: b.cycleEndISO, dueISO: b.dueISO, cardPersonal: b.cardPersonal, cardAnnualFee: b.cardAnnualFee, cardColor: b.cardColor, cardFamilyBudgeted: b.cardFamilyBudgeted, cardFamilyMisc: b.cardFamilyMisc,
     });
   }
   // Allowances: the treasurer disburses these AFTER collection (like a payout), never dated/overdue.
@@ -259,7 +269,7 @@ export function buildMoneyPlan(input: {
   // still counts against their liquidity), but only an UNPAID one can generate a funding need.
   // Deferred (wind-down) bills are the assignee's own responsibility, NOT pool-funded — exclude them
   // from need/spare math so they never pull a disbursement; the balance walk still flags them if short.
-  const cashBillsOf = (memberId: number) => bills.filter((b) => !b.fund && !b.deferred && b.payerId === memberId).map((b) => ({ day: b.day ?? lastDay, amount: -b.amount, done: b.done }));
+  const cashBillsOf = (memberId: number) => bills.filter((b) => !b.fund && !b.deferred && !b.cardBill && b.payerId === memberId).map((b) => ({ day: b.day ?? lastDay, amount: -b.amount, done: b.done }));
   const incomeOf = (memberId: number) => arrivalList.filter((a) => a.memberId === memberId).map((a) => ({ day: a.day ?? 0, amount: a.amount }));
 
   // The creditor's need schedule: walk their own income (in) and cash bills (out) chronologically; each
@@ -287,7 +297,7 @@ export function buildMoneyPlan(input: {
     ...inbound.map((t) => ({ day: inboundDay.get(t.fromId) ?? null, amount: t.amount })),
     // An UNDATED bill has no deadline, so it can't pull the hub's cash early — treat it as month-end
     // (matches cashBillsOf and the "no date sorts last" display). Without this it counted at day 0.
-    ...bills.filter((b) => !b.fund && b.payerId === treasurerId).map((b) => ({ day: b.day ?? lastDay, amount: -b.amount })),
+    ...bills.filter((b) => !b.fund && !b.cardBill && b.payerId === treasurerId).map((b) => ({ day: b.day ?? lastDay, amount: -b.amount })),
     ...outbound.filter((o) => o.settled).map((o) => ({ day: 0 as number | null, amount: -paidOf(o) })), // only what actually left the hub
   ]);
   // A debtor's collection that is instead paid DIRECT to a creditor (see the direct-match pass) never
@@ -583,19 +593,27 @@ export function buildMoneyPlan(input: {
   // leftover / Piggy that became this month's pool income). This lets the hand-over move real balance
   // to the hub — crediting the pool income so the hub can disburse — WITHOUT flagging the holder short.
   for (const p of poolHandovers) shift(p.fromId, p.amount);
+  // Seed each card-bill payer with the carried cash they've HELD since the swipe (a credit spend never
+  // left their hand — it's been sitting there since a prior month). This is the cash the card bill draws
+  // from, so paying it visibly REDUCES their balance without the walk ever flagging them short. Seed both
+  // done and unpaid (a done one's seed + its −amount shift cancel, keeping the walk's flow balance intact).
+  for (const b of bills) if (b.cardBill) shift(b.payerId, b.amount);
   const senderOf = (s: PlanStep): number | null => (s.kind === "bill" ? s.payerId ?? null : s.fromId ?? null);
   const touchesHub = (s: PlanStep): boolean =>
     treasurerId != null &&
-    ((s.kind === "bill" && !s.fund && s.payerId === treasurerId) ||
+    ((s.kind === "bill" && !s.fund && !s.cardBill && s.payerId === treasurerId) ||
       (s.kind === "income" && s.toId === treasurerId) ||
       ((s.kind === "transfer-in" || s.kind === "transfer-out" || s.kind === "allowance" || s.kind === "advance" || s.kind === "manual" || s.kind === "pool-handover") && (s.fromId === treasurerId || s.toId === treasurerId)));
   let hubShortfall = 0;
   for (const s of steps) {
     s.balancesBefore = Object.fromEntries(bal); // snapshot each person's cash BEFORE this step moves any
     if (s.hidden) { s.balancesAfter = Object.fromEntries(bal); continue; } // removed from the plan → moves nothing
+    // Fund bills draw a held fund → net-neutral (no month cash). A card bill DOES move cash, but from the
+    // seeded carried cash the payer already holds — so it reduces their balance yet is never "short"
+    // (the short-check below skips it; the seed above guarantees the cash is there).
     const usesCash = !(s.kind === "bill" && s.fund);
     const senderId = senderOf(s);
-    if (!s.done && usesCash && senderId != null) {
+    if (!s.done && usesCash && senderId != null && !s.cardBill) {
       const before = bal.get(senderId) ?? 0;
       if (before < s.amount - 0.005) {
         const short = Math.round((s.amount - before) * 100) / 100;
@@ -616,7 +634,9 @@ export function buildMoneyPlan(input: {
       shift(s.fromId, -s.amount);
       shift(s.toId, s.amount);
     } else if (s.kind === "bill" && !s.fund) {
-      shift(s.payerId, -s.amount); // paid to an external vendor — leaves the family
+      // Normal bill → paid to a vendor (leaves the family). Card bill → paid to the card issuer, drawn
+      // from the seeded carried cash; either way the payer's running balance drops by the amount.
+      shift(s.payerId, -s.amount);
     }
     s.balancesAfter = Object.fromEntries(bal);
     if (touchesHub(s)) s.hubAfter = bal.get(treasurerId!) ?? 0;
@@ -627,7 +647,7 @@ export function buildMoneyPlan(input: {
   // including that bill. Since sheet income ≥ expense this resolves to some day this month. Reuses
   // `infeasibleFrom` on the bill = "payable from day Y". `shortBills` counts them — the plan's headline
   // number, which we want to drive to zero.
-  const shortBillSteps = steps.filter((s) => s.kind === "bill" && !s.fund && !s.done && (s.senderShort ?? 0) > 0.005);
+  const shortBillSteps = steps.filter((s) => s.kind === "bill" && !s.fund && !s.cardBill && !s.done && (s.senderShort ?? 0) > 0.005);
   for (const bill of shortBillSteps) {
     const m = bill.payerId;
     if (m == null) continue;

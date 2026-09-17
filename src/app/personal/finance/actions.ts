@@ -25,6 +25,9 @@ const num = (v: FormDataEntryValue | null) => {
   return Number.isFinite(n) ? n : null;
 };
 
+// Calendar month 1–12 (annual-fee month), or null when blank/out of range.
+const clampMonth = (n: number | null) => (n == null ? null : n >= 1 && n <= 12 ? Math.round(n) : null);
+
 // ── Accounts ─────────────────────────────────────────────────────────────────
 export type AccountFormState = { ok: boolean; error?: string; n: number };
 
@@ -58,6 +61,8 @@ export async function addAccount(
         creditLimit: num(formData.get("creditLimit")),
         statementDay: num(formData.get("statementDay")),
         dueOffsetDays: num(formData.get("dueOffsetDays")),
+        annualFee: num(formData.get("annualFee")),
+        annualFeeMonth: clampMonth(num(formData.get("annualFeeMonth"))),
       },
     });
   }
@@ -128,6 +133,8 @@ export async function setCreditConfig(formData: FormData) {
     statementDay: clampDay(num(formData.get("statementDay"))),
     dueOffsetDays: num(formData.get("dueOffsetDays")),
     reminderDays: clampReminder(num(formData.get("reminderDays"))),
+    annualFee: num(formData.get("annualFee")),
+    annualFeeMonth: clampMonth(num(formData.get("annualFeeMonth"))),
   };
   await prisma.creditCardDetail.upsert({
     where: { accountId: id },
@@ -167,6 +174,31 @@ export async function addManualTransaction(formData: FormData) {
       merchant: merchant.slice(0, 120),
       amount: Math.round(amount * 100) / 100,
       type: TXN_TYPES.includes(type as TxnType) ? type : "spend",
+      rewardPoints: num(formData.get("rewardPoints")),
+      source: "manual",
+    },
+  });
+  rev();
+}
+
+// Log the ₹ value of reward points redeemed as cash (used anywhere). It counts as the card's cashback,
+// so it feeds the card's net profit/loss (cashback − fees). Optionally record how many points were burned.
+export async function addPointsRedemption(formData: FormData) {
+  const member = await me();
+  if (!member) return;
+  const accountId = Number(formData.get("accountId"));
+  const account = await prisma.financeAccount.findFirst({ where: { id: accountId, memberId: member.id }, select: { id: true, type: true } });
+  if (!account || account.type !== "credit_card") return;
+  const amount = num(formData.get("amount"));
+  if (!amount || amount <= 0) return;
+  await prisma.accountTransaction.create({
+    data: {
+      memberId: member.id,
+      accountId,
+      date: new Date(),
+      merchant: "Points redeemed → cash",
+      amount: Math.round(amount * 100) / 100,
+      type: "cashback", // realised reward → counts toward the card's profit/loss
       rewardPoints: num(formData.get("rewardPoints")),
       source: "manual",
     },

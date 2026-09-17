@@ -1,6 +1,6 @@
 import { formatINR } from "@/lib/format";
-import { unmarkCardBillPaid } from "@/app/personal/actions";
-import { MarkBillPaidButton } from "@/components/personal/MarkBillPaidButton";
+import { unpayFamilyCardBill } from "@/app/actions";
+import { PayCardBillModal } from "@/components/PayCardBillModal";
 import { ToastForm } from "@/components/ToastForm";
 import type { CardDue, CardDueItem, BalanceCardView } from "@/lib/personal/cash";
 
@@ -66,7 +66,7 @@ function CardBlock({ d }: { d: CardDue }) {
                     {c.dueISO ? <> · due {fmtDate(c.dueISO)}</> : null} ·{" "}
                     <b className="tabular-nums text-slate-800">{formatINR(cycleFull)}</b>
                   </span>
-                  <MarkBillPaidButton cardId={d.cardId} cardName={d.cardName} cycleEndISO={c.cycleEndISO} cycleTotal={cycleFull} />
+                  <PayCardBillModal cardId={d.cardId} cardName={d.cardName} color={d.color} cycleEndISO={c.cycleEndISO} dueISO={c.dueISO ?? c.cycleEndISO} familyBudgeted={c.familyBudgeted} familyMisc={Math.round((c.familyTotal - c.familyBudgeted) * 100) / 100} personalAmount={c.total} annualFee={c.annualFee} />
                 </div>
                 <ItemList items={c.items} />
               </li>
@@ -78,8 +78,9 @@ function CardBlock({ d }: { d: CardDue }) {
           {d.paid.map((p) => (
             <li key={p.billId} className="flex items-center justify-between gap-2 px-3 py-1 text-xs text-slate-400">
               <span>✓ Paid — bill {fmtDate(p.cycleEndISO)} · {formatINR(p.amount)}</span>
-              <ToastForm action={unmarkCardBillPaid} successMessage="Bill payment undone">
-                <input type="hidden" name="id" value={p.billId} />
+              <ToastForm action={unpayFamilyCardBill} successMessage="Bill payment undone">
+                <input type="hidden" name="cardId" value={d.cardId} />
+                <input type="hidden" name="cycleEnd" value={p.cycleEndISO} />
                 <button className="font-medium text-slate-400 hover:text-red-600">undo</button>
               </ToastForm>
             </li>

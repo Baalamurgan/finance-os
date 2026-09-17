@@ -110,6 +110,12 @@ export function AddAccountModal() {
                       <Field label="Due after (days)">
                         <input name="dueOffsetDays" inputMode="numeric" placeholder="18" className="input w-full" />
                       </Field>
+                      <Field label="Annual fee (₹)">
+                        <input name="annualFee" inputMode="numeric" placeholder="optional" className="input w-full" />
+                      </Field>
+                      <Field label="Fee month (1–12)">
+                        <input name="annualFeeMonth" inputMode="numeric" placeholder="e.g. 4 = Apr" className="input w-full" />
+                      </Field>
                     </div>
                   </div>
                 )}

@@ -21,11 +21,13 @@ export function computeCreditDashboard(input: {
 
   let outstanding = 0;
   let lifetimeCashback = 0;
+  let lifetimeFees = 0;
   let lifetimePoints = 0;
   for (const t of txns) {
     if (OWED_UP.has(t.type)) outstanding += t.amount;
     else if (OWED_DOWN.has(t.type)) outstanding -= t.amount;
     if (t.type === "cashback") lifetimeCashback += t.amount;
+    if (t.type === "fee" || t.type === "charge" || t.type === "interest") lifetimeFees += t.amount;
     if (t.rewardPoints) lifetimePoints += t.rewardPoints;
   }
 
@@ -66,6 +68,8 @@ export function computeCreditDashboard(input: {
     cashbackThisCycle,
     pointsThisCycle,
     lifetimeCashback,
+    lifetimeFees,
+    netRewards: Math.round((lifetimeCashback - lifetimeFees) * 100) / 100,
     lifetimePoints,
   };
 }
