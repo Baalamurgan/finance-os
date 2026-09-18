@@ -9,6 +9,7 @@ import { MiscPayModal } from "@/components/MiscPayModal";
 
 export function InHandPersonGroup({
   group,
+  isPreview = false,
   pendingCashMove,
   doneCashMove,
   isTreasurer,
@@ -31,6 +32,7 @@ export function InHandPersonGroup({
   treasurerOwnLeftover = 0,
 }: {
   group: InHand["byPerson"][number];
+  isPreview?: boolean;
   pendingCashMove: number;
   doneCashMove: number;
   isTreasurer: boolean;
@@ -78,7 +80,14 @@ export function InHandPersonGroup({
   // set-asides + pending hand-overs − misc/out-of-pocket fronted. Budgets, bills & card-bills are EXCLUDED
   // (consumed within the month). This equals next month's OPENING balance, so the ledger is continuous.
   const expectedMisc = inclMisc ? miscSpent : 0;
-  const expected = Math.round((poolAmt + piggyAmt + sinkingHeld + earmarkedTotal + pendingPiggyHeld - expectedMisc) * 100) / 100;
+  // The treasurer's pool includes cash he'll DISBURSE to members for their bills (billsHeldForMembers) —
+  // that leaves his hand by month-end, so his Expected is the RESIDUAL pool, not the peak. (In the live
+  // month those disbursements are already done, so billsHeldForMembers ≈ 0 and this is a no-op there.)
+  const poolForExpected = isTreasurer ? poolAmt - billsHeldForMembers : 0;
+  // A set-aside / sinking fund with a bill DUE this month gets spent on that bill by month-end — so
+  // subtract those periodic fund-bills (they're paid FROM the set-aside/fund, which is added above).
+  const periodicBillsDue = unpaidPeriodic.reduce((s, b) => s + b.bill, 0);
+  const expected = Math.round((poolForExpected + piggyAmt + sinkingHeld + earmarkedTotal + pendingPiggyHeld - expectedMisc - periodicBillsDue) * 100) / 100;
   const paidCount = paidBills.length + paidPeriodic.length;
   // Bills whose Money-Plan step the head hid drop out of the pay list into a muted "Hidden" section,
   // so the card and the plan stay in sync. Hiding is view-only — the bill (and the total) is untouched.
@@ -106,9 +115,11 @@ export function InHandPersonGroup({
           {isPiggyHolder && <span className="ml-1 text-[10px] font-normal text-pink-500">piggy</span>}
         </span>
         <span className="flex items-baseline gap-1.5">
-          <span className={`text-right text-sm font-bold tabular-nums ${holdingNow < 0 ? "text-red-600" : "text-emerald-700"}`}>
-            {formatINR(holdingNow)}
-            <span className="ml-1 text-[10px] font-normal text-slate-400">{holdingNow < 0 ? "to reclaim" : "holding now"}</span>
+          {/* In a PREVIEW month, "holding now" is fake (you don't hold a future month's cash) — so lead
+              with the meaningful projection, Expected by month-end. In the live month, lead with holding-now. */}
+          <span className={`text-right text-sm font-bold tabular-nums ${(isPreview ? expected : holdingNow) < 0 ? "text-red-600" : "text-emerald-700"}`}>
+            {formatINR(isPreview ? expected : holdingNow)}
+            <span className="ml-1 text-[10px] font-normal text-slate-400">{isPreview ? "expected" : holdingNow < 0 ? "to reclaim" : "holding now"}</span>
           </span>
           <span className={`text-[10px] text-slate-300 transition-transform ${expanded ? "rotate-180" : ""}`}>▾</span>
         </span>
@@ -116,15 +127,26 @@ export function InHandPersonGroup({
       {/* Collapsed hint: the two things worth seeing at a glance without expanding. */}
       {!expanded && (Math.abs(pendingCashMove) > 0.005 || toPayCount > 0) && (
         <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[10px] text-slate-400">
-          {Math.abs(expected - holdingNow) > 0.005 && <span>→ {formatINR(expected)} by month-end</span>}
+          {isPreview
+            ? <span>holding now <span className="text-slate-300">· projected</span> {formatINR(holdingNow)}</span>
+            : Math.abs(expected - holdingNow) > 0.005 && <span>→ {formatINR(expected)} by month-end</span>}
           {toPayCount > 0 && <span className="text-amber-500">· {toPayCount} bill{toPayCount > 1 ? "s" : ""} to pay</span>}
         </div>
       )}
       {expanded && (
       <>
       <div className="mt-1 flex items-baseline justify-between gap-2 border-b border-dashed border-slate-100 pb-1 text-[10px] text-slate-400">
-        <span>Expected by month-end</span>
-        <span className="tabular-nums">{formatINR(expected)}{Math.abs(expected - holdingNow) > 0.005 && <span className="ml-1 text-slate-300">({formatINR(expected - holdingNow)} still to move)</span>}</span>
+        {isPreview ? (
+          <>
+            <span>Holding now <span className="text-slate-300">· projected</span></span>
+            <span className="tabular-nums text-slate-400">{formatINR(holdingNow)}</span>
+          </>
+        ) : (
+          <>
+            <span>Expected by month-end</span>
+            <span className="tabular-nums">{formatINR(expected)}{Math.abs(expected - holdingNow) > 0.005 && <span className="ml-1 text-slate-300">({formatINR(expected - holdingNow)} still to move)</span>}</span>
+          </>
+        )}
       </div>
       <ul className="mt-2 space-y-1">
         {/* Pinned to the TOP: things owed from an earlier month that were never paid. A pure

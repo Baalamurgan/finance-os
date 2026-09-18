@@ -53,6 +53,10 @@ export default async function InHandPage({
   }
 
   const open = c.selected.status === "open";
+  // A preview (draft) month is a PROJECTION of a future month — its In-Hand isn't your real current cash
+  // (that's the open month's), and it only firms up once the current month winds down. Flag it so the
+  // numbers read as an estimate, and lead with "Expected by month-end" rather than a fake "holding now".
+  const isPreview = c.selected.status === "draft";
   const periodId = c.selected.id;
   // Real cash each person holds: budget left + bills to pay + savings held − misc spent.
   const inHand = await getInHand(c.household.id, periodId);
@@ -108,12 +112,18 @@ export default async function InHandPage({
           monthBalance={inHand.monthBalance}
         />
 
+        {showInHand && isPreview && (
+          <div className="rounded-xl border border-violet-200 bg-violet-50 px-3 py-2 text-xs text-violet-700">
+            🔮 <b>Preview month</b> — these are <b>projected</b>, not your current cash (that's this month&apos;s). They firm up once the current month winds down. The number to plan by here is <b>Expected by month-end</b>.
+          </div>
+        )}
         {showInHand ? (
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             {visibleGroups.map((g) => (
               <InHandPersonGroup
                 key={g.memberId}
                 group={g}
+                isPreview={isPreview}
                 pendingCashMove={g.memberId != null ? pendingByMember[g.memberId] ?? 0 : 0}
                 doneCashMove={g.memberId != null ? doneByMember[g.memberId] ?? 0 : 0}
                 isTreasurer={g.memberId === inHand.treasurerId}

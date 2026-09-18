@@ -45,8 +45,11 @@ async function main() {
       const total = g.net + poolAmt + piggyAmt + g.sinkingHeld;
       const pcm = g.memberId != null ? pending[g.memberId] ?? 0 : 0;
       const holdingNow = Math.round((total - pcm) * 100) / 100; // app's current holding-now (projection)
-      // "expected by month-end" = carry-forward: pool + piggy + sinking + set-asides + pending hand-overs − misc.
-      const expected = Math.round((poolAmt + piggyAmt + g.sinkingHeld + g.earmarkedTotal + g.pendingPiggyHeld - g.miscSpent) * 100) / 100;
+      // "expected by month-end" = carry-forward: (treasurer pool RESIDUAL, i.e. minus what he'll disburse
+      // to members) + piggy + sinking + set-asides + pending hand-overs − misc.
+      const poolForExpected = isTre ? poolAmt - inhand.poolHoldsForMembers : 0;
+      const periodicBillsDue = g.unpaidPeriodic.reduce((s, b) => s + b.bill, 0); // set-aside/fund bills due this month
+      const expected = Math.round((poolForExpected + piggyAmt + g.sinkingHeld + g.earmarkedTotal + g.pendingPiggyHeld - g.miscSpent - periodicBillsDue) * 100) / 100;
       console.log(`── ${g.name} (#${g.memberId}) ── holding now ${inr(holdingNow)}   EXPECTED(carry-fwd) ${inr(expected)}`);
       console.log(`     expected parts: pool ${inr(poolAmt)} + piggy ${inr(piggyAmt)} + sinking ${inr(g.sinkingHeld)} + set-asides ${inr(g.earmarkedTotal)} + pendingPiggy ${inr(g.pendingPiggyHeld)} − misc ${inr(g.miscSpent)}  (budgets/bills/cards EXCLUDED)`);
       console.log("");
