@@ -1132,6 +1132,14 @@ export async function _getInHand(householdId: number, periodId: number, settleme
   // and debit spends DO leave immediately, so they reduce as before. The Sheet "Spent/₹budget" display
   // (getTrackedExpenses) still counts credit spends — only In-Hand's held-cash view excludes them.
   const isCreditSpend = (s: (typeof spends)[number]) => s.cardAccount?.type === "credit_card";
+  // Real cash a member has SPENT this month (for the holding-now ledger): every non-credit spend
+  // (cash/UPI/debit) attributed to them is cash that left their hand. Credit spends are excluded — that
+  // cash stays put until the card bill is paid (a separate ledger event).
+  const cashSpentByMember = new Map<number, number>();
+  for (const s of spends) {
+    if (isCreditSpend(s) || s.memberId == null) continue;
+    cashSpentByMember.set(s.memberId, (cashSpentByMember.get(s.memberId) ?? 0) + s.amount);
+  }
   const heldSpentByCat = new Map<number, number>();
   const outOfPocketByMember = new Map<number | null, number>();
   for (const s of spends) {
@@ -1344,6 +1352,7 @@ export async function _getInHand(householdId: number, periodId: number, settleme
       memberId: key, name, cats, unpaidBills, paidBills, earmarked, unpaidPeriodic, paidPeriodic, carried, carriedDue,
       sinkingFunds, sinkingHeld, pendingPiggyHeld, pendingCardBills: pendingCards,
       budgetRemaining, unpaidTotal, earmarkedTotal, miscSpent,
+      cashSpent: key != null ? cashSpentByMember.get(key) ?? 0 : 0, // real cash spent this month (non-credit) — for the holding-now ledger
       // Money still owed TO this member from the pool. For a self-funding contributor this is 0 — they
       // already hold the cash (it's in `net`); a pool-funded receiver still awaits it via the Money plan.
       yetToReceive,

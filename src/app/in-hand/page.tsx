@@ -1,7 +1,7 @@
 import { formatINR } from "@/lib/format";
 import { loadCommon } from "@/lib/load";
 import { getInHand, getMoneyPlan, getMoneyPlanActivity, type InHand } from "@/lib/queries";
-import { pendingCashMoveByMember } from "@/lib/moneyPlan";
+import { pendingCashMoveByMember, doneCashMoveByMember } from "@/lib/moneyPlan";
 import { MoneyPlanActivity } from "@/components/MoneyPlanActivity";
 import { NavHeader } from "@/components/NavHeader";
 import { MoneyPlan } from "@/components/MoneyPlan";
@@ -65,6 +65,10 @@ export default async function InHandPage({
   // (see pendingCashMoveByMember). Backs each member's total down to what they physically hold given
   // only the steps done so far; converges to the projection as the plan is worked through.
   const pendingByMember = pendingCashMoveByMember(plan.steps);
+  // Real "holding now" ledger: completed cash-moves so far (income received, transfers done, bills/card
+  // bills paid). The component adds each member's standing balances (Piggy/sinking/pending hand-overs)
+  // and subtracts their cash spent, so holding-now = actual bank cash, not a projection.
+  const doneByMember = doneCashMoveByMember(plan.steps);
   const visibleGroups = c.isHead
     ? inHand.byPerson
     : inHand.byPerson.filter((g) => g.memberId === currentMemberId);
@@ -111,6 +115,7 @@ export default async function InHandPage({
                 key={g.memberId}
                 group={g}
                 pendingCashMove={g.memberId != null ? pendingByMember[g.memberId] ?? 0 : 0}
+                doneCashMove={g.memberId != null ? doneByMember[g.memberId] ?? 0 : 0}
                 isTreasurer={g.memberId === inHand.treasurerId}
                 pool={inHand.treasurerPool}
                 sharedNet={inHand.shared.net}

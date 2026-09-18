@@ -18,7 +18,7 @@ async function main() {
   const { PrismaClient } = await import("@prisma/client");
   const { PrismaPg } = await import("@prisma/adapter-pg");
   const { _getInHand, _getSettlement, getMoneyPlan } = await import("../src/lib/queries");
-  const { pendingCashMoveByMember } = await import("../src/lib/moneyPlan");
+  const { pendingCashMoveByMember, doneCashMoveByMember } = await import("../src/lib/moneyPlan");
   const prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString: url }) });
   try {
     const period = await prisma.period.findFirst({ where: { status: "draft" }, orderBy: [{ year: "desc" }, { month: "desc" }] });
@@ -32,6 +32,7 @@ async function main() {
     const inhand = await _getInHand(period.householdId, period.id, settlement);
     const plan = await getMoneyPlan(period.householdId, period.id, inhand, undefined, undefined, settlement);
     const pending = pendingCashMoveByMember(plan.steps);
+    const done = doneCashMoveByMember(plan.steps);
 
     console.log(`\n=== ${period.label} · holding-now breakdown ===`);
     console.log(`treasurer=#${treasurerId}  piggyHolder=#${piggyHolderId}  generalPiggy=${inr(inhand.generalPiggy)}  pool=${inr(inhand.treasurerPool)}\n`);
@@ -43,22 +44,11 @@ async function main() {
       const piggyAmt = isPig ? inhand.generalPiggy - (inhand.pendingPiggyHandover?.lump ?? 0) : 0;
       const total = g.net + poolAmt + piggyAmt + g.sinkingHeld;
       const pcm = g.memberId != null ? pending[g.memberId] ?? 0 : 0;
-      const holdingNow = total - pcm;
-      const cardHeld = (g.pendingCardBills ?? []).reduce((s, b) => s + b.familyAmount, 0);
-      console.log(`── ${g.name} (#${g.memberId}) ── holding now ${inr(holdingNow)}`);
-      console.log(`   total ${inr(total)} = net ${inr(g.net)}${isTre ? ` + pool ${inr(poolAmt)}` : ""}${isPig ? ` + piggy ${inr(piggyAmt)}` : ""} + sinkingHeld ${inr(g.sinkingHeld)}`);
-      console.log(`     net parts: budgetRemaining ${inr(g.budgetRemaining)} + earmarked ${inr(g.earmarkedTotal)} − misc ${inr(g.miscSpent)} + pendingPiggyHeld ${inr(g.pendingPiggyHeld)} + cardBillsHeld ${inr(cardHeld)} (+ self-funded bills)`);
-      if ((g.pendingCardBills ?? []).length) for (const b of g.pendingCardBills!) console.log(`       💳 ${b.cardName} family ${inr(b.familyAmount)} (due ${b.dueISO.slice(0, 10)})`);
-      console.log(`   − pendingCashMove ${inr(pcm)} (undone plan cash-moves, +receive/−send):`);
-      for (const s of plan.steps) {
-        if (s.done || s.hidden) continue;
-        const rows: string[] = [];
-        if (s.kind === "income" && s.toId === g.memberId) rows.push(`+${inr(s.amount)} income`);
-        else if (s.kind === "allowance") { if (s.fromId === g.memberId && s.fromId !== s.toId) rows.push(`−${inr(s.amount)} allowance→${s.toName}`); if (s.poolTwoStep && s.toId === g.memberId) rows.push(`+${inr(s.amount)} pool-misc`); }
-        else if ((s.kind === "bill") && s.poolVendorLeg && s.payerId === g.memberId) rows.push(`−${inr(s.amount)} vendor leg`);
-        else if (["transfer-in", "transfer-out", "advance", "manual", "pool-handover"].includes(s.kind)) { if (s.fromId === g.memberId) rows.push(`−${inr(s.amount)} → ${s.toName}`); if (s.toId === g.memberId) rows.push(`+${inr(s.amount)} ← ${s.fromName}`); }
-        for (const r of rows) console.log(`       day ${String(s.day ?? "—").padStart(2)} ${s.kind.padEnd(12)} ${r}`);
-      }
+      const holdingNow = Math.round((total - pcm) * 100) / 100; // app's current holding-now (projection)
+      // "expected by month-end" = carry-forward: pool + piggy + sinking + set-asides + pending hand-overs − misc.
+      const expected = Math.round((poolAmt + piggyAmt + g.sinkingHeld + g.earmarkedTotal + g.pendingPiggyHeld - g.miscSpent) * 100) / 100;
+      console.log(`── ${g.name} (#${g.memberId}) ── holding now ${inr(holdingNow)}   EXPECTED(carry-fwd) ${inr(expected)}`);
+      console.log(`     expected parts: pool ${inr(poolAmt)} + piggy ${inr(piggyAmt)} + sinking ${inr(g.sinkingHeld)} + set-asides ${inr(g.earmarkedTotal)} + pendingPiggy ${inr(g.pendingPiggyHeld)} − misc ${inr(g.miscSpent)}  (budgets/bills/cards EXCLUDED)`);
       console.log("");
     }
   } finally {

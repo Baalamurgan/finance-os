@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildMoneyPlan, pendingCashMoveByMember, type PlanTransfer, type PlanBill, type PlanStep } from "./moneyPlan";
+import { buildMoneyPlan, pendingCashMoveByMember, doneCashMoveByMember, type PlanTransfer, type PlanBill, type PlanStep } from "./moneyPlan";
 
 const T = 1; // treasurer id
 const xfer = (o: Partial<PlanTransfer>): PlanTransfer => ({ fromId: 2, from: "B", toId: T, to: "A", amount: 100, settled: false, recordId: null, ...o });
@@ -849,5 +849,28 @@ describe("pendingCashMoveByMember", () => {
       step({ kind: "bill", payerId: 2, amount: 30, done: true }),
     ];
     expect(pendingCashMoveByMember(steps)).toEqual({});
+  });
+});
+
+describe("doneCashMoveByMember", () => {
+  const step = (o: Partial<PlanStep> & Pick<PlanStep, "kind">): PlanStep =>
+    ({ id: `s${Math.random()}`, day: null, amount: 0, done: false, status: null, days: null, ...o } as PlanStep);
+
+  it("sums only COMPLETED cash-moves per member; includes paid bills, skips fund bills & pending steps", () => {
+    const steps = [
+      step({ kind: "income", toId: 3, amount: 200, done: true }),               // C received → +200
+      step({ kind: "income", toId: 4, amount: 50 }),                            // not received → ignored
+      step({ kind: "transfer-in", fromId: 2, toId: 1, amount: 100, done: true }), // B → hub done → B −100, hub +100
+      step({ kind: "bill", payerId: 3, amount: 30, done: true }),               // C paid a cash bill → −30
+      step({ kind: "bill", payerId: 3, amount: 500, done: true, fund: true }),  // fund bill → from the fund, skipped
+      step({ kind: "bill", payerId: 2, amount: 40 }),                           // not paid → ignored
+      step({ kind: "transfer-out", fromId: 1, toId: 5, amount: 70, hidden: true }), // hidden → ignored
+    ];
+    const d = doneCashMoveByMember(steps);
+    expect(d[3]).toBe(170); // +200 income received − 30 cash bill paid
+    expect(d[2]).toBe(-100); // handed the collection to the hub
+    expect(d[1]).toBe(100); // hub received the collection
+    expect(d[4]).toBeUndefined(); // income not received yet
+    expect(d[5]).toBeUndefined(); // hidden step ignored
   });
 });

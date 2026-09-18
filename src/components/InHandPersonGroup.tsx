@@ -10,6 +10,7 @@ import { MiscPayModal } from "@/components/MiscPayModal";
 export function InHandPersonGroup({
   group,
   pendingCashMove,
+  doneCashMove,
   isTreasurer,
   pool,
   sharedNet,
@@ -31,6 +32,7 @@ export function InHandPersonGroup({
 }: {
   group: InHand["byPerson"][number];
   pendingCashMove: number;
+  doneCashMove: number;
   isTreasurer: boolean;
   pool: number;
   sharedNet: number;
@@ -50,7 +52,7 @@ export function InHandPersonGroup({
   poolDisbursements?: { recipientId: number; recipientName: string; label: string; amount: number }[];
   treasurerOwnLeftover?: number;
 }) {
-  const { name, cats, unpaidBills, paidBills, earmarked, sinkingFunds, sinkingHeld, unpaidPeriodic, paidPeriodic, carried, carriedDue, miscSpent, net, pendingPiggyHeld, pendingCardBills, yetToReceive, selfFundsBills } = group;
+  const { name, cats, unpaidBills, paidBills, earmarked, earmarkedTotal, sinkingFunds, sinkingHeld, unpaidPeriodic, paidPeriodic, carried, carriedDue, miscSpent, net, pendingPiggyHeld, pendingCardBills, cashSpent, yetToReceive, selfFundsBills } = group;
   const handovers = group.handovers ?? []; // tolerate a stale cached shape (pre-feature) until it refreshes
   // Per-card toggle: include or exclude this member's own misc/out-of-pocket in their total.
   // Default = include (the true position). Excluding shows "budget + bills + savings" only, so
@@ -68,9 +70,15 @@ export function InHandPersonGroup({
   // this person's own pendingPiggyHeld, so it isn't re-added here.
   const piggyAmt = isPiggyHolder ? piggy - pendingPiggyLump : 0;
   const total = shownNet + poolAmt + piggyAmt + sinkingHeld;
-  // "Holding now" = the projected total minus the cash-moves still pending (computed in the page from the
-  // Money Plan). As steps get ticked, `pendingCashMove` shrinks to 0 and holding-now rises to `total`.
+  // "Holding now" = the projected total minus the cash-moves still pending (from the Money Plan). As
+  // steps get ticked, `pendingCashMove` shrinks to 0 and holding-now rises to `total`.
   const holdingNow = Math.round((total - pendingCashMove) * 100) / 100;
+  // "Expected by month-end" = the CARRY-FORWARD: what genuinely remains as this member's own money once
+  // budgets are spent (or leftover→Piggy) and bills/card-bills are paid — i.e. pool + Piggy + sinking +
+  // set-asides + pending hand-overs − misc/out-of-pocket fronted. Budgets, bills & card-bills are EXCLUDED
+  // (consumed within the month). This equals next month's OPENING balance, so the ledger is continuous.
+  const expectedMisc = inclMisc ? miscSpent : 0;
+  const expected = Math.round((poolAmt + piggyAmt + sinkingHeld + earmarkedTotal + pendingPiggyHeld - expectedMisc) * 100) / 100;
   const paidCount = paidBills.length + paidPeriodic.length;
   // Bills whose Money-Plan step the head hid drop out of the pay list into a muted "Hidden" section,
   // so the card and the plan stay in sync. Hiding is view-only — the bill (and the total) is untouched.
@@ -108,7 +116,7 @@ export function InHandPersonGroup({
       {/* Collapsed hint: the two things worth seeing at a glance without expanding. */}
       {!expanded && (Math.abs(pendingCashMove) > 0.005 || toPayCount > 0) && (
         <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[10px] text-slate-400">
-          {Math.abs(pendingCashMove) > 0.005 && <span>→ {formatINR(total)} once settled</span>}
+          {Math.abs(expected - holdingNow) > 0.005 && <span>→ {formatINR(expected)} by month-end</span>}
           {toPayCount > 0 && <span className="text-amber-500">· {toPayCount} bill{toPayCount > 1 ? "s" : ""} to pay</span>}
         </div>
       )}
@@ -116,7 +124,7 @@ export function InHandPersonGroup({
       <>
       <div className="mt-1 flex items-baseline justify-between gap-2 border-b border-dashed border-slate-100 pb-1 text-[10px] text-slate-400">
         <span>Expected by month-end</span>
-        <span className="tabular-nums">{formatINR(total)}{total !== holdingNow && <span className="ml-1 text-slate-300">({formatINR(total - holdingNow)} still to move)</span>}</span>
+        <span className="tabular-nums">{formatINR(expected)}{Math.abs(expected - holdingNow) > 0.005 && <span className="ml-1 text-slate-300">({formatINR(expected - holdingNow)} still to move)</span>}</span>
       </div>
       <ul className="mt-2 space-y-1">
         {/* Pinned to the TOP: things owed from an earlier month that were never paid. A pure

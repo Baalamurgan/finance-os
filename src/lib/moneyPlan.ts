@@ -710,3 +710,27 @@ export function pendingCashMoveByMember(steps: PlanStep[]): Record<number, numbe
   }
   return Object.fromEntries(out);
 }
+
+// Per-member sum of the cash-moves that have ALREADY COMPLETED (done steps), signed from the member's
+// view (+ received, − sent/paid). Powers the real "cash on hand" ledger: holding-now = standing balances
+// (Piggy/sinking/pending hand-overs) + doneCashMove − cash spent. Unlike pendingCashMoveByMember this
+// INCLUDES paid bills/card-bills (a done bill is real cash that has left the payer) and credits a
+// received allowance to its recipient (cash in their hand until they spend it). Fund bills draw a held
+// fund, not cash → skipped; Piggy steps are informational here (the Piggy balance is a standing figure).
+export function doneCashMoveByMember(steps: PlanStep[]): Record<number, number> {
+  const out = new Map<number, number>();
+  const bump = (id: number | null | undefined, d: number) => {
+    if (id == null) return;
+    out.set(id, Math.round(((out.get(id) ?? 0) + d) * 100) / 100);
+  };
+  for (const s of steps) {
+    if (!s.done || s.hidden) continue;
+    if (s.kind === "income") { bump(s.toId, s.amount); continue; }
+    if (s.kind === "bill") { if (!s.fund) bump(s.payerId, -s.amount); continue; } // cash/card bill paid → out; fund bill from the fund
+    if (s.kind === "piggy") continue; // informational — the Piggy balance is carried as a standing figure
+    // transfer-in / transfer-out / allowance / advance / manual / pool-handover → real cash moved
+    bump(s.fromId, -s.amount);
+    bump(s.toId, s.amount);
+  }
+  return Object.fromEntries(out);
+}
