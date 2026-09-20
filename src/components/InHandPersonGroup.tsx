@@ -250,9 +250,9 @@ export function InHandPersonGroup({
         {/* Credit-card spends: shown for context but NOT in the in-hand total — the cash hasn't left; it's
             squared up at next month's settlement. Display-only, never affects the number above. */}
         {(cardSpent ?? 0) > 0.005 && (
-          <li className="flex items-center justify-between gap-2 text-xs">
-            <span className="truncate text-slate-400">💳 On cards <span className="text-[10px]">· not in-hand · settles next month</span></span>
-            <span className="shrink-0 tabular-nums text-slate-400">{formatINR(cardSpent ?? 0)}</span>
+          <li className="flex items-center justify-between gap-2 text-[11px] text-slate-400">
+            <span className="truncate">💳 On cards <span className="italic">· not subtracted · settles next month</span></span>
+            <span className="shrink-0 tabular-nums italic">− {formatINR(cardSpent ?? 0)}</span>
           </li>
         )}
         {isTreasurer && (
@@ -541,7 +541,7 @@ export function InHandPersonGroup({
       )}
       {shownNet < 0 && (
         <p className="mt-2 text-[11px] leading-tight text-amber-600">
-          Fronted more than budget — reclaim from the treasurer at wind-down, or deduct from next month.
+          This amount will be settled at next month&apos;s settlement.
         </p>
       )}
       </>

@@ -385,6 +385,11 @@ model FinanceAccount {
   last4       String?
   color       String   @default("#6366f1")
   active      Boolean  @default(true)
+  // Spends on this card aren't the family's cash now — they're reimbursed at the next settlement (like a
+  // credit card, or a benefit wallet such as Pluxee whose balance isn't family money). When true, spends
+  // are EXCLUDED from In-Hand and shown under "On cards · settles next month". Credit cards behave this
+  // way inherently regardless of this flag; it's mainly for debit/prepaid benefit cards.
+  reimbursed  Boolean  @default(false)
   sortOrder   Int      @default(0)
   // Debit/prepaid only: the balance when tracking started. Current balance = openingBalance + top-ups
   // + refunds − spends − fees (see src/lib/finance/balance.ts). Null/0 for credit cards.

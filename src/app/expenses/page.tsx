@@ -99,7 +99,7 @@ export default async function ExpensesPage({
   const filteredTotal = filterMemberId != null ? (filteredBudgetedSpent ?? 0) + (filteredOutOfPocket ?? 0) + (filteredMisc ?? 0) : null;
   // Cross-cutting cash-vs-card split (a card is a payment method, not a category): credit-card spends
   // don't touch in-hand — they settle at next month's settlement. Display-only; the totals above are unchanged.
-  const sumCardSpends = (cs: typeof cards) => cs.reduce((s, c) => s + c.spends.reduce((a, x) => a + (x.cardAccount?.type === "credit_card" ? x.amount : 0), 0), 0);
+  const sumCardSpends = (cs: typeof cards) => cs.reduce((s, c) => s + c.spends.reduce((a, x) => a + ((x.cardAccount?.type === "credit_card" || x.cardAccount?.reimbursed) ? x.amount : 0), 0), 0);
   const cardSpends = sumCardSpends(cards); // credit-card spends in the current view (respects the member filter)
   const filteredCard = filterMemberId != null ? cardSpends : null;
   const filteredCash = filterMemberId != null ? (filteredTotal ?? 0) - cardSpends : null;

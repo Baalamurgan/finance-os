@@ -85,6 +85,7 @@ export async function updateAccount(formData: FormData) {
       last4: String(formData.get("last4") ?? "").trim().slice(0, 4) || null,
       color: String(formData.get("color") ?? "").trim() || account.color,
       active: formData.get("active") == null ? account.active : formData.get("active") === "on",
+      reimbursed: formData.get("reimbursed") === "on", // spends aren't family cash now → settle next month (Pluxee, credit-like)
       // Opening balance is editable for debit/prepaid (a correction to the starting point).
       ...(BALANCE_ACCOUNT_TYPES.has(account.type) && formData.get("openingBalance") != null
         ? { openingBalance: num(formData.get("openingBalance")) ?? account.openingBalance }

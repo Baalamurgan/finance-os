@@ -910,7 +910,7 @@ export async function getTrackedExpenses(householdId: number, periodId: number) 
     prisma.budget.findMany({ where: { periodId } }),
     prisma.spend.findMany({
       where: { periodId },
-      include: { member: true, category: true, cardAccount: { select: { name: true, color: true, last4: true, type: true } } },
+      include: { member: true, category: true, cardAccount: { select: { name: true, color: true, last4: true, type: true, reimbursed: true } } },
       orderBy: { createdAt: "desc" },
     }),
     getSinkingBalances(householdId),
@@ -1067,9 +1067,10 @@ export async function _getInHand(householdId: number, periodId: number, settleme
     prisma.period.findUnique({ where: { id: periodId }, select: { treasurerMemberId: true, status: true, month: true, year: true } }),
     prisma.category.findMany({ where: { householdId, tracked: true, onHold: false } }),
     prisma.budget.findMany({ where: { periodId } }),
-    // cardAccount.type lets us tell a CREDIT-card spend from cash/UPI/debit: a credit spend doesn't take
-    // cash out of hand until the card's bill is paid, so it must NOT reduce In-Hand at swipe (see below).
-    prisma.spend.findMany({ where: { periodId }, include: { cardAccount: { select: { type: true } } } }),
+    // cardAccount.type + reimbursed tell us if a spend leaves family cash now. A credit-card spend (or any
+    // card flagged "reimbursed", e.g. a Pluxee benefit wallet) doesn't — it settles at the next settlement,
+    // so it must NOT reduce In-Hand at swipe (see settlesLater below).
+    prisma.spend.findMany({ where: { periodId }, include: { cardAccount: { select: { type: true, reimbursed: true } } } }),
     // "bills" = tagged Sheet expense lines the person was handed money to pay: loans, chits,
     // interest, fixed bills, plain "pay someone" (cook, milk…), AND hand-added Misc lines — including
     // ones in the tracked "Personal/Misc" bucket (section Misc), so planned misc becomes plan steps.
@@ -1131,27 +1132,28 @@ export async function _getInHand(householdId: number, periodId: number, settleme
   // card's bill is paid. So it must NOT reduce In-Hand at swipe (it stays held until the bill). Cash/UPI
   // and debit spends DO leave immediately, so they reduce as before. The Sheet "Spent/₹budget" display
   // (getTrackedExpenses) still counts credit spends — only In-Hand's held-cash view excludes them.
-  const isCreditSpend = (s: (typeof spends)[number]) => s.cardAccount?.type === "credit_card";
-  // Real cash a member has SPENT this month (for the holding-now ledger): every non-credit spend
-  // (cash/UPI/debit) attributed to them is cash that left their hand. Credit spends are excluded — that
-  // cash stays put until the card bill is paid (a separate ledger event).
+  // A spend "settles later" (not family cash now) when it's on a credit card OR on any card flagged
+  // reimbursed (e.g. a Pluxee benefit wallet whose balance isn't family money) — it's squared up at the
+  // next settlement, so it must NOT reduce In-Hand now. Plain cash/UPI/debit leaves hand immediately.
+  const settlesLater = (s: (typeof spends)[number]) => s.cardAccount?.type === "credit_card" || s.cardAccount?.reimbursed === true;
+  // Real cash a member has SPENT this month (for the holding-now ledger): everything that left hand now.
   const cashSpentByMember = new Map<number, number>();
   for (const s of spends) {
-    if (isCreditSpend(s) || s.memberId == null) continue;
+    if (settlesLater(s) || s.memberId == null) continue;
     cashSpentByMember.set(s.memberId, (cashSpentByMember.get(s.memberId) ?? 0) + s.amount);
   }
-  // CREDIT-card spends attributed to each member this month — shown as an informational "on cards" note
-  // (NOT in the in-hand total): the cash hasn't left; it's squared up at next month's settlement.
+  // Card/benefit spends that settle next month, per member — shown as an informational "on cards" note
+  // (NOT in the in-hand total): the family cash hasn't left; it's squared up at next month's settlement.
   const cardSpentByMember = new Map<number, number>();
   for (const s of spends) {
-    if (!isCreditSpend(s) || s.memberId == null) continue;
+    if (!settlesLater(s) || s.memberId == null) continue;
     cardSpentByMember.set(s.memberId, (cardSpentByMember.get(s.memberId) ?? 0) + s.amount);
   }
   const heldSpentByCat = new Map<number, number>();
   const outOfPocketByMember = new Map<number | null, number>();
   for (const s of spends) {
     if (!budgetedIds.has(s.categoryId)) continue;
-    if (isCreditSpend(s)) continue; // credit → cash still held until the card bill is paid
+    if (settlesLater(s)) continue; // credit or reimbursed (Pluxee) → not family cash now; settles next month
     const holder = catHolder.get(s.categoryId) ?? null;
     const spender = s.memberId ?? null;
     if (spender != null && spender !== holder) {
@@ -1179,7 +1181,7 @@ export async function _getInHand(householdId: number, periodId: number, settleme
   for (const s of spends) {
     if (budgetedIds.has(s.categoryId)) continue;
     if (fundCatIds.has(s.categoryId)) continue; // a spend against a bill's fund isn't misc (it draws the fund)
-    if (isCreditSpend(s)) continue; // credit → cash still held until the card bill is paid
+    if (settlesLater(s)) continue; // credit or reimbursed (Pluxee) → not family cash now; settles next month
     const k = s.memberId ?? null;
     miscByMember.set(k, (miscByMember.get(k) ?? 0) + s.amount);
   }

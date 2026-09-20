@@ -211,6 +211,10 @@ export default async function CreditCardDetail({
               <input type="checkbox" name="active" defaultChecked={account.active} className="h-4 w-4 accent-emerald-600" />
               Active (show it in the &ldquo;Paid with&rdquo; picker)
             </label>
+            <label className="flex items-start gap-2 text-xs font-medium text-slate-600 sm:col-span-2">
+              <input type="checkbox" name="reimbursed" defaultChecked={account.reimbursed} className="mt-0.5 h-4 w-4 accent-emerald-600" />
+              <span>Reimbursed at settlement — spends aren&apos;t your cash now <span className="font-normal text-slate-400">(e.g. Pluxee / benefit wallets; excluded from In-Hand, shown as &ldquo;settles next month&rdquo;). Credit cards already behave this way.</span></span>
+            </label>
             <div className="flex items-center justify-between sm:col-span-2">
               <button className="rounded-lg bg-emerald-600 px-4 py-1.5 text-sm font-semibold text-white hover:bg-emerald-700">Save</button>
             </div>
