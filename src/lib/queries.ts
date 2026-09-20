@@ -1140,6 +1140,13 @@ export async function _getInHand(householdId: number, periodId: number, settleme
     if (isCreditSpend(s) || s.memberId == null) continue;
     cashSpentByMember.set(s.memberId, (cashSpentByMember.get(s.memberId) ?? 0) + s.amount);
   }
+  // CREDIT-card spends attributed to each member this month — shown as an informational "on cards" note
+  // (NOT in the in-hand total): the cash hasn't left; it's squared up at next month's settlement.
+  const cardSpentByMember = new Map<number, number>();
+  for (const s of spends) {
+    if (!isCreditSpend(s) || s.memberId == null) continue;
+    cardSpentByMember.set(s.memberId, (cardSpentByMember.get(s.memberId) ?? 0) + s.amount);
+  }
   const heldSpentByCat = new Map<number, number>();
   const outOfPocketByMember = new Map<number | null, number>();
   for (const s of spends) {
@@ -1353,6 +1360,7 @@ export async function _getInHand(householdId: number, periodId: number, settleme
       sinkingFunds, sinkingHeld, pendingPiggyHeld, pendingCardBills: pendingCards,
       budgetRemaining, unpaidTotal, earmarkedTotal, miscSpent,
       cashSpent: key != null ? cashSpentByMember.get(key) ?? 0 : 0, // real cash spent this month (non-credit) — for the holding-now ledger
+      cardSpent: key != null ? cardSpentByMember.get(key) ?? 0 : 0, // credit-card spends this month (NOT in-hand; settles next month) — display only
       // Money still owed TO this member from the pool. For a self-funding contributor this is 0 — they
       // already hold the cash (it's in `net`); a pool-funded receiver still awaits it via the Money plan.
       yetToReceive,

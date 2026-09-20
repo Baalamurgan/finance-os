@@ -97,6 +97,15 @@ export default async function ExpensesPage({
   const filteredOutOfPocket = filterMemberId != null ? sumSpends(budgetedCards.filter((c) => c.responsibleMemberId !== filterMemberId)) : null;
   const filteredMisc = filterMemberId != null ? sumSpends(miscCards) : null;
   const filteredTotal = filterMemberId != null ? (filteredBudgetedSpent ?? 0) + (filteredOutOfPocket ?? 0) + (filteredMisc ?? 0) : null;
+  // Cross-cutting cash-vs-card split (a card is a payment method, not a category): credit-card spends
+  // don't touch in-hand — they settle at next month's settlement. Display-only; the totals above are unchanged.
+  const sumCardSpends = (cs: typeof cards) => cs.reduce((s, c) => s + c.spends.reduce((a, x) => a + (x.cardAccount?.type === "credit_card" ? x.amount : 0), 0), 0);
+  const cardSpends = sumCardSpends(cards); // credit-card spends in the current view (respects the member filter)
+  const filteredCard = filterMemberId != null ? cardSpends : null;
+  const filteredCash = filterMemberId != null ? (filteredTotal ?? 0) - cardSpends : null;
+  // General (all-members) cash vs card, for the unfiltered summary. Cash is what actually leaves hand →
+  // drives In-Hand; card settles next month. Display-only.
+  const generalCash = Math.round((totalSpent - cardSpends) * 100) / 100;
   const open = c.selected.status === "open";
   // Head-only tidy-up: misc spends that look like a tracked category (open month only).
   const miscReview = c.isHead && open ? await getMiscReview(c.household.id, c.selected.id) : [];
@@ -148,6 +157,11 @@ export default async function ExpensesPage({
                   <span className="text-amber-600">+ {formatINR(filteredMisc ?? 0)} misc</span>
                   {(filteredOutOfPocket ?? 0) > 0 && <span className="text-rose-600">{" "}+ {formatINR(filteredOutOfPocket ?? 0)} out-of-pocket</span>}
                 </div>
+                {(filteredCard ?? 0) > 0 && (
+                  <div className="text-[11px] text-slate-400">
+                    {formatINR(filteredCash ?? 0)} cash · <span className="text-fuchsia-500">{formatINR(filteredCard ?? 0)} on cards</span> (settles next month)
+                  </div>
+                )}
               </div>
             ) : (
               <div className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-right">
@@ -160,6 +174,11 @@ export default async function ExpensesPage({
                     / {formatINR(totalAllocation)}
                   </span>
                 </div>
+                {cardSpends > 0 && (
+                  <div className="text-[11px] text-slate-400">
+                    {formatINR(generalCash)} cash · <span className="text-fuchsia-500">{formatINR(cardSpends)} on cards</span> (settles next month)
+                  </div>
+                )}
                 <div className={`text-xs ${totalRemaining >= 0 ? "text-green-600" : "text-red-600"}`}>
                   {totalRemaining >= 0 ? "Remaining " : "Over by "}
                   {formatINR(Math.abs(totalRemaining))}

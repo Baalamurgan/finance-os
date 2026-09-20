@@ -54,7 +54,7 @@ export function InHandPersonGroup({
   poolDisbursements?: { recipientId: number; recipientName: string; label: string; amount: number }[];
   treasurerOwnLeftover?: number;
 }) {
-  const { name, cats, unpaidBills, paidBills, earmarked, earmarkedTotal, sinkingFunds, sinkingHeld, unpaidPeriodic, paidPeriodic, carried, carriedDue, miscSpent, net, pendingPiggyHeld, pendingCardBills, cashSpent, yetToReceive, selfFundsBills } = group;
+  const { name, cats, unpaidBills, paidBills, earmarked, earmarkedTotal, sinkingFunds, sinkingHeld, unpaidPeriodic, paidPeriodic, carried, carriedDue, miscSpent, net, pendingPiggyHeld, pendingCardBills, cashSpent, cardSpent, yetToReceive, selfFundsBills } = group;
   const handovers = group.handovers ?? []; // tolerate a stale cached shape (pre-feature) until it refreshes
   // Per-card toggle: include or exclude this member's own misc/out-of-pocket in their total.
   // Default = include (the true position). Excluding shows "budget + bills + savings" only, so
@@ -245,6 +245,14 @@ export function InHandPersonGroup({
               </button>
             </span>
             <span className={`shrink-0 tabular-nums ${inclMisc ? "text-red-600" : "text-slate-300 line-through"}`}>− {formatINR(miscSpent)}</span>
+          </li>
+        )}
+        {/* Credit-card spends: shown for context but NOT in the in-hand total — the cash hasn't left; it's
+            squared up at next month's settlement. Display-only, never affects the number above. */}
+        {(cardSpent ?? 0) > 0.005 && (
+          <li className="flex items-center justify-between gap-2 text-xs">
+            <span className="truncate text-slate-400">💳 On cards <span className="text-[10px]">· not in-hand · settles next month</span></span>
+            <span className="shrink-0 tabular-nums text-slate-400">{formatINR(cardSpent ?? 0)}</span>
           </li>
         )}
         {isTreasurer && (
