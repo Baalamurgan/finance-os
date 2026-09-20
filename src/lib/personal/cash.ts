@@ -82,7 +82,9 @@ export async function getUnpaidCardDues(memberId: number): Promise<number> {
 // for visibility with a tag. They are counted in `familyTotal` / `familyUnpaidTotal` ONLY — never in
 // `total` / `unpaidTotal`, which stay personal-only so the month spendable & cash-in-hand are unchanged.
 export type CardDueItem = { label: string; amount: number; dateISO: string; family: boolean };
-export type CardDueCycle = { cycleEndISO: string; dueISO: string | null; total: number; familyTotal: number; familyBudgeted: number; annualFee: number; generated: boolean; items: CardDueItem[] };
+// The budgeted family portion, split by the spend's budget month (a 16th–15th cycle spans two months).
+export type MonthAmount = { monthISO: string; amount: number };
+export type CardDueCycle = { cycleEndISO: string; dueISO: string | null; total: number; familyTotal: number; familyBudgeted: number; familyBudgetedByMonth: MonthAmount[]; annualFee: number; generated: boolean; items: CardDueItem[] };
 export type CardDue = {
   cardId: number;
   cardName: string;
@@ -98,6 +100,13 @@ export type CardDue = {
 };
 
 const midnight = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate());
+
+// A month→amount map → a rounded, chronological list (drops empties). Used for the by-month budgeted split.
+const monthList = (m: Map<string, number>): MonthAmount[] =>
+  [...m.entries()]
+    .map(([monthISO, amount]) => ({ monthISO, amount: Math.round(amount * 100) / 100 }))
+    .filter((x) => x.amount > 0.005)
+    .sort((a, b) => a.monthISO.localeCompare(b.monthISO));
 
 // ── Balance cards (debit/prepaid) — no bill; a running balance + the spends drawn from it ──
 export type BalanceCardView = {
@@ -199,12 +208,21 @@ export async function getCardDues(memberId: number): Promise<CardDue[]> {
     // Group items into billing cycles by their date; a cycle with a matching PersonalCardBill is settled
     // (its cash already left) and drops off. Personal → total; family → familyTotal (kept apart).
     const paidKeys = new Set(myBills.map((b) => midnight(b.cycleEnd).getTime()));
-    const byCycle = new Map<number, { end: Date; due: Date | null; total: number; familyTotal: number; familyBudgeted: number; items: CardDueItem[] }>();
+    const byCycle = new Map<number, { end: Date; due: Date | null; total: number; familyTotal: number; familyBudgeted: number; familyBudgetedByMonth: Map<string, number>; items: CardDueItem[] }>();
     for (const it of mine) {
       const cyc = currentCycle(statementDay, it.date, dueOffset);
       const key = midnight(cyc.end).getTime();
-      const g = byCycle.get(key) ?? { end: midnight(cyc.end), due: cyc.dueDate, total: 0, familyTotal: 0, familyBudgeted: 0, items: [] };
-      if (it.family) { g.familyTotal += it.amount; if (it.budgeted) g.familyBudgeted += it.amount; } else g.total += it.amount;
+      const g = byCycle.get(key) ?? { end: midnight(cyc.end), due: cyc.dueDate, total: 0, familyTotal: 0, familyBudgeted: 0, familyBudgetedByMonth: new Map<string, number>(), items: [] };
+      if (it.family) {
+        g.familyTotal += it.amount;
+        if (it.budgeted) {
+          g.familyBudgeted += it.amount;
+          // a 16th–15th cycle straddles two budget months → split the budgeted portion by the spend's
+          // calendar month so the bill shows which month's held budget each part draws from.
+          const mk = new Date(it.date.getFullYear(), it.date.getMonth(), 1).toISOString();
+          g.familyBudgetedByMonth.set(mk, (g.familyBudgetedByMonth.get(mk) ?? 0) + it.amount);
+        }
+      } else g.total += it.amount;
       g.items.push(toItem(it));
       byCycle.set(key, g);
     }
@@ -217,7 +235,7 @@ export async function getCardDues(memberId: number): Promise<CardDue[]> {
     const cycles = [...byCycle.entries()]
       .filter(([key]) => !paidKeys.has(key))
       .sort((a, b) => a[0] - b[0])
-      .map(([, g]) => ({ cycleEndISO: g.end.toISOString(), dueISO: g.due ? g.due.toISOString() : null, total: g.total, familyTotal: g.familyTotal, familyBudgeted: g.familyBudgeted, annualFee: annualFeeOf(g.end), generated: g.end.getTime() <= nowMid, items: g.items.sort(byDateDesc) }));
+      .map(([, g]) => ({ cycleEndISO: g.end.toISOString(), dueISO: g.due ? g.due.toISOString() : null, total: g.total, familyTotal: g.familyTotal, familyBudgeted: g.familyBudgeted, familyBudgetedByMonth: monthList(g.familyBudgetedByMonth), annualFee: annualFeeOf(g.end), generated: g.end.getTime() <= nowMid, items: g.items.sort(byDateDesc) }));
     const unpaidTotal = cycles.reduce((s, c) => s + c.total, 0);
     const familyUnpaidTotal = cycles.reduce((s, c) => s + c.familyTotal, 0);
 

@@ -1,0 +1,78 @@
+"use client";
+
+import { useEffect, useState } from "react";
+import { getMyIncomingPeerCardUses, type PeerCardUse } from "@/app/personal/actions";
+import { formatINR } from "@/lib/format";
+
+// A one-time popup that tells the card OWNER their card was used by another member (peer-card spend).
+// Shows each usage exactly once — the shown ids are remembered per-device in localStorage, so it won't
+// nag again. Fetches its own data on mount (like CardDueHighAlert), so no page threads props. New
+// usages surface the next time the owner opens Personal until acknowledged.
+const SEEN_KEY = "peercarduse:seen";
+
+function readSeen(): number[] {
+  try { return JSON.parse(localStorage.getItem(SEEN_KEY) ?? "[]"); } catch { return []; }
+}
+
+export function PeerCardUsePopup() {
+  const [uses, setUses] = useState<PeerCardUse[] | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    getMyIncomingPeerCardUses()
+      .then((all) => {
+        if (!alive) return;
+        const seen = new Set(readSeen());
+        const unseen = all.filter((u) => !seen.has(u.id));
+        if (unseen.length > 0) setUses(unseen);
+      })
+      .catch(() => {});
+    return () => { alive = false; };
+  }, []);
+
+  if (!uses || uses.length === 0) return null;
+
+  const close = () => {
+    try {
+      const next = Array.from(new Set([...readSeen(), ...uses.map((u) => u.id)]));
+      localStorage.setItem(SEEN_KEY, JSON.stringify(next));
+    } catch {}
+    setUses(null);
+  };
+
+  const one = uses.length === 1;
+
+  return (
+    <div className="fixed inset-0 z-[95] flex items-end justify-center overflow-y-auto bg-black/40 sm:items-center sm:p-4" onClick={close}>
+      <div
+        className="w-full max-w-sm rounded-t-3xl bg-white shadow-xl ring-2 ring-indigo-300 sm:rounded-3xl"
+        onClick={(e) => e.stopPropagation()}
+        style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
+      >
+        <div className="px-6 pt-6 text-center">
+          <div className="mx-auto grid h-14 w-14 place-items-center rounded-full bg-indigo-100 text-3xl">💳</div>
+          <h2 className="mt-3 text-lg font-bold text-indigo-700">{one ? "Your card was used" : "Your cards were used"}</h2>
+          <p className="mt-1 text-xs text-slate-400">Someone in the family paid with your card — you&apos;ll be repaid. Track it in Lending.</p>
+          <ul className="mt-3 space-y-2 text-left">
+            {uses.map((u) => (
+              <li key={u.id} className="rounded-xl bg-slate-50 px-3 py-2.5">
+                <div className="flex items-baseline justify-between gap-2">
+                  <span className="min-w-0 text-sm text-slate-700">
+                    <b className="text-slate-900">{u.spender}</b> used {u.cardName ? <b>{u.cardName}</b> : "your card"}
+                  </span>
+                  <span className="shrink-0 text-sm font-bold tabular-nums text-slate-900">{formatINR(u.amount)}</span>
+                </div>
+                {u.note && <div className="mt-0.5 truncate text-xs text-slate-500">for {u.note}</div>}
+              </li>
+            ))}
+          </ul>
+        </div>
+        <div className="px-6 py-6">
+          <button type="button" onClick={close} className="w-full rounded-xl bg-indigo-600 px-4 py-3 text-center text-base font-semibold text-white hover:bg-indigo-700">
+            Got it
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}

@@ -97,6 +97,21 @@ export async function getMyLendingReminders(): Promise<LendingReminder[]> {
     }));
 }
 
+// One-time "your card was used by someone else" alert for the card OWNER. Each peer-card spend created a
+// `lent` loan on the owner (linkGroup set); this returns the open ones so the popup can show them once
+// (the client remembers which it has shown). Clears naturally once the debt is settled/deleted.
+export type PeerCardUse = { id: number; spender: string; note: string | null; amount: number; cardName: string | null; atISO: string };
+export async function getMyIncomingPeerCardUses(): Promise<PeerCardUse[]> {
+  const member = await meRead();
+  if (!member) return [];
+  const loans = await prisma.personalLoan.findMany({
+    where: { memberId: member.id, direction: "lent", status: "open", linkGroup: { not: null } },
+    select: { id: true, counterparty: true, note: true, amount: true, createdAt: true, cardAccount: { select: { name: true } } },
+    orderBy: { createdAt: "desc" },
+  });
+  return loans.map((l) => ({ id: l.id, spender: l.counterparty, note: l.note, amount: l.amount, cardName: l.cardAccount?.name ?? null, atISO: l.createdAt.toISOString() }));
+}
+
 // Resolve the signed-in member WITHOUT touching the personal lock. Used by read-only actions
 // that also run in Family view (where the personal-unlock cookie is intentionally absent).
 async function meRead() {

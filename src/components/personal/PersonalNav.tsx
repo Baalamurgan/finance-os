@@ -5,6 +5,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { exitToFamily, lockPersonalNow } from "@/app/personal/lock/actions";
 import { CardDueHighAlert } from "@/components/personal/CardDueHighAlert";
+import { PeerCardUsePopup } from "@/components/personal/PeerCardUsePopup";
 import { RemindersBell } from "@/components/personal/RemindersBell";
 import { PersonalDock } from "@/components/personal/PersonalDock";
 import { LendingDueBar } from "@/components/personal/LendingDueBar";
@@ -56,6 +57,7 @@ export function PersonalNav({
           it's always enabled here. */}
       <AutoLock enabled lockAction={lockPersonalNow} storageKey="personal:hiddenAt" />
       <CardDueHighAlert context="personal" />
+      <PeerCardUsePopup />
       <header className="sticky top-0 z-40 border-b border-emerald-100 bg-emerald-50/90 backdrop-blur">
         <div className="mx-auto flex max-w-3xl flex-nowrap items-center gap-x-2 px-4 py-2.5 sm:flex-wrap sm:gap-x-3 sm:py-3 sm:px-6">
           <div className="mr-1 min-w-0 sm:mr-2">

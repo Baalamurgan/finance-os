@@ -7,7 +7,7 @@ import { computeSettlement, type SettleTagged } from "@/lib/settlement-core";
 import { planBillMonth, isLumpDue, monthsUntilNextDue, type FundingStyle } from "@/lib/schedule";
 import { suggestCategoryName, normalizeItem, resolveCategoryId } from "@/lib/spendCategorize";
 import { withShareCount } from "@/lib/format";
-import { getCardDues } from "@/lib/personal/cash";
+import { getCardDues, type MonthAmount } from "@/lib/personal/cash";
 
 // Keywords that drive the on-save category suggestion: the household's LEARNED words
 // (SpendKeyword) plus its head-curated shortcuts (SpendShortcut, weighted high since
@@ -624,7 +624,7 @@ export async function getMoneyPlan(householdId: number, periodId: number, inhand
     for (const b of g.pendingCardBills ?? []) {
       const day = new Date(b.dueISO).getDate();
       const st = dayStatus(day);
-      bills.push({ key: `cardbill-${b.cardId}-${b.cycleEndISO}`, payerId: g.memberId, payerName: g.name, vendor: `${b.cardName} bill`, amount: b.familyAmount, done: b.done, day, status: st?.status ?? null, days: st?.days ?? null, cardBill: true, cardId: b.cardId, cycleEndISO: b.cycleEndISO, dueISO: b.dueISO, cardPersonal: b.personalAmount, cardAnnualFee: b.annualFee, cardColor: b.color, cardFamilyBudgeted: b.familyBudgeted, cardFamilyMisc: b.familyMisc });
+      bills.push({ key: `cardbill-${b.cardId}-${b.cycleEndISO}`, payerId: g.memberId, payerName: g.name, vendor: `${b.cardName} bill`, amount: b.familyAmount, done: b.done, day, status: st?.status ?? null, days: st?.days ?? null, cardBill: true, cardId: b.cardId, cycleEndISO: b.cycleEndISO, dueISO: b.dueISO, cardPersonal: b.personalAmount, cardAnnualFee: b.annualFee, cardColor: b.color, cardFamilyBudgeted: b.familyBudgeted, cardFamilyBudgetedByMonth: b.familyBudgetedByMonth, cardFamilyMisc: b.familyMisc });
     }
   }
   // Shared (no-payer) bills — e.g. an expense added from the plan with payer "Shared" — are paid from
@@ -970,6 +970,7 @@ export type PendingCardBill = {
   dueISO: string;
   familyAmount: number; // family (reimbursed) portion of the cycle — what family money funds
   familyBudgeted: number; // of the family portion: spends in a budgeted category (Fuel…) → from the held budget
+  familyBudgetedByMonth: MonthAmount[]; // that budgeted portion split by budget month (a 16th–15th cycle spans two)
   familyMisc: number; // of the family portion: misc/other spends → from the owner's in-hand (settlement reimburses)
   personalAmount: number; // the owner's personal portion of the same bill (paid from their Can-spend)
   annualFee: number; // the card's annual fee IF this cycle's statement month is its fee month, else 0
@@ -1020,6 +1021,7 @@ export async function getPendingCardBills(householdId: number, period: { year: n
           cycleEndISO: cyc.cycleEndISO, dueISO: cyc.dueISO,
           familyAmount: Math.round(cyc.familyTotal * 100) / 100,
           ...split(cyc.familyTotal, cyc.familyBudgeted),
+          familyBudgetedByMonth: cyc.familyBudgetedByMonth,
           personalAmount: Math.round(cyc.total * 100) / 100,
           annualFee,
           done: false,
@@ -1039,6 +1041,7 @@ export async function getPendingCardBills(householdId: number, period: { year: n
           cycleEndISO: p.cycleEndISO, dueISO: p.dueISO,
           familyAmount: Math.round(p.familyTotal * 100) / 100,
           ...split(p.familyTotal, p.familyBudgeted),
+          familyBudgetedByMonth: [], // paid → shown as a pill, no pay modal
           personalAmount: Math.round(p.total * 100) / 100,
           annualFee,
           done: true,

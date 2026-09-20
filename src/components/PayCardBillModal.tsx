@@ -5,6 +5,18 @@ import { formatINR } from "@/lib/format";
 import { payFamilyCardBill } from "@/app/actions";
 import { useToastAction } from "@/components/Toast";
 
+// One line of the statement breakdown. Hoisted out of the modal so it isn't re-created each render.
+function Row({ label, hint, value, strong }: { label: string; hint?: string; value: number; strong?: boolean }) {
+  return (
+    <div className="flex items-baseline justify-between gap-2 text-sm">
+      <span className={strong ? "font-semibold text-slate-800" : "text-slate-600"}>
+        {label} {hint && <span className="text-[11px] text-slate-400">{hint}</span>}
+      </span>
+      <span className={`shrink-0 tabular-nums ${strong ? "font-semibold text-slate-800" : "text-slate-600"}`}>{formatINR(value)}</span>
+    </div>
+  );
+}
+
 // One owner-only payment settles a whole family credit-card cycle. The amount defaults to the summed
 // swipes (family + personal) + any annual fee, and is editable to the real statement figure — the ±
 // difference vs the swipes is the card's fee/cashback. The split shows WHERE each rupee comes from:
@@ -16,6 +28,7 @@ export function PayCardBillModal({
   cycleEndISO,
   dueISO,
   familyBudgeted,
+  familyBudgetedByMonth = [],
   familyMisc,
   personalAmount,
   annualFee,
@@ -26,6 +39,7 @@ export function PayCardBillModal({
   cycleEndISO: string;
   dueISO: string;
   familyBudgeted: number; // family spends in a budgeted category → funded from the held budget
+  familyBudgetedByMonth?: { monthISO: string; amount: number }[]; // that budgeted portion split by budget month
   familyMisc: number; // family misc/other spends → funded from the owner's in-hand
   personalAmount: number;
   annualFee: number;
@@ -38,6 +52,12 @@ export function PayCardBillModal({
   const amountNum = Number(amount) || 0;
   const difference = Math.round((amountNum - suggested) * 100) / 100; // + = extra fees/charges, − = cashback/savings
   const due = new Date(dueISO).toLocaleDateString("en-IN", { day: "numeric", month: "short" });
+  // Show the budgeted portion split by month only when the cycle genuinely straddles two+ budget months.
+  const budgetedMonths = familyBudgetedByMonth.filter((m) => m.amount > 0.005);
+  const splitByMonth = budgetedMonths.length > 1;
+  const multiYear = new Set(budgetedMonths.map((m) => new Date(m.monthISO).getFullYear())).size > 1;
+  const monthLabel = (iso: string) =>
+    new Date(iso).toLocaleDateString("en-IN", multiYear ? { month: "short", year: "2-digit" } : { month: "short" });
 
   useEffect(() => {
     if (!open) return;
@@ -45,15 +65,6 @@ export function PayCardBillModal({
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [open]);
-
-  const Row = ({ label, hint, value, strong }: { label: string; hint?: string; value: number; strong?: boolean }) => (
-    <div className="flex items-baseline justify-between gap-2 text-sm">
-      <span className={strong ? "font-semibold text-slate-800" : "text-slate-600"}>
-        {label} {hint && <span className="text-[11px] text-slate-400">{hint}</span>}
-      </span>
-      <span className={`shrink-0 tabular-nums ${strong ? "font-semibold text-slate-800" : "text-slate-600"}`}>{formatINR(value)}</span>
-    </div>
-  );
 
   return (
     <>
@@ -78,7 +89,13 @@ export function PayCardBillModal({
 
               <div className="space-y-1.5 rounded-xl p-3" style={{ backgroundColor: `${color}0d` }}>
                 <p className="text-[11px] font-semibold uppercase tracking-wide" style={{ color }}>Statement · due {due}</p>
-                {familyBudgeted > 0.005 && <Row label="⛽ Family — budgeted" hint="from the held budget" value={familyBudgeted} />}
+                {familyBudgeted > 0.005 && (
+                  splitByMonth
+                    ? budgetedMonths.map((m) => (
+                        <Row key={m.monthISO} label={`⛽ Family — budgeted (${monthLabel(m.monthISO)})`} hint={`from ${monthLabel(m.monthISO)}'s held budget`} value={m.amount} />
+                      ))
+                    : <Row label="⛽ Family — budgeted" hint="from the held budget" value={familyBudgeted} />
+                )}
                 {familyMisc > 0.005 && <Row label="🛒 Family — misc / other" hint="from your in-hand" value={familyMisc} />}
                 {personalAmount > 0.005 && <Row label="👤 Your spends" hint="from your Can-spend" value={personalAmount} />}
                 {annualFee > 0.005 && <Row label="🧾 Annual fee" hint="this month" value={annualFee} />}

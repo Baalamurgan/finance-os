@@ -247,7 +247,11 @@ function ItemRow({ item, members, categories, readOnly, draft, patch }: { item: 
       </select>
       {item.kind === "expense" && (
         <select value={draft.categoryId} onChange={(e) => patch(item.id, { categoryId: e.target.value })} className="input w-32 py-1 text-xs" title="category">
-          {categories.map((c) => <option key={c.id} value={String(c.id)}>{c.name}</option>)}
+          {SECTIONS.filter((sec) => categories.some((c) => c.section === sec)).map((sec) => (
+            <optgroup key={sec} label={SECTION_LABEL[sec]}>
+              {categories.filter((c) => c.section === sec).map((c) => <option key={c.id} value={String(c.id)}>{c.name}</option>)}
+            </optgroup>
+          ))}
         </select>
       )}
       <ScheduleEditor s={draft.sched} set={(sched) => patch(item.id, { sched })} kind={item.kind === "income" ? "income" : "expense"} />
@@ -271,6 +275,11 @@ function ItemRow({ item, members, categories, readOnly, draft, patch }: { item: 
 function AddItem({ householdId, categories, members }: { householdId: number; categories: CatOpt[]; members: MemberOpt[] }) {
   const [kind, setKind] = useState<"income" | "expense">("expense");
   const [sched, setSched] = useState<SchedState>(() => initSched());
+  const [catId, setCatId] = useState(""); // "" = none, "new" = create inline, else an id
+  const [newCatName, setNewCatName] = useState("");
+  const [newCatSection, setNewCatSection] = useState("Monthly");
+  const newCat = catId === "new";
+  const catSections = SECTIONS.filter((sec) => categories.some((c) => c.section === sec));
   return (
     <div className="border-t border-slate-100 p-4">
       <h3 className="mb-2 text-sm font-semibold text-slate-700">+ Add recurring item</h3>
@@ -288,10 +297,25 @@ function AddItem({ householdId, categories, members }: { householdId: number; ca
           {members.map((m) => <option key={m.id} value={String(m.id)}>{m.name}</option>)}
         </select>
         {kind === "expense" && (
-          <select name="categoryId" required className="input w-36">
-            <option value="">Category *</option>
-            {categories.map((c) => <option key={c.id} value={String(c.id)}>{c.name} · {c.section}</option>)}
-          </select>
+          <>
+            <select name="categoryId" required value={catId} onChange={(e) => setCatId(e.target.value)} className="input w-40" title="category">
+              <option value="">Category *</option>
+              {catSections.map((sec) => (
+                <optgroup key={sec} label={SECTION_LABEL[sec]}>
+                  {categories.filter((c) => c.section === sec).map((c) => <option key={c.id} value={String(c.id)}>{c.name}</option>)}
+                </optgroup>
+              ))}
+              <option value="new">➕ New category…</option>
+            </select>
+            {newCat && (
+              <>
+                <input name="newCategoryName" required value={newCatName} onChange={(e) => setNewCatName(e.target.value)} placeholder="New category *" className="input w-36" />
+                <select name="newCategorySection" value={newCatSection} onChange={(e) => setNewCatSection(e.target.value)} className="input w-32" title="section for the new category">
+                  {SECTIONS.map((s) => <option key={s} value={s}>{SECTION_LABEL[s]}</option>)}
+                </select>
+              </>
+            )}
+          </>
         )}
         <ScheduleEditor s={sched} set={setSched} kind={kind} />
         <SchedHidden s={sched} />
@@ -299,6 +323,7 @@ function AddItem({ householdId, categories, members }: { householdId: number; ca
       </form>
       <p className="mt-2 text-xs text-slate-400">
         Applies from next month. This is the template — the current sheet stays frozen.{" "}
+        {newCat && <><b>New category</b>: it&apos;s created under the section you pick (Monthly for an EMI).{" "}</>}
         {sched.kind === "installment" && <><b>Installment</b>: total payments + which is <i>this</i> month; auto-advances (3/6…) then stops.</>}
         {" "}Periodic bills (yearly insurance, every-2-months EMI) are set up in <b>Budgets &amp; sinking funds</b>.
       </p>

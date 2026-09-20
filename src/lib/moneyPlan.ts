@@ -15,6 +15,7 @@ export type PlanBill = {
   cardBill?: boolean; cardId?: number; cycleEndISO?: string; dueISO?: string; // a family credit-card bill (paid from held cash; net-neutral like a fund bill)
   cardPersonal?: number; cardAnnualFee?: number; cardColor?: string; // the owner's personal slice + annual fee (fee-month only) + the card's colour — for the Pay modal
   cardFamilyBudgeted?: number; cardFamilyMisc?: number; // family portion split: from held budget vs from in-hand
+  cardFamilyBudgetedByMonth?: { monthISO: string; amount: number }[]; // budgeted portion split by budget month (cycle straddles two)
 };
 // An allowance = personal money the treasurer SENDS a member (not a bill they owe). Disbursed after
 // collection, never dated/overdue; completion writes through to the Sheet line's paid flag (billId).
@@ -68,6 +69,7 @@ export type PlanStep = {
   cardBill?: boolean; cardId?: number; cycleEndISO?: string; dueISO?: string;
   cardPersonal?: number; cardAnnualFee?: number; cardColor?: string; // the owner's personal slice + annual fee (fee-month only) + the card's colour — for the Pay modal
   cardFamilyBudgeted?: number; cardFamilyMisc?: number; // family portion split: from held budget vs from in-hand
+  cardFamilyBudgetedByMonth?: { monthISO: string; amount: number }[]; // budgeted portion split by budget month (cycle straddles two)
   status?: "overdue" | "soon" | "normal" | null;
   days?: number | null; // days until due (negative = overdue), for the urgency tag
   short?: number; // hub is short this much when this step runs (funds not in yet)
@@ -169,7 +171,7 @@ export function buildMoneyPlan(input: {
     steps.push({
       id: b.key, kind: "bill", day: b.day, amount: b.amount, done: b.done,
       payerId: b.payerId, payerName: b.payerName, vendor: b.vendor, billId: b.billId, categoryId: b.categoryId, fund: b.fund, fundAvail: b.fundAvail, misc: b.misc, miscCard: b.miscCard, status: b.status, days: b.days ?? null, deferred: b.deferred,
-      cardBill: b.cardBill, cardId: b.cardId, cycleEndISO: b.cycleEndISO, dueISO: b.dueISO, cardPersonal: b.cardPersonal, cardAnnualFee: b.cardAnnualFee, cardColor: b.cardColor, cardFamilyBudgeted: b.cardFamilyBudgeted, cardFamilyMisc: b.cardFamilyMisc,
+      cardBill: b.cardBill, cardId: b.cardId, cycleEndISO: b.cycleEndISO, dueISO: b.dueISO, cardPersonal: b.cardPersonal, cardAnnualFee: b.cardAnnualFee, cardColor: b.cardColor, cardFamilyBudgeted: b.cardFamilyBudgeted, cardFamilyMisc: b.cardFamilyMisc, cardFamilyBudgetedByMonth: b.cardFamilyBudgetedByMonth,
     });
   }
   // Allowances: the treasurer disburses these AFTER collection (like a payout), never dated/overdue.

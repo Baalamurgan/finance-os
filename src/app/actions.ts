@@ -1116,7 +1116,7 @@ export async function editSpendAction(
   const amount = parseAmount(formData.get("amount"));
   if (!id || !label || !amount) return prev;
 
-  const spend = await prisma.spend.findUnique({ where: { id }, include: { category: { select: { section: true, tracked: true } } } });
+  const spend = await prisma.spend.findUnique({ where: { id }, include: { category: { select: { section: true, tracked: true, name: true } } } });
   if (!spend) return prev;
   if (!(await periodOpen(spend.periodId))) return prev;
 
@@ -1161,8 +1161,11 @@ export async function editSpendAction(
   if (cardAccountId != null && cardOwnerId != null) {
     await prisma.accountTransaction.upsert({
       where: { familySpendId: id },
-      update: { amount, merchant: label, accountId: cardAccountId, memberId: cardOwnerId },
-      create: { memberId: cardOwnerId, accountId: cardAccountId, date: spend.createdAt, merchant: label, amount, type: "spend", source: "family", familySpendId: id },
+      // category drives the card-bill budgeted-vs-misc split (getCardDues) — a spend re-tagged to a card
+      // via edit must carry its category name too, or it wrongly reads as "misc" on the bill. Backfills
+      // the field on update so any earlier mirror that missed it is repaired the next time it's edited.
+      update: { amount, merchant: label, accountId: cardAccountId, memberId: cardOwnerId, category: spend.category?.name ?? null },
+      create: { memberId: cardOwnerId, accountId: cardAccountId, date: spend.createdAt, merchant: label, amount, type: "spend", category: spend.category?.name ?? null, source: "family", familySpendId: id },
     });
   } else {
     await prisma.accountTransaction.deleteMany({ where: { familySpendId: id } });
@@ -2800,9 +2803,20 @@ export async function createRecurringItem(formData: FormData) {
   const kind = formData.get("kind") === "income" ? "income" : "expense";
   let name = String(formData.get("name") ?? "").trim();
   const amount = parseAmount(formData.get("amount"));
-  const categoryId = formData.get("categoryId") ? Number(formData.get("categoryId")) : null;
+  const rawCat = String(formData.get("categoryId") ?? "");
+  let categoryId: number | null = /^\d+$/.test(rawCat) ? Number(rawCat) : null;
   const memberId = formData.get("memberId") ? Number(formData.get("memberId")) : null;
   if (!householdId || !name || !amount || amount <= 0) return;
+  // Create-a-new-category inline (e.g. a new EMI under Monthly) when none is picked — same shape as the
+  // Sheet's Add-expense modal: a name + a chosen section. Reuses an existing category of that name.
+  if (kind === "expense" && !categoryId) {
+    const newCatName = String(formData.get("newCategoryName") ?? "").trim();
+    if (newCatName) {
+      const section = String(formData.get("newCategorySection") ?? "Monthly");
+      const existing = await prisma.category.findFirst({ where: { householdId, name: newCatName } });
+      categoryId = existing?.id ?? (await prisma.category.create({ data: { householdId, name: newCatName, section } })).id;
+    }
+  }
   if (kind === "expense" && !categoryId) return;
   const sched = await scheduleFromForm(householdId, formData);
   if (sched.installmentsTotal && sched.intervalMonths === 1) name = stripInstNumber(name);

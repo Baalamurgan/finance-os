@@ -456,6 +456,7 @@ export function MoneyPlan({
                           cycleEndISO={s.cycleEndISO!}
                           dueISO={s.dueISO!}
                           familyBudgeted={s.cardFamilyBudgeted ?? s.amount}
+                          familyBudgetedByMonth={s.cardFamilyBudgetedByMonth}
                           familyMisc={s.cardFamilyMisc ?? 0}
                           personalAmount={s.cardPersonal ?? 0}
                           annualFee={s.cardAnnualFee ?? 0}
