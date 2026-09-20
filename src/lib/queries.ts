@@ -1304,12 +1304,10 @@ export async function _getInHand(householdId: number, periodId: number, settleme
     const unpaidPeriodic = memberDue.filter((b) => !b.paid).map((b) => ({ categoryId: b.categoryId, name: b.name, bill: b.bill, fund: b.fund, afterWindDown: b.afterWindDown, due: dueOf(b.day), hidden: isHiddenPeriodic(b.categoryId) }));
     const paidPeriodic = memberDue.filter((b) => b.paid).map((b) => ({ categoryId: b.categoryId, name: b.name, bill: b.bill, fund: b.fund, afterWindDown: b.afterWindDown, due: dueOf(b.day), hidden: isHiddenPeriodic(b.categoryId) }));
 
-    // bills carried over from an earlier closed month, still not marked paid. The payer was handed (or
-    // held) the cash but never paid the vendor, so they're still HOLDING it — it counts in their in-hand.
+    // bills carried over from an earlier closed month, still not marked paid (net-neutral nag)
     const carried = carriedBills
       .filter((e) => (e.memberId ?? null) === key)
       .map((e) => ({ id: e.id, name: e.label, amount: e.amount, from: e.period.label }));
-    const carriedTotal = carried.reduce((s, c) => s + c.amount, 0);
     // periodic fund-bills this member pays that were due in a closed month and never paid
     const carriedDue = carriedPeriodic
       .filter((b) => b.payer === key)
@@ -1361,9 +1359,9 @@ export async function _getInHand(householdId: number, periodId: number, settleme
       selfFundsBills: selfFunds,
       // In-hand = what this member PHYSICALLY holds right now: budget cash left + set-asides they hold
       // + last month's Piggy leftover they still hold − their own out-of-pocket + any unpaid bills they
-      // SELF-FUND (held until paid) + carried unpaid bills from an earlier month (never paid → they're
-      // still holding that cash). Pool-funded bills are excluded (→ "yet to receive").
-      net: budgetRemaining + earmarkedTotal - miscSpent + pendingPiggyHeld + heldBills + pendingCardHeld + carriedTotal,
+      // SELF-FUND (held until paid). Pool-funded bills are excluded (→ "yet to receive"); carried bills
+      // aren't here either (settled in their month).
+      net: budgetRemaining + earmarkedTotal - miscSpent + pendingPiggyHeld + heldBills + pendingCardHeld,
     };
   };
 
