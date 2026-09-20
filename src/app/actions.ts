@@ -2764,6 +2764,18 @@ async function installmentStartFrom(householdId: number, total: number | null, c
   while (m < 1) { m += 12; y -= 1; }
   return { installmentsTotal: total, installmentStartYear: y, installmentStartMonth: m };
 }
+
+// Payment #1 of a NEW installment lands on next month by default (Setup changes apply from next
+// month; the current sheet is frozen) — so the preview reads 1/N, not 2/N. "This month" anchors #1 to
+// the current open month instead (numbering starts here; the frozen current sheet isn't touched).
+async function installmentStartAnchored(householdId: number, total: number | null, startThisMonth: boolean) {
+  if (!total || total <= 0) return { installmentsTotal: null, installmentStartYear: null, installmentStartMonth: null };
+  const anchor = await latestOpenPeriod(householdId);
+  let y = anchor?.year ?? new Date().getFullYear();
+  let m = (anchor?.month ?? new Date().getMonth() + 1) + (startThisMonth ? 0 : 1);
+  while (m > 12) { m -= 12; y += 1; }
+  return { installmentsTotal: total, installmentStartYear: y, installmentStartMonth: m };
+}
 const stripInstNumber = (name: string) => name.replace(/\s+\d+\s*\/\s*\d+\s*$/, "").trim();
 
 type ScheduleFields = {
@@ -2783,6 +2795,13 @@ async function scheduleFromForm(householdId: number, formData: FormData): Promis
   const dueDay = formData.get("dueDay") ? Math.min(31, Math.max(1, Number(formData.get("dueDay")))) : null;
   if (kind === "installment") {
     const total = formData.get("installmentsTotal") ? Number(formData.get("installmentsTotal")) : null;
+    // ADD flow sends installmentStart ("next"|"this") → anchor #1 to next/this month. EDIT flow sends
+    // installmentCurrent (which payment is the current open month) → preserves the existing start.
+    const startSel = formData.get("installmentStart");
+    if (startSel != null) {
+      const inst = await installmentStartAnchored(householdId, total, String(startSel) === "this");
+      return { intervalMonths: 1, dueDay, ...inst };
+    }
     const current = Number(formData.get("installmentCurrent")) || 1;
     const inst = await installmentStartFrom(householdId, total, current);
     return { intervalMonths: 1, dueDay, ...inst };
@@ -3162,6 +3181,18 @@ export async function saveAllRecurringItems(
     if (r.installmentsTotal) fd.set("installmentsTotal", String(r.installmentsTotal));
     if (r.installmentCurrent) fd.set("installmentCurrent", String(r.installmentCurrent));
     const sched = await scheduleFromForm(item.householdId, fd);
+    // Editing an installment must NOT move its start month (which would re-baseline the schedule — and
+    // a not-yet-started EMI has current=0, which the recompute would wrongly read as "starts this
+    // month"). Preserve the stored start for an existing installment; only a brand-new one (monthly →
+    // installment) gets anchored to next month.
+    if (sched.installmentsTotal != null) {
+      const wasInstallment = item.installmentsTotal != null && item.intervalMonths <= 1 && item.installmentStartYear != null;
+      const start = wasInstallment
+        ? { installmentStartYear: item.installmentStartYear, installmentStartMonth: item.installmentStartMonth }
+        : await installmentStartAnchored(item.householdId, sched.installmentsTotal, false);
+      sched.installmentStartYear = start.installmentStartYear;
+      sched.installmentStartMonth = start.installmentStartMonth;
+    }
 
     const finalName = sched.installmentsTotal && sched.intervalMonths === 1 ? stripInstNumber(name) : name;
     await prisma.recurringItem.update({

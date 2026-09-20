@@ -18,7 +18,9 @@ export type RItem = {
 // Periodic "every N months" bills live on the Category now (Budgets & sinking funds →
 // "Full bill"), so recurring items are just monthly lines or fixed-term installments.
 type SchedKind = "monthly" | "installment";
-type SchedState = { kind: SchedKind; total: string; current: string; dueDay: string };
+// `current` is used when EDITING an existing installment (which payment is the current month).
+// `startThisMonth` is used when ADDING a new one (payment #1 = this month vs next month).
+type SchedState = { kind: SchedKind; total: string; current: string; startThisMonth: boolean; dueDay: string };
 
 function initSched(item?: RItem): SchedState {
   const kind: SchedKind = item && item.installmentsTotal != null && item.intervalMonths <= 1 ? "installment" : "monthly";
@@ -26,10 +28,11 @@ function initSched(item?: RItem): SchedState {
     kind,
     total: item && item.intervalMonths <= 1 && item.installmentsTotal != null ? String(item.installmentsTotal) : "",
     current: item?.installmentCurrent != null ? String(item.installmentCurrent) : "",
+    startThisMonth: false, // new EMIs start next month by default (Setup applies from next month)
     dueDay: item?.dueDay != null ? String(item.dueDay) : "",
   };
 }
-const schedKey = (s: SchedState) => [s.kind, s.total, s.current, s.dueDay].join("|");
+const schedKey = (s: SchedState) => [s.kind, s.total, s.current, s.startThisMonth, s.dueDay].join("|");
 
 // ── Row draft: the editable state of one template row, lifted to the parent so a single
 // floating "N unsaved changes → Save" bar can batch-save them all (like Budgets & sinking funds). ──
@@ -51,18 +54,27 @@ const draftPayload = (id: number, d: Draft) => ({
   installmentCurrent: d.sched.kind === "installment" ? (d.sched.current || "1") : "",
 });
 
-function ScheduleEditor({ s, set, kind }: { s: SchedState; set: (s: SchedState) => void; kind: "income" | "expense" }) {
+function ScheduleEditor({ s, set, kind, variant = "edit" }: { s: SchedState; set: (s: SchedState) => void; kind: "income" | "expense"; variant?: "add" | "edit" }) {
   return (
     <span className="flex flex-wrap items-center gap-1 text-[11px] text-slate-600">
       <select value={s.kind} onChange={(e) => set({ ...s, kind: e.target.value as SchedKind })} className="input py-1 text-xs" title="How often this repeats">
         <option value="monthly">every month</option>
-        <option value="installment">installment (N times)</option>
+        <option value="installment">{kind === "income" ? "for a fixed number of months" : "EMI / installment"}</option>
       </select>
       {s.kind === "installment" && (
-        <span className="flex items-center gap-1 text-indigo-600">
-          ×<input type="number" min="1" value={s.total} onChange={(e) => set({ ...s, total: e.target.value })} placeholder="total" className="input w-14 py-1 text-xs" title="total payments" />
-          on #<input type="number" min="1" value={s.current} onChange={(e) => set({ ...s, current: e.target.value })} placeholder="this mo" className="input w-14 py-1 text-xs" title="which payment is THIS month" />
-        </span>
+        variant === "add" ? (
+          <span className="flex items-center gap-1 text-indigo-600">
+            for <input type="number" min="1" value={s.total} onChange={(e) => set({ ...s, total: e.target.value })} placeholder="6" className="input w-14 py-1 text-xs" title="number of monthly payments" /> months, from
+            <select value={s.startThisMonth ? "this" : "next"} onChange={(e) => set({ ...s, startThisMonth: e.target.value === "this" })} className="input py-1 text-xs" title="when the first payment lands">
+              <option value="next">next month</option>
+              <option value="this">this month</option>
+            </select>
+          </span>
+        ) : (
+          <span className="flex items-center gap-1 text-indigo-600" title="total number of monthly payments (the start month stays fixed)">
+            ×<input type="number" min="1" value={s.total} onChange={(e) => set({ ...s, total: e.target.value })} placeholder="total" className="input w-14 py-1 text-xs" /> payments
+          </span>
+        )
       )}
       <span className="flex items-center gap-1 text-slate-500" title={kind === "income" ? "Day of the month this income arrives" : "Day of the month this is due"}>
         {kind === "income" ? "arrives" : "due"} day
@@ -81,7 +93,7 @@ function SchedHidden({ s }: { s: SchedState }) {
       {s.kind === "installment" && (
         <>
           <input type="hidden" name="installmentsTotal" value={s.total} />
-          <input type="hidden" name="installmentCurrent" value={s.current || "1"} />
+          <input type="hidden" name="installmentStart" value={s.startThisMonth ? "this" : "next"} />
         </>
       )}
     </>
@@ -220,7 +232,7 @@ function ItemRow({ item, members, categories, readOnly, draft, patch }: { item: 
       <div className="flex items-center justify-between gap-2 py-2 pl-2 text-sm">
         <span className="truncate text-slate-700">
           {item.name}
-          {item.installmentsTotal != null && item.installmentCurrent != null && item.intervalMonths <= 1 && <span className="ml-1.5 text-[11px] text-indigo-500">{item.installmentCurrent}/{item.installmentsTotal}</span>}
+          {item.installmentsTotal != null && item.installmentCurrent != null && item.intervalMonths <= 1 && <span className="ml-1.5 text-[11px] text-indigo-500">{item.installmentCurrent <= 0 ? "starts next mo" : `${item.installmentCurrent}/${item.installmentsTotal}`}</span>}
           {scheduleSummary(item) && <span className="ml-1.5 text-[11px] text-violet-600">· {scheduleSummary(item)}</span>}
           {item.memberName ? <span className="ml-1.5 text-[11px] text-slate-400">· {item.memberName}</span> : null}
         </span>
@@ -234,7 +246,7 @@ function ItemRow({ item, members, categories, readOnly, draft, patch }: { item: 
       <input value={draft.name} onChange={(e) => patch(item.id, { name: e.target.value })} className="input w-40 py-1 text-sm" />
       {item.installmentsTotal != null && item.installmentCurrent != null && item.intervalMonths <= 1 && (
         <span className="rounded-full bg-indigo-50 px-1.5 py-0.5 text-[10px] font-medium text-indigo-500" title="installment (this month / total)">
-          {item.installmentCurrent}/{item.installmentsTotal}
+          {item.installmentCurrent <= 0 ? "starts next mo" : `${item.installmentCurrent}/${item.installmentsTotal}`}
         </span>
       )}
       <div className="flex items-center gap-1">
@@ -278,8 +290,12 @@ function AddItem({ householdId, categories, members }: { householdId: number; ca
   const [catId, setCatId] = useState(""); // "" = none, "new" = create inline, else an id
   const [newCatName, setNewCatName] = useState("");
   const [newCatSection, setNewCatSection] = useState("Monthly");
+  const [amount, setAmount] = useState("");
   const newCat = catId === "new";
   const catSections = SECTIONS.filter((sec) => categories.some((c) => c.section === sec));
+  // EMI helper: N monthly payments of ₹amount → total, so "how it works" is obvious at a glance.
+  const emiN = sched.kind === "installment" ? Number(sched.total) || 0 : 0;
+  const emiPer = Number(amount) || 0;
   return (
     <div className="border-t border-slate-100 p-4">
       <h3 className="mb-2 text-sm font-semibold text-slate-700">+ Add recurring item</h3>
@@ -291,7 +307,7 @@ function AddItem({ householdId, categories, members }: { householdId: number; ca
           <button type="button" onClick={() => setKind("expense")} className={`px-2.5 py-1.5 ${kind === "expense" ? "bg-indigo-600 text-white" : "text-slate-500"}`}>Expense</button>
         </div>
         <input name="name" placeholder="Name *" required className="input w-40" />
-        <input name="amount" type="number" step="0.01" placeholder="₹ *" required className="input w-24" />
+        <input name="amount" type="number" step="0.01" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder={kind === "expense" && sched.kind === "installment" ? "₹ / month *" : "₹ *"} required className="input w-28" />
         <select name="memberId" className="input w-32">
           <option value="">{kind === "income" ? "Owner…" : "Who pays…"}</option>
           {members.map((m) => <option key={m.id} value={String(m.id)}>{m.name}</option>)}
@@ -317,15 +333,22 @@ function AddItem({ householdId, categories, members }: { householdId: number; ca
             )}
           </>
         )}
-        <ScheduleEditor s={sched} set={setSched} kind={kind} />
+        <ScheduleEditor s={sched} set={setSched} kind={kind} variant="add" />
         <SchedHidden s={sched} />
         <button className="btn">Add</button>
       </form>
+      {/* EMI at-a-glance: N × per-month = total, and when it starts/ends — so "how EMI works" is clear. */}
+      {sched.kind === "installment" && emiN > 0 && emiPer > 0 && (
+        <p className="mt-2 rounded-lg bg-indigo-50 px-3 py-2 text-xs text-indigo-800">
+          💳 <b>{emiN} payments of {formatINR(emiPer)}</b> = {formatINR(emiN * emiPer)} total ·
+          first payment <b>{sched.startThisMonth ? "this month (1/" : "next month (1/"}{emiN})</b>, then counts down (2/{emiN}, 3/{emiN}…) and stops after {emiN}.
+        </p>
+      )}
       <p className="mt-2 text-xs text-slate-400">
         Applies from next month. This is the template — the current sheet stays frozen.{" "}
         {newCat && <><b>New category</b>: it&apos;s created under the section you pick (Monthly for an EMI).{" "}</>}
-        {sched.kind === "installment" && <><b>Installment</b>: total payments + which is <i>this</i> month; auto-advances (3/6…) then stops.</>}
-        {" "}Periodic bills (yearly insurance, every-2-months EMI) are set up in <b>Budgets &amp; sinking funds</b>.
+        {sched.kind === "installment" && sched.startThisMonth && <><b>Starting this month</b>: set a due day <i>after</i> today so the first payment isn&apos;t already past.{" "}</>}
+        Periodic bills (yearly insurance, every-2-months EMI) are set up in <b>Budgets &amp; sinking funds</b>.
       </p>
     </div>
   );
