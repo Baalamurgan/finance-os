@@ -90,9 +90,13 @@ export default async function ExpensesPage({
   // When filtered to a member, the summary reflects only THAT member's spends ("everything they
   // spent") — allocation/remaining don't apply to one person, so we show budgeted-spend + misc.
   const sumSpends = (cs: typeof cards) => cs.reduce((s, c) => s + c.spends.reduce((a, x) => a + x.amount, 0), 0);
-  const filteredBudgetedSpent = filterMemberId != null ? sumSpends(budgetedCards) : null;
+  // Split a member's budgeted spends into their OWN categories vs OUT-OF-POCKET (a budgeted category
+  // held by someone else — e.g. Arumugam buying petrol, which is Baala's Fuel budget). Same holder-vs-
+  // spender rule as In-Hand/settlement: own = category's responsibleMemberId is this member.
+  const filteredBudgetedSpent = filterMemberId != null ? sumSpends(budgetedCards.filter((c) => c.responsibleMemberId === filterMemberId)) : null;
+  const filteredOutOfPocket = filterMemberId != null ? sumSpends(budgetedCards.filter((c) => c.responsibleMemberId !== filterMemberId)) : null;
   const filteredMisc = filterMemberId != null ? sumSpends(miscCards) : null;
-  const filteredTotal = filterMemberId != null ? (filteredBudgetedSpent ?? 0) + (filteredMisc ?? 0) : null;
+  const filteredTotal = filterMemberId != null ? (filteredBudgetedSpent ?? 0) + (filteredOutOfPocket ?? 0) + (filteredMisc ?? 0) : null;
   const open = c.selected.status === "open";
   // Head-only tidy-up: misc spends that look like a tracked category (open month only).
   const miscReview = c.isHead && open ? await getMiscReview(c.household.id, c.selected.id) : [];
@@ -142,6 +146,7 @@ export default async function ExpensesPage({
                 <div className="text-xs text-slate-500">
                   {formatINR(filteredBudgetedSpent ?? 0)} budgeted{" "}
                   <span className="text-amber-600">+ {formatINR(filteredMisc ?? 0)} misc</span>
+                  {(filteredOutOfPocket ?? 0) > 0 && <span className="text-rose-600">{" "}+ {formatINR(filteredOutOfPocket ?? 0)} out-of-pocket</span>}
                 </div>
               </div>
             ) : (
