@@ -46,6 +46,21 @@ async function main() {
     netWorthItem: await prisma.netWorthItem.findMany(),
     setAsideSkip: await prisma.setAsideSkip.findMany(),
     billPayment: await prisma.billPayment.findMany(),
+    // The recurring TEMPLATE is the source of truth every month generates from — omitting it lost the
+    // whole schedule on restore. Plus the other tables that were silently missing.
+    recurringItem: await prisma.recurringItem.findMany(),
+    miscCategory: await prisma.miscCategory.findMany(),
+    advance: await prisma.advance.findMany(),
+    poolHandover: await prisma.poolHandover.findMany(),
+    manualPlanStep: await prisma.manualPlanStep.findMany(),
+    hiddenPlanStep: await prisma.hiddenPlanStep.findMany(),
+    stepDayOverride: await prisma.stepDayOverride.findMany(),
+    stepOrderOverride: await prisma.stepOrderOverride.findMany(),
+    spendKeyword: await prisma.spendKeyword.findMany(),
+    spendShortcut: await prisma.spendShortcut.findMany(),
+    integration: await prisma.integration.findMany(),
+    personalSavings: await prisma.personalSavings.findMany(),
+    personalCardBill: await prisma.personalCardBill.findMany(),
   };
 
   mkdirSync("backups", { recursive: true });
