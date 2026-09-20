@@ -25,12 +25,16 @@ function Modal({ title, onClose, children }: { title: string; onClose: () => voi
   );
 }
 
-// ── Create a manual lend / borrow (with an optional repay-by date + reminder lead) ──
-export function AddLoanModal() {
+// ── Create a manual lend / borrow — pick a household member (mirrors to their tab) or type a name;
+// a repay-by date is required so both sides get the reminder. ──
+export function AddLoanModal({ members = [] }: { members?: { id: number; name: string }[] }) {
   const [open, setOpen] = useState(false);
   const [direction, setDirection] = useState<"lent" | "borrowed">("lent");
-  const [withDate, setWithDate] = useState(false);
-  const other = direction === "lent" ? "they" : "you";
+  const [personSel, setPersonSel] = useState(""); // "" none · a member id · "other"
+  const isOther = personSel === "other";
+  const memberChosen = personSel !== "" && !isOther;
+  const memberName = members.find((m) => String(m.id) === personSel)?.name ?? "";
+  const dateLabel = direction === "lent" ? "Collect by" : "Repay by";
 
   return (
     <>
@@ -47,10 +51,33 @@ export function AddLoanModal() {
                 <button type="button" onClick={() => setDirection("borrowed")} className={`rounded-lg border px-3 py-2 text-sm font-medium ${direction === "borrowed" ? "border-amber-400 bg-amber-50 text-amber-800" : "border-slate-200 text-slate-500"}`}>← I borrowed</button>
               </div>
               <input type="hidden" name="direction" value={direction} />
+
               <div>
                 <label className="text-xs font-medium text-slate-500">Person</label>
-                <input name="counterparty" required placeholder="Who?" className="input mt-1 w-full" autoFocus />
+                {members.length > 0 ? (
+                  <>
+                    <select value={personSel} onChange={(e) => setPersonSel(e.target.value)} required className="input mt-1 w-full">
+                      <option value="">Choose…</option>
+                      <optgroup label="Family members">
+                        {members.map((m) => <option key={m.id} value={String(m.id)}>{m.name}</option>)}
+                      </optgroup>
+                      <option value="other">Someone else (type a name)</option>
+                    </select>
+                    {isOther && <input name="counterparty" required autoFocus placeholder="Name" className="input mt-2 w-full" />}
+                    {memberChosen && (
+                      <>
+                        <input type="hidden" name="counterpartyMemberId" value={personSel} />
+                        <p className="mt-1.5 rounded-lg bg-emerald-50 px-2.5 py-1.5 text-[11px] leading-relaxed text-emerald-800">
+                          🔗 This also shows in <b>{memberName}</b>&apos;s Lending — as {direction === "lent" ? "money they owe you" : "money they’ll be repaid"}. Settling or deleting either side clears both.
+                        </p>
+                      </>
+                    )}
+                  </>
+                ) : (
+                  <input name="counterparty" required placeholder="Who?" className="input mt-1 w-full" autoFocus />
+                )}
               </div>
+
               <div>
                 <label className="text-xs font-medium text-slate-500">Amount (₹)</label>
                 <input name="amount" type="number" step="0.01" inputMode="decimal" required placeholder="0" className="input mt-1 w-full text-lg font-semibold tabular-nums" />
@@ -61,23 +88,17 @@ export function AddLoanModal() {
               </div>
 
               <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
-                <label className="flex cursor-pointer items-center gap-2 text-sm font-medium text-slate-700">
-                  <input type="checkbox" checked={withDate} onChange={(e) => setWithDate(e.target.checked)} className="h-4 w-4 rounded border-slate-300" />
-                  📅 Set a repay-by date &amp; reminder
-                </label>
-                {withDate && (
-                  <div className="mt-3 flex flex-wrap items-end gap-2">
-                    <label className="flex-1">
-                      <span className="text-[11px] font-medium text-slate-600">{direction === "lent" ? "Collect by" : "Repay by"}</span>
-                      <input name="repayBy" type="date" className="input mt-0.5 w-full py-1.5 text-sm" />
-                    </label>
-                    <label>
-                      <span className="text-[11px] font-medium text-slate-600">Remind (days before)</span>
-                      <input name="notifyDaysBefore" type="number" min="0" step="1" defaultValue="3" className="input mt-0.5 w-24 py-1.5 text-sm" />
-                    </label>
-                    <p className="w-full text-[11px] text-slate-400">Nudges {other === "they" ? "you" : "both of you"} from that many days before, in the bell and the top bar, until it&apos;s settled.</p>
-                  </div>
-                )}
+                <div className="flex flex-wrap items-end gap-2">
+                  <label className="flex-1">
+                    <span className="text-[11px] font-medium text-slate-600">{dateLabel} *</span>
+                    <input name="repayBy" type="date" required className="input mt-0.5 w-full py-1.5 text-sm" />
+                  </label>
+                  <label>
+                    <span className="text-[11px] font-medium text-slate-600">Remind (days before)</span>
+                    <input name="notifyDaysBefore" type="number" min="0" step="1" defaultValue="3" className="input mt-0.5 w-24 py-1.5 text-sm" />
+                  </label>
+                  <p className="w-full text-[11px] text-slate-400">Nudges {memberChosen ? "both of you" : "you"} from that many days before — in the bell and the top bar — until it&apos;s settled.</p>
+                </div>
               </div>
             </div>
             <div className="flex justify-end gap-2 border-t border-slate-100 px-5 py-3">
@@ -158,7 +179,11 @@ export function LoanRowActions({ loan }: { loan: LoanRow }) {
               </ToastForm>
             </div>
             {loan.isPeer && (
-              <p className="text-[11px] text-slate-400">This is a card-fronted debt — settling or deleting it here clears it for both of you.</p>
+              <p className="text-[11px] text-slate-400">
+                {loan.cardName
+                  ? "This is a card-fronted debt — settling or deleting it here clears it for both of you."
+                  : `Shared with ${loan.counterparty} — settling or deleting it here clears it for both of you.`}
+              </p>
             )}
           </div>
         </Modal>

@@ -35,6 +35,13 @@ export default async function PersonalLoans({
     orderBy: [{ status: "asc" }, { createdAt: "desc" }],
     include: { cardAccount: { select: { name: true, color: true } } },
   })) as LoanData[];
+  // Other household members → the "choose a member" picker in the add-loan modal (a member counterparty
+  // mirrors the loan into their own Lending tab).
+  const otherMembers = (await prisma.member.findMany({
+    where: { householdId: c.member.householdId, id: { not: c.member.id } },
+    select: { id: true, name: true },
+    orderBy: { name: "asc" },
+  }));
   const lent = loans.filter((l) => l.direction === "lent");
   const borrowed = loans.filter((l) => l.direction === "borrowed");
   const owedToYou = lent.filter((l) => l.status === "open").reduce((s, l) => s + l.outstanding, 0);
@@ -57,7 +64,7 @@ export default async function PersonalLoans({
           </div>
         </div>
 
-        <AddLoanModal />
+        <AddLoanModal members={otherMembers} />
 
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <LoanList title="You lent" loans={lent} accent="emerald" direction="lent" />
@@ -153,6 +160,9 @@ function LoanList({
                               <div className="mt-1 flex flex-wrap gap-1.5">
                                 {l.linkGroup != null && l.cardAccount && (
                                   <span className="rounded-full bg-indigo-50 px-2 py-0.5 text-[11px] font-medium text-indigo-700">💳 {l.cardAccount.name}</span>
+                                )}
+                                {l.linkGroup != null && !l.cardAccount && (
+                                  <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-700">🔗 linked · both tabs</span>
                                 )}
                                 {l.dueDate && (
                                   <span className="rounded-full bg-slate-50 px-2 py-0.5 text-[11px] font-medium text-slate-600">

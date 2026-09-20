@@ -700,19 +700,44 @@ export async function addPersonalLoan(formData: FormData) {
   const member = await me();
   if (!member) return;
   const direction = String(formData.get("direction")) === "borrowed" ? "borrowed" : "lent";
-  const counterparty = String(formData.get("counterparty") ?? "").trim();
   const amount = parseAmount(formData.get("amount"));
   const note = String(formData.get("note") ?? "").trim() || null;
-  if (!counterparty || !amount || amount <= 0) return;
-  // Optional repay-by date for a manual loan → drives the bell + top-bar reminder. notifyDaysBefore is
-  // how many days ahead the nudge starts (default 3); it's inert when no date is set.
+  if (!amount || amount <= 0) return;
+  // Repay-by date → drives the bell + top-bar reminder. notifyDaysBefore = how many days ahead the
+  // nudge starts (default 3).
   const repayRaw = String(formData.get("repayBy") ?? "").trim();
   const dueDate = repayRaw ? new Date(`${repayRaw}T00:00:00`) : null;
   const nd = Number(formData.get("notifyDaysBefore"));
   const notifyDaysBefore = Number.isFinite(nd) && nd >= 0 ? Math.round(nd) : 3;
-  await prisma.personalLoan.create({
-    data: { memberId: member.id, direction, counterparty, amount, outstanding: amount, note, dueDate, notifyDaysBefore },
-  });
+
+  // Counterparty is either a household MEMBER (→ mirror to their Lending tab, two-sided) or a free-text
+  // name (single-sided, as before).
+  const cpMemberId = Number(formData.get("counterpartyMemberId")) || 0;
+  let cpMember: { id: number; name: string } | null = null;
+  if (cpMemberId && cpMemberId !== member.id) {
+    const m = await prisma.member.findUnique({ where: { id: cpMemberId }, select: { id: true, name: true, householdId: true } });
+    if (m && m.householdId === member.householdId) cpMember = { id: m.id, name: m.name };
+  }
+
+  if (cpMember) {
+    // Two linked rows sharing a linkGroup — it shows in BOTH members' tabs (you lent ⇄ they borrowed),
+    // and settling/recording/deleting either side clears both (loanGroupWhere).
+    const linkGroup = randomUUID();
+    const opp = direction === "borrowed" ? "lent" : "borrowed";
+    const common = { amount, outstanding: amount, note, dueDate, notifyDaysBefore, linkGroup };
+    await prisma.personalLoan.createMany({
+      data: [
+        { memberId: member.id, direction, counterparty: cpMember.name, ...common },
+        { memberId: cpMember.id, direction: opp, counterparty: member.name, ...common },
+      ],
+    });
+  } else {
+    const counterparty = String(formData.get("counterparty") ?? "").trim();
+    if (!counterparty) return;
+    await prisma.personalLoan.create({
+      data: { memberId: member.id, direction, counterparty, amount, outstanding: amount, note, dueDate, notifyDaysBefore },
+    });
+  }
   rev();
 }
 
