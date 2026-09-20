@@ -2,16 +2,15 @@
 
 import { useRouter, useSearchParams } from "next/navigation";
 
-type HubTab = "networth" | "cards" | "savings";
+type HubTab = "networth" | "savings";
 const TABS: { key: HubTab; label: string; icon: string }[] = [
   { key: "networth", label: "Net worth", icon: "📊" },
-  { key: "cards", label: "Cards", icon: "💳" },
   { key: "savings", label: "Savings", icon: "🐷" },
 ];
 
-// Sub-navigation for the Finance hub — keeps Net worth, Cards and Savings under one tab
-// so the main personal nav doesn't overflow. URL-driven (?tab=), preserves the month.
-export function FinanceHubTabs({ tab, financeDue }: { tab: HubTab; financeDue?: boolean }) {
+// Sub-navigation for the Finance hub — Net worth and Savings (Cards moved to its own top-level tab).
+// URL-driven (?tab=), preserves the month.
+export function FinanceHubTabs({ tab }: { tab: HubTab; financeDue?: boolean }) {
   const router = useRouter();
   const params = useSearchParams();
   const pick = (key: HubTab) => {
@@ -32,9 +31,6 @@ export function FinanceHubTabs({ tab, financeDue }: { tab: HubTab; financeDue?: 
           }`}
         >
           <span className="mr-1">{t.icon}</span>{t.label}
-          {t.key === "cards" && financeDue && (
-            <span className="absolute right-1.5 top-1.5 h-1.5 w-1.5 rounded-full bg-red-500" />
-          )}
         </button>
       ))}
     </div>

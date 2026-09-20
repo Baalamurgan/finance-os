@@ -42,7 +42,7 @@ export default async function CreditCardDetail({
       <PersonalNav active="finance" name={c.account.name} selYear={c.selYear} selMonth={c.selMonth} financeDue={c.cardReminders.length > 0} />
       <main className="mx-auto max-w-3xl space-y-5 p-4 pb-24 sm:p-6">
         <div>
-          <Link href="/personal/finance?tab=cards" className="text-xs font-medium text-emerald-700 hover:underline">← All cards</Link>
+          <Link href="/personal/cards" className="text-xs font-medium text-emerald-700 hover:underline">← All cards</Link>
           <div className="mt-1 flex items-center gap-2">
             <span className="h-3.5 w-3.5 rounded-full" style={{ background: account.color }} />
             <h1 className="text-xl font-bold text-slate-900">{account.name}</h1>
@@ -111,7 +111,7 @@ export default async function CreditCardDetail({
         {dues.length > 0 && (
           <div>
             <h2 className="mb-2 text-sm font-semibold text-slate-800">On this card, unpaid</h2>
-            <CardDuesStrip dues={dues} />
+            <CardDuesStrip dues={dues} showPaid />
           </div>
         )}
 

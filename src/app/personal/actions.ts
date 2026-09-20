@@ -1,5 +1,6 @@
 "use server";
 
+import { randomUUID } from "node:crypto";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { headers } from "next/headers";
@@ -11,6 +12,7 @@ import { log } from "@/lib/log";
 import { isPersonalUnlocked } from "@/lib/personal-lock";
 import { ensurePersonalMonth, ensurePersonalPreview, rebuildPersonalPreview, seedPersonalCategories } from "@/lib/personal";
 import { getCardBillReminders } from "@/lib/personal/cash";
+import { currentCycle } from "@/lib/finance/cycle";
 
 // The "high alert" CC dues for the signed-in member: bills due within 3 days (or overdue).
 // Used by the after-unlock popup in BOTH family and personal views (a member's own cards).
@@ -41,6 +43,58 @@ export async function getMyCardReminders(): Promise<CardReminderItem[]> {
     overdue: r.overdue,
     amount: r.taggedTotal || r.ledgerOutstanding || 0,
   }));
+}
+
+// The bell + top-bar reminder for repay-by dates on OPEN lending/borrowing. An item surfaces once
+// today is within its `notifyDaysBefore` lead (or it's overdue) and clears the moment it's settled or
+// deleted — nothing stored. Both directions: "you owe" (borrowed) and "collect" (lent). Peer-card
+// debts carry a card; manual loans may carry a user-set date.
+export type LendingReminder = {
+  id: number;
+  direction: "lent" | "borrowed";
+  counterparty: string;
+  amount: number; // outstanding
+  dueISO: string;
+  daysUntilDue: number; // negative = overdue
+  overdue: boolean;
+  note: string | null;
+  cardName: string | null;
+  color: string | null;
+};
+export async function getMyLendingReminders(): Promise<LendingReminder[]> {
+  const member = await meRead();
+  if (!member) return [];
+  const loans = await prisma.personalLoan.findMany({
+    where: { memberId: member.id, status: "open", dueDate: { not: null } },
+    select: {
+      id: true, direction: true, counterparty: true, outstanding: true, dueDate: true, note: true,
+      notifyDaysBefore: true, cardAccount: { select: { name: true, color: true } },
+    },
+    orderBy: { dueDate: "asc" },
+  });
+  const DAY = 86400000;
+  const today = new Date(); const t0 = new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime();
+  return loans
+    .map((l) => {
+      const due = l.dueDate!;
+      const d0 = new Date(due.getFullYear(), due.getMonth(), due.getDate()).getTime();
+      const daysUntilDue = Math.round((d0 - t0) / DAY);
+      return { loan: l, due, daysUntilDue };
+    })
+    // within the lead window (or overdue), per each loan's own notify setting
+    .filter(({ loan, daysUntilDue }) => daysUntilDue <= loan.notifyDaysBefore)
+    .map(({ loan, due, daysUntilDue }) => ({
+      id: loan.id,
+      direction: loan.direction === "borrowed" ? ("borrowed" as const) : ("lent" as const),
+      counterparty: loan.counterparty,
+      amount: loan.outstanding,
+      dueISO: due.toISOString(),
+      daysUntilDue,
+      overdue: daysUntilDue < 0,
+      note: loan.note,
+      cardName: loan.cardAccount?.name ?? null,
+      color: loan.cardAccount?.color ?? null,
+    }));
 }
 
 // Resolve the signed-in member WITHOUT touching the personal lock. Used by read-only actions
@@ -89,13 +143,64 @@ async function ccCardId(memberId: number, formData: FormData): Promise<number | 
   return acc && acc.memberId === memberId && acc.type === "credit_card" ? raw : null;
 }
 
-// Resolve "cardAccountId" to ANY active card the member owns (credit/debit/prepaid) — day-to-day spends
-// can be paid with any card. Returns the card's id + type, or null (cash/UPI).
-async function anyCardId(memberId: number, formData: FormData): Promise<{ id: number; type: string } | null> {
+// Resolve "cardAccountId" to ANY active card in the member's household — day-to-day spends can be
+// paid with any card, INCLUDING another member's (peer usage: you spend, they front the cash). Own
+// card → isPeer false. Peer card → isPeer true, carrying the owner + the credit cycle so a repay-by
+// date can be derived. Returns null for cash/UPI or a foreign/inactive card outside the household.
+type SpendCard = {
+  id: number;
+  type: string;
+  ownerId: number;
+  ownerName: string;
+  isPeer: boolean;
+  statementDay: number | null;
+  dueOffsetDays: number | null;
+};
+async function resolveSpendCard(memberId: number, formData: FormData): Promise<SpendCard | null> {
   const raw = Number(formData.get("cardAccountId"));
   if (!raw) return null;
-  const acc = await prisma.financeAccount.findUnique({ where: { id: raw }, select: { memberId: true, type: true, active: true } });
-  return acc && acc.memberId === memberId && acc.active ? { id: raw, type: acc.type } : null;
+  const self = await prisma.member.findUnique({ where: { id: memberId }, select: { householdId: true } });
+  const acc = await prisma.financeAccount.findUnique({
+    where: { id: raw },
+    select: {
+      id: true, type: true, active: true, memberId: true,
+      member: { select: { name: true, householdId: true } },
+      credit: { select: { statementDay: true, dueOffsetDays: true } },
+    },
+  });
+  if (!acc || !acc.active) return null;
+  const isPeer = acc.memberId !== memberId;
+  if (isPeer && acc.member.householdId !== self?.householdId) return null; // peer cards: same household only
+  return {
+    id: acc.id, type: acc.type, ownerId: acc.memberId, ownerName: acc.member.name, isPeer,
+    statementDay: acc.credit?.statementDay ?? null,
+    dueOffsetDays: acc.credit?.dueOffsetDays ?? null,
+  };
+}
+
+// The immutable repay-by date for a spend on a peer CREDIT card = that card's cycle due date for the
+// spend's date. Debit/prepaid peer cards have no cycle → null (the payer must enter one).
+function peerRepayDate(card: SpendCard, when: Date): Date | null {
+  if (card.type !== "credit_card" || card.statementDay == null) return null;
+  return currentCycle(card.statementDay, when, card.dueOffsetDays).dueDate;
+}
+
+// Resolve the repay-by date + notify lead for a peer-card spend. Credit cards derive it from the cycle
+// (immutable). Every other card (debit/prepaid, or a credit card with no statement day) REQUIRES the
+// payer to pick a date — there's no cycle to infer one from.
+function resolvePeerRepay(
+  card: SpendCard, formData: FormData, when: Date,
+): { dueDate: Date; notifyDaysBefore: number } | { error: string } {
+  let dueDate = peerRepayDate(card, when);
+  if (!dueDate) {
+    const raw = String(formData.get("repayBy") ?? "").trim();
+    const d = raw ? new Date(`${raw}T00:00:00`) : null;
+    if (!d || Number.isNaN(d.getTime())) return { error: `Pick a repay-by date for ${card.ownerName}'s card.` };
+    dueDate = d;
+  }
+  const nd = Number(formData.get("notifyDaysBefore"));
+  const notifyDaysBefore = Number.isFinite(nd) && nd >= 0 ? Math.round(nd) : 3;
+  return { dueDate, notifyDaysBefore };
 }
 
 // Keep a card's LEDGER line in sync with a personal spend, so the spend shows as a line item under that
@@ -105,17 +210,43 @@ async function anyCardId(memberId: number, formData: FormData): Promise<{ id: nu
 // the line if the spend moved to cash. Deleting the spend cascades the line away via the FK.
 async function syncPersonalSpendLedger(
   tx: Prisma.TransactionClient,
-  a: { spendId: number; memberId: number; card: { id: number; type: string } | null; amount: number; label: string; date: Date; categoryName: string | null },
+  a: { spendId: number; card: SpendCard | null; amount: number; label: string; date: Date; categoryName: string | null; payerName: string },
 ) {
   if (a.card) {
+    // The ledger line lives on the card OWNER (their money/limit is what moves). Peer usage → source
+    // "peer" (getCardDues treats it as a reimbursed line, kept apart from the owner's own dues) and the
+    // merchant is prefixed with who spent, so the owner can see it's not their own charge.
+    const source = a.card.isPeer ? "peer" : "personal";
+    const merchant = a.card.isPeer ? `${a.payerName}: ${a.label}` : a.label;
     await tx.accountTransaction.upsert({
       where: { personalSpendId: a.spendId },
-      update: { amount: a.amount, merchant: a.label, accountId: a.card.id },
-      create: { memberId: a.memberId, accountId: a.card.id, date: a.date, merchant: a.label, amount: a.amount, type: "spend", category: a.categoryName, source: "personal", personalSpendId: a.spendId },
+      update: { amount: a.amount, merchant, accountId: a.card.id, memberId: a.card.ownerId, source },
+      create: { memberId: a.card.ownerId, accountId: a.card.id, date: a.date, merchant, amount: a.amount, type: "spend", category: a.categoryName, source, personalSpendId: a.spendId },
     });
   } else {
     await tx.accountTransaction.deleteMany({ where: { personalSpendId: a.spendId } });
   }
+}
+
+// Create / refresh / remove the two-sided peer-card debt for a spend. Called after the spend row is
+// written. Idempotent: it clears any prior peer pair for this spend, then (if the spend is on a peer
+// card) writes a fresh borrower + lender pair sharing a linkGroup, so settling/deleting either clears
+// both. The repay-by date is derived from the card cycle (credit) and is immutable in the UI.
+async function syncPeerCardLoans(
+  tx: Prisma.TransactionClient,
+  a: { spendId: number; payerId: number; payerName: string; card: SpendCard | null; amount: number; note: string; dueDate: Date | null; notifyDaysBefore: number },
+) {
+  // Peer loans are the only spend-linked loans carrying a linkGroup — drop them before rewriting.
+  await tx.personalLoan.deleteMany({ where: { spendId: a.spendId, linkGroup: { not: null } } });
+  if (!a.card || !a.card.isPeer) return;
+  const linkGroup = randomUUID();
+  const common = { amount: a.amount, outstanding: a.amount, note: a.note, spendId: a.spendId, linkGroup, cardAccountId: a.card.id, dueDate: a.dueDate, notifyDaysBefore: a.notifyDaysBefore };
+  await tx.personalLoan.createMany({
+    data: [
+      { memberId: a.payerId, direction: "borrowed", counterparty: a.card.ownerName, ...common },
+      { memberId: a.card.ownerId, direction: "lent", counterparty: a.payerName, ...common },
+    ],
+  });
 }
 
 export type PersonalSaveState = { ok: boolean; error?: string; n: number };
@@ -276,8 +407,19 @@ export async function addPersonalSpend(
   // where others owe 100% — it doesn't eat this month's budget, and a single "lent"
   // receivable drops cash-in-hand until it's marked received. Mutually exclusive with split.
   const reimburse = !shared && formData.get("reimburse") === "on";
-  const card = await anyCardId(member.id, formData); // any owned card; shared allowed
+  const card = await resolveSpendCard(member.id, formData); // any household card (own or peer)
   const cardAccountId = card?.id ?? null;
+  // A peer-card spend already carries its own cross-person debt (you owe the card owner) — combining it
+  // with a split/reimbursement would double the receivables. Keep them separate for now.
+  if (card?.isPeer && (shared || reimburse))
+    return { ok: false, error: "A spend on someone else's card can't also be split or reimbursed. Log it plainly — you'll owe the card owner.", n };
+  // Peer card → resolve the repay-by date (immutable from the cycle for credit; required input otherwise).
+  let peerRepay: { dueDate: Date; notifyDaysBefore: number } | null = null;
+  if (card?.isPeer) {
+    const r = resolvePeerRepay(card, formData, new Date());
+    if ("error" in r) return { ok: false, error: r.error, n };
+    peerRepay = r;
+  }
   let splits: { name: string; amount: number }[] = [];
   let myShare = 0;
   if (shared) {
@@ -299,7 +441,9 @@ export async function addPersonalSpend(
   await prisma.$transaction(async (tx) => {
     const created = await tx.personalSpend.create({ data: { memberId: member.id, periodId, categoryId, amount, note, cardAccountId, sharedOthers } });
     // A debit/prepaid card spend posts the FULL amount to the card ledger (that's what left the card).
-    await syncPersonalSpendLedger(tx, { spendId: created.id, memberId: member.id, card, amount, label: note, date: created.date, categoryName: cat.name });
+    // A peer card posts it to the OWNER's ledger + creates the two-sided repay debt.
+    await syncPersonalSpendLedger(tx, { spendId: created.id, card, amount, label: note, date: created.date, categoryName: cat.name, payerName: member.name });
+    await syncPeerCardLoans(tx, { spendId: created.id, payerId: member.id, payerName: member.name, card, amount, note, dueDate: peerRepay?.dueDate ?? null, notifyDaysBefore: peerRepay?.notifyDaysBefore ?? 3 });
     for (const s of splits) {
       await tx.personalLoan.create({
         data: {
@@ -341,11 +485,21 @@ export async function updatePersonalSpend(
     return { ok: false, error: "Enter a name, category and amount.", n };
   const cat = await prisma.personalCategory.findUnique({ where: { id: categoryId }, select: { memberId: true, name: true } });
   if (!cat || cat.memberId !== member.id) return { ok: false, error: "Unknown category.", n };
-  const card = await anyCardId(member.id, formData);
+  const card = await resolveSpendCard(member.id, formData);
   const cardAccountId = card?.id ?? null;
+  // Editing a shared/reimbursed spend onto a peer card would tangle two debt models — block it.
+  if (card?.isPeer && (s.sharedOthers != null))
+    return { ok: false, error: "This spend is split/reimbursed — it can't move onto someone else's card.", n };
+  let peerRepay: { dueDate: Date; notifyDaysBefore: number } | null = null;
+  if (card?.isPeer) {
+    const r = resolvePeerRepay(card, formData, s.date);
+    if ("error" in r) return { ok: false, error: r.error, n };
+    peerRepay = r;
+  }
   await prisma.$transaction(async (tx) => {
     await tx.personalSpend.update({ where: { id }, data: { categoryId, amount, note, cardAccountId } });
-    await syncPersonalSpendLedger(tx, { spendId: id, memberId: member.id, card, amount, label: note, date: s.date, categoryName: cat.name });
+    await syncPersonalSpendLedger(tx, { spendId: id, card, amount, label: note, date: s.date, categoryName: cat.name, payerName: member.name });
+    await syncPeerCardLoans(tx, { spendId: id, payerId: member.id, payerName: member.name, card, amount, note, dueDate: peerRepay?.dueDate ?? null, notifyDaysBefore: peerRepay?.notifyDaysBefore ?? 3 });
   });
   rev();
   return { ok: true, n };
@@ -357,7 +511,12 @@ export async function deletePersonalSpend(formData: FormData) {
   const id = Number(formData.get("id"));
   const s = await prisma.personalSpend.findUnique({ where: { id } });
   if (!s || s.memberId !== member.id) return;
-  await prisma.personalSpend.delete({ where: { id } });
+  await prisma.$transaction(async (tx) => {
+    // Auto-created peer-card debt (borrower + lender rows) goes with the spend — spendId is SetNull on
+    // the loan, so it would otherwise linger. The ledger mirror cascades on the spend delete itself.
+    await tx.personalLoan.deleteMany({ where: { spendId: id, linkGroup: { not: null } } });
+    await tx.personalSpend.delete({ where: { id } });
+  });
   rev();
 }
 
@@ -530,10 +689,23 @@ export async function addPersonalLoan(formData: FormData) {
   const amount = parseAmount(formData.get("amount"));
   const note = String(formData.get("note") ?? "").trim() || null;
   if (!counterparty || !amount || amount <= 0) return;
+  // Optional repay-by date for a manual loan → drives the bell + top-bar reminder. notifyDaysBefore is
+  // how many days ahead the nudge starts (default 3); it's inert when no date is set.
+  const repayRaw = String(formData.get("repayBy") ?? "").trim();
+  const dueDate = repayRaw ? new Date(`${repayRaw}T00:00:00`) : null;
+  const nd = Number(formData.get("notifyDaysBefore"));
+  const notifyDaysBefore = Number.isFinite(nd) && nd >= 0 ? Math.round(nd) : 3;
   await prisma.personalLoan.create({
-    data: { memberId: member.id, direction, counterparty, amount, outstanding: amount, note },
+    data: { memberId: member.id, direction, counterparty, amount, outstanding: amount, note, dueDate, notifyDaysBefore },
   });
   rev();
+}
+
+// A peer-card loan has TWO rows (borrower + lender) sharing a linkGroup. Any mutation applies to the
+// whole group so settling/recording/deleting from EITHER member's Lending tab clears both sides. A
+// plain loan (no linkGroup) is just itself.
+function loanGroupWhere(loan: { id: number; linkGroup: string | null }): Prisma.PersonalLoanWhereInput {
+  return loan.linkGroup ? { linkGroup: loan.linkGroup } : { id: loan.id };
 }
 
 export async function recordPersonalLoanPayment(formData: FormData) {
@@ -546,8 +718,8 @@ export async function recordPersonalLoanPayment(formData: FormData) {
   const outstanding = Math.max(0, loan.outstanding - pay);
   // Receiving a repayment (manual OR shared) just settles the loan — it restores your
   // cash-in-hand (which excludes what's owed to you); "Can spend" already assumed it.
-  await prisma.personalLoan.update({
-    where: { id },
+  await prisma.personalLoan.updateMany({
+    where: loanGroupWhere(loan),
     data: { outstanding, status: outstanding <= 0.005 ? "settled" : "open" },
   });
   rev();
@@ -559,7 +731,7 @@ export async function settlePersonalLoan(formData: FormData) {
   const id = Number(formData.get("id"));
   const loan = await prisma.personalLoan.findUnique({ where: { id } });
   if (!loan || loan.memberId !== member.id) return;
-  await prisma.personalLoan.update({ where: { id }, data: { outstanding: 0, status: "settled" } });
+  await prisma.personalLoan.updateMany({ where: loanGroupWhere(loan), data: { outstanding: 0, status: "settled" } });
   rev();
 }
 
@@ -569,7 +741,7 @@ export async function deletePersonalLoan(formData: FormData) {
   const id = Number(formData.get("id"));
   const loan = await prisma.personalLoan.findUnique({ where: { id } });
   if (!loan || loan.memberId !== member.id) return;
-  await prisma.personalLoan.delete({ where: { id } });
+  await prisma.personalLoan.deleteMany({ where: loanGroupWhere(loan) });
   rev();
 }
 

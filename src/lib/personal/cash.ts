@@ -154,10 +154,11 @@ export async function getCardDues(memberId: number): Promise<CardDue[]> {
     prisma.personalExpense.findMany({ where: { memberId, cardAccountId: { not: null } }, select: { cardAccountId: true, amount: true, date: true, label: true } }),
     prisma.personalCardBill.findMany({ where: { memberId }, select: { id: true, cardAccountId: true, cycleEnd: true, amount: true } }),
     prisma.personalCategory.findMany({ where: { memberId }, select: { id: true, name: true } }),
-    // Family-view spends mirrored onto these cards (owner = this member). Shown tagged for visibility;
-    // the family reimburses them, so they never touch the personal totals (see familyTotal below). The
-    // category name lets us split the family portion into budgeted (from the held budget) vs misc.
-    prisma.accountTransaction.findMany({ where: { accountId: { in: cardIds }, source: "family", type: "spend" }, select: { accountId: true, amount: true, date: true, merchant: true, category: true } }),
+    // Mirrored spends this member's cards FRONT for someone else — the family (source "family", owner
+    // bore a family spend) OR another member (source "peer", they spent on this card and owe the owner).
+    // Both are reimbursed, so they're tracked apart in familyTotal and never touch the personal totals
+    // (see below). The category name lets us split the family portion into budgeted vs misc.
+    prisma.accountTransaction.findMany({ where: { accountId: { in: cardIds }, source: { in: ["family", "peer"] }, type: "spend" }, select: { accountId: true, amount: true, date: true, merchant: true, category: true } }),
     // Household budgeted (tracked, non-misc) category NAMES — a family mirror line whose category matches
     // one of these was a budgeted spend (Fuel/provision); anything else is misc/other. Name-matched because
     // the mirror stores the family category's name (set at spend time).

@@ -35,7 +35,7 @@ export function CardDueHighAlert({ context }: { context: "family" | "personal" }
     : worst.daysUntilDue === 0
       ? "A credit-card bill is due today"
       : `A credit-card bill is due in ${worst.daysUntilDue} day${worst.daysUntilDue === 1 ? "" : "s"}`;
-  const href = context === "personal" ? "/personal/finance?tab=cards" : "/personal";
+  const href = context === "personal" ? "/personal/cards" : "/personal";
 
   return (
     <div className="fixed inset-0 z-[95] flex items-end justify-center overflow-y-auto bg-black/40 sm:items-center sm:p-4" onClick={close}>

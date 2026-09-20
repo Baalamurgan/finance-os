@@ -126,7 +126,7 @@ export async function getTodayData(opts: {
       atISO: c.dueISO,
       overdue: c.overdue,
       amount: c.taggedTotal || c.ledgerOutstanding || null,
-      href: "/personal/finance?tab=cards",
+      href: "/personal/cards",
       icon: "💳",
     });
   }

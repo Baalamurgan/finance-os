@@ -8,7 +8,7 @@ import { formatINR } from "@/lib/format";
 import { PersonalSplitModal, type SplitPerson } from "@/components/personal/PersonalSplitModal";
 
 type Cat = { id: number; name: string; icon: string | null };
-type Card = { id: number; name: string; color: string; type?: string };
+type Card = { id: number; name: string; color: string; type?: string; ownerName?: string; mine?: boolean };
 type Initial = { id: number; categoryId: number; amount: number; note: string | null; cardAccountId?: number | null };
 const INIT: PersonalSaveState = { ok: false, n: 0 };
 
@@ -50,6 +50,11 @@ export function PersonalSpendModal({
   const [myShare, setMyShare] = useState(0);
   const [splitOpen, setSplitOpen] = useState(false);
   const [reimburse, setReimburse] = useState(false); // whole spend to receive back (not a split)
+  const [cardId, setCardId] = useState(isEdit ? String(initial!.cardAccountId ?? "") : "");
+  const selectedCard = cards.find((c) => String(c.id) === cardId);
+  const peerCard = selectedCard && selectedCard.mine === false ? selectedCard : null;
+  const myCards = cards.filter((c) => c.mine !== false);
+  const peerCards = cards.filter((c) => c.mine === false);
   const shared = splits != null;
   const amountNum = Number(amount) || 0;
   const [state, formAction, pending] = useActionState(isEdit ? updatePersonalSpend : addPersonalSpend, INIT);
@@ -61,7 +66,7 @@ export function PersonalSpendModal({
       prevN.current = state.n;
       if (state.ok) {
         toast(isEdit ? "Updated" : "Spend added", "success");
-        if (!isEdit) { formRef.current?.reset(); setAmount(""); setNote(""); setCategoryId(""); setCatTouched(false); resetShared(); setReimburse(false); }
+        if (!isEdit) { formRef.current?.reset(); setAmount(""); setNote(""); setCategoryId(""); setCatTouched(false); resetShared(); setReimburse(false); setCardId(""); }
         setOpen(false);
       } else toast(state.error ?? "Couldn't save", "error");
     }
@@ -159,7 +164,7 @@ export function PersonalSpendModal({
                   />
                 </div>
 
-                {!isEdit && (
+                {!isEdit && !peerCard && (
                   <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
                     <label className="flex cursor-pointer items-center gap-2 text-sm font-medium text-slate-700">
                       <input type="checkbox" checked={shared} onChange={(e) => toggleShared(e.target.checked)} className="h-4 w-4 rounded border-slate-300" />
@@ -191,17 +196,63 @@ export function PersonalSpendModal({
                 {cards.length > 0 && (
                   <div>
                     <label className="text-xs font-medium text-slate-500">💳 Paid with</label>
-                    <select name="cardAccountId" defaultValue={isEdit ? String(initial!.cardAccountId ?? "") : ""} className="input mt-1 w-full">
+                    <select
+                      name="cardAccountId" value={cardId}
+                      onChange={(e) => {
+                        const v = e.target.value;
+                        setCardId(v);
+                        // peer card + split/reimburse can't combine — the action rejects it, so clear them
+                        if (cards.find((c) => String(c.id) === v && c.mine === false)) { resetShared(); setReimburse(false); }
+                      }}
+                      className="input mt-1 w-full"
+                    >
                       <option value="">Cash / UPI (from this month)</option>
-                      {cards.map((c) => (
-                        <option key={c.id} value={c.id}>
-                          {c.name}{c.type === "credit_card" ? " — pay at card bill" : c.type === "prepaid_card" ? " — from wallet balance" : c.type === "debit_card" ? " — from card balance" : ""}
-                        </option>
-                      ))}
+                      {myCards.length > 0 && (
+                        <optgroup label="My cards">
+                          {myCards.map((c) => (
+                            <option key={c.id} value={c.id}>
+                              {c.name}{c.type === "credit_card" ? " — pay at card bill" : c.type === "prepaid_card" ? " — from wallet balance" : c.type === "debit_card" ? " — from card balance" : ""}
+                            </option>
+                          ))}
+                        </optgroup>
+                      )}
+                      {peerCards.length > 0 && (
+                        <optgroup label="Family members' cards">
+                          {peerCards.map((c) => (
+                            <option key={c.id} value={c.id}>
+                              {c.name} — {c.ownerName}&apos;s{c.type === "credit_card" ? " credit card" : c.type === "prepaid_card" ? " wallet" : " card"}
+                            </option>
+                          ))}
+                        </optgroup>
+                      )}
                     </select>
-                    <p className="mt-1 text-[11px] text-slate-400">
-                      It counts against this month either way. A credit card is paid later at its bill; a debit/prepaid card comes off the card&apos;s balance now.{shared ? " Others owe you their shares." : ""}
-                    </p>
+                    {peerCard ? (
+                      <div className="mt-1.5 space-y-2 rounded-lg bg-amber-50 p-2.5">
+                        <p className="text-[11px] leading-relaxed text-amber-800">
+                          🤝 {peerCard.ownerName} fronts this — it counts against your month, and you&apos;ll <b>owe {peerCard.ownerName}</b>. Both of you get a reminder before it&apos;s due. Settle it in Lending.
+                        </p>
+                        {peerCard.type === "credit_card" ? (
+                          <p className="text-[11px] text-amber-700">
+                            📅 Repay-by is set automatically from {peerCard.ownerName}&apos;s card due date.
+                          </p>
+                        ) : (
+                          <div className="flex flex-wrap items-end gap-2">
+                            <label className="flex-1">
+                              <span className="text-[11px] font-medium text-amber-800">Repay {peerCard.ownerName} by *</span>
+                              <input name="repayBy" type="date" required className="input mt-0.5 w-full py-1.5 text-sm" />
+                            </label>
+                            <label>
+                              <span className="text-[11px] font-medium text-amber-800">Remind (days before)</span>
+                              <input name="notifyDaysBefore" type="number" min="0" step="1" defaultValue="3" className="input mt-0.5 w-24 py-1.5 text-sm" />
+                            </label>
+                          </div>
+                        )}
+                      </div>
+                    ) : (
+                      <p className="mt-1 text-[11px] text-slate-400">
+                        It counts against this month either way. A credit card is paid later at its bill; a debit/prepaid card comes off the card&apos;s balance now.{shared ? " Others owe you their shares." : ""}
+                      </p>
+                    )}
                   </div>
                 )}
               </div>

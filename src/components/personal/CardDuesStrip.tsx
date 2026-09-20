@@ -34,7 +34,9 @@ function ItemList({ items }: { items: CardDueItem[] }) {
 }
 
 // One card's dues block: the full bill you owe the card, its cycles, and the line items (incl. family).
-function CardBlock({ d }: { d: CardDue }) {
+// `showPaid` keeps the settled-cycle history (with undo) — on by default only on a card's own page; the
+// day-to-day dues strip hides it (a paid bill is done).
+function CardBlock({ d, showPaid }: { d: CardDue; showPaid: boolean }) {
   return (
     <div className="rounded-xl border border-slate-200 bg-white p-3">
       <div className="flex items-center gap-2">
@@ -75,7 +77,7 @@ function CardBlock({ d }: { d: CardDue }) {
           {d.cycles.length === 0 && (
             <li className="px-1 py-1 text-xs text-slate-400">All bills settled 🎉</li>
           )}
-          {d.paid.map((p) => (
+          {showPaid && d.paid.map((p) => (
             <li key={p.billId} className="rounded-lg px-3 py-1 text-xs text-slate-400">
               <div className="flex items-center justify-between gap-2">
                 <span>✓ Paid — bill {fmtDate(p.cycleEndISO)} · {formatINR(p.amount)}</span>
@@ -118,14 +120,14 @@ function BalanceBlock({ b }: { b: BalanceCardView }) {
 // All of the member's cards in one place: credit cards show the full unpaid bill + cycles; debit/prepaid
 // show their balance + spends. Both list family-used spends with a tag. "Mark bill paid" settles a credit
 // cycle. Collapsible (seamless) — the summary always lists every card even when collapsed.
-export function CardDuesStrip({ dues, balances = [] }: { dues: CardDue[]; balances?: BalanceCardView[] }) {
-  const active = dues.filter((d) => fullUnpaid(d) > 0 || d.paid.length > 0);
+export function CardDuesStrip({ dues, balances = [], showPaid = false }: { dues: CardDue[]; balances?: BalanceCardView[]; showPaid?: boolean }) {
+  const active = dues.filter((d) => fullUnpaid(d) > 0 || (showPaid && d.paid.length > 0));
   const count = active.length + balances.length;
   if (count === 0) return null;
   const grandTotal = active.reduce((s, d) => s + fullUnpaid(d), 0); // "to pay" = credit bills only (balance cards owe nothing)
 
   return (
-    <details className="group rounded-xl border border-slate-200 bg-slate-50/60" open>
+    <details className="group rounded-xl border border-slate-200 bg-slate-50/60">
       <summary className="flex cursor-pointer list-none flex-wrap items-center gap-x-2 gap-y-1 p-3 [&::-webkit-details-marker]:hidden">
         <span className="text-sm font-semibold text-slate-800">💳 Cards</span>
         <span className="text-xs text-slate-500">· {count} card{count === 1 ? "" : "s"}</span>
@@ -156,7 +158,7 @@ export function CardDuesStrip({ dues, balances = [] }: { dues: CardDue[]; balanc
         </span>
       </summary>
       <div className="space-y-2 p-3 pt-0">
-        {active.map((d) => <CardBlock key={`d-${d.cardId}`} d={d} />)}
+        {active.map((d) => <CardBlock key={`d-${d.cardId}`} d={d} showPaid={showPaid} />)}
         {balances.map((b) => <BalanceBlock key={`b-${b.cardId}`} b={b} />)}
       </div>
     </details>

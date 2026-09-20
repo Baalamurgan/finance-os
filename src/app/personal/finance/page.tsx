@@ -1,14 +1,13 @@
 import Link from "next/link";
 import { formatINR } from "@/lib/format";
 import { loadPersonal } from "@/lib/loadPersonal";
-import { getNetWorth, getWalletAccounts } from "@/lib/finance/queries";
+import { getNetWorth } from "@/lib/finance/queries";
 import { getPersonalSavings } from "@/lib/personal/savings";
 import { netWorthTypeMeta } from "@/lib/finance/types";
 import { PersonalNav } from "@/components/personal/PersonalNav";
 import { FinanceHubTabs } from "@/components/personal/FinanceHubTabs";
 import { PersonalSavingsCard } from "@/components/personal/PersonalSavingsCard";
 import { NetWorthItemModal } from "@/components/personal/NetWorthItemModal";
-import { AddAccountModal } from "@/components/personal/AddAccountModal";
 import { ConfirmForm } from "@/components/ConfirmForm";
 import { MoneyFlowDonut } from "@/components/Charts";
 import { deleteNetWorthItem } from "@/app/personal/finance/actions";
@@ -22,10 +21,9 @@ export default async function FinancePage({
 }) {
   const sp = await searchParams;
   const c = await loadPersonal(sp);
-  const tab = sp.tab === "cards" || sp.tab === "savings" ? sp.tab : "networth";
+  const tab = sp.tab === "savings" ? "savings" : "networth";
   const financeDue = c.cardReminders.length > 0;
   const nw = await getNetWorth(c.member.id);
-  const wallet = await getWalletAccounts(c.member.id);
   const savings = tab === "savings" ? await getPersonalSavings(c.member.id) : null;
 
   const donutSegments = nw.allocation.map((a, i) => ({
@@ -40,10 +38,10 @@ export default async function FinancePage({
       <main className="mx-auto max-w-3xl space-y-5 p-4 pb-24 sm:p-6">
         <div>
           <h1 className="text-xl font-bold text-slate-900">Finance</h1>
-          <p className="text-sm text-slate-500">Net worth, your cards, and your savings pot — all in one place.</p>
+          <p className="text-sm text-slate-500">Your net worth and savings pot. Cards live in their own tab now.</p>
         </div>
 
-        <FinanceHubTabs tab={tab} financeDue={financeDue} />
+        <FinanceHubTabs tab={tab} />
 
         {tab === "savings" && (
           savings && c.selected ? (
@@ -132,44 +130,6 @@ export default async function FinancePage({
           Values are what you enter — update them anytime. Lending/borrowing and card dues are pulled in automatically.
         </p>
         </>
-        )}
-
-        {/* Cards sub-tab: manage & open your cards */}
-        {tab === "cards" && (
-        <section className="rounded-xl border border-slate-200 bg-white">
-          <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3">
-            <span className="text-sm font-semibold text-slate-800">💳 Your cards</span>
-            <AddAccountModal />
-          </div>
-          <div className="space-y-2 p-4">
-            {wallet.map(({ account, summary, balance }) => {
-              const typeLabel = account.type === "credit_card" ? "Credit" : account.type === "prepaid_card" ? "Prepaid" : "Debit";
-              const inner = (
-                <div className="flex items-center justify-between rounded-lg border border-slate-200 p-3">
-                  <div className="flex items-center gap-2">
-                    <span className="h-3 w-3 rounded-full" style={{ background: account.color }} />
-                    <div>
-                      <div className="text-sm font-medium text-slate-800">{account.name}</div>
-                      <div className="text-[11px] text-slate-400">
-                        {[typeLabel, account.institution, account.last4 && `XX${account.last4}`].filter(Boolean).join(" · ")}
-                      </div>
-                    </div>
-                  </div>
-                  {account.type === "credit_card" ? (
-                    <span className="text-xs tabular-nums text-slate-500">{summary?.hasLimit ? `${Math.round(summary.utilPct ?? 0)}% used ›` : "set up ›"}</span>
-                  ) : (
-                    <span className="text-right">
-                      <span className="block text-sm font-semibold tabular-nums text-emerald-700">{formatINR(balance ?? 0)}</span>
-                      <span className="block text-[10px] text-slate-400">balance ›</span>
-                    </span>
-                  )}
-                </div>
-              );
-              return <Link key={account.id} href={`/personal/finance/${account.id}`} className="block hover:opacity-80">{inner}</Link>;
-            })}
-            {wallet.length === 0 && <p className="text-center text-sm text-slate-400">No cards yet.</p>}
-          </div>
-        </section>
         )}
       </main>
     </>

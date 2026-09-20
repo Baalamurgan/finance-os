@@ -348,7 +348,20 @@ model PersonalLoan {
   // deleting the spend leaves the receivable standing (you're still owed the money).
   spend        PersonalSpend? @relation("SpendSplits", fields: [spendId], references: [id], onDelete: SetNull)
   spendId      Int?
+  // Repay-by reminder. dueDate null = no reminder (legacy/manual without a date). notifyDaysBefore =
+  // how many days ahead the nudge starts (bell + top bar), until the loan is settled/deleted.
+  dueDate      DateTime?
+  notifyDaysBefore Int  @default(3)
+  // Peer-card usage: a spend one member made on ANOTHER member's card. The two sides (borrower +
+  // lender) share a linkGroup uuid so settling/deleting either settles both. cardAccountId ties it to
+  // the owner's card → the dueDate is derived from that card's cycle and is IMMUTABLE. SetNull so the
+  // debt survives the card being deleted.
+  linkGroup    String?
+  cardAccount   FinanceAccount? @relation("PeerCardLoan", fields: [cardAccountId], references: [id], onDelete: SetNull)
+  cardAccountId Int?
   createdAt    DateTime @default(now())
+
+  @@index([linkGroup])
 }
 
 // A net-worth holding: a manually-valued asset or liability (stocks, MF, FD, PF, gold,
@@ -399,6 +412,7 @@ model FinanceAccount {
   taggedSpends   PersonalSpend[]   @relation("PersonalSpendCard")
   taggedExpenses PersonalExpense[] @relation("PersonalExpenseCard")
   familySpends   Spend[]           @relation("FamilySpendCard")
+  peerLoans      PersonalLoan[]    @relation("PeerCardLoan")
   cardBills      PersonalCardBill[]
   createdAt   DateTime @default(now())
 

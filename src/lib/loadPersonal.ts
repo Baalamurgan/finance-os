@@ -69,15 +69,19 @@ export async function loadPersonal(params?: { y?: string; m?: string }) {
     })
   ).map((a) => ({ id: a.id, name: a.name, color: a.color }));
 
-  // All active cards for the day-to-day spend picker (any card can pay a spend). Credit stays tag-only
-  // (its dues run through getCardDues); debit/prepaid post to the card ledger and move the balance.
+  // All active cards in the HOUSEHOLD for the day-to-day spend picker — your own AND other members'
+  // (peer usage: you spend, they front the cash, you owe them). Own cards first, then each member's,
+  // tagged with owner so the modal can group them and derive the cross-person debt. Credit stays
+  // tag-only (dues run through getCardDues); debit/prepaid post to the owner's ledger + balance.
   const spendCards = (
     await prisma.financeAccount.findMany({
-      where: { memberId: member.id, active: true },
+      where: { active: true, member: { householdId: member.householdId } },
       orderBy: [{ sortOrder: "asc" }, { id: "asc" }],
-      select: { id: true, name: true, color: true, type: true },
+      select: { id: true, name: true, color: true, type: true, memberId: true, member: { select: { name: true } } },
     })
-  ).map((a) => ({ id: a.id, name: a.name, color: a.color, type: a.type }));
+  )
+    .map((a) => ({ id: a.id, name: a.name, color: a.color, type: a.type, ownerId: a.memberId, ownerName: a.member.name, mine: a.memberId === member.id }))
+    .sort((a, b) => Number(b.mine) - Number(a.mine)); // your cards first
 
   // Due-bill reminders (soon/overdue) — drives the landing banner + the Finance-tab badge.
   const cardReminders = creditCards.length > 0 ? await getCardBillReminders(member.id) : [];

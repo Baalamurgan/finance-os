@@ -7,6 +7,7 @@ import { exitToFamily, lockPersonalNow } from "@/app/personal/lock/actions";
 import { CardDueHighAlert } from "@/components/personal/CardDueHighAlert";
 import { RemindersBell } from "@/components/personal/RemindersBell";
 import { PersonalDock } from "@/components/personal/PersonalDock";
+import { LendingDueBar } from "@/components/personal/LendingDueBar";
 import { AutoLock } from "@/components/AutoLock";
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -16,13 +17,14 @@ const TABS = [
   { key: "expenses", label: "Spends", href: "/personal/expenses", icon: "🧾" },
   { key: "sheet", label: "Sheet", href: "/personal/sheet", icon: "📋" },
   { key: "loans", label: "Lending", href: "/personal/loans", icon: "🤝" },
-  { key: "finance", label: "Finance", href: "/personal/finance", icon: "💳" },
+  { key: "cards", label: "Cards", href: "/personal/cards", icon: "💳" },
+  { key: "finance", label: "Finance", href: "/personal/finance", icon: "📈" },
   { key: "analysis", label: "Analysis", href: "/personal/analysis", icon: "📊" },
   { key: "setup", label: "Setup", href: "/personal/setup", icon: "⚙️" },
 ] as const;
 
 const PRIMARY = TABS.slice(0, 4); // Today · Spends · Sheet · Lending (bottom bar)
-const MORE = TABS.slice(4); // Finance · Analysis · Setup (overflow)
+const MORE = TABS.slice(4); // Cards · Finance · Analysis · Setup (overflow)
 
 export function PersonalNav({
   active,
@@ -31,7 +33,7 @@ export function PersonalNav({
   selMonth,
   financeDue = false,
 }: {
-  active: "today" | "sheet" | "expenses" | "analysis" | "finance" | "setup" | "loans";
+  active: "today" | "sheet" | "expenses" | "analysis" | "finance" | "setup" | "loans" | "cards";
   name: string;
   selYear: number;
   selMonth: number;
@@ -75,7 +77,7 @@ export function PersonalNav({
                 }`}
               >
                 {t.label}
-                {t.key === "finance" && financeDue && <span className="absolute right-1 top-1 h-1.5 w-1.5 rounded-full bg-red-500" />}
+                {t.key === "cards" && financeDue && <span className="absolute right-1 top-1 h-1.5 w-1.5 rounded-full bg-red-500" />}
               </Link>
             ))}
           </nav>
@@ -111,6 +113,7 @@ export function PersonalNav({
           </div>
         </div>
       </header>
+      <LendingDueBar />
 
       <PersonalBottomNav active={active} q={q} financeDue={financeDue} />
       <PersonalDock />

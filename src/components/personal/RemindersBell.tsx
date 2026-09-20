@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
-import { getMyCardReminders } from "@/app/personal/actions";
+import { getMyCardReminders, getMyLendingReminders } from "@/app/personal/actions";
 import { getMyBillReminders } from "@/app/actions";
 import { formatINR } from "@/lib/format";
 
@@ -19,8 +19,17 @@ const dismissId = (r: Item) => `${r.key}@${r.dueISO}`;
 
 async function loadItems(context: "family" | "personal"): Promise<Item[]> {
   if (context === "personal") {
-    const rows = await getMyCardReminders();
-    return rows.map((r) => ({ key: `c${r.cardId}`, title: r.cardName, dueISO: r.dueISO, daysUntilDue: r.daysUntilDue, overdue: r.overdue, amount: r.amount, href: `/personal/finance/${r.cardId}`, dot: r.color }));
+    const [cards, lending] = await Promise.all([getMyCardReminders(), getMyLendingReminders()]);
+    const cardItems: Item[] = cards.map((r) => ({ key: `c${r.cardId}`, title: r.cardName, dueISO: r.dueISO, daysUntilDue: r.daysUntilDue, overdue: r.overdue, amount: r.amount, href: `/personal/finance/${r.cardId}`, dot: r.color }));
+    const lendItems: Item[] = lending.map((r) => ({
+      key: `l${r.id}`,
+      title: r.direction === "borrowed" ? `Repay ${r.counterparty}` : `Collect from ${r.counterparty}`,
+      dueISO: r.dueISO, daysUntilDue: r.daysUntilDue, overdue: r.overdue, amount: r.amount,
+      href: "/personal/loans",
+      dot: r.color ?? (r.direction === "borrowed" ? "#f59e0b" : "#10b981"),
+    }));
+    // soonest first, across both kinds
+    return [...cardItems, ...lendItems].sort((a, b) => a.daysUntilDue - b.daysUntilDue);
   }
   const rows = await getMyBillReminders();
   return rows.map((r) => ({ key: `b${r.categoryId}`, title: r.name, dueISO: r.dueISO, daysUntilDue: r.daysUntilDue, overdue: r.overdue, amount: r.amount ?? 0, href: "/in-hand" }));

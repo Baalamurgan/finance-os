@@ -3,13 +3,23 @@ import { prisma } from "@/lib/prisma";
 import { loadPersonal } from "@/lib/loadPersonal";
 import { PersonalNav } from "@/components/personal/PersonalNav";
 import { ToastForm } from "@/components/ToastForm";
-import {
-  addPersonalLoan,
-  recordPersonalLoanPayment,
-  settlePersonalLoan,
-  deletePersonalLoan,
-  renamePersonalLoanParty,
-} from "@/app/personal/actions";
+import { AddLoanModal, LoanRowActions, type LoanRow } from "@/components/personal/LendingManager";
+import { renamePersonalLoanParty } from "@/app/personal/actions";
+
+type LoanData = {
+  id: number;
+  direction: string;
+  counterparty: string;
+  amount: number;
+  outstanding: number;
+  note: string | null;
+  status: string;
+  sharedPaid: number | null;
+  sharedShare: number | null;
+  dueDate: Date | null;
+  linkGroup: string | null;
+  cardAccount: { name: string; color: string } | null;
+};
 
 export default async function PersonalLoans({
   searchParams,
@@ -20,10 +30,11 @@ export default async function PersonalLoans({
   const c = await loadPersonal(sp);
   const nav = <PersonalNav active="loans" name={c.account.name} selYear={c.selYear} selMonth={c.selMonth} financeDue={c.cardReminders.length > 0} />;
 
-  const loans = await prisma.personalLoan.findMany({
+  const loans = (await prisma.personalLoan.findMany({
     where: { memberId: c.member.id },
     orderBy: [{ status: "asc" }, { createdAt: "desc" }],
-  });
+    include: { cardAccount: { select: { name: true, color: true } } },
+  })) as LoanData[];
   const lent = loans.filter((l) => l.direction === "lent");
   const borrowed = loans.filter((l) => l.direction === "borrowed");
   const owedToYou = lent.filter((l) => l.status === "open").reduce((s, l) => s + l.outstanding, 0);
@@ -46,20 +57,7 @@ export default async function PersonalLoans({
           </div>
         </div>
 
-        {/* add */}
-        <section className="rounded-xl border border-slate-200 bg-white p-4">
-          <h2 className="mb-3 text-sm font-semibold text-slate-900">Record lending / borrowing</h2>
-          <ToastForm action={addPersonalLoan} successMessage="Added" className="grid grid-cols-2 gap-2 sm:grid-cols-5">
-            <select name="direction" className="input" defaultValue="lent">
-              <option value="lent">I lent</option>
-              <option value="borrowed">I borrowed</option>
-            </select>
-            <input name="counterparty" placeholder="Person *" required className="input" />
-            <input name="amount" type="number" step="0.01" placeholder="₹ *" required className="input" />
-            <input name="note" placeholder="Note" className="input" />
-            <button className="rounded-md bg-emerald-600 px-3 py-2 text-sm font-medium text-white hover:bg-emerald-700">Add</button>
-          </ToastForm>
-        </section>
+        <AddLoanModal />
 
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <LoanList title="You lent" loans={lent} accent="emerald" direction="lent" />
@@ -77,14 +75,14 @@ function LoanList({
   direction,
 }: {
   title: string;
-  loans: { id: number; counterparty: string; amount: number; outstanding: number; note: string | null; status: string; sharedPaid: number | null; sharedShare: number | null }[];
+  loans: LoanData[];
   accent: "emerald" | "amber";
   direction: "lent" | "borrowed";
 }) {
   const amountColor = accent === "emerald" ? "text-emerald-700" : "text-amber-700";
   // Group by counterparty so multiple lends/borrows with the SAME person roll up under one person —
   // collapsed by default. Header shows the still-open total; a fully-settled person shows their gross
-  // total struck through so the history never disappears. Each entry keeps record/settle/delete.
+  // total struck through so the history never disappears. Each entry keeps a single "Manage" action.
   const groups = new Map<string, typeof loans>();
   for (const l of loans) {
     const key = l.counterparty.trim();
@@ -136,44 +134,50 @@ function LoanList({
                       <button className="rounded-md bg-slate-100 px-2 py-1 text-xs font-medium text-slate-600 hover:bg-slate-200">Rename</button>
                     </ToastForm>
                     <ul className="divide-y divide-slate-100">
-                      {g.items.map((l) => (
-                        <li key={l.id} className="py-2">
-                          <div className="flex items-center justify-between">
-                            <span className="text-xs text-slate-400">{l.note || (l.sharedPaid != null ? "Shared spend" : "—")}</span>
-                            <span className={`tabular-nums text-sm font-medium ${l.status === "settled" ? "text-slate-400 line-through" : amountColor}`}>
-                              {formatINR(l.status === "settled" ? l.amount : l.outstanding)}
-                            </span>
-                          </div>
-                          {l.sharedPaid != null && (
-                            <div className="mt-0.5 inline-flex flex-wrap items-center gap-1.5 rounded-md bg-emerald-50 px-2 py-0.5 text-[11px] text-emerald-700">
-                              {l.sharedShare === 0
-                                ? `↩️ To receive back · you paid ${formatINR(l.sharedPaid)}`
-                                : `🤝 Shared spend · you paid ${formatINR(l.sharedPaid)} · your share ${formatINR(l.sharedShare ?? 0)}`}
+                      {g.items.map((l) => {
+                        const row: LoanRow = {
+                          id: l.id, counterparty: l.counterparty, amount: l.amount, outstanding: l.outstanding,
+                          note: l.note, sharedPaid: l.sharedPaid, dueISO: l.dueDate ? l.dueDate.toISOString() : null,
+                          cardName: l.cardAccount?.name ?? null, isPeer: l.linkGroup != null, accent,
+                        };
+                        return (
+                          <li key={l.id} className="py-2">
+                            <div className="flex items-center justify-between">
+                              <span className="text-xs text-slate-400">{l.note || (l.sharedPaid != null ? "Shared spend" : "—")}</span>
+                              <span className={`tabular-nums text-sm font-medium ${l.status === "settled" ? "text-slate-400 line-through" : amountColor}`}>
+                                {formatINR(l.status === "settled" ? l.amount : l.outstanding)}
+                              </span>
                             </div>
-                          )}
-                          <div className="mt-1.5 flex items-center gap-2">
-                            {l.status === "open" ? (
-                              <>
-                                <ToastForm action={recordPersonalLoanPayment} successMessage="Payment recorded" className="flex items-center gap-1">
-                                  <input type="hidden" name="id" value={l.id} />
-                                  <input name="amount" type="number" step="0.01" placeholder="₹ recd" className="input w-24 py-1 text-xs" />
-                                  <button className="rounded-md bg-slate-100 px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-200">Record</button>
-                                </ToastForm>
-                                <ToastForm action={settlePersonalLoan} successMessage="Settled">
-                                  <input type="hidden" name="id" value={l.id} />
-                                  <button className="text-xs font-medium text-emerald-700">{l.sharedPaid != null ? "Mark received" : "Settle"}</button>
-                                </ToastForm>
-                              </>
-                            ) : (
-                              <span className="text-[11px] font-medium text-emerald-600">✓ settled</span>
+                            {/* badges: card-fronted + repay-by date */}
+                            {(l.linkGroup != null || l.dueDate) && l.status === "open" && (
+                              <div className="mt-1 flex flex-wrap gap-1.5">
+                                {l.linkGroup != null && l.cardAccount && (
+                                  <span className="rounded-full bg-indigo-50 px-2 py-0.5 text-[11px] font-medium text-indigo-700">💳 {l.cardAccount.name}</span>
+                                )}
+                                {l.dueDate && (
+                                  <span className="rounded-full bg-slate-50 px-2 py-0.5 text-[11px] font-medium text-slate-600">
+                                    📅 {accent === "emerald" ? "collect" : "repay"} by {fmtDate(l.dueDate)}
+                                  </span>
+                                )}
+                              </div>
                             )}
-                            <ToastForm action={deletePersonalLoan} successMessage="Deleted">
-                              <input type="hidden" name="id" value={l.id} />
-                              <button className="text-xs text-slate-400 hover:text-red-600">Delete</button>
-                            </ToastForm>
-                          </div>
-                        </li>
-                      ))}
+                            {l.sharedPaid != null && (
+                              <div className="mt-0.5 inline-flex flex-wrap items-center gap-1.5 rounded-md bg-emerald-50 px-2 py-0.5 text-[11px] text-emerald-700">
+                                {l.sharedShare === 0
+                                  ? `↩️ To receive back · you paid ${formatINR(l.sharedPaid)}`
+                                  : `🤝 Shared spend · you paid ${formatINR(l.sharedPaid)} · your share ${formatINR(l.sharedShare ?? 0)}`}
+                              </div>
+                            )}
+                            <div className="mt-1.5 flex items-center gap-2">
+                              {l.status === "open" ? (
+                                <LoanRowActions loan={row} />
+                              ) : (
+                                <span className="text-[11px] font-medium text-emerald-600">✓ settled</span>
+                              )}
+                            </div>
+                          </li>
+                        );
+                      })}
                     </ul>
                   </div>
                 </details>
@@ -184,4 +188,8 @@ function LoanList({
       )}
     </section>
   );
+}
+
+function fmtDate(d: Date) {
+  return d.toLocaleDateString("en-IN", { day: "numeric", month: "short" });
 }
