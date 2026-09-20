@@ -82,7 +82,7 @@ export async function getUnpaidCardDues(memberId: number): Promise<number> {
 // for visibility with a tag. They are counted in `familyTotal` / `familyUnpaidTotal` ONLY — never in
 // `total` / `unpaidTotal`, which stay personal-only so the month spendable & cash-in-hand are unchanged.
 export type CardDueItem = { label: string; amount: number; dateISO: string; family: boolean };
-export type CardDueCycle = { cycleEndISO: string; dueISO: string | null; total: number; familyTotal: number; familyBudgeted: number; annualFee: number; items: CardDueItem[] };
+export type CardDueCycle = { cycleEndISO: string; dueISO: string | null; total: number; familyTotal: number; familyBudgeted: number; annualFee: number; generated: boolean; items: CardDueItem[] };
 export type CardDue = {
   cardId: number;
   cardName: string;
@@ -211,10 +211,13 @@ export async function getCardDues(memberId: number): Promise<CardDue[]> {
     // Annual fee rides a cycle only when its statement (cycle-end) month is the card's fee month.
     const feeMonth = card.credit?.annualFeeMonth ?? null;
     const annualFeeOf = (end: Date) => (feeMonth != null && end.getMonth() + 1 === feeMonth ? Math.round((card.credit?.annualFee ?? 0) * 100) / 100 : 0);
+    // A cycle's bill is GENERATED once its statement date (cycle-end) has arrived — only then can it be
+    // paid. The in-progress cycle (statement date still in the future) is shown accumulating, no pay yet.
+    const nowMid = midnight(new Date()).getTime();
     const cycles = [...byCycle.entries()]
       .filter(([key]) => !paidKeys.has(key))
       .sort((a, b) => a[0] - b[0])
-      .map(([, g]) => ({ cycleEndISO: g.end.toISOString(), dueISO: g.due ? g.due.toISOString() : null, total: g.total, familyTotal: g.familyTotal, familyBudgeted: g.familyBudgeted, annualFee: annualFeeOf(g.end), items: g.items.sort(byDateDesc) }));
+      .map(([, g]) => ({ cycleEndISO: g.end.toISOString(), dueISO: g.due ? g.due.toISOString() : null, total: g.total, familyTotal: g.familyTotal, familyBudgeted: g.familyBudgeted, annualFee: annualFeeOf(g.end), generated: g.end.getTime() <= nowMid, items: g.items.sort(byDateDesc) }));
     const unpaidTotal = cycles.reduce((s, c) => s + c.total, 0);
     const familyUnpaidTotal = cycles.reduce((s, c) => s + c.familyTotal, 0);
 

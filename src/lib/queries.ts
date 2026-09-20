@@ -1010,6 +1010,7 @@ export async function getPendingCardBills(householdId: number, period: { year: n
       if (!card) continue;
       for (const cyc of d.cycles) {
         if (cyc.familyTotal <= 0.005) continue; // only cycles that carry FAMILY spend
+        if (!cyc.generated) continue; // bill not generated yet (statement date not reached) → can't pay it
         if (!cyc.dueISO) continue;
         if (new Date(cyc.dueISO).getTime() > monthEnd) continue; // not due yet → still on the live envelope
         const annualFee = cyc.annualFee; // computed per-cycle by getCardDues (fee-month only)

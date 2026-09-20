@@ -64,11 +64,17 @@ function CardBlock({ d, showPaid }: { d: CardDue; showPaid: boolean }) {
               <li key={c.cycleEndISO} className="rounded-lg bg-slate-50 px-3 py-2 text-sm">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <span className="text-slate-600">
-                    Bill {fmtDate(c.cycleEndISO)}
+                    {c.generated ? "Bill" : "Accruing"} {fmtDate(c.cycleEndISO)}
                     {c.dueISO ? <> · due {fmtDate(c.dueISO)}</> : null} ·{" "}
                     <b className="tabular-nums text-slate-800">{formatINR(cycleFull)}</b>
                   </span>
-                  <PayCardBillModal cardId={d.cardId} cardName={d.cardName} color={d.color} cycleEndISO={c.cycleEndISO} dueISO={c.dueISO ?? c.cycleEndISO} familyBudgeted={c.familyBudgeted} familyMisc={Math.round((c.familyTotal - c.familyBudgeted) * 100) / 100} personalAmount={c.total} annualFee={c.annualFee} />
+                  {c.generated ? (
+                    <PayCardBillModal cardId={d.cardId} cardName={d.cardName} color={d.color} cycleEndISO={c.cycleEndISO} dueISO={c.dueISO ?? c.cycleEndISO} familyBudgeted={c.familyBudgeted} familyMisc={Math.round((c.familyTotal - c.familyBudgeted) * 100) / 100} personalAmount={c.total} annualFee={c.annualFee} />
+                  ) : (
+                    <span className="rounded-full bg-white px-2 py-0.5 text-[11px] font-medium text-slate-400 ring-1 ring-slate-200">
+                      bill generates {fmtDate(c.cycleEndISO)}
+                    </span>
+                  )}
                 </div>
                 <ItemList items={c.items} />
               </li>
