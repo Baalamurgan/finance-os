@@ -1547,7 +1547,8 @@ async function doAddMiscSpendCard(formData: FormData): Promise<{ ok: boolean; er
   const name = String(formData.get("name") ?? formData.get("label") ?? "").trim().slice(0, 40);
   const amount = parseAmount(formData.get("amount"));
   if (!periodId || !name || !amount || amount <= 0) return { ok: false, error: "Give the card a name and budget." };
-  const repeatYearly = formData.get("repeatYearly") === "on";
+  const repeatMonthly = formData.get("repeatMonthly") === "on";
+  const repeatYearly = !repeatMonthly && formData.get("repeatYearly") === "on"; // monthly supersedes yearly
   const memberRaw = String(formData.get("responsibleMemberId") ?? formData.get("memberId") ?? "").trim();
   const responsibleMemberId = memberRaw === "" ? null : Number(memberRaw);
   // Optional due day — the card shows as a dated bill in the Money Plan (assume the owner spends it all).
@@ -1570,7 +1571,7 @@ async function doAddMiscSpendCard(formData: FormData): Promise<{ ok: boolean; er
       const cat = await tx.category.create({
         data: {
           householdId: period.householdId, name, section: "Monthly", tracked: true,
-          monthlyBudget: amount, responsibleMemberId, miscCard: true, repeatYearly, billMonth: repeatYearly ? period.month : null,
+          monthlyBudget: amount, responsibleMemberId, miscCard: true, repeatMonthly, repeatYearly, billMonth: repeatYearly ? period.month : null,
         },
       });
       // Materialise into the CURRENT month now (clone only seeds FUTURE months): envelope + budget,
@@ -1583,12 +1584,12 @@ async function doAddMiscSpendCard(formData: FormData): Promise<{ ok: boolean; er
   } catch {
     return { ok: false, error: `"${name}" already exists.` };
   }
-  await logActivity("expense", "created", `Added misc spend card “${name}” (${formatINR(amount)})${repeatYearly ? " · repeats yearly" : ""}`, periodId);
+  await logActivity("expense", "created", `Added misc spend card “${name}” (${formatINR(amount)})${repeatMonthly ? " · repeats monthly" : repeatYearly ? " · repeats yearly" : ""}`, periodId);
   revalidateFamily();
   return { ok: true };
 }
 
-// Setup control: stop a yearly misc spend card from re-seeding in future years. Keeps the current
+// Setup control: stop a misc spend card from re-seeding (monthly or yearly). Keeps the current
 // month's card (it has spends/an envelope) — just clears the repeat so it won't come back.
 export async function stopMiscCardRepeat(formData: FormData) {
   if (!(await isHead())) return;
@@ -1596,8 +1597,8 @@ export async function stopMiscCardRepeat(formData: FormData) {
   if (!id) return;
   const cat = await prisma.category.findUnique({ where: { id }, select: { miscCard: true, name: true } });
   if (!cat?.miscCard) return;
-  await prisma.category.update({ where: { id }, data: { repeatYearly: false } });
-  await logActivity("expense", "updated", `Stopped misc card “${cat.name}” repeating yearly`);
+  await prisma.category.update({ where: { id }, data: { repeatYearly: false, repeatMonthly: false } });
+  await logActivity("expense", "updated", `Stopped misc card “${cat.name}” repeating`);
   revalidateFamily();
 }
 

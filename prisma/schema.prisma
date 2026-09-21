@@ -661,6 +661,7 @@ model Category {
   // (never cloned forward). If repeatYearly, the clone re-seeds it ONLY in billMonth each year.
   miscCard     Boolean        @default(false)
   repeatYearly Boolean        @default(false) // miscCard: re-seed every year in billMonth (else one-off)
+  repeatMonthly Boolean       @default(false) // miscCard: re-seed EVERY month (a recurring variable budget)
   responsibleMemberId Int?     // budget: over-budget excess owner; bill-with-a-fund: the SAVER who sets aside the share & holds it (bears the cost)
   payerMemberId       Int?     // bill-with-a-fund: who physically PAYS the bill on its due month (null → same as the saver). Bill + fund credit tag to them → net ~0.
   onUnpaid    String         @default("carry") // bill-with-a-fund overdue behaviour: "carry" (unpaid share stays in the fund; nag in next month's In-Hand) | "skip" (subscription: release the held share back to general Piggy at wind-down)
