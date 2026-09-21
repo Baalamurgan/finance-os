@@ -80,7 +80,7 @@ export function ExpenseModal({
   // instead of a one-shot bill line. Mutually exclusive with pool-funding. `repeatYearly` re-seeds
   // it this month each year. Only offered for a misc expense on create.
   const [spendCard, setSpendCard] = useState(false);
-  const [spendCardRepeat, setSpendCardRepeat] = useState<"none" | "monthly" | "yearly">("none");
+  const [repeatYearly, setRepeatYearly] = useState(false);
   const noteRef = useRef<HTMLInputElement>(null);
   const prevN = useRef(0);
 
@@ -156,7 +156,7 @@ export function ExpenseModal({
         setPoolFund(false);
         setPoolBill(false);
         setSpendCard(false);
-        setSpendCardRepeat("none");
+        setRepeatYearly(false);
       }
     }
   }, [state.n]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -372,19 +372,11 @@ export function ExpenseModal({
                     {spendCard && (
                       <>
                         <input type="hidden" name="spendCard" value="on" />
-                        {spendCardRepeat === "monthly" && <input type="hidden" name="repeatMonthly" value="on" />}
-                        {spendCardRepeat === "yearly" && <input type="hidden" name="repeatYearly" value="on" />}
-                        <div className="mt-2 flex items-center gap-2 border-t border-indigo-100 pt-2 text-sm text-indigo-800">
-                          <span className="font-medium">Repeat</span>
-                          <select value={spendCardRepeat} onChange={(e) => setSpendCardRepeat(e.target.value as "none" | "monthly" | "yearly")} className="input py-1 text-sm">
-                            <option value="none">just this month</option>
-                            <option value="monthly">every month</option>
-                            <option value="yearly">every year</option>
-                          </select>
-                          <span className="text-xs text-indigo-500">
-                            {spendCardRepeat === "monthly" ? "a recurring budget, re-seeded monthly" : spendCardRepeat === "yearly" ? "auto-added this month next year" : "one-off"}
-                          </span>
-                        </div>
+                        <label className="mt-2 flex items-center gap-2 border-t border-indigo-100 pt-2 text-sm text-indigo-800">
+                          <input type="checkbox" name="repeatYearly" checked={repeatYearly} onChange={(e) => setRepeatYearly(e.target.checked)} className="h-4 w-4 accent-indigo-600" />
+                          Repeat every year
+                          <span className="text-xs text-indigo-500">(auto-added this month next year)</span>
+                        </label>
                       </>
                     )}
                   </div>

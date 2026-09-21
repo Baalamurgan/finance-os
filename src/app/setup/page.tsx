@@ -60,9 +60,8 @@ export default async function SetupPage({
     dueDay: it.dueDay,
   }));
   const categoryOpts: CatOpt[] = c.categories.map((cat) => ({ id: cat.id, name: cat.name, section: cat.section }));
-  // Repeating misc spend cards — re-seed as a spend card every month (repeatMonthly) or in their
-  // month each year (repeatYearly). Managed below.
-  const repeatingMiscCards = c.categories.filter((cat) => cat.miscCard && (cat.repeatYearly || cat.repeatMonthly));
+  // Yearly misc spend cards — re-seed as a spend card in their month each year (managed below).
+  const yearlyMiscCards = c.categories.filter((cat) => cat.miscCard && cat.repeatYearly);
 
   // Quick-add chips for the Add-Spend modal + the tracked categories they can target.
   const spendShortcuts = await getSpendShortcuts(c.household.id);
@@ -188,20 +187,20 @@ export default async function SetupPage({
           )}
         </section>
 
-        {/* Repeating misc spend cards — templates that re-seed monthly or yearly. */}
-        {repeatingMiscCards.length > 0 && (
+        {/* Yearly misc spend cards — templates that re-seed in their month each year. */}
+        {yearlyMiscCards.length > 0 && (
           <section className="rounded-xl border border-slate-200 bg-white p-4">
-            <h2 className="text-sm font-semibold text-slate-900">🔁 Repeating misc spend cards</h2>
+            <h2 className="text-sm font-semibold text-slate-900">🔁 Yearly misc spend cards</h2>
             <p className="mt-0.5 text-xs text-slate-500">
-              Spend cards that auto-add themselves — a recurring variable budget you log spends into. Monthly ones re-seed every month; yearly ones re-seed in their month each year.
+              Planned-misc cards marked “repeat every year” — each is auto-added as a spend card in its month, every year.
             </p>
             <ul className="mt-3 divide-y divide-slate-100">
-              {repeatingMiscCards.map((cat) => (
+              {yearlyMiscCards.map((cat) => (
                 <li key={cat.id} className="flex items-center justify-between gap-2 py-2 text-sm">
                   <div className="min-w-0">
                     <div className="truncate font-medium text-slate-800">{cat.name}</div>
                     <div className="text-xs text-slate-400">
-                      {formatINR(cat.monthlyBudget ?? 0)} · {cat.repeatMonthly ? "every month" : `every ${MONTHS[(cat.billMonth ?? 1) - 1]}`}
+                      {formatINR(cat.monthlyBudget ?? 0)} · every {MONTHS[(cat.billMonth ?? 1) - 1]}
                       {cat.responsibleMemberId != null ? ` · ${c.members.find((m) => m.id === cat.responsibleMemberId)?.name ?? "shared"}` : " · shared"}
                     </div>
                   </div>
