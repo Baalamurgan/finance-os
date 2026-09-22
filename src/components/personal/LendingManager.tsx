@@ -126,9 +126,24 @@ export type LoanRow = {
   accent: "emerald" | "amber";
 };
 
-export function LoanRowActions({ loan }: { loan: LoanRow }) {
+type LoanCat = { id: number; name: string; icon: string | null };
+export function LoanRowActions({ loan, categories = [] }: { loan: LoanRow; categories?: LoanCat[] }) {
   const [open, setOpen] = useState(false);
+  const [payCat, setPayCat] = useState("");
+  const [settleCat, setSettleCat] = useState("");
   const receiveVerb = loan.accent === "emerald" ? "Mark received" : "Mark repaid";
+  // Paying a debt you owe (amber) that isn't a peer-card spend already in your budget logs a real spend,
+  // so it needs a category. A card-fronted debt (cardName) was counted when you spent — no re-logging.
+  const logsSpend = loan.accent === "amber" && !loan.cardName;
+
+  const catSelect = (value: string, onChange: (v: string) => void) => (
+    <select value={value} onChange={(e) => onChange(e.target.value)} name="settleCategoryId" required className="input mt-1 w-full">
+      <option value="" disabled>Which category? *</option>
+      {categories.map((c) => (
+        <option key={c.id} value={c.id}>{c.icon ? `${c.icon} ` : ""}{c.name}</option>
+      ))}
+    </select>
+  );
 
   return (
     <>
@@ -158,25 +173,35 @@ export function LoanRowActions({ loan }: { loan: LoanRow }) {
               </div>
             </div>
 
+            {logsSpend && (
+              <p className="rounded-lg bg-amber-50 px-2.5 py-1.5 text-[11px] leading-relaxed text-amber-800">
+                💸 Paying this is real cash out — it&apos;s logged as a spend under the category you pick, so your <b>Can spend</b> drops by what you pay.
+              </p>
+            )}
+
             {/* record a part-payment */}
             <ToastForm action={recordPersonalLoanPayment} successMessage="Payment recorded" onSubmit={() => setOpen(false)}>
               <input type="hidden" name="id" value={loan.id} />
               <label className="text-xs font-medium text-slate-500">Record a part payment</label>
               <div className="mt-1 flex gap-2">
-                <input name="amount" type="number" step="0.01" inputMode="decimal" placeholder="₹ received" className="input flex-1" />
+                <input name="amount" type="number" step="0.01" inputMode="decimal" placeholder={loan.accent === "emerald" ? "₹ received" : "₹ paid"} className="input flex-1" />
                 <button type="submit" className="rounded-md bg-slate-100 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-200">Record</button>
               </div>
+              {logsSpend && catSelect(payCat, setPayCat)}
             </ToastForm>
 
-            <div className="flex items-center gap-2 border-t border-slate-100 pt-3">
-              <ToastForm action={settlePersonalLoan} successMessage="Settled" onSubmit={() => setOpen(false)} className="flex-1">
-                <input type="hidden" name="id" value={loan.id} />
-                <button type="submit" className="w-full rounded-md bg-emerald-600 px-3 py-2 text-sm font-semibold text-white hover:bg-emerald-700">✓ {receiveVerb} in full</button>
-              </ToastForm>
-              <ToastForm action={deletePersonalLoan} successMessage="Deleted" onSubmit={() => setOpen(false)}>
-                <input type="hidden" name="id" value={loan.id} />
-                <button type="submit" className="rounded-md border border-slate-200 px-3 py-2 text-sm font-medium text-slate-500 hover:border-red-300 hover:text-red-600">Delete</button>
-              </ToastForm>
+            <div className="border-t border-slate-100 pt-3">
+              <div className="flex items-start gap-2">
+                <ToastForm action={settlePersonalLoan} successMessage="Settled" onSubmit={() => setOpen(false)} className="flex-1">
+                  <input type="hidden" name="id" value={loan.id} />
+                  {logsSpend && catSelect(settleCat, setSettleCat)}
+                  <button type="submit" className={`w-full rounded-md bg-emerald-600 px-3 py-2 text-sm font-semibold text-white hover:bg-emerald-700 ${logsSpend ? "mt-2" : ""}`}>✓ {receiveVerb} in full</button>
+                </ToastForm>
+                <ToastForm action={deletePersonalLoan} successMessage="Deleted" onSubmit={() => setOpen(false)}>
+                  <input type="hidden" name="id" value={loan.id} />
+                  <button type="submit" className="rounded-md border border-slate-200 px-3 py-2 text-sm font-medium text-slate-500 hover:border-red-300 hover:text-red-600">Delete</button>
+                </ToastForm>
+              </div>
             </div>
             {loan.isPeer && (
               <p className="text-[11px] text-slate-400">

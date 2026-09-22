@@ -846,6 +846,30 @@ function loanGroupWhere(loan: { id: number; linkGroup: string | null }): Prisma.
   return loan.linkGroup ? { linkGroup: loan.linkGroup } : { id: loan.id };
 }
 
+// Paying off a debt YOU owe is real cash leaving your hand — it should register as a spend so "Can
+// spend" drops. This applies to a BORROWED loan that isn't already in your budget: a peer-card spend you
+// logged yourself carries a cardAccountId (counted at spend time) and is skipped; split/shared debts and
+// manual borrows are not, so they log. Receiving money you're owed (lent side) is untouched.
+type SettleLoan = { direction: string; cardAccountId: number | null; counterparty: string; note: string | null };
+function shouldLogSettlement(loan: SettleLoan): boolean {
+  return loan.direction === "borrowed" && loan.cardAccountId == null;
+}
+// Resolve + validate the category up front (before we mutate anything), so a settlement never clears the
+// debt without also logging the expense. Returns null when no expense should be logged.
+async function resolveSettleCategory(memberId: number, loan: SettleLoan, formData: FormData): Promise<number | null> {
+  if (!shouldLogSettlement(loan)) return null;
+  const id = Number(formData.get("settleCategoryId")) || 0;
+  const cat = await prisma.personalCategory.findFirst({ where: { id, memberId }, select: { id: true } });
+  if (!cat) throw new Error("Pick a category for this settlement.");
+  return cat.id;
+}
+async function createSettlementSpend(member: { id: number }, loan: SettleLoan, paid: number, categoryId: number) {
+  if (paid <= 0) return;
+  const period = await ensurePersonalMonth(member.id);
+  const label = `Settled with ${loan.counterparty}${loan.note ? ` · ${loan.note}` : ""}`;
+  await prisma.personalSpend.create({ data: { memberId: member.id, periodId: period.id, categoryId, amount: paid, note: label } });
+}
+
 export async function recordPersonalLoanPayment(formData: FormData) {
   const member = await me();
   if (!member) return;
@@ -853,13 +877,16 @@ export async function recordPersonalLoanPayment(formData: FormData) {
   const pay = parseAmount(formData.get("amount"));
   const loan = await prisma.personalLoan.findUnique({ where: { id } });
   if (!loan || loan.memberId !== member.id || !pay || pay <= 0) return;
+  const settleCat = await resolveSettleCategory(member.id, loan, formData); // throws if a category is required but missing
+  const applied = Math.min(pay, loan.outstanding); // never log more than what was owed
   const outstanding = Math.max(0, loan.outstanding - pay);
-  // Receiving a repayment (manual OR shared) just settles the loan — it restores your
-  // cash-in-hand (which excludes what's owed to you); "Can spend" already assumed it.
+  // A repayment on a lent loan (money coming BACK to you) just settles it — cash-in-hand already excluded
+  // it. A repayment on a borrowed loan is cash going OUT → logged below as a spend.
   await prisma.personalLoan.updateMany({
     where: loanGroupWhere(loan),
     data: { outstanding, status: outstanding <= 0.005 ? "settled" : "open" },
   });
+  if (settleCat != null) await createSettlementSpend(member, loan, applied, settleCat);
   rev();
 }
 
@@ -869,7 +896,10 @@ export async function settlePersonalLoan(formData: FormData) {
   const id = Number(formData.get("id"));
   const loan = await prisma.personalLoan.findUnique({ where: { id } });
   if (!loan || loan.memberId !== member.id) return;
+  const settleCat = await resolveSettleCategory(member.id, loan, formData); // throws if a category is required but missing
+  const paid = loan.outstanding; // the amount cleared right now
   await prisma.personalLoan.updateMany({ where: loanGroupWhere(loan), data: { outstanding: 0, status: "settled" } });
+  if (settleCat != null) await createSettlementSpend(member, loan, paid, settleCat);
   rev();
 }
 

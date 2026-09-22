@@ -4,6 +4,7 @@ import { useActionState, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { addSpendAction, getSpendAssist, type AddSpendState } from "@/app/actions";
 import { suggestCategoryName, resolveCategoryId, suggestSpendKind, validateSpendLabel, type LearnedKeyword } from "@/lib/spendCategorize";
+import { evalArithmetic, hasArithmeticOp } from "@/lib/calc";
 import { useToast } from "@/components/Toast";
 
 type Cat = { id: number; name: string; misc?: boolean; oneMonth?: boolean }; // misc = the Personal/Misc bucket; oneMonth = a this-month-only spend card
@@ -49,6 +50,7 @@ export function AddSpendModal({
   const [topCardId, setTopCardId] = useState<number | null>(null); // most-used card → featured chip
   const [cardId, setCardId] = useState<number | null>(null); // null = Cash / UPI
   const [confirmOpen, setConfirmOpen] = useState(false); // on-save "did you mean" popup
+  const [amountExpr, setAmountExpr] = useState(""); // mirrors the amount field so the "=" calc button can show
   const [submitTick, setSubmitTick] = useState(0); // bump to submit after a state update
   const [fieldError, setFieldError] = useState<{ field: string; message: string } | null>(null); // inline validation
 
@@ -107,6 +109,18 @@ export function AddSpendModal({
     setFieldError(null);
     setConfirmOpen(false);
     setJustSaved(false);
+    setAmountExpr("");
+  };
+
+  // Amount field doubles as a calculator: reveal "=" only when there's an operator to compute.
+  const amtEval = evalArithmetic(amountExpr);
+  const showAmtCalc = hasArithmeticOp(amountExpr) && amtEval != null;
+  const calcAmount = () => {
+    const r = evalArithmetic(amountRef.current?.value ?? "");
+    if (r == null) { toast("Check the calculation", "error"); return; }
+    if (amountRef.current) amountRef.current.value = String(r);
+    setAmountExpr(String(r));
+    if (fieldError?.field === "amount") setFieldError(null);
   };
 
   useEffect(() => setMounted(true), []);
@@ -145,7 +159,14 @@ export function AddSpendModal({
     if (!open) return;
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    // Lock the page behind the modal so scrolling inside it never bleeds to the background (Android
+    // scroll-chaining). overscroll-contain on the scroller is the belt; this is the braces.
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      document.body.style.overflow = prevOverflow;
+    };
   }, [open]);
 
   // On a successful save: if "keep adding" is on, clear + stay open (rapid
@@ -194,6 +215,14 @@ export function AddSpendModal({
   const onSave = () => {
     if (pending) return;
     setFieldError(null);
+    // Resolve a typed calculation ("120+45") to its number before validating/submitting.
+    const raw = amountRef.current?.value ?? "";
+    if (hasArithmeticOp(raw)) {
+      const r = evalArithmetic(raw);
+      if (r == null) return failField("amount", "Check the calculation.");
+      if (amountRef.current) amountRef.current.value = String(r);
+      setAmountExpr(String(r));
+    }
     const amt = Number(amountRef.current?.value ?? "");
     if (!amt || amt <= 0) return failField("amount", "Enter an amount.");
     if (!categoryId) return failField("category", "Pick a category.");
@@ -238,7 +267,7 @@ export function AddSpendModal({
         mounted &&
         createPortal(
           <div
-            className="fixed inset-0 z-50 flex items-end justify-center overflow-y-auto bg-black/40 sm:items-center sm:p-4"
+            className="fixed inset-0 z-50 flex items-end justify-center overflow-y-auto overscroll-contain bg-black/40 sm:items-center sm:p-4"
             onClick={() => setOpen(false)}
           >
             <div
@@ -262,26 +291,34 @@ export function AddSpendModal({
               </div>
 
               <form ref={formRef} action={formAction} className="flex min-h-0 flex-col">
-                <div className="space-y-5 overflow-y-auto px-5 py-5">
+                <div className="space-y-5 overflow-y-auto overscroll-contain px-5 py-5">
                   <input type="hidden" name="periodId" value={periodId} />
                   <input type="hidden" name="categoryId" value={categoryId ?? ""} />
 
-                  {/* big amount */}
+                  {/* big amount — also a mini-calculator: type "120+45" and hit "=" */}
                   <div>
                     <label className="text-sm font-medium text-slate-600">Amount (₹) <span className="text-red-500">*</span></label>
-                    <input
-                      ref={amountRef}
-                      name="amount"
-                      type="number"
-                      step="1"
-                      min="0"
-                      inputMode="numeric"
-                      autoFocus
-                      required
-                      onChange={() => fieldError?.field === "amount" && setFieldError(null)}
-                      placeholder="0"
-                      className={`mt-1.5 w-full rounded-xl border-2 px-4 py-3 text-4xl font-bold tabular-nums outline-none focus:ring-2 focus:ring-indigo-100 ${fieldError?.field === "amount" ? "border-red-400 focus:border-red-400" : "border-slate-300 focus:border-indigo-400"}`}
-                    />
+                    <div className="relative mt-1.5">
+                      <input
+                        ref={amountRef}
+                        name="amount"
+                        type="text"
+                        inputMode="decimal"
+                        autoFocus
+                        required
+                        onChange={(e) => { setAmountExpr(e.target.value); if (fieldError?.field === "amount") setFieldError(null); }}
+                        placeholder="0"
+                        className={`w-full rounded-xl border-2 px-4 py-3 pr-24 text-4xl font-bold tabular-nums outline-none focus:ring-2 focus:ring-indigo-100 ${fieldError?.field === "amount" ? "border-red-400 focus:border-red-400" : "border-slate-300 focus:border-indigo-400"}`}
+                      />
+                      {showAmtCalc && (
+                        <button
+                          type="button" onClick={calcAmount}
+                          className="absolute right-2 top-1/2 -translate-y-1/2 rounded-lg bg-indigo-100 px-2.5 py-1.5 text-base font-bold tabular-nums text-indigo-700 hover:bg-indigo-200"
+                        >
+                          = {amtEval}
+                        </button>
+                      )}
+                    </div>
                     {fieldError?.field === "amount" && <p className="mt-1 text-xs font-medium text-red-600">{fieldError.message}</p>}
                   </div>
 

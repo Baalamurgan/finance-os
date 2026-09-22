@@ -42,6 +42,8 @@ export default async function PersonalLoans({
     select: { id: true, name: true },
     orderBy: { name: "asc" },
   }));
+  // Categories for the "settle a debt you owe → log it as a spend" picker.
+  const catOpts = c.categories.map((k) => ({ id: k.id, name: k.name, icon: k.icon }));
   const lent = loans.filter((l) => l.direction === "lent");
   const borrowed = loans.filter((l) => l.direction === "borrowed");
   const owedToYou = lent.filter((l) => l.status === "open").reduce((s, l) => s + l.outstanding, 0);
@@ -67,8 +69,8 @@ export default async function PersonalLoans({
         <AddLoanModal members={otherMembers} />
 
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-          <LoanList title="You lent" loans={lent} accent="emerald" direction="lent" />
-          <LoanList title="You borrowed" loans={borrowed} accent="amber" direction="borrowed" />
+          <LoanList title="You lent" loans={lent} accent="emerald" direction="lent" categories={catOpts} />
+          <LoanList title="You borrowed" loans={borrowed} accent="amber" direction="borrowed" categories={catOpts} />
         </div>
       </main>
     </>
@@ -80,11 +82,13 @@ function LoanList({
   loans,
   accent,
   direction,
+  categories,
 }: {
   title: string;
   loans: LoanData[];
   accent: "emerald" | "amber";
   direction: "lent" | "borrowed";
+  categories: { id: number; name: string; icon: string | null }[];
 }) {
   const amountColor = accent === "emerald" ? "text-emerald-700" : "text-amber-700";
   // Group by counterparty so multiple lends/borrows with the SAME person roll up under one person —
@@ -180,7 +184,7 @@ function LoanList({
                             )}
                             <div className="mt-1.5 flex items-center gap-2">
                               {l.status === "open" ? (
-                                <LoanRowActions loan={row} />
+                                <LoanRowActions loan={row} categories={categories} />
                               ) : (
                                 <span className="text-[11px] font-medium text-emerald-600">✓ settled</span>
                               )}

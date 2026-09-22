@@ -6,6 +6,7 @@ import { useToast } from "@/components/Toast";
 import { suggestSpendKind } from "@/lib/spendCategorize";
 import { formatINR } from "@/lib/format";
 import { currentCycle } from "@/lib/finance/cycle";
+import { evalArithmetic, hasArithmeticOp } from "@/lib/calc";
 import { PersonalSplitModal, type SplitPerson, type Member } from "@/components/personal/PersonalSplitModal";
 
 type Cat = { id: number; name: string; icon: string | null };
@@ -70,7 +71,12 @@ export function PersonalSpendModal({
   const myCards = cards.filter((c) => c.mine !== false);
   const peerCards = cards.filter((c) => c.mine === false);
   const shared = splits != null;
-  const amountNum = Number(amount) || 0;
+  // The amount field doubles as a mini-calculator: "120+45*2" evaluates on demand. amountEval is the
+  // resolved number (also for a plain "120"); the hidden input submits it, so a raw expression never
+  // reaches the server. showCalc reveals the "=" button only when there's an operator to compute.
+  const amountEval = evalArithmetic(amount);
+  const amountNum = amountEval ?? 0;
+  const showCalc = hasArithmeticOp(amount) && amountEval != null;
   const [state, formAction, pending] = useActionState(isEdit ? updatePersonalSpend : addPersonalSpend, INIT);
 
   // "Collect by" for a split/reimbursement paid on YOUR OWN credit card is auto-derived from that
@@ -104,6 +110,22 @@ export function PersonalSpendModal({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state.n]);
 
+  // Lock the page behind the sheet so scrolling inside it never bleeds to the background (Android
+  // scroll-chaining). overscroll-contain on the scroller is the belt; this is the braces.
+  useEffect(() => {
+    if (!open) return;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => { document.body.style.overflow = prev; };
+  }, [open]);
+
+  const calcAmount = () => {
+    const r = evalArithmetic(amount);
+    if (r == null) { toast("Check the calculation", "error"); return; }
+    setAmount(String(r));
+    if (shared) resetShared();
+  };
+
   const toggleShared = (checked: boolean) => {
     if (!checked) { resetShared(); return; }
     if (amountNum <= 0) { toast("Enter the amount you paid first", "error"); return; }
@@ -129,7 +151,7 @@ export function PersonalSpendModal({
       )}
 
       {open && (
-        <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/40 p-4 sm:items-center" onClick={() => setOpen(false)}>
+        <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto overscroll-contain bg-black/40 p-4 sm:items-center" onClick={() => setOpen(false)}>
           <div className="my-auto flex w-full max-w-md flex-col rounded-2xl bg-white shadow-xl" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between border-b border-slate-100 px-5 py-3">
               <h2 className="text-lg font-bold text-slate-900">{isEdit ? "Edit spend" : "Add spend"}</h2>
@@ -156,13 +178,25 @@ export function PersonalSpendModal({
                 )}
                 <div>
                   <label className="text-xs font-medium text-slate-500">{shared ? "You paid (₹)" : "Amount (₹)"}<Req /></label>
-                  <input
-                    name="amount" type="number" step="0.01" inputMode="decimal" autoFocus required
-                    value={amount}
-                    onChange={(e) => { setAmount(e.target.value); if (shared) resetShared(); }}
-                    placeholder="0"
-                    className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-3 text-3xl font-bold tabular-nums outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100"
-                  />
+                  {/* the amount is submitted resolved (expression → number) via this hidden field */}
+                  <input type="hidden" name="amount" value={amountEval ?? ""} />
+                  <div className="relative mt-1">
+                    <input
+                      type="text" inputMode="decimal" autoFocus required
+                      value={amount}
+                      onChange={(e) => { setAmount(e.target.value); if (shared) resetShared(); }}
+                      placeholder="0"
+                      className="w-full rounded-lg border border-slate-300 px-3 py-3 pr-24 text-3xl font-bold tabular-nums outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100"
+                    />
+                    {showCalc && (
+                      <button
+                        type="button" onClick={calcAmount}
+                        className="absolute right-2 top-1/2 -translate-y-1/2 rounded-lg bg-emerald-100 px-2.5 py-1.5 text-sm font-bold tabular-nums text-emerald-700 hover:bg-emerald-200"
+                      >
+                        = {amountEval}
+                      </button>
+                    )}
+                  </div>
                   {remaining !== undefined && !isEdit && (
                     <p className="mt-1 text-xs text-slate-400">Remaining to spend: {formatINR(remaining)}</p>
                   )}
