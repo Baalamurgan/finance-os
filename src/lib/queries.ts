@@ -1811,6 +1811,40 @@ function diffKey(label: string): string {
     .trim();
 }
 
+/**
+ * IDs of this month's expense/income lines that are NEW — a recurring line whose (category + label, with
+ * the installment counter and set-aside variant folded via diffKey) didn't exist last month. Powers the
+ * "NEW" badge so a first-time EMI / bill / income source stands out; a continuing installment (2/6 after
+ * 1/6) is NOT new. One-offs (misc/carry/surplus, oneOff:true) are excluded — they're inherently one-month,
+ * so badging them all would be noise. No prior month → empty (don't badge a first month wholesale).
+ */
+export async function getNewSheetLineIds(householdId: number, periodId: number) {
+  const empty = { expenses: new Set<number>(), incomes: new Set<number>() };
+  try {
+    const period = await prisma.period.findUnique({ where: { id: periodId }, select: { year: true, month: true } });
+    if (!period) return empty;
+    const prevMonth = period.month === 1 ? 12 : period.month - 1;
+    const prevYear = period.month === 1 ? period.year - 1 : period.year;
+    const prev = await prisma.period.findUnique({ where: { householdId_year_month: { householdId, year: prevYear, month: prevMonth } }, select: { id: true } });
+    if (!prev) return empty;
+    const [curExp, prevExp, curInc, prevInc] = await Promise.all([
+      prisma.expenseEntry.findMany({ where: { periodId }, select: { id: true, categoryId: true, label: true, oneOff: true } }),
+      prisma.expenseEntry.findMany({ where: { periodId: prev.id }, select: { categoryId: true, label: true } }),
+      prisma.incomeEntry.findMany({ where: { periodId }, select: { id: true, source: true, oneOff: true } }),
+      prisma.incomeEntry.findMany({ where: { periodId: prev.id }, select: { source: true } }),
+    ]);
+    const eKey = (categoryId: number | null, label: string) => `${categoryId ?? "x"}|${diffKey(label)}`;
+    const prevExpKeys = new Set(prevExp.map((e) => eKey(e.categoryId, e.label)));
+    const prevIncKeys = new Set(prevInc.map((i) => diffKey(i.source)));
+    return {
+      expenses: new Set(curExp.filter((e) => !e.oneOff && !prevExpKeys.has(eKey(e.categoryId, e.label))).map((e) => e.id)),
+      incomes: new Set(curInc.filter((i) => !i.oneOff && !prevIncKeys.has(diffKey(i.source))).map((i) => i.id)),
+    };
+  } catch {
+    return empty;
+  }
+}
+
 function diffByKey(
   cur: { label: string; amount: number }[],
   prev: { label: string; amount: number }[],

@@ -69,7 +69,7 @@ export default async function ActivityPage({
           ) : (
             <div className="mt-3 space-y-4">
               <ChangeBlock title="Income" diff={changes.income!} />
-              <ChangeBlock title="Expenses" diff={changes.expense!} />
+              <ChangeBlock title="Expenses" diff={changes.expense!} skipMonth={c.selected?.label} />
               {nonEmpty(changes.misc) && (
                 <div className="rounded-lg bg-slate-50 p-3">
                   <ChangeBlock title="Miscellaneous (one-off)" diff={changes.misc!} collapsible />
@@ -113,10 +113,15 @@ export default async function ActivityPage({
   );
 }
 
+// A removed set-aside line (its label ends with the save marker) means that month's contribution was
+// skipped — worth calling out WHICH month so it reads clearly on a preview/past sheet too.
+const isSetAside = (label: string) => /\(saving\)$/.test(label) || /monthly share\)$/.test(label);
+
 function ChangeBlock({
   title,
   diff,
   collapsible,
+  skipMonth,
 }: {
   title: string;
   diff: {
@@ -125,6 +130,7 @@ function ChangeBlock({
     changed: { label: string; from: number; to: number }[];
   };
   collapsible?: boolean;
+  skipMonth?: string; // the month whose set-aside was skipped (shown as a tag on set-aside rows)
 }) {
   const n = diff.added.length + diff.changed.length + diff.removed.length;
   if (n === 0) return null;
@@ -146,7 +152,14 @@ function ChangeBlock({
       ))}
       {diff.removed.map((r, i) => (
         <li key={`r${i}`} className="flex justify-between gap-2">
-          <span className="text-red-600">✕ Removed “{r.label}”</span>
+          <span className="text-red-600">
+            ✕ Removed “{r.label}”
+            {skipMonth && isSetAside(r.label) && (
+              <span className="ml-1.5 rounded-full bg-amber-100 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-amber-700">
+                {skipMonth} skipped
+              </span>
+            )}
+          </span>
           <span className="tabular-nums text-red-600">{formatINR(r.amount)}</span>
         </li>
       ))}

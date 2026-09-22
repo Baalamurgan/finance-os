@@ -2,7 +2,7 @@ import { redirect } from "next/navigation";
 import { formatINR, withShareCount } from "@/lib/format";
 import { categoryEmoji } from "@/lib/categoryEmoji";
 import { loadCommon } from "@/lib/load";
-import { getRollup, getWindDownPreview, getSkippedSetAsides, getProjectedPiggy, getInHand } from "@/lib/queries";
+import { getRollup, getWindDownPreview, getSkippedSetAsides, getProjectedPiggy, getInHand, getNewSheetLineIds } from "@/lib/queries";
 import { NavHeader } from "@/components/NavHeader";
 import { RowActions } from "@/components/RowActions";
 import { ExpenseRowActions } from "@/components/ExpenseRowActions";
@@ -96,8 +96,10 @@ function ExpenseRow({
   members,
   periodId,
   periodMonth,
+  isNew,
 }: {
   e: ExpRow;
+  isNew?: boolean;
   canEditHere: boolean;
   categories: CatLite[];
   members: MemLite[];
@@ -146,7 +148,7 @@ function ExpenseRow({
         : `This was the last set-aside before the bill — the shortfall will be paid out-of-pocket on the due month.`) +
       `\n\nIt won't come back on a rebuild; Setup stays the template.`;
   return (
-    <Row label={withShareCount(e.label, e.category.billEveryMonths)} sub={e.category.name} emoji={categoryEmoji(e.category.name)} tag={e.member?.name} amount={e.amount} pinnedControl={e.pinned ? <PinnedBadge kind="expense" id={e.id} canEdit={canEditHere} /> : sheetSection(e) === "Misc" && e.note !== CARRY_NOTE ? <KeptTag title="Planned / added this month — kept through a Sheet refresh" /> : null}>
+    <Row label={withShareCount(e.label, e.category.billEveryMonths)} sub={e.category.name} emoji={categoryEmoji(e.category.name)} tag={e.member?.name} amount={e.amount} isNew={isNew} pinnedControl={e.pinned ? <PinnedBadge kind="expense" id={e.id} canEdit={canEditHere} /> : sheetSection(e) === "Misc" && e.note !== CARRY_NOTE ? <KeptTag title="Planned / added this month — kept through a Sheet refresh" /> : null}>
       {canEditHere && isSetAside && (
         <ConfirmForm action={skipSetAside} message={removeMsg}>
           <input type="hidden" name="categoryId" value={e.categoryId} />
@@ -179,6 +181,7 @@ function ExpenseRow({
 
 function ExpenseSection({
   g,
+  newIds,
   canEditHere,
   categories,
   members,
@@ -191,6 +194,7 @@ function ExpenseSection({
   members: MemLite[];
   periodId: number;
   periodMonth: number;
+  newIds?: Set<number>;
 }) {
   return (
     <details data-persist={`sec-${g.section}`} className="group border-b border-slate-100 last:border-0">
@@ -216,6 +220,7 @@ function ExpenseSection({
             members={members}
             periodId={periodId}
             periodMonth={periodMonth}
+            isNew={newIds?.has(e.id)}
           />
         ))}
       </div>
@@ -300,7 +305,7 @@ export default async function SheetPage({
 
   // These reads are independent — fetch them in ONE round-trip instead of a six-deep await waterfall
   // against the (remote) DB pooler, which dominated the sheet's time-to-first-byte on mobile.
-  const [rollup, skipped, preview, projectedPiggy, inHand] = await Promise.all([
+  const [rollup, skipped, preview, projectedPiggy, inHand, newLines] = await Promise.all([
     getRollup(c.selected.id),
     getSkippedSetAsides(c.household.id, c.selected.id),
     draftSource ? getWindDownPreview(c.household.id, draftSource.id) : Promise.resolve(null),
@@ -308,7 +313,11 @@ export default async function SheetPage({
     // In-Hand also drives the "bill due this month" rows under Yearly/periodic — fetch it for the
     // preview draft too, so an upcoming fund bill (EB, insurance…) is visible before the month opens.
     open || isDraft ? getInHand(c.household.id, c.selected.id) : Promise.resolve(null),
+    // Lines new this month (first-time EMI / bill / income) → the "NEW" badge.
+    getNewSheetLineIds(c.household.id, c.selected.id),
   ]);
+  const newExpenseIds = newLines.expenses;
+  const newIncomeIds = newLines.incomes;
   const shownPiggy = projectedPiggy ? projectedPiggy.generalTotal : c.piggyBalance;
   // Part of the Piggy figure may be last month's leftover still sitting with the category owners
   // (not yet handed to the holder). Surface it so the piggy number isn't mistaken for fully received.
@@ -551,7 +560,7 @@ export default async function SheetPage({
                     </div>
                   </div>
                 ) : (
-                  <Row key={i.id} label={i.source} tag={i.owner?.name} amount={i.amount} pinnedControl={i.pinned ? <PinnedBadge kind="income" id={i.id} canEdit={canEditHere} /> : i.note != null && KEPT_INCOME_NOTES.has(i.note) ? <KeptTag title="Brought forward from last month — kept through a Sheet refresh" /> : null}>
+                  <Row key={i.id} label={i.source} tag={i.owner?.name} amount={i.amount} isNew={newIncomeIds.has(i.id)} pinnedControl={i.pinned ? <PinnedBadge kind="income" id={i.id} canEdit={canEditHere} /> : i.note != null && KEPT_INCOME_NOTES.has(i.note) ? <KeptTag title="Brought forward from last month — kept through a Sheet refresh" /> : null}>
                     {c.isHead ? (
                       <IncomeRowActions
                         members={c.members}
@@ -611,6 +620,7 @@ export default async function SheetPage({
                       members={c.members}
                       periodId={c.selected!.id}
                       periodMonth={c.selected!.month}
+                      newIds={newExpenseIds}
                     />
                   ))}
                   {canEditHere && (
@@ -660,6 +670,7 @@ export default async function SheetPage({
                           members={c.members}
                           periodId={c.selected!.id}
                           periodMonth={c.selected!.month}
+                          isNew={newExpenseIds.has(e.id)}
                         />
                       ))
                     )}
@@ -766,6 +777,9 @@ export default async function SheetPage({
                     <path fill="currentColor" d="M7 5l6 5-6 5z" />
                   </svg>
                   <h2 className="text-sm font-semibold text-amber-800">⏭️ Skipped this month</h2>
+                  <span className="shrink-0 rounded-full bg-amber-200 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-amber-800">
+                    {monthLabel(c.selMonth, c.selYear)}
+                  </span>
                   <span className="text-[10px] text-amber-600">({skipped.length})</span>
                 </span>
                 <span className="text-sm font-bold tabular-nums text-amber-800">{formatINR(skippedTotal)} freed</span>
@@ -862,6 +876,7 @@ function Row({
   amount,
   emoji,
   pinnedControl,
+  isNew,
   children,
 }: {
   label: string;
@@ -870,6 +885,7 @@ function Row({
   amount: number;
   emoji?: string | null;
   pinnedControl?: React.ReactNode;
+  isNew?: boolean; // first appeared this month (not on last month's sheet)
   children?: React.ReactNode;
 }) {
   // pull a trailing installment marker ("Chimney EMI 2/6") out into a tag
@@ -885,6 +901,11 @@ function Row({
           {installment && (
             <span className="shrink-0 rounded-full bg-indigo-50 px-1.5 py-0.5 text-[10px] font-semibold text-indigo-500" title="installment (this payment / total)">
               {installment}
+            </span>
+          )}
+          {isNew && (
+            <span className="shrink-0 rounded-full bg-emerald-100 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-emerald-700" title="New this month — wasn't on last month's sheet">
+              New
             </span>
           )}
           {pinnedControl}
