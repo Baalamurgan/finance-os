@@ -18,6 +18,8 @@ export const CATEGORY_KINDS: { name: string; icon: string; bucket: string }[] = 
   { name: "Transfers / Sent", icon: "💸", bucket: "want" },
   { name: "EMI & Loans", icon: "🏦", bucket: "need" },
   { name: "Investments", icon: "📈", bucket: "invest" },
+  { name: "God & Temple", icon: "🛕", bucket: "want" },
+  { name: "Pets", icon: "🐾", bucket: "want" },
   { name: "Miscellaneous", icon: "🔧", bucket: "want" },
 ];
 

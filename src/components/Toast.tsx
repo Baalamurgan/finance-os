@@ -3,7 +3,7 @@
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from "react";
 import { unstable_rethrow } from "next/navigation";
 
-type ToastType = "success" | "error";
+type ToastType = "success" | "error" | "loading";
 type Toast = { id: number; message: string; type: ToastType };
 
 const ToastCtx = createContext<(message: string, type?: ToastType) => void>(() => {});
@@ -42,8 +42,11 @@ export function ToastProvider({ children }: { children: ReactNode }) {
 
   const show = useCallback((message: string, type: ToastType = "success") => {
     const id = Date.now() + Math.random();
-    setToasts((t) => [...t, { id, message, type }]);
-    setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), 3200);
+    // A real result (success/error) also clears any lingering "loading" pill, so a slow save shows
+    // "Saving…" and is replaced by the outcome — never two stacked or a stuck spinner.
+    setToasts((t) => [...(type === "loading" ? t : t.filter((x) => x.type !== "loading")), { id, message, type }]);
+    // Loading pills linger (a slow round-trip) with a generous failsafe; results auto-dismiss quickly.
+    setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), type === "loading" ? 12000 : 3200);
   }, []);
 
   return (
@@ -66,21 +69,26 @@ function ToastPill({ toast }: { toast: Toast }) {
     return () => cancelAnimationFrame(r);
   }, []);
 
+  const loading = toast.type === "loading";
   const ok = toast.type === "success";
   return (
     <div
       role="status"
       className={`pointer-events-auto flex max-w-[92vw] items-center gap-2.5 rounded-full bg-white py-2.5 pl-2.5 pr-4 text-sm font-medium shadow-lg ring-1 transition-all duration-300 sm:max-w-sm ${
         shown ? "translate-y-0 opacity-100" : "translate-y-2 opacity-0"
-      } ${ok ? "text-emerald-800 ring-emerald-200" : "text-red-800 ring-red-200"}`}
+      } ${loading ? "text-slate-700 ring-slate-200" : ok ? "text-emerald-800 ring-emerald-200" : "text-red-800 ring-red-200"}`}
     >
       <span
         className={`grid h-6 w-6 shrink-0 place-items-center rounded-full text-white ${
-          ok ? "bg-emerald-500" : "bg-red-500"
+          loading ? "bg-slate-400" : ok ? "bg-emerald-500" : "bg-red-500"
         }`}
         aria-hidden
       >
-        {ok ? (
+        {loading ? (
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" className="animate-spin">
+            <path d="M12 3a9 9 0 1 0 9 9" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" />
+          </svg>
+        ) : ok ? (
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
             <path d="M5 13l4 4L19 7" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" />
           </svg>

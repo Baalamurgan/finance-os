@@ -3,7 +3,7 @@
 import { useActionState, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { addSpendAction, getSpendAssist, type AddSpendState } from "@/app/actions";
-import { suggestCategoryName, resolveCategoryId, suggestSpendKind, type LearnedKeyword } from "@/lib/spendCategorize";
+import { suggestCategoryName, resolveCategoryId, suggestSpendKind, validateSpendLabel, type LearnedKeyword } from "@/lib/spendCategorize";
 import { useToast } from "@/components/Toast";
 
 type Cat = { id: number; name: string; misc?: boolean }; // misc = the Personal/Misc bucket
@@ -50,6 +50,7 @@ export function AddSpendModal({
   const [cardId, setCardId] = useState<number | null>(null); // null = Cash / UPI
   const [confirmOpen, setConfirmOpen] = useState(false); // on-save "did you mean" popup
   const [submitTick, setSubmitTick] = useState(0); // bump to submit after a state update
+  const [fieldError, setFieldError] = useState<{ field: string; message: string } | null>(null); // inline validation
 
   const selectedCard = cardId != null ? cards.find((c) => c.id === cardId) : undefined;
   // "Paid with": Cash + the one most-used card as quick chips; every other card lives in a dropdown.
@@ -77,8 +78,36 @@ export function AddSpendModal({
 
   const formRef = useRef<HTMLFormElement>(null);
   const amountRef = useRef<HTMLInputElement>(null);
+  const labelRef = useRef<HTMLInputElement>(null);
+  const subRef = useRef<HTMLSelectElement>(null);
+  const catRef = useRef<HTMLDivElement>(null);
   const prevN = useRef(0);
+  const wasPending = useRef(false); // detect the pending→done edge to resolve the save
   const fetchedKw = useRef(false);
+
+  // Point the user at the offending field: inline message + toast + focus/scroll.
+  const failField = (field: string, message: string) => {
+    setFieldError({ field, message });
+    toast(message, "error");
+    if (field === "amount") amountRef.current?.focus();
+    else if (field === "label") labelRef.current?.focus();
+    else if (field === "subCategory") subRef.current?.focus();
+    else if (field === "category") catRef.current?.scrollIntoView({ block: "center", behavior: "smooth" });
+  };
+
+  // Fresh form every open — the modal instance persists, so controlled state (category, item, kind,
+  // card) would otherwise carry over from the last entry and look pre-filled.
+  const resetForm = () => {
+    setCategoryId(fixedCategory?.id ?? null);
+    setLabelText("");
+    setSubCategory("");
+    setKindTouched(false);
+    setCardId(null);
+    setKeepAdding(false);
+    setFieldError(null);
+    setConfirmOpen(false);
+    setJustSaved(false);
+  };
 
   useEffect(() => setMounted(true), []);
 
@@ -130,6 +159,7 @@ export function AddSpendModal({
         setSubCategory(""); // controlled — reset for the next item
         setKindTouched(false); // let the next item auto-fill its kind again
         setLabelText(""); // controlled — reset the item text
+        setFieldError(null); // clear any prior inline error
         setJustSaved(true);
         amountRef.current?.focus();
         const t = setTimeout(() => setJustSaved(false), 2500);
@@ -140,16 +170,37 @@ export function AddSpendModal({
   }, [state.n, keepAdding]);
 
   const openModal = () => {
-    setJustSaved(false);
+    resetForm();
     setOpen(true);
   };
 
-  const doSubmit = () => setSubmitTick((t) => t + 1);
-  // Save intercept: run native validation, then confirm if the item looks miscategorised
-  // (only on a real mismatch — matching entries save straight through).
+  // Resolve the save on the pending→done edge: a server rejection (n unchanged, error set) points the
+  // user at the field and toasts why — so the modal never sits silently on a disabled "Saving…".
+  useEffect(() => {
+    if (wasPending.current && !pending && state.n === prevN.current && state.error) {
+      // Reacting to an async server result (not a render-derived value) — point at the field + toast why.
+      failField(state.field ?? "", state.error);
+    }
+    wasPending.current = pending;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pending, state]);
+
+  const doSubmit = () => {
+    toast("Saving…", "loading"); // immediate feedback; replaced by the success/error toast on finish
+    setSubmitTick((t) => t + 1);
+  };
+  // Save intercept: validate every mandatory field and POINT at the first one that's missing/too generic,
+  // then confirm if the item looks miscategorised (only on a real mismatch — matches save straight through).
   const onSave = () => {
-    if (pending || !categoryId || needSub) return;
-    if (!formRef.current?.reportValidity()) return; // amount / item required
+    if (pending) return;
+    setFieldError(null);
+    const amt = Number(amountRef.current?.value ?? "");
+    if (!amt || amt <= 0) return failField("amount", "Enter an amount.");
+    if (!categoryId) return failField("category", "Pick a category.");
+    if (!labelText.trim()) return failField("label", "Enter what was bought.");
+    const labelErr = validateSpendLabel(labelText, selectedCat?.name ?? "");
+    if (labelErr) return failField("label", labelErr);
+    if (needSub) return failField("subCategory", "Pick a kind of spend.");
     if (mismatch) {
       setConfirmOpen(true);
       return;
@@ -217,7 +268,7 @@ export function AddSpendModal({
 
                   {/* big amount */}
                   <div>
-                    <label className="text-sm font-medium text-slate-600">Amount (₹)</label>
+                    <label className="text-sm font-medium text-slate-600">Amount (₹) <span className="text-red-500">*</span></label>
                     <input
                       ref={amountRef}
                       name="amount"
@@ -227,9 +278,11 @@ export function AddSpendModal({
                       inputMode="numeric"
                       autoFocus
                       required
+                      onChange={() => fieldError?.field === "amount" && setFieldError(null)}
                       placeholder="0"
-                      className="mt-1.5 w-full rounded-xl border-2 border-slate-300 px-4 py-3 text-4xl font-bold tabular-nums outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
+                      className={`mt-1.5 w-full rounded-xl border-2 px-4 py-3 text-4xl font-bold tabular-nums outline-none focus:ring-2 focus:ring-indigo-100 ${fieldError?.field === "amount" ? "border-red-400 focus:border-red-400" : "border-slate-300 focus:border-indigo-400"}`}
                     />
+                    {fieldError?.field === "amount" && <p className="mt-1 text-xs font-medium text-red-600">{fieldError.message}</p>}
                   </div>
 
                   {/* quick-add chips (head-curated, or the family's frequent items) — one
@@ -263,14 +316,14 @@ export function AddSpendModal({
 
                   {/* category chips (picker mode only) — compact wrapping pills */}
                   {!fixedCategory && categories && (
-                    <div>
-                      <label className="text-sm font-medium text-slate-600">Category</label>
+                    <div ref={catRef}>
+                      <label className="text-sm font-medium text-slate-600">Category <span className="text-red-500">*</span></label>
                       <div className="mt-1.5 flex flex-wrap gap-1.5">
                         {categories.map((cat) => (
                           <button
                             key={cat.id}
                             type="button"
-                            onClick={() => setCategoryId(cat.id)}
+                            onClick={() => { setCategoryId(cat.id); if (fieldError?.field === "category") setFieldError(null); }}
                             className={`rounded-full border px-3 py-1.5 text-sm font-medium transition ${
                               categoryId === cat.id
                                 ? "border-indigo-500 bg-indigo-50 text-indigo-700"
@@ -281,19 +334,22 @@ export function AddSpendModal({
                           </button>
                         ))}
                       </div>
+                      {fieldError?.field === "category" && <p className="mt-1 text-xs font-medium text-red-600">{fieldError.message}</p>}
                     </div>
                   )}
 
                   <div>
-                    <label className="text-sm font-medium text-slate-600">What was bought</label>
+                    <label className="text-sm font-medium text-slate-600">What was bought <span className="text-red-500">*</span></label>
                     <input
+                      ref={labelRef}
                       name="label"
                       required
                       value={labelText}
-                      onChange={(e) => setLabelText(e.target.value)}
-                      placeholder="e.g. Tomatoes, Chicken, Petrol"
-                      className="mt-1.5 w-full rounded-xl border-2 border-slate-300 px-4 py-3 text-lg outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
+                      onChange={(e) => { setLabelText(e.target.value); if (fieldError?.field === "label") setFieldError(null); }}
+                      placeholder="e.g. Tomatoes, Chicken, Petrol — Activa"
+                      className={`mt-1.5 w-full rounded-xl border-2 px-4 py-3 text-lg outline-none focus:ring-2 focus:ring-indigo-100 ${fieldError?.field === "label" ? "border-red-400 focus:border-red-400" : "border-slate-300 focus:border-indigo-400"}`}
                     />
+                    {fieldError?.field === "label" && <p className="mt-1 text-xs font-medium text-red-600">{fieldError.message}</p>}
                   </div>
 
                   {/* sub-category — misc spends only (reporting: Food, Travel…). Auto-filled
@@ -307,17 +363,19 @@ export function AddSpendModal({
                         Auto-picked from what was bought — change it if it&apos;s off.
                       </p>
                       <select
+                        ref={subRef}
                         name="subCategory"
                         required
                         value={subCategory}
-                        onChange={(e) => { setKindTouched(true); setSubCategory(e.target.value); }}
-                        className="mt-1.5 w-full rounded-xl border-2 border-slate-300 px-4 py-3 text-base outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
+                        onChange={(e) => { setKindTouched(true); setSubCategory(e.target.value); if (fieldError?.field === "subCategory") setFieldError(null); }}
+                        className={`mt-1.5 w-full rounded-xl border-2 px-4 py-3 text-base outline-none focus:ring-2 focus:ring-indigo-100 ${fieldError?.field === "subCategory" ? "border-red-400 focus:border-red-400" : "border-slate-300 focus:border-indigo-400"}`}
                       >
                         <option value="" disabled>Pick a kind…</option>
                         {subCategories!.map((s) => (
                           <option key={s.name} value={s.name}>{s.icon} {s.name}</option>
                         ))}
                       </select>
+                      {fieldError?.field === "subCategory" && <p className="mt-1 text-xs font-medium text-red-600">{fieldError.message}</p>}
                     </div>
                   )}
 
@@ -414,13 +472,31 @@ export function AddSpendModal({
                   <button
                     type="button"
                     onClick={onSave}
-                    disabled={!categoryId || needSub || pending}
-                    className="min-h-12 flex-1 rounded-xl bg-indigo-600 px-4 py-3 text-base font-semibold text-white shadow-sm active:bg-indigo-800 disabled:opacity-40"
+                    disabled={pending}
+                    className="flex min-h-12 flex-1 items-center justify-center gap-2 rounded-xl bg-indigo-600 px-4 py-3 text-base font-semibold text-white shadow-sm active:bg-indigo-800 disabled:opacity-60"
                   >
+                    {pending && (
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" className="animate-spin" aria-hidden>
+                        <path d="M12 3a9 9 0 1 0 9 9" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" />
+                      </svg>
+                    )}
                     {pending ? "Saving…" : "Save"}
                   </button>
                 </div>
               </form>
+
+              {/* saving overlay — makes a slow round-trip obviously "in progress" (not hung) and blocks
+                  a double-submit. The button + a loading toast reinforce it. */}
+              {pending && (
+                <div className="absolute inset-0 z-20 flex items-center justify-center rounded-t-3xl bg-white/60 backdrop-blur-[1px] sm:rounded-2xl">
+                  <span className="flex items-center gap-2 rounded-full bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow ring-1 ring-slate-200">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" className="animate-spin" aria-hidden>
+                      <path d="M12 3a9 9 0 1 0 9 9" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" />
+                    </svg>
+                    Saving…
+                  </span>
+                </div>
+              )}
 
               {/* on-save confirmation — only when the item looks miscategorised. Buttons
                   say the OUTCOME (not Yes/No) so it's clear for everyone; both save. */}

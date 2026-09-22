@@ -4,7 +4,7 @@ import { prisma } from "@/lib/prisma";
 import { Prisma } from "@prisma/client";
 import { revalidatePath } from "next/cache";
 import { revalidateFamily } from "@/lib/revalidate";
-import { redirect } from "next/navigation";
+import { redirect, unstable_rethrow } from "next/navigation";
 import { cookies, headers } from "next/headers";
 import { auth, signOut } from "@/auth";
 import { isUnlocked } from "@/lib/applock";
@@ -12,7 +12,7 @@ import { log } from "@/lib/log";
 import { formatINR, parseAmount } from "@/lib/format";
 import { generateMonth } from "@/lib/periodClone";
 import { isMiscBucket, MISC_SUBCATEGORIES } from "@/lib/misc";
-import { isLearnable } from "@/lib/spendCategorize";
+import { isLearnable, validateSpendLabel } from "@/lib/spendCategorize";
 import { getSpendShortcuts, getMatcherKeywords, getFrequentSpendItems, getMoneyPlan, getMiscSubCategories, getFamilyCards } from "@/lib/queries";
 import { getCardDues } from "@/lib/personal/cash";
 import { ensurePersonalMonth } from "@/lib/personal";
@@ -44,6 +44,38 @@ async function logActivity(
       periodId: periodId ?? null,
     },
   });
+}
+
+// Record a BLOCKED / denied action attempt so a silent guard-return stops being invisible: it emits one
+// JSON log line (Vercel Runtime Logs) AND writes an ActivityLog row (action "blocked") the head can see
+// in /activity. This is how we catch "I tapped it and nothing happened" without asking the member to
+// reproduce it — and how we confirm a permission fix actually worked.
+async function logBlocked(
+  tag: string,
+  entity: string,
+  reason: string,
+  summary: string,
+  periodId?: number | null,
+) {
+  const session = await auth();
+  log.warn(tag, "blocked", { outcome: "blocked", reason, memberId: session?.user?.memberId ?? null, periodId: periodId ?? null });
+  try {
+    const household = await prisma.household.findFirst({ select: { id: true } });
+    if (!household) return;
+    await prisma.activityLog.create({
+      data: {
+        householdId: household.id,
+        memberId: session?.user?.memberId ?? null,
+        memberName: session?.user?.memberName ?? session?.user?.name ?? null,
+        action: "blocked",
+        entity,
+        summary: `${summary} — blocked: ${reason}`,
+        periodId: periodId ?? null,
+      },
+    });
+  } catch {
+    /* logging must never break the request it's describing */
+  }
 }
 
 const VIEW_AS_COOKIE = "view-as";
@@ -607,10 +639,14 @@ function istYearMonth(now = new Date()): { year: number; month: number } {
 
 // Log an actual spend in a tracked category (Expenses tab).
 // ANY signed-in member can log — auto-attributed to themselves (like the WhatsApp groups).
-async function doAddSpend(formData: FormData): Promise<boolean> {
+// Field-tagged result so the modal can point at the offending input and toast the reason, instead of a
+// silent boolean that left the modal looking hung. `field` matches the client's input names.
+type SpendResult = { ok: true } | { ok: false; error: string; field?: "amount" | "category" | "label" | "subCategory" };
+
+async function doAddSpend(formData: FormData): Promise<SpendResult> {
   const session = await auth();
   const selfId = session?.user?.memberId;
-  if (!selfId) return false; // must be a mapped member
+  if (!selfId) return { ok: false, error: "Please sign in again." }; // must be a mapped member
   await requireUnlocked("deleteIncome");
 
   const periodId = Number(formData.get("periodId"));
@@ -618,16 +654,24 @@ async function doAddSpend(formData: FormData): Promise<boolean> {
   const amount = parseAmount(formData.get("amount"));
   const label = String(formData.get("label") ?? "").trim();
 
-  if (!periodId || !categoryId || !amount || !label) return false;
-  if (!(await periodOpen(periodId))) return false;
+  if (!amount) return { ok: false, error: "Enter an amount.", field: "amount" };
+  if (!categoryId) return { ok: false, error: "Pick a category.", field: "category" };
+  if (!label) return { ok: false, error: "Enter what was bought.", field: "label" };
+  if (!periodId) return { ok: false, error: "Couldn't find the month — reopen and try again." };
+  if (!(await periodOpen(periodId))) return { ok: false, error: "This month is closed." };
 
   // Misc (Personal/Misc) spends must carry a reporting sub-category (Food, Travel…);
   // other categories already are a category, so it stays null there.
   const subCategoryRaw = String(formData.get("subCategory") ?? "").trim();
   const cat = await prisma.category.findUnique({ where: { id: categoryId }, select: { section: true, tracked: true, householdId: true, name: true } });
   const misc = cat ? isMiscBucket(cat) : false;
-  if (misc && !subCategoryRaw) return false; // mandatory for misc
+  if (misc && !subCategoryRaw) return { ok: false, error: "Pick a kind of spend.", field: "subCategory" };
   const subCategory = misc && subCategoryRaw ? subCategoryRaw : null;
+
+  // "Be specific" — reject a note that just restates the category ("veggies", "provision") or a bare fuel
+  // word. Authoritative server-side twin of the modal's instant check (see validateSpendLabel).
+  const labelErr = validateSpendLabel(label, cat?.name ?? "");
+  if (labelErr) return { ok: false, error: labelErr, field: "label" };
 
   // Only the head may log a spend on behalf of another member; everyone else = self.
   const overrideId = Number(formData.get("memberId")) || 0;
@@ -691,7 +735,7 @@ async function doAddSpend(formData: FormData): Promise<boolean> {
   if (cat && cat.tracked && !misc) await learnSpendItem(cat.householdId, label, categoryId);
   await logActivity("spend", "created", `Logged spend “${label}” ${formatINR(amount)}`, targetPeriodId);
   revalidateFamily();
-  return true;
+  return { ok: true };
 }
 
 // Reinforce (or create) the item→category memory for this household. Best-effort:
@@ -866,21 +910,32 @@ export async function ignoreMiscReview(formData: FormData) {
   revalidateFamily();
 }
 
-// Plain form-action caller (card mode on the Expenses page): fire-and-forget.
+// Plain form-action caller (card mode on the Expenses page): throw on failure so the wrapping
+// useToastAction shows an error toast instead of a silent no-op.
 export async function addSpend(formData: FormData) {
-  await doAddSpend(formData);
+  const r = await doAddSpend(formData);
+  if (!r.ok) throw new Error(r.error);
 }
 
-// useActionState caller (the quick-entry modal): returns a success signal so the
-// UI can show "Saved ✓" and reset for the next item without closing. `n`
-// increments on each successful save and drives the client-side reset effect.
-export type AddSpendState = { ok: boolean; n: number };
+// useActionState caller (the quick-entry modal): returns a success signal so the UI can show "Saved ✓"
+// and reset for the next item without closing. `n` increments on each successful save and drives the
+// client-side reset effect; on failure it carries the reason + the field to point at. Wrapped in a
+// try/catch so an unexpected throw resolves the action (the modal never stays stuck on "Saving…").
+export type AddSpendState = { ok: boolean; n: number; error?: string; field?: "amount" | "category" | "label" | "subCategory" };
 export async function addSpendAction(
   prev: AddSpendState,
   formData: FormData,
 ): Promise<AddSpendState> {
-  const ok = await doAddSpend(formData);
-  return { ok, n: ok ? prev.n + 1 : prev.n };
+  try {
+    const r = await doAddSpend(formData);
+    return r.ok
+      ? { ok: true, n: prev.n + 1 }
+      : { ok: false, n: prev.n, error: r.error, field: r.field };
+  } catch (e) {
+    unstable_rethrow(e); // let redirect() (e.g. the app-lock bounce) pass through
+    log.error("addSpendAction", "error", { outcome: "error", message: e instanceof Error ? e.message : String(e) });
+    return { ok: false, n: prev.n, error: "Couldn't save — please try again." };
+  }
 }
 
 // The spend's owner can delete their own; the head can delete anyone's.
@@ -891,11 +946,22 @@ export async function deleteSpend(formData: FormData) {
   const id = Number(formData.get("id"));
   if (!id) return;
   const spend = await prisma.spend.findUnique({ where: { id } });
-  if (!spend) return;
-  if (!(await periodOpen(spend.periodId))) return;
+  if (!spend) { await logBlocked("deleteSpend", "spend", "not-found", `Delete spend #${id}`); throw new Error("That entry no longer exists — it may already be gone."); }
+  if (!(await periodOpen(spend.periodId))) {
+    await logBlocked("deleteSpend", "spend", "period-not-open", `Remove “${spend.label}” ${formatINR(spend.amount)}`, spend.periodId);
+    throw new Error("This month is closed, so its entries can't be deleted.");
+  }
 
-  const isOwner = spend.memberId === session.user.memberId;
-  if (session.user.role !== "head" && !isOwner) return;
+  // The person who LOGGED a spend can remove their own entry even when it's filed under someone else — a
+  // spend on a family card is attributed to the card OWNER, not whoever typed it, so an ownership check on
+  // memberId alone locked a member out of undoing their own mistake (the bug that hit Arumugam). Head can
+  // delete any entry. Silent returns here previously let the UI still toast "deleted" — now we log + throw.
+  const meId = session.user.memberId;
+  const canDelete = session.user.role === "head" || spend.memberId === meId || spend.loggedById === meId;
+  if (!canDelete) {
+    await logBlocked("deleteSpend", "spend", "not-logger-or-head", `Remove “${spend.label}” ${formatINR(spend.amount)}`, spend.periodId);
+    throw new Error("Only the person who logged this entry (or the head) can delete it.");
+  }
 
   // (Receipt files are deferred/cloud-stored — nothing to unlink locally.)
   // Any credit-dashboard mirror line (family credit-card spend) is removed by the DB cascade

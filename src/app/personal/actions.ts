@@ -8,6 +8,7 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { auth } from "@/auth";
 import { parseAmount } from "@/lib/format";
+import { validateSpendLabel } from "@/lib/spendCategorize";
 import { log } from "@/lib/log";
 import { isPersonalUnlocked } from "@/lib/personal-lock";
 import { ensurePersonalMonth, ensurePersonalPreview, rebuildPersonalPreview, seedPersonalCategories } from "@/lib/personal";
@@ -414,6 +415,9 @@ export async function addPersonalSpend(
   if (!(await ownsPeriod(member.id, periodId))) return { ok: false, error: "Not your month.", n };
   const cat = await prisma.personalCategory.findUnique({ where: { id: categoryId } });
   if (!cat || cat.memberId !== member.id) return { ok: false, error: "Unknown category.", n };
+  // "Be specific" — reject a note that just restates the category or a bare umbrella/fuel word.
+  const noteErr = validateSpendLabel(note, cat.name);
+  if (noteErr) return { ok: false, error: noteErr, n };
   // Shared spend (GPay-style): the full "amount" is logged as the spend (optionally on a
   // card, deferred as usual); each other person's share becomes its own lent receivable
   // that posts back as income when received. "myShare" is what's left for you.

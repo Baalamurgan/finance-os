@@ -1798,6 +1798,20 @@ function diffByKey(
   return { added, removed, changed };
 }
 
+/**
+ * Recent BLOCKED action attempts (logBlocked → ActivityLog action "blocked"). Powers the head-only
+ * "Something didn't go through" feed on /activity, so a silent permission/state failure is visible and
+ * testable without asking the member to reproduce it. Newest first.
+ */
+export async function getRecentBlocks(householdId: number, limit = 30) {
+  return prisma.activityLog.findMany({
+    where: { householdId, action: "blocked" },
+    orderBy: { createdAt: "desc" },
+    take: limit,
+    select: { id: true, memberName: true, entity: true, summary: true, createdAt: true },
+  });
+}
+
 export async function getMonthChanges(householdId: number, periodId: number) {
   const period = await prisma.period.findUnique({ where: { id: periodId } });
   if (!period) return null;

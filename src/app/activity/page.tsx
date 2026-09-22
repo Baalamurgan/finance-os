@@ -1,6 +1,6 @@
 import { formatINR } from "@/lib/format";
 import { loadCommon } from "@/lib/load";
-import { getMonthChanges } from "@/lib/queries";
+import { getMonthChanges, getRecentBlocks } from "@/lib/queries";
 import { NavHeader } from "@/components/NavHeader";
 
 export default async function ActivityPage({
@@ -38,6 +38,9 @@ export default async function ActivityPage({
   );
 
   const changes = c.selected ? await getMonthChanges(c.household.id, c.selected.id) : null;
+  // Head-only: actions that were denied (permission / closed month / missing row). Surfacing them here
+  // means a member's "it didn't work" is catchable without a repro, and confirms a fix took.
+  const blocks = c.isHead ? await getRecentBlocks(c.household.id) : [];
 
   const nonEmpty = (d?: { added: unknown[]; removed: unknown[]; changed: unknown[] } | null) =>
     !!d && (d.added.length > 0 || d.removed.length > 0 || d.changed.length > 0);
@@ -75,6 +78,36 @@ export default async function ActivityPage({
             </div>
           )}
         </section>
+
+        {/* Head-only: denied attempts, so silent failures are visible and fixes are testable. */}
+        {c.isHead && (
+          <section className="rounded-xl border border-slate-200 bg-white p-4">
+            <h2 className="text-sm font-semibold text-slate-900">Something didn&apos;t go through</h2>
+            <p className="mt-0.5 text-xs text-slate-500">
+              Actions that were blocked — a locked month, a permission, or a missing entry. Newest first.
+            </p>
+            {blocks.length === 0 ? (
+              <p className="mt-2 text-sm text-slate-400">No blocked actions recorded. 🎉</p>
+            ) : (
+              <ul className="mt-3 space-y-1.5 text-sm">
+                {blocks.map((b) => (
+                  <li key={b.id} className="flex items-start justify-between gap-3 border-b border-slate-100 pb-1.5 last:border-0">
+                    <span className="text-slate-700">
+                      <span className="rounded bg-red-50 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-red-600">
+                        {b.entity}
+                      </span>{" "}
+                      {b.summary}
+                      {b.memberName ? <span className="text-slate-400"> · {b.memberName}</span> : null}
+                    </span>
+                    <span className="shrink-0 text-[11px] tabular-nums text-slate-400">
+                      {b.createdAt.toLocaleDateString("en-IN", { day: "2-digit", month: "short" })}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
+        )}
       </main>
     </>
   );

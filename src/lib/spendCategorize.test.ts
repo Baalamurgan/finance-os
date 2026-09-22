@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { suggestCategoryName, isLearnable, normalizeItem, resolveCategoryId, suggestSpendKind } from "./spendCategorize";
+import { suggestCategoryName, isLearnable, normalizeItem, resolveCategoryId, suggestSpendKind, validateSpendLabel } from "./spendCategorize";
 
 describe("suggestCategoryName", () => {
   it("maps the household's staples to the right category", () => {
@@ -89,5 +89,43 @@ describe("suggestSpendKind", () => {
     expect(suggestSpendKind("beverage")).toBeNull(); // 'veg' must not fire inside a word
     expect(suggestSpendKind("")).toBeNull();
     expect(suggestSpendKind("random gibberish xyz")).toBeNull();
+  });
+  it("routes the household's new kinds", () => {
+    expect(suggestSpendKind("Cat food")).toBe("Pets");
+    expect(suggestSpendKind("Pradhosham koil exp")).toBe("God & Temple");
+    expect(suggestSpendKind("Arni house property tax")).toBe("Bills & Utilities");
+    expect(suggestSpendKind("Idiyappam vadacurry")).toBe("Food & Dining");
+  });
+});
+
+describe("validateSpendLabel", () => {
+  it("blocks a bare restatement of the category", () => {
+    expect(validateSpendLabel("provision", "Provision")).not.toBeNull();
+    expect(validateSpendLabel("provision items", "Provision")).not.toBeNull();
+    expect(validateSpendLabel("veggies", "Veg & Fruits")).not.toBeNull();
+    expect(validateSpendLabel("vegetables", "Veg & Fruits")).not.toBeNull();
+    expect(validateSpendLabel("fruits", "Veg & Fruits")).not.toBeNull();
+    expect(validateSpendLabel("vinayagar chaturthi", "Vinayagar chaturthi")).not.toBeNull();
+    expect(validateSpendLabel("vinayagar items", "Vinayagar chaturthi")).not.toBeNull();
+    expect(validateSpendLabel("Krishnar & accessories", "Krishna jayanthi")).not.toBeNull();
+    expect(validateSpendLabel("Dhashni birthday", "Dhashni birthday")).not.toBeNull();
+    expect(validateSpendLabel("", "Provision")).not.toBeNull();
+  });
+  it("allows a note that names a concrete item", () => {
+    expect(validateSpendLabel("milk", "Veg & Fruits")).toBeNull();
+    expect(validateSpendLabel("paal", "Veg & Fruits")).toBeNull();
+    expect(validateSpendLabel("maavu", "Veg & Fruits")).toBeNull();
+    expect(validateSpendLabel("flour", "Veg & Fruits")).toBeNull();
+    expect(validateSpendLabel("vinayagar idol", "Vinayagar chaturthi")).toBeNull();
+    expect(validateSpendLabel("krishnar idol", "Krishna jayanthi")).toBeNull();
+    expect(validateSpendLabel("doll", "Krishna jayanthi")).toBeNull();
+    expect(validateSpendLabel("Dhashni birthday cake", "Dhashni birthday")).toBeNull();
+    expect(validateSpendLabel("rice", "Provision")).toBeNull();
+  });
+  it("requires a vehicle/detail for fuel, not a bare fuel word", () => {
+    expect(validateSpendLabel("petrol", "Petrol")).toMatch(/vehicle/i);
+    expect(validateSpendLabel("diesel", "Petrol")).not.toBeNull();
+    expect(validateSpendLabel("petrol Activa", "Petrol")).toBeNull();
+    expect(validateSpendLabel("Brio diesel", "Petrol")).toBeNull();
   });
 });

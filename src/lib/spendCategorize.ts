@@ -109,21 +109,25 @@ export function resolveCategoryId(name: string | null, categories: { id: number;
 // fill is SOFT (the user can always change it). Keywords must be whole-word (single) or a
 // phrase (multi-word), and must not overlap across kinds. Names MUST match CATEGORY_KINDS.
 const SPEND_KIND_KEYWORDS: { kind: string; keywords: string[] }[] = [
-  { kind: "Food & Dining", keywords: ["restaurant", "hotel", "swiggy", "zomato", "dinner", "lunch", "breakfast", "snacks", "biryani", "biriyani", "meals", "food", "cafe", "pizza", "burger", "dosa", "idli", "parotta", "juice", "bakery", "sweets", "sweet", "tiffin", "eat", "eatery", "kfc", "dominos", "chaat", "shawarma", "samosa"] },
+  { kind: "Food & Dining", keywords: ["restaurant", "hotel", "swiggy", "zomato", "dinner", "lunch", "breakfast", "snacks", "biryani", "biriyani", "meals", "food", "cafe", "pizza", "burger", "dosa", "idli", "parotta", "juice", "bakery", "sweets", "sweet", "tiffin", "eat", "eatery", "kfc", "dominos", "chaat", "shawarma", "samosa", "vadacurry", "vada", "vadai", "cooz", "idiyappam", "chapati", "chapathi", "chappathi", "chappathis", "chapatis", "bonda", "bondas", "sundal", "puff", "appam", "poori", "puri", "pongal", "upma", "bajji", "murukku", "mixture", "kheer", "payasam", "halwa", "sambar", "rasam", "banana chips", "soup"] },
   { kind: "Groceries", keywords: ["grocery", "groceries", "provision", "provisions", "ration", "rice", "arisi", "dal", "paruppu", "oil", "ennai", "sugar", "sakkarai", "salt", "uppu", "milk", "paal", "vegetables", "vegetable", "veg", "veggies", "fruits", "fruit", "atta", "flour", "maavu", "onion", "vengayam", "tomato", "thakkali", "masala", "biscuit", "egg", "muttai", "coconut", "thengai", "greens", "keerai"] },
-  { kind: "Shopping", keywords: ["dress", "shirt", "tshirt", "clothes", "saree", "shoes", "chappal", "amazon", "flipkart", "myntra", "shopping", "electronics", "gadget", "headphone", "charger", "watch", "bag"] },
-  { kind: "Bills & Utilities", keywords: ["eb", "electricity", "current bill", "water bill", "gas", "cylinder", "recharge", "wifi", "broadband", "internet", "dth", "cable", "postpaid", "prepaid"] },
+  { kind: "Shopping", keywords: ["dress", "shirt", "tshirt", "clothes", "saree", "shoes", "chappal", "amazon", "flipkart", "myntra", "shopping", "electronics", "gadget", "headphone", "charger", "watch", "bag", "slippers", "mattress", "phone case", "nail cutter", "battery", "thread", "jacket", "jackets", "mat", "cover"] },
+  { kind: "Bills & Utilities", keywords: ["eb", "electricity", "current bill", "water bill", "gas", "cylinder", "recharge", "wifi", "broadband", "internet", "dth", "cable", "postpaid", "prepaid", "property tax", "house tax", "carpenter", "plumber", "electrician", "labour"] },
   { kind: "Rent", keywords: ["rent", "vaadagai"] },
   { kind: "Transport & Fuel", keywords: ["petrol", "diesel", "fuel", "bunk", "bus", "train", "auto", "cab", "uber", "ola", "metro", "parking", "toll", "fare", "rapido", "share auto"] },
   { kind: "Entertainment", keywords: ["movie", "cinema", "netflix", "spotify", "hotstar", "prime", "game", "ott"] },
   { kind: "Travel", keywords: ["flight", "trip", "tour", "holiday", "resort", "stay", "booking", "irctc", "vacation"] },
   { kind: "Health", keywords: ["medical", "medicine", "tablet", "tablets", "hospital", "doctor", "pharmacy", "clinic", "health", "scan", "lab", "apollo", "mediplus"] },
-  { kind: "Education", keywords: ["school", "college", "fees", "fee", "tuition", "book", "books", "course", "exam", "class", "stationery"] },
+  { kind: "Education", keywords: ["school", "college", "fees", "fee", "tuition", "book", "books", "course", "exam", "class", "stationery", "marker", "pen", "pencil", "notebook", "chart paper"] },
   { kind: "Personal Care", keywords: ["salon", "haircut", "parlour", "parlor", "cosmetics", "cosmetic", "grooming", "spa", "beauty"] },
   { kind: "Gifts & Donations", keywords: ["gift", "donation", "temple", "offering", "hundial", "kovil", "charity"] },
   { kind: "Transfers / Sent", keywords: ["sent", "transfer", "gpay", "phonepe", "upi"] },
   { kind: "EMI & Loans", keywords: ["emi", "loan", "interest", "kist"] },
   { kind: "Investments", keywords: ["sip", "mutual fund", "stock", "gold", "investment", "chit", "chitfund", "fd", "rd"] },
+  { kind: "Pets", keywords: ["pet", "pets", "dog", "puppy", "cat", "kitten", "vet", "veterinary", "kennel", "pet food", "dog food", "cat food", "fish food", "aquarium"] },
+  // Temple / ritual spends — the household tracks these apart from Gifts & Donations (their own "God &
+  // Temple" tag, used ~9× in Jun–Aug). Deity/ceremony words route here; plain "gift"/"donation" stay Gifts.
+  { kind: "God & Temple", keywords: ["temple", "koil", "kovil", "pooja", "puja", "pradhosham", "amavasa", "amavasya", "dakshinai", "dakshina", "jothidar", "homam", "abhishekam", "abisekam", "hundial", "nonbu", "nombu", "gopooja", "seemantham", "varalakshmi", "thithi", "deepam", "prasadam", "archanai", "kumkum", "vibhuti", "vinayagar", "perumal", "amman", "ayyappan"] },
 ];
 
 const kindRows = SPEND_KIND_KEYWORDS.flatMap((m) => m.keywords.map((k) => ({ kind: m.kind, keyword: normalizeItem(k) })));
@@ -152,4 +156,58 @@ export function isLearnable(label: string): string | null {
   const words = norm.split(" ");
   if (words.length > 3 || norm.length > 24) return null;
   return norm;
+}
+
+// ── "Be specific" validation for a spend note ──────────────────────────────────────────
+// A note that merely restates the category ("veggies" under Veg & Fruits, "provision" under Provision,
+// "Dhashni birthday" under Dhashni birthday) or is a bare umbrella/fuel word carries no information — the
+// category already says that much. validateSpendLabel HARD-BLOCKS those so entries stay meaningful, while
+// allowing any note with at least one concrete item ("milk", "idol", "cake", "petrol activa"). Pure &
+// shared so the Add-Spend modal (instant) and the server action (authoritative) enforce the same rule.
+
+// Words that add no meaning on their own.
+const FILLER_WORDS = new Set([
+  "items", "item", "stuff", "things", "thing", "group", "accessories", "accessory", "other", "others",
+  "misc", "general", "expense", "expenses", "exp", "purchase", "purchases", "bought", "related", "and",
+  "for", "of", "the", "a", "an", "some", "nos", "no", "pcs", "pieces", "pack", "packet",
+]);
+// Whole-CATEGORY words — they name a bucket, not an item. Grocery umbrellas AND the bare fuel words (a
+// fuel note must say WHICH vehicle / add a detail, per the household's rule).
+const UMBRELLA_WORDS = new Set([
+  "veggies", "vegetable", "vegetables", "veg", "fruit", "fruits", "provision", "provisions", "grocery",
+  "groceries", "ration", "petrol", "diesel", "fuel", "bunk", "gas",
+]);
+const FUEL_WORDS = ["petrol", "diesel", "fuel", "bunk"];
+
+// A note word "is just the category name" when it equals a category-name token or shares a 4+ char prefix
+// with one ("provisions"↔"provision", "krishnar"↔"krishna"). Short tokens (<3) are ignored to stay safe.
+function echoesCategory(word: string, catTokens: string[]): boolean {
+  for (const c of catTokens) {
+    if (c.length < 3) continue;
+    if (word === c) return true;
+    let i = 0;
+    while (i < word.length && i < c.length && word[i] === c[i]) i++;
+    if (i >= 4) return true;
+  }
+  return false;
+}
+
+/**
+ * Returns an error MESSAGE when the note is too generic to save (a bare restatement of the category, an
+ * umbrella/fuel word, or only filler), else null. `categoryName` lets it treat category-echoing words as
+ * meaningless. Empty note gets its own prompt.
+ */
+export function validateSpendLabel(label: string, categoryName = ""): string | null {
+  const note = normalizeItem(label);
+  if (!note) return "Add what you bought — e.g. milk, idol, cake.";
+  const catTokens = normalizeItem(categoryName).split(" ").filter(Boolean);
+  const words = note.split(" ").filter(Boolean);
+  const hasItem = words.some(
+    (w) => !FILLER_WORDS.has(w) && !UMBRELLA_WORDS.has(w) && !echoesCategory(w, catTokens),
+  );
+  if (hasItem) return null;
+  if (words.some((w) => FUEL_WORDS.includes(w))) {
+    return "Say which vehicle — e.g. “petrol — Activa”, not just “petrol”.";
+  }
+  return "Too generic — add what you actually bought (e.g. milk, idol, cake).";
 }
