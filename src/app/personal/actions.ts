@@ -285,8 +285,10 @@ async function syncPeerCardLoans(
   tx: Prisma.TransactionClient,
   a: { spendId: number; payerId: number; payerName: string; card: SpendCard | null; amount: number; note: string; dueDate: Date | null; notifyDaysBefore: number },
 ) {
-  // Peer loans are the only spend-linked loans carrying a linkGroup — drop them before rewriting.
-  await tx.personalLoan.deleteMany({ where: { spendId: a.spendId, linkGroup: { not: null } } });
+  // Drop only the prior PEER-CARD pair (they carry a cardAccountId) before rewriting. Member-split /
+  // reimbursement receivables also share a linkGroup but have no cardAccountId — leave those untouched,
+  // or editing an unrelated field would wipe the split debt.
+  await tx.personalLoan.deleteMany({ where: { spendId: a.spendId, cardAccountId: { not: null } } });
   if (!a.card || !a.card.isPeer) return;
   const linkGroup = randomUUID();
   const common = { amount: a.amount, outstanding: a.amount, note: a.note, spendId: a.spendId, linkGroup, cardAccountId: a.card.id, dueDate: a.dueDate, notifyDaysBefore: a.notifyDaysBefore, initiatedById: a.payerId };
@@ -609,10 +611,36 @@ export async function updatePersonalSpend(
     if ("error" in r) return { ok: false, error: r.error, n };
     peerRepay = r;
   }
+
+  // Keep split/reimbursement receivables in step with an edited amount (Model A: your share is the
+  // residual = amount − Σ others' shares). A full reimbursement's single receivable tracks the new
+  // amount; a split keeps others' shares and lets your share absorb the change — never below what's owed.
+  const r2 = (x: number) => Math.round(x * 100) / 100;
+  let spendSync: null | { sharedOthers: number; reimburseLoan: { id: number; linkGroup: string | null; amount: number; outstanding: number } | null } = null;
+  if (s.sharedOthers != null && Math.abs(amount - s.amount) > 0.005) {
+    const lent = await prisma.personalLoan.findMany({ where: { spendId: id, direction: "lent" }, select: { id: true, linkGroup: true, amount: true, outstanding: true } });
+    const owed = r2(lent.reduce((t, l) => t + l.amount, 0));
+    const wasReimburse = Math.abs(s.amount - s.sharedOthers) <= 0.005;
+    if (wasReimburse && lent.length === 1) {
+      spendSync = { sharedOthers: amount, reimburseLoan: lent[0] };
+    } else {
+      if (owed > amount + 0.005) return { ok: false, error: "That's less than what others still owe you — adjust the split first.", n };
+      spendSync = { sharedOthers: owed, reimburseLoan: null };
+    }
+  }
+
   await prisma.$transaction(async (tx) => {
-    await tx.personalSpend.update({ where: { id }, data: { categoryId, amount, note, cardAccountId } });
+    await tx.personalSpend.update({ where: { id }, data: { categoryId, amount, note, cardAccountId, ...(spendSync ? { sharedOthers: spendSync.sharedOthers } : {}) } });
     await syncPersonalSpendLedger(tx, { spendId: id, card, amount, label: note, date: s.date, categoryName: cat.name, payerName: member.name });
     await syncPeerCardLoans(tx, { spendId: id, payerId: member.id, payerName: member.name, card, amount, note, dueDate: peerRepay?.dueDate ?? null, notifyDaysBefore: peerRepay?.notifyDaysBefore ?? 3 });
+    if (spendSync?.reimburseLoan) {
+      const l = spendSync.reimburseLoan;
+      const paid = Math.max(0, r2(l.amount - l.outstanding));
+      const newOut = Math.max(0, r2(amount - paid));
+      await tx.personalLoan.updateMany({ where: l.linkGroup ? { linkGroup: l.linkGroup } : { id: l.id }, data: { amount, outstanding: newOut, sharedPaid: amount, status: newOut <= 0.005 ? "settled" : "open" } });
+    } else if (spendSync) {
+      await tx.personalLoan.updateMany({ where: { spendId: id, direction: "lent" }, data: { sharedPaid: amount, sharedShare: r2(amount - spendSync.sharedOthers) } });
+    }
   });
   rev();
   return { ok: true, n };
@@ -910,6 +938,48 @@ export async function deletePersonalLoan(formData: FormData) {
   const loan = await prisma.personalLoan.findUnique({ where: { id } });
   if (!loan || loan.memberId !== member.id) return;
   await prisma.personalLoan.deleteMany({ where: loanGroupWhere(loan) });
+  rev();
+}
+
+// Edit a "You lent" entry: amount, collect-by date, note, reminder lead — NOT the counterparty. Amount +
+// date are locked for a card-fronted debt (the peer card cycle drives those). When it's a shared-spend
+// receivable, changing its amount rebalances the PARENT spend (others' owed = Σ shares, your share is the
+// residual) — so the spend and the lending entry stay in sync both ways. Applies to the whole linked
+// group, so the mirror on the other member's tab tracks the change too.
+export async function updatePersonalLoan(formData: FormData) {
+  const member = await me();
+  if (!member) return;
+  const id = Number(formData.get("id"));
+  const loan = await prisma.personalLoan.findUnique({ where: { id } });
+  if (!loan || loan.memberId !== member.id || loan.direction !== "lent") return;
+  const r2 = (x: number) => Math.round(x * 100) / 100;
+
+  const note = String(formData.get("note") ?? "").trim() || null;
+  const nd = Number(formData.get("notifyDaysBefore"));
+  const notifyDaysBefore = Number.isFinite(nd) && nd >= 0 ? Math.round(nd) : loan.notifyDaysBefore;
+  const editable = loan.cardAccountId == null; // peer-card amount/date are immutable (driven by the card)
+  const newAmount = editable ? (parseAmount(formData.get("amount")) || loan.amount) : loan.amount;
+  if (!newAmount || newAmount <= 0) return;
+  const dueRaw = String(formData.get("dueDate") ?? "").trim();
+  const dueDate = !editable ? loan.dueDate : dueRaw ? new Date(`${dueRaw}T00:00:00`) : null;
+  const paid = Math.max(0, r2(loan.amount - loan.outstanding)); // preserve what's already been paid
+  const newOutstanding = Math.max(0, r2(newAmount - paid));
+
+  if (loan.spendId && editable && Math.abs(newAmount - loan.amount) > 0.005) {
+    const spend = await prisma.personalSpend.findUnique({ where: { id: loan.spendId }, select: { id: true, amount: true } });
+    if (spend) {
+      const others = await prisma.personalLoan.aggregate({ where: { spendId: spend.id, direction: "lent", id: { not: id } }, _sum: { amount: true } });
+      const newSharedOthers = r2((others._sum.amount ?? 0) + newAmount);
+      if (newSharedOthers > spend.amount + 0.005) throw new Error("owed exceeds the spend");
+      await prisma.personalSpend.update({ where: { id: spend.id }, data: { sharedOthers: newSharedOthers } });
+      await prisma.personalLoan.updateMany({ where: { spendId: spend.id, direction: "lent" }, data: { sharedShare: r2(spend.amount - newSharedOthers), sharedPaid: spend.amount } });
+    }
+  }
+
+  await prisma.personalLoan.updateMany({
+    where: loanGroupWhere(loan),
+    data: { amount: newAmount, outstanding: newOutstanding, note, dueDate, notifyDaysBefore, status: newOutstanding <= 0.005 ? "settled" : "open" },
+  });
   rev();
 }
 

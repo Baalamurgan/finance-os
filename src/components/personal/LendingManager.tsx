@@ -8,6 +8,7 @@ import {
   recordPersonalLoanPayment,
   settlePersonalLoan,
   deletePersonalLoan,
+  updatePersonalLoan,
 } from "@/app/personal/actions";
 
 // ── Shared modal shell ────────────────────────────────────────────────────────
@@ -177,6 +178,32 @@ export function LoanRowActions({ loan, categories = [] }: { loan: LoanRow; categ
               <p className="rounded-lg bg-amber-50 px-2.5 py-1.5 text-[11px] leading-relaxed text-amber-800">
                 💸 Paying this is real cash out — it&apos;s logged as a spend under the category you pick, so your <b>Can spend</b> drops by what you pay.
               </p>
+            )}
+
+            {/* edit the entry (You lent only) — amount, collect-by, note. Amount/date locked for a
+                card-fronted debt (driven by the card). Editing a shared-spend receivable rebalances the
+                parent spend both ways. */}
+            {loan.accent === "emerald" && (
+              <ToastForm action={updatePersonalLoan} successMessage="Updated" errorMessage="Couldn't update — check the amount" onSubmit={() => setOpen(false)} className="rounded-lg border border-slate-100 p-3">
+                <input type="hidden" name="id" value={loan.id} />
+                <div className="text-xs font-medium text-slate-500">Edit details</div>
+                <div className="mt-2 space-y-2">
+                  <label className="block">
+                    <span className="text-[11px] text-slate-500">Amount (₹)</span>
+                    <input name="amount" type="number" step="0.01" inputMode="decimal" defaultValue={loan.amount} disabled={!!loan.cardName} className="input mt-0.5 w-full py-1.5 text-sm disabled:bg-slate-100 disabled:text-slate-400" />
+                  </label>
+                  <label className="block">
+                    <span className="text-[11px] text-slate-500">Collect by</span>
+                    <input name="dueDate" type="date" defaultValue={loan.dueISO ? loan.dueISO.slice(0, 10) : ""} disabled={!!loan.cardName} className="input mt-0.5 w-full py-1.5 text-sm disabled:bg-slate-100 disabled:text-slate-400" />
+                  </label>
+                  <label className="block">
+                    <span className="text-[11px] text-slate-500">Note</span>
+                    <input name="note" defaultValue={loan.note ?? ""} className="input mt-0.5 w-full py-1.5 text-sm" />
+                  </label>
+                  <button type="submit" className="w-full rounded-md bg-slate-800 px-3 py-2 text-sm font-medium text-white hover:bg-slate-700">Save changes</button>
+                </div>
+                {loan.cardName && <p className="mt-1 text-[11px] text-slate-400">Amount &amp; date come from {loan.cardName} — only the note is editable.</p>}
+              </ToastForm>
             )}
 
             {/* record a part-payment */}

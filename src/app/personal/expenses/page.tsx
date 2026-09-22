@@ -73,7 +73,10 @@ export default async function PersonalExpenses({
     let split: { kind: "split" | "reimburse"; youSpent: number; people: number; toCome: number; borne: number } | undefined;
     if (s.sharedOthers != null) {
       const myShare = r2(s.amount - s.sharedOthers);
-      const loans = s.splitLoans;
+      // Only the LENDER rows are this spend's receivables. A member split also writes a mirrored
+      // "borrowed" row on the other member (same spendId) — that's their liability copy, not more owed
+      // to you, so exclude it or the totals double.
+      const loans = s.splitLoans.filter((l) => l.direction === "lent");
       const existingTotal = r2(loans.reduce((t, l) => t + l.amount, 0));
       const borne = Math.max(0, r2(s.sharedOthers - existingTotal)); // receivables that were deleted → you eat them
       const open = loans.filter((l) => l.status === "open");
