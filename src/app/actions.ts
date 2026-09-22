@@ -13,7 +13,7 @@ import { formatINR, parseAmount } from "@/lib/format";
 import { generateMonth } from "@/lib/periodClone";
 import { isMiscBucket, MISC_SUBCATEGORIES } from "@/lib/misc";
 import { isLearnable, validateSpendLabel } from "@/lib/spendCategorize";
-import { getSpendShortcuts, getMatcherKeywords, getFrequentSpendItems, getMoneyPlan, getMiscSubCategories, getFamilyCards } from "@/lib/queries";
+import { getSpendShortcuts, getMatcherKeywords, getFrequentSpendItems, getFrequentSpendCombos, getMoneyPlan, getMiscSubCategories, getFamilyCards } from "@/lib/queries";
 import { getCardDues } from "@/lib/personal/cash";
 import { ensurePersonalMonth } from "@/lib/personal";
 import { planBillMonth, type FundingStyle } from "@/lib/schedule";
@@ -758,7 +758,9 @@ async function learnSpendItem(householdId: number, label: string, categoryId: nu
 // it through): the quick chips (head-curated shortcuts, or the most-frequent items when
 // none are set up) + the keyword rows that drive the on-save suggestion.
 export type SpendAssist = {
-  chips: { icon: string | null; label: string; categoryId: number }[];
+  // `frequent` chips are the member's own most-used category+payment combos (preset both, type the item);
+  // the rest are head-curated item shortcuts (also fill the item). `cardId` is the preset payment method.
+  chips: { icon: string | null; label: string; categoryId: number; cardId?: number | null; frequent?: boolean }[];
   keywords: { keyword: string; category: string; hits: number }[];
   cards: { id: number; name: string; ownerId: number; ownerName: string; last4: string | null; type: string; color: string }[];
   topCardId: number | null; // most-used card family-wide → featured as a quick chip in "Paid with"
@@ -781,9 +783,14 @@ export async function getSpendAssist(): Promise<SpendAssist> {
       take: 1,
     }),
   ]);
-  const chips = shortcuts.length
+  const curated: SpendAssist["chips"] = shortcuts.length
     ? shortcuts.map((s) => ({ icon: s.icon, label: s.label, categoryId: s.categoryId }))
     : (await getFrequentSpendItems(household.id)).map((f) => ({ icon: f.icon, label: f.label, categoryId: f.categoryId }));
+  // Supplement with THIS member's most-used category+payment combos (deduped against curated categories
+  // so we don't just repeat them). These preset category + card; the member types the item + amount.
+  const combos = session.user.memberId ? await getFrequentSpendCombos(household.id, session.user.memberId) : [];
+  const mfu: SpendAssist["chips"] = combos.map((c) => ({ icon: c.icon, label: c.label, categoryId: c.categoryId, cardId: c.cardId, frequent: true }));
+  const chips = [...curated, ...mfu];
   const cards = cardRows.map((c) => ({ id: c.id, name: c.name, ownerId: c.memberId, ownerName: c.member.name, last4: c.last4, type: c.type, color: c.color }));
   // Only feature it if it's still an active card in the list; else fall back to the first card.
   const rawTop = topCard[0]?.cardAccountId ?? null;

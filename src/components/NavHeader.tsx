@@ -63,7 +63,7 @@ export function NavHeader({
   selYear: number;
   selMonth: number;
   members: { id: number; name: string }[];
-  categories: { id: number; name: string; tracked?: boolean; section?: string; sinking?: boolean }[];
+  categories: { id: number; name: string; tracked?: boolean; section?: string; sinking?: boolean; miscCard?: boolean; repeatMonthly?: boolean; repeatYearly?: boolean }[];
   account: { name: string; email: string; image: string | null };
   isHead: boolean;
   piggyBalance: number;
@@ -90,7 +90,9 @@ export function NavHeader({
   const spendCategories = categories
     .filter((c) => c.tracked)
     .sort((a, b) => Number(a.sinking ?? false) - Number(b.sinking ?? false))
-    .map((c) => ({ id: c.id, name: c.name, misc: c.section === "Misc" }));
+    // oneMonth = a spend card created for THIS month only (not re-seeded) → grouped apart in the picker
+    // from the always-recurring monthly budgets.
+    .map((c) => ({ id: c.id, name: c.name, misc: c.section === "Misc", oneMonth: !!(c.miscCard && !c.repeatMonthly && !c.repeatYearly) }));
 
   // Day-to-day tabs live in the nav; the admin-ish ones (Wind Down, Setup, Settings)
   // moved under the avatar menu to declutter the bar.

@@ -74,6 +74,47 @@ export async function getFrequentSpendItems(householdId: number, limit = 10) {
   }
 }
 
+/**
+ * Per-member "most frequently used" spend combos (category + payment method) from the member's own
+ * recent logs — powers the dynamic quick-add chips that supplement the head-curated shortcuts. Each chip
+ * presets the category and the card/cash so the member types only the amount + item. Frequency ≥ 2 in the
+ * last ~90 days; newest-weighted by count. Best-effort (never blocks the modal).
+ */
+export async function getFrequentSpendCombos(householdId: number, memberId: number, limit = 5) {
+  try {
+    const since = new Date();
+    since.setDate(since.getDate() - 90);
+    const grouped = await prisma.spend.groupBy({
+      by: ["categoryId", "cardAccountId"],
+      where: { loggedById: memberId, createdAt: { gte: since }, category: { householdId, tracked: true } },
+      _count: { _all: true },
+      orderBy: { _count: { categoryId: "desc" } },
+      take: 20,
+    });
+    if (grouped.length === 0) return [];
+    const catIds = [...new Set(grouped.map((g) => g.categoryId))];
+    const cardIds = [...new Set(grouped.map((g) => g.cardAccountId).filter((x): x is number => x != null))];
+    const [cats, cards] = await Promise.all([
+      prisma.category.findMany({ where: { id: { in: catIds } }, select: { id: true, name: true } }),
+      cardIds.length ? prisma.financeAccount.findMany({ where: { id: { in: cardIds } }, select: { id: true, name: true } }) : Promise.resolve([]),
+    ]);
+    const catById = new Map(cats.map((c) => [c.id, c.name]));
+    const cardById = new Map(cards.map((c) => [c.id, c.name]));
+    const out: { icon: string; label: string; categoryId: number; cardId: number | null }[] = [];
+    for (const g of grouped) {
+      if (g._count._all < 2) continue; // "frequent" = used at least twice
+      const catName = catById.get(g.categoryId);
+      if (!catName) continue;
+      const pay = g.cardAccountId != null ? cardById.get(g.cardAccountId) ?? "Card" : "Cash";
+      out.push({ icon: g.cardAccountId != null ? "💳" : "💵", label: `${catName} · ${pay}`, categoryId: g.categoryId, cardId: g.cardAccountId ?? null });
+      if (out.length >= limit) break;
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}
+
 // Misc spends in this period whose item looks like it belongs in a tracked category —
 // the head-only "Review Misc" safety net. Uses the same seed+learned matcher as the
 // entry-time nudge, then resolves the suggestion to a real tracked (non-misc) category.

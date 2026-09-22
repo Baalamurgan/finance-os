@@ -6,11 +6,11 @@ import { addSpendAction, getSpendAssist, type AddSpendState } from "@/app/action
 import { suggestCategoryName, resolveCategoryId, suggestSpendKind, validateSpendLabel, type LearnedKeyword } from "@/lib/spendCategorize";
 import { useToast } from "@/components/Toast";
 
-type Cat = { id: number; name: string; misc?: boolean }; // misc = the Personal/Misc bucket
+type Cat = { id: number; name: string; misc?: boolean; oneMonth?: boolean }; // misc = the Personal/Misc bucket; oneMonth = a this-month-only spend card
 
 type Mem = { id: number; name: string };
 
-type Chip = { icon: string | null; label: string; categoryId: number };
+type Chip = { icon: string | null; label: string; categoryId: number; cardId?: number | null; frequent?: boolean };
 type Card = { id: number; name: string; ownerId: number; ownerName: string; last4: string | null; type: string; color: string };
 
 export function AddSpendModal({
@@ -292,48 +292,67 @@ export function AddSpendModal({
                     <div>
                       <label className="text-sm font-medium text-slate-600">Quick add</label>
                       <div className="-mx-1 mt-1.5 flex gap-2 overflow-x-auto px-1 pb-1">
-                        {chips.map((ch, i) => (
-                          <button
-                            key={`${ch.label}-${i}`}
-                            type="button"
-                            onClick={() => {
-                              setLabelText(ch.label);
-                              setCategoryId(ch.categoryId);
-                            }}
-                            className={`flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full border-2 px-3 py-2 text-sm font-medium transition ${
-                              categoryId === ch.categoryId && labelText === ch.label
-                                ? "border-indigo-500 bg-indigo-50 text-indigo-700"
-                                : "border-slate-200 text-slate-600 active:border-slate-400"
-                            }`}
-                          >
-                            {ch.icon && <span className="text-base leading-none">{ch.icon}</span>}
-                            {ch.label}
-                          </button>
-                        ))}
+                        {chips.map((ch, i) => {
+                          // curated item chip → fills category + item; frequent combo chip → presets
+                          // category + payment method, leaving the item + amount to type.
+                          const active = ch.frequent
+                            ? categoryId === ch.categoryId && cardId === (ch.cardId ?? null)
+                            : categoryId === ch.categoryId && labelText === ch.label;
+                          return (
+                            <button
+                              key={`${ch.label}-${i}`}
+                              type="button"
+                              onClick={() => {
+                                setCategoryId(ch.categoryId);
+                                if (fieldError?.field === "category") setFieldError(null);
+                                if (ch.frequent) {
+                                  setCardId(ch.cardId ?? null);
+                                  labelRef.current?.focus();
+                                } else {
+                                  setLabelText(ch.label);
+                                }
+                              }}
+                              className={`flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full border-2 px-3 py-2 text-sm font-medium transition ${
+                                active
+                                  ? "border-indigo-500 bg-indigo-50 text-indigo-700"
+                                  : ch.frequent
+                                    ? "border-dashed border-slate-300 text-slate-500 active:border-slate-400"
+                                    : "border-slate-200 text-slate-600 active:border-slate-400"
+                              }`}
+                            >
+                              {ch.icon && <span className="text-base leading-none">{ch.icon}</span>}
+                              {ch.label}
+                            </button>
+                          );
+                        })}
                       </div>
                     </div>
                   )}
 
-                  {/* category chips (picker mode only) — compact wrapping pills */}
+                  {/* category picker (picker mode only) — a grouped dropdown: the always-recurring
+                      "Monthly budgets" first, then this-month-only spend cards under their own heading. */}
                   {!fixedCategory && categories && (
                     <div ref={catRef}>
                       <label className="text-sm font-medium text-slate-600">Category <span className="text-red-500">*</span></label>
-                      <div className="mt-1.5 flex flex-wrap gap-1.5">
-                        {categories.map((cat) => (
-                          <button
-                            key={cat.id}
-                            type="button"
-                            onClick={() => { setCategoryId(cat.id); if (fieldError?.field === "category") setFieldError(null); }}
-                            className={`rounded-full border px-3 py-1.5 text-sm font-medium transition ${
-                              categoryId === cat.id
-                                ? "border-indigo-500 bg-indigo-50 text-indigo-700"
-                                : "border-slate-200 text-slate-600 hover:border-slate-300 active:border-slate-400"
-                            }`}
-                          >
-                            {cat.name}
-                          </button>
-                        ))}
-                      </div>
+                      <select
+                        value={categoryId ?? ""}
+                        onChange={(e) => { setCategoryId(e.target.value ? Number(e.target.value) : null); if (fieldError?.field === "category") setFieldError(null); }}
+                        className={`mt-1.5 w-full rounded-xl border-2 px-4 py-3 text-base outline-none focus:ring-2 focus:ring-indigo-100 ${fieldError?.field === "category" ? "border-red-400 focus:border-red-400" : "border-slate-300 focus:border-indigo-400"}`}
+                      >
+                        <option value="" disabled>Pick a category…</option>
+                        <optgroup label="Monthly budgets">
+                          {categories.filter((c) => !c.oneMonth).map((cat) => (
+                            <option key={cat.id} value={cat.id}>{cat.name}</option>
+                          ))}
+                        </optgroup>
+                        {categories.some((c) => c.oneMonth) && (
+                          <optgroup label="Just this month">
+                            {categories.filter((c) => c.oneMonth).map((cat) => (
+                              <option key={cat.id} value={cat.id}>{cat.name}</option>
+                            ))}
+                          </optgroup>
+                        )}
+                      </select>
                       {fieldError?.field === "category" && <p className="mt-1 text-xs font-medium text-red-600">{fieldError.message}</p>}
                     </div>
                   )}
