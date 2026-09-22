@@ -63,6 +63,12 @@ export async function generateMonth(
   const incKey = (ownerId: number | null, source: string) => `${ownerId ?? "x"}|${stripInst(source)}`;
   const skipExp = new Set(overrideExp.map((r) => expKey(r.categoryId, r.memberId, r.label)));
   const skipInc = new Set(overrideInc.map((r) => incKey(r.ownerId, r.source)));
+  // A BUDGETED / spend-card category generates exactly ONE line per month. If the head pinned (or removed)
+  // that line — even after editing its label or member so the exact key no longer matches — we must NOT
+  // regenerate a second copy. So for those single-line categories, skip on categoryId alone. (Misc keeps
+  // the precise per-member/label key, since a Misc category legitimately holds many lines.)
+  const overriddenCatIds = new Set<number>();
+  for (const r of overrideExp) if (r.categoryId != null) overriddenCatIds.add(r.categoryId);
   // fund a goal-based bill can count on = accrued piggyEntry + this month's not-yet-accrued
   // set-aside, minus any part a paid due-month bill already consumed from that set-aside.
   const fundByCat = new Map<number, number>();
@@ -136,7 +142,9 @@ export async function generateMonth(
     // ONLY in their billMonth each year, like a yearly bill.
     if (cat.miscCard && !cat.repeatMonthly && !(cat.repeatYearly && cat.billMonth === period?.month)) continue;
     const label = cat.sinking ? `${cat.name} (monthly share)` : cat.name;
-    if (skipExp.has(expKey(cat.id, cat.responsibleMemberId, label))) continue; // head removed/pinned this envelope (Budget skipped too)
+    // Skip if the head pinned/removed this envelope — by exact key OR (since it's a one-line category) by
+    // categoryId, so an edited label/member on the pinned line can't spawn a duplicate on rebuild.
+    if (skipExp.has(expKey(cat.id, cat.responsibleMemberId, label)) || overriddenCatIds.has(cat.id)) continue;
     await tx.expenseEntry.create({
       data: {
         periodId: targetId,
@@ -168,7 +176,8 @@ export async function generateMonth(
     if (cat.fundingStyle != null) continue; // goal-based bill-with-a-fund → handled below
     if (cat.onHold || cat.billEveryMonths == null || cat.billAmount == null || cat.billAmount <= 0) continue;
     if (!isLumpDue(cat.billMonth ?? 1, cat.billEveryMonths, period!)) continue;
-    if (skipExp.has(expKey(cat.id, cat.responsibleMemberId, cat.name))) continue; // head removed/pinned this bill
+    // One line per category → skip by exact key OR categoryId (an edited pinned line can't dup on rebuild).
+    if (skipExp.has(expKey(cat.id, cat.responsibleMemberId, cat.name)) || overriddenCatIds.has(cat.id)) continue;
     await tx.expenseEntry.create({
       data: {
         periodId: targetId,

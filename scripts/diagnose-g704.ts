@@ -1,6 +1,11 @@
 /**
- * READ-ONLY: find the "G704 maintenance" expense line(s) — which member it's attributed to, which month,
- * amount, paid state, and note — so we can decide exactly where it should land. Nothing is written.
+ * READ-ONLY: full picture of the "G704 maintenance" duplicate so we can delete the RIGHT row. Shows the
+ * expense LINES (with pinned / oneOff / period), the CATEGORIES (miscCard / repeatMonthly flags), and any
+ * remaining RecurringItem templates. Nothing is written.
+ *
+ * The duplicate-after-rebuild pattern: a PINNED leftover line survives every rebuild (by design), so once
+ * the old recurring copy was pinned, deleting its template didn't remove it — the pinned orphan stays and
+ * rebuild also regenerates the repeatMonthly spend card → two rows.
  *
  * Run:  node_modules/.bin/tsx scripts/diagnose-g704.ts
  */
@@ -17,15 +22,40 @@ async function main() {
   const { PrismaPg } = await import("@prisma/adapter-pg");
   const prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString: url }) });
   try {
+    const like = { contains: "G704", mode: "insensitive" as const };
+
+    console.log("── EXPENSE LINES (the rows you see on the Sheet) ──");
     const rows = await prisma.expenseEntry.findMany({
-      where: { OR: [{ label: { contains: "G704", mode: "insensitive" } }, { label: { contains: "maintenance", mode: "insensitive" } }] },
-      select: { id: true, label: true, amount: true, paid: true, note: true, memberId: true, member: { select: { name: true } }, category: { select: { name: true, section: true, tracked: true, fundingStyle: true } }, period: { select: { label: true, status: true, year: true, month: true } } },
-      orderBy: { id: "asc" },
+      where: { label: like },
+      select: {
+        id: true, label: true, amount: true, pinned: true, oneOff: true, paid: true, note: true,
+        member: { select: { name: true } },
+        category: { select: { id: true, name: true, miscCard: true, repeatMonthly: true, repeatYearly: true } },
+        period: { select: { label: true, status: true } },
+      },
+      orderBy: [{ period: { year: "asc" } }, { period: { month: "asc" } }, { id: "asc" }],
     });
-    if (rows.length === 0) { console.log("No expense line matching G704 / maintenance."); return; }
+    if (rows.length === 0) console.log("  (none)");
     for (const e of rows) {
-      console.log(`#${e.id} "${e.label}" ${inr(e.amount)} · ${e.period.label}[${e.period.status}] · member=${e.member?.name ?? "(shared/none)"} · paid=${e.paid} · cat=${e.category.name}(section=${e.category.section},tracked=${e.category.tracked},funding=${e.category.fundingStyle ?? "-"}) · note=${e.note ?? "-"}`);
+      console.log(
+        `  #${e.id} "${e.label}" ${inr(e.amount)} · ${e.period.label}[${e.period.status}]` +
+        ` · ${e.pinned ? "📌PINNED" : "not-pinned"} · oneOff=${e.oneOff} · member=${e.member?.name ?? "-"}` +
+        ` · cat#${e.category.id}"${e.category.name}"(miscCard=${e.category.miscCard},repeatMonthly=${e.category.repeatMonthly},repeatYearly=${e.category.repeatYearly})` +
+        ` · note=${e.note ?? "-"}`,
+      );
     }
+
+    console.log("\n── CATEGORIES named G704 ──");
+    const cats = await prisma.category.findMany({ where: { name: like }, select: { id: true, name: true, section: true, tracked: true, miscCard: true, repeatMonthly: true, repeatYearly: true, monthlyBudget: true } });
+    if (cats.length === 0) console.log("  (none)");
+    for (const c of cats) console.log(`  cat#${c.id} "${c.name}" · section=${c.section} tracked=${c.tracked} miscCard=${c.miscCard} repeatMonthly=${c.repeatMonthly} repeatYearly=${c.repeatYearly} budget=${c.monthlyBudget}`);
+
+    console.log("\n── RECURRING ITEM templates named G704 (should be GONE after the merge) ──");
+    const items = await prisma.recurringItem.findMany({ where: { name: like }, select: { id: true, name: true, amount: true, kind: true, active: true, categoryId: true } });
+    if (items.length === 0) console.log("  (none — good)");
+    for (const it of items) console.log(`  RecurringItem#${it.id} "${it.name}" ${inr(it.amount)} kind=${it.kind} active=${it.active} categoryId=${it.categoryId}`);
+
+    console.log("\nNothing was written. Paste this and I'll tell you exactly which line id to delete.");
   } finally {
     await prisma.$disconnect();
   }
