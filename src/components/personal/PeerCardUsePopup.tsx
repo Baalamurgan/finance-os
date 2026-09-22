@@ -44,17 +44,33 @@ export function PeerCardUsePopup() {
   const one = uses.length === 1;
   const allCard = uses.every((u) => u.kind === "card");
   const allSplit = uses.every((u) => u.kind === "split");
-  const icon = allCard ? "💳" : allSplit ? "🤝" : "🔔";
+  const allLoan = uses.every((u) => u.kind === "loan");
+  const icon = allCard ? "💳" : allSplit ? "🤝" : allLoan ? "🧾" : "🔔";
   const title = allCard
     ? one ? "Your card was used" : "Your cards were used"
     : allSplit
       ? one ? "You've got a shared spend" : "You've got shared spends"
-      : "New from your family";
+      : allLoan
+        ? one ? "A new lending entry" : "New lending entries"
+        : "New from your family";
   const subtitle = allCard
     ? "Someone in the family paid with your card — you'll be repaid. Track it in Lending."
     : allSplit
       ? "A family member shared a spend with you — you owe your share. Track it in Lending."
-      : "Family members shared spends with you. Track them in Lending.";
+      : allLoan
+        ? "A family member logged a lend/borrow with you. Track it in Lending."
+        : "Family members logged money activity with you. Track it in Lending.";
+
+  // Per-item phrasing. "you owe" (amber) when the member is on the borrowing side; "you'll be repaid"
+  // when they're owed.
+  const line = (u: (typeof uses)[number]) => {
+    if (u.kind === "card") return <><b className="text-slate-900">{u.spender}</b> used {u.cardName ? <b>{u.cardName}</b> : "your card"}</>;
+    if (u.kind === "split") return <><b className="text-slate-900">{u.spender}</b> split a spend with you — <span className="text-amber-700">you owe</span></>;
+    // manual loan
+    return u.direction === "borrowed"
+      ? <><b className="text-slate-900">{u.spender}</b> lent you — <span className="text-amber-700">you owe</span></>
+      : <><b className="text-slate-900">{u.spender}</b> borrowed from you — you&apos;ll be repaid</>;
+  };
 
   return (
     <div className="fixed inset-0 z-[95] flex items-end justify-center overflow-y-auto bg-black/40 sm:items-center sm:p-4" onClick={close}>
@@ -71,13 +87,7 @@ export function PeerCardUsePopup() {
             {uses.map((u) => (
               <li key={u.id} className="rounded-xl bg-slate-50 px-3 py-2.5">
                 <div className="flex items-baseline justify-between gap-2">
-                  <span className="min-w-0 text-sm text-slate-700">
-                    {u.kind === "card" ? (
-                      <><b className="text-slate-900">{u.spender}</b> used {u.cardName ? <b>{u.cardName}</b> : "your card"}</>
-                    ) : (
-                      <><b className="text-slate-900">{u.spender}</b> split a spend with you — <span className="text-amber-700">you owe</span></>
-                    )}
-                  </span>
+                  <span className="min-w-0 text-sm text-slate-700">{line(u)}</span>
                   <span className="shrink-0 text-sm font-bold tabular-nums text-slate-900">{formatINR(u.amount)}</span>
                 </div>
                 {u.note && <div className="mt-0.5 truncate text-xs text-slate-500">for {u.note}</div>}

@@ -359,6 +359,10 @@ model PersonalLoan {
   linkGroup    String?
   cardAccount   FinanceAccount? @relation("PeerCardLoan", fields: [cardAccountId], references: [id], onDelete: SetNull)
   cardAccountId Int?
+  // The member who CREATED this linked pair (manual lend, peer-card spend, or split/reimbursement). The
+  // one-time heads-up notifies the OTHER side — the member who didn't initiate it — whatever the
+  // direction. Null on legacy rows (they fall back to the spend-payer heuristic).
+  initiatedById Int?
   createdAt    DateTime @default(now())
 
   @@index([linkGroup])

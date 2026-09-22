@@ -98,27 +98,34 @@ export async function getMyLendingReminders(): Promise<LendingReminder[]> {
     }));
 }
 
-// One-time heads-up for the person on the receiving end of a household-linked spend they didn't make:
-//   • "card"  — the card OWNER, when someone paid with their card (peer-card spend), or
-//   • "split" — the person who now OWES, when someone split a spend / logged a reimbursement with them.
-// Both are linkGroup loans on ME tied to a spend SOMEONE ELSE logged (spend.memberId ≠ me), so the rule
-// "notify the side that didn't initiate it" covers both. Card loans carry the card; split loans don't.
-// Returns the open ones so the popup can show each once (the client remembers which it has shown); the
-// row clears naturally once the debt is settled/deleted.
-export type PeerCardUse = { id: number; kind: "card" | "split"; spender: string; note: string | null; amount: number; cardName: string | null; atISO: string };
+// One-time heads-up for the person on the receiving end of a household-linked lend/borrow they didn't
+// initiate:
+//   • "card"  — the card OWNER, when someone paid with their card (peer-card spend),
+//   • "split" — the person who now OWES, when someone split a spend / logged a reimbursement with them,
+//   • "loan"  — either side of a manual "Record lending / borrowing" the other member created.
+// The rule is simply "notify the member who didn't create the linked pair" (initiatedById ≠ me). Legacy
+// rows (initiatedById null, pre-migration) fall back to the spend-payer heuristic. Card loans carry the
+// card; split/reimburse loans carry a spend; manual loans carry neither. Returns the open ones so the
+// popup can show each once (the client remembers which); the row clears once it's settled/deleted.
+export type PeerCardUse = { id: number; kind: "card" | "split" | "loan"; direction: "lent" | "borrowed"; spender: string; note: string | null; amount: number; cardName: string | null; atISO: string };
 export async function getMyIncomingPeerCardUses(): Promise<PeerCardUse[]> {
   const member = await meRead();
   if (!member) return [];
   const loans = await prisma.personalLoan.findMany({
     where: {
       memberId: member.id, status: "open", linkGroup: { not: null },
-      spendId: { not: null }, spend: { memberId: { not: member.id } },
+      OR: [
+        { initiatedById: { not: member.id } }, // I didn't create this pair — new rows, any type
+        { initiatedById: null, spendId: { not: null }, spend: { memberId: { not: member.id } } }, // legacy spend-linked
+      ],
     },
-    select: { id: true, counterparty: true, note: true, amount: true, createdAt: true, cardAccount: { select: { name: true } } },
+    select: { id: true, direction: true, counterparty: true, note: true, amount: true, spendId: true, createdAt: true, cardAccount: { select: { name: true } } },
     orderBy: { createdAt: "desc" },
   });
   return loans.map((l) => ({
-    id: l.id, kind: l.cardAccount ? "card" : "split",
+    id: l.id,
+    kind: l.cardAccount ? "card" : l.spendId != null ? "split" : "loan",
+    direction: l.direction === "borrowed" ? "borrowed" : "lent",
     spender: l.counterparty, note: l.note, amount: l.amount, cardName: l.cardAccount?.name ?? null, atISO: l.createdAt.toISOString(),
   }));
 }
@@ -282,7 +289,7 @@ async function syncPeerCardLoans(
   await tx.personalLoan.deleteMany({ where: { spendId: a.spendId, linkGroup: { not: null } } });
   if (!a.card || !a.card.isPeer) return;
   const linkGroup = randomUUID();
-  const common = { amount: a.amount, outstanding: a.amount, note: a.note, spendId: a.spendId, linkGroup, cardAccountId: a.card.id, dueDate: a.dueDate, notifyDaysBefore: a.notifyDaysBefore };
+  const common = { amount: a.amount, outstanding: a.amount, note: a.note, spendId: a.spendId, linkGroup, cardAccountId: a.card.id, dueDate: a.dueDate, notifyDaysBefore: a.notifyDaysBefore, initiatedById: a.payerId };
   await tx.personalLoan.createMany({
     data: [
       { memberId: a.payerId, direction: "borrowed", counterparty: a.card.ownerName, ...common },
@@ -310,7 +317,7 @@ async function createSharedReceivable(
       memberId: a.payerId, direction: "lent", counterparty: a.counterpartyName,
       amount: a.owedAmount, outstanding: a.owedAmount, note: a.note,
       sharedPaid: a.fullPaid, sharedShare: a.myShare, spendId: a.spendId,
-      dueDate: a.dueDate, notifyDaysBefore: a.notifyDaysBefore, linkGroup,
+      dueDate: a.dueDate, notifyDaysBefore: a.notifyDaysBefore, linkGroup, initiatedById: a.payerId,
     },
   });
   if (a.counterpartyMemberId && linkGroup) {
@@ -318,7 +325,7 @@ async function createSharedReceivable(
       data: {
         memberId: a.counterpartyMemberId, direction: "borrowed", counterparty: a.payerName,
         amount: a.owedAmount, outstanding: a.owedAmount, note: a.note, spendId: a.spendId,
-        dueDate: a.dueDate, notifyDaysBefore: a.notifyDaysBefore, linkGroup,
+        dueDate: a.dueDate, notifyDaysBefore: a.notifyDaysBefore, linkGroup, initiatedById: a.payerId,
       },
     });
   }
@@ -815,7 +822,7 @@ export async function addPersonalLoan(formData: FormData) {
     // and settling/recording/deleting either side clears both (loanGroupWhere).
     const linkGroup = randomUUID();
     const opp = direction === "borrowed" ? "lent" : "borrowed";
-    const common = { amount, outstanding: amount, note, dueDate, notifyDaysBefore, linkGroup };
+    const common = { amount, outstanding: amount, note, dueDate, notifyDaysBefore, linkGroup, initiatedById: member.id };
     await prisma.personalLoan.createMany({
       data: [
         { memberId: member.id, direction, counterparty: cpMember.name, ...common },
