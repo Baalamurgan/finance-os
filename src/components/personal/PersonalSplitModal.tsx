@@ -3,32 +3,37 @@
 import { useMemo, useState } from "react";
 import { formatINR } from "@/lib/format";
 
-export type SplitPerson = { name: string; amount: number };
+export type Member = { id: number; name: string };
+// memberId set → household member (mirrors to their Lending tab + notifies them). null → typed outside name.
+export type SplitPerson = { name: string; amount: number; memberId?: number | null };
 type Method = "equal" | "shares" | "exact";
-type Row = { id: number; name: string; isYou: boolean; count: number; exact: string };
+type Row = { id: number; name: string; memberId: number | null; isYou: boolean; count: number; exact: string };
 
 const r2 = (n: number) => Math.round(n * 100) / 100;
 
 // GPay-style splitter, shown on top of the Add-spend modal. You (the payer) are always a
-// participant; only the OTHERS' shares become receivables. Methods: Equal, Shares (2×…),
-// Exact. Returns the others' shares + your own share (which must all add up to the total).
+// participant; only the OTHERS' shares become receivables. Each other row is either a household
+// MEMBER (picked from the dropdown → the split mirrors into their Lending tab and pings them once)
+// or a typed outside name (single-sided, as before). Methods: Equal, Shares (2×…), Exact.
 export function PersonalSplitModal({
   total,
   initial,
+  members = [],
   onConfirm,
   onClose,
 }: {
   total: number;
   initial?: SplitPerson[];
+  members?: Member[];
   onConfirm: (others: SplitPerson[], myShare: number) => void;
   onClose: () => void;
 }) {
   const [method, setMethod] = useState<Method>("equal");
   const [rows, setRows] = useState<Row[]>(() => {
-    const you: Row = { id: 0, name: "You", isYou: true, count: 1, exact: "" };
+    const you: Row = { id: 0, name: "You", memberId: null, isYou: true, count: 1, exact: "" };
     const seed: SplitPerson[] = initial && initial.length > 0 ? initial : [{ name: "", amount: 0 }];
     const others: Row[] = seed.map((p, i) => ({
-      id: i + 1, name: p.name ?? "", isYou: false, count: 1, exact: p.amount ? String(p.amount) : "",
+      id: i + 1, name: p.name ?? "", memberId: p.memberId ?? null, isYou: false, count: 1, exact: p.amount ? String(p.amount) : "",
     }));
     return [you, ...others];
   });
@@ -62,13 +67,23 @@ export function PersonalSplitModal({
   const canSave = total > 0 && others.length > 0 && namesOk && sumsOk && sharesPositive;
 
   const setRow = (id: number, patch: Partial<Row>) => setRows((rs) => rs.map((r) => (r.id === id ? { ...r, ...patch } : r)));
-  const addPerson = () => { setRows((rs) => [...rs, { id: nextId, name: "", isYou: false, count: 1, exact: "" }]); setNextId((i) => i + 1); };
+  const addPerson = () => { setRows((rs) => [...rs, { id: nextId, name: "", memberId: null, isYou: false, count: 1, exact: "" }]); setNextId((i) => i + 1); };
   const removePerson = (id: number) => setRows((rs) => rs.filter((r) => r.id !== id));
+
+  // Pick a member (id) / clear (—) / choose "other" to type a name. Selecting a member fills the name.
+  const pickPerson = (id: number, value: string) => {
+    if (value === "other") { setRow(id, { memberId: null, name: "" }); return; }
+    const m = members.find((mm) => String(mm.id) === value);
+    if (m) setRow(id, { memberId: m.id, name: m.name });
+    else setRow(id, { memberId: null, name: "" });
+  };
 
   const confirm = () => {
     if (!canSave) return;
-    onConfirm(others.map((o) => ({ name: o.row.name.trim(), amount: o.amount })), myShare);
+    onConfirm(others.map((o) => ({ name: o.row.name.trim(), amount: o.amount, memberId: o.row.memberId })), myShare);
   };
+
+  const hasMembers = members.length > 0;
 
   return (
     <div className="fixed inset-0 z-[60] flex items-end justify-center overflow-y-auto bg-black/50 p-0 sm:items-center sm:p-4" onClick={onClose}>
@@ -96,6 +111,23 @@ export function PersonalSplitModal({
             <div key={r.id} className="flex items-center gap-2">
               {r.isYou ? (
                 <span className="flex-1 rounded-lg bg-slate-50 px-3 py-2 text-sm font-medium text-slate-700">You</span>
+              ) : hasMembers ? (
+                <div className="flex flex-1 flex-col gap-1">
+                  <select
+                    value={r.memberId != null ? String(r.memberId) : r.name || r.exact ? "other" : ""}
+                    onChange={(e) => pickPerson(r.id, e.target.value)}
+                    className="input py-2"
+                  >
+                    <option value="" disabled>Who? *</option>
+                    <optgroup label="Family members">
+                      {members.map((m) => <option key={m.id} value={String(m.id)}>{m.name}</option>)}
+                    </optgroup>
+                    <option value="other">Someone else (type a name)</option>
+                  </select>
+                  {r.memberId == null && (
+                    <input value={r.name} onChange={(e) => setRow(r.id, { name: e.target.value })} placeholder="Name *" className="input py-1.5 text-sm" />
+                  )}
+                </div>
               ) : (
                 <input value={r.name} onChange={(e) => setRow(r.id, { name: e.target.value })} placeholder="Name *" className="input flex-1 py-2" />
               )}
@@ -112,13 +144,18 @@ export function PersonalSplitModal({
                 <span className="w-24 text-right text-sm font-semibold tabular-nums text-slate-700">{formatINR(shares[i] ?? 0)}</span>
               )}
               {!r.isYou && (
-                <button type="button" onClick={() => removePerson(r.id)} aria-label="Remove" className="text-slate-300 hover:text-red-600">✕</button>
+                <button type="button" onClick={() => removePerson(r.id)} aria-label="Remove" className="self-start pt-2 text-slate-300 hover:text-red-600">✕</button>
               )}
             </div>
           ))}
           <button type="button" onClick={addPerson} className="mt-1 w-full rounded-lg border border-dashed border-emerald-300 py-2 text-sm font-medium text-emerald-700 hover:bg-emerald-50">
             + Add person
           </button>
+          {hasMembers && (
+            <p className="text-[11px] leading-relaxed text-slate-400">
+              🔗 Pick a family member and this split shows in <b>their</b> Lending too — they get a one-time heads-up. Settling or deleting either side clears both.
+            </p>
+          )}
         </div>
 
         <div className="border-t border-slate-100 px-5 py-3">

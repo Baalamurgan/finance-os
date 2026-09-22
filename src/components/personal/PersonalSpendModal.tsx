@@ -5,18 +5,30 @@ import { addPersonalSpend, updatePersonalSpend, type PersonalSaveState } from "@
 import { useToast } from "@/components/Toast";
 import { suggestSpendKind } from "@/lib/spendCategorize";
 import { formatINR } from "@/lib/format";
-import { PersonalSplitModal, type SplitPerson } from "@/components/personal/PersonalSplitModal";
+import { currentCycle } from "@/lib/finance/cycle";
+import { PersonalSplitModal, type SplitPerson, type Member } from "@/components/personal/PersonalSplitModal";
 
 type Cat = { id: number; name: string; icon: string | null };
-type Card = { id: number; name: string; color: string; type?: string; ownerName?: string; mine?: boolean };
+type Card = {
+  id: number; name: string; color: string; type?: string; ownerName?: string; mine?: boolean;
+  statementDay?: number | null; dueOffsetDays?: number | null;
+};
 type Initial = { id: number; categoryId: number; amount: number; note: string | null; cardAccountId?: number | null };
 const INIT: PersonalSaveState = { ok: false, n: 0 };
+
+const Req = () => <span className="text-red-500"> *</span>;
+const toISODate = (d: Date) => {
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${d.getFullYear()}-${m}-${day}`;
+};
 
 // Daily spend (category + amount + note), drawn against the remaining balance.
 export function PersonalSpendModal({
   periodId,
   categories,
   cards = [],
+  members = [],
   remaining,
   initial,
   hideTrigger = false,
@@ -26,6 +38,7 @@ export function PersonalSpendModal({
   periodId: number;
   categories: Cat[];
   cards?: Card[];
+  members?: Member[];
   remaining?: number;
   initial?: Initial;
   hideTrigger?: boolean;
@@ -50,6 +63,7 @@ export function PersonalSpendModal({
   const [myShare, setMyShare] = useState(0);
   const [splitOpen, setSplitOpen] = useState(false);
   const [reimburse, setReimburse] = useState(false); // whole spend to receive back (not a split)
+  const [reimbSel, setReimbSel] = useState(""); // "" · member id · "other"
   const [cardId, setCardId] = useState(isEdit ? String(initial!.cardAccountId ?? "") : "");
   const selectedCard = cards.find((c) => String(c.id) === cardId);
   const peerCard = selectedCard && selectedCard.mine === false ? selectedCard : null;
@@ -59,6 +73,19 @@ export function PersonalSpendModal({
   const amountNum = Number(amount) || 0;
   const [state, formAction, pending] = useActionState(isEdit ? updatePersonalSpend : addPersonalSpend, INIT);
 
+  // "Collect by" for a split/reimbursement paid on YOUR OWN credit card is auto-derived from that
+  // card's cycle (shown disabled). Any other method (cash/UPI, debit/prepaid) → you must pick a date.
+  const ownCreditDue = (() => {
+    if (!selectedCard || selectedCard.mine === false || selectedCard.type !== "credit_card") return null;
+    if (selectedCard.statementDay == null || selectedCard.dueOffsetDays == null) return null;
+    return currentCycle(selectedCard.statementDay, new Date(), selectedCard.dueOffsetDays).dueDate ?? null;
+  })();
+  const needsOwed = shared || reimburse;
+
+  const hasMembers = members.length > 0;
+  const reimbMember = members.find((m) => String(m.id) === reimbSel);
+  const reimbIsOther = reimbSel === "other";
+
   const resetShared = () => { setSplits(null); setMyShare(0); };
 
   useEffect(() => {
@@ -66,7 +93,11 @@ export function PersonalSpendModal({
       prevN.current = state.n;
       if (state.ok) {
         toast(isEdit ? "Updated" : "Spend added", "success");
-        if (!isEdit) { formRef.current?.reset(); setAmount(""); setNote(""); setCategoryId(""); setCatTouched(false); resetShared(); setReimburse(false); setCardId(""); }
+        if (!isEdit) {
+          formRef.current?.reset();
+          setAmount(""); setNote(""); setCategoryId(""); setCatTouched(false);
+          resetShared(); setReimburse(false); setReimbSel(""); setCardId("");
+        }
         setOpen(false);
       } else toast(state.error ?? "Couldn't save", "error");
     }
@@ -76,13 +107,14 @@ export function PersonalSpendModal({
   const toggleShared = (checked: boolean) => {
     if (!checked) { resetShared(); return; }
     if (amountNum <= 0) { toast("Enter the amount you paid first", "error"); return; }
-    setReimburse(false); // split and reimburse are mutually exclusive
+    setReimburse(false); setReimbSel(""); // split and reimburse are mutually exclusive
     setSplitOpen(true);
   };
 
   const toggleReimburse = (checked: boolean) => {
     if (checked) resetShared(); // split and reimburse are mutually exclusive
     setReimburse(checked);
+    if (!checked) setReimbSel("");
   };
 
   return (
@@ -116,9 +148,14 @@ export function PersonalSpendModal({
                     <input type="hidden" name="myShare" value={myShare} />
                   </>
                 )}
-                {reimburse && <input type="hidden" name="reimburse" value="on" />}
+                {reimburse && (
+                  <>
+                    <input type="hidden" name="reimburse" value="on" />
+                    {reimbMember && <input type="hidden" name="reimburseMemberId" value={reimbMember.id} />}
+                  </>
+                )}
                 <div>
-                  <label className="text-xs font-medium text-slate-500">{shared ? "You paid (₹)" : "Amount (₹)"}</label>
+                  <label className="text-xs font-medium text-slate-500">{shared ? "You paid (₹)" : "Amount (₹)"}<Req /></label>
                   <input
                     name="amount" type="number" step="0.01" inputMode="decimal" autoFocus required
                     value={amount}
@@ -131,7 +168,7 @@ export function PersonalSpendModal({
                   )}
                 </div>
                 <div>
-                  <label className="text-xs font-medium text-slate-500">Category</label>
+                  <label className="text-xs font-medium text-slate-500">Category<Req /></label>
                   <select
                     name="categoryId" required
                     value={categoryId}
@@ -145,7 +182,7 @@ export function PersonalSpendModal({
                   </select>
                 </div>
                 <div>
-                  <label className="text-xs font-medium text-slate-500">Name</label>
+                  <label className="text-xs font-medium text-slate-500">Name<Req /></label>
                   <input
                     name="note" required
                     value={note}
@@ -164,35 +201,8 @@ export function PersonalSpendModal({
                   />
                 </div>
 
-                {!isEdit && !peerCard && (
-                  <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
-                    <label className="flex cursor-pointer items-center gap-2 text-sm font-medium text-slate-700">
-                      <input type="checkbox" checked={shared} onChange={(e) => toggleShared(e.target.checked)} className="h-4 w-4 rounded border-slate-300" />
-                      🤝 Split this spend (I paid, others owe me)
-                    </label>
-                    {shared && splits && (
-                      <div className="mt-3 rounded-lg bg-white p-3 text-sm">
-                        <div className="font-medium text-slate-700">Your share {formatINR(myShare)}</div>
-                        <ul className="mt-1 space-y-0.5 text-xs text-slate-500">
-                          {splits.map((s, i) => (
-                            <li key={i} className="flex justify-between"><span>{s.name}</span><span className="tabular-nums">{formatINR(s.amount)}</span></li>
-                          ))}
-                        </ul>
-                        <button type="button" onClick={() => setSplitOpen(true)} className="mt-2 text-xs font-medium text-emerald-700">Edit split</button>
-                      </div>
-                    )}
-                    <label className="mt-2 flex cursor-pointer items-center gap-2 border-t border-slate-200 pt-2 text-sm font-medium text-slate-700">
-                      <input type="checkbox" checked={reimburse} onChange={(e) => toggleReimburse(e.target.checked)} className="h-4 w-4 rounded border-slate-300" />
-                      ↩️ I&apos;ll get this back (reimbursement)
-                    </label>
-                    {reimburse && (
-                      <p className="mt-1.5 pl-6 text-xs text-slate-500">
-                        Adds a “{note.trim() || "this spend"}” receivable for {formatINR(amountNum)} to Lending. It won&apos;t reduce this month&apos;s budget — mark it received when the money comes back.
-                      </p>
-                    )}
-                  </div>
-                )}
-
+                {/* Paid with — moved ABOVE the split/reimburse boxes so a credit-card choice can auto-set
+                    the collect-by date below. */}
                 {cards.length > 0 && (
                   <div>
                     <label className="text-xs font-medium text-slate-500">💳 Paid with</label>
@@ -202,7 +212,7 @@ export function PersonalSpendModal({
                         const v = e.target.value;
                         setCardId(v);
                         // peer card + split/reimburse can't combine — the action rejects it, so clear them
-                        if (cards.find((c) => String(c.id) === v && c.mine === false)) { resetShared(); setReimburse(false); }
+                        if (cards.find((c) => String(c.id) === v && c.mine === false)) { resetShared(); setReimburse(false); setReimbSel(""); }
                       }}
                       className="input mt-1 w-full"
                     >
@@ -238,7 +248,7 @@ export function PersonalSpendModal({
                         ) : (
                           <div className="flex flex-wrap items-end gap-2">
                             <label className="flex-1">
-                              <span className="text-[11px] font-medium text-amber-800">Repay {peerCard.ownerName} by *</span>
+                              <span className="text-[11px] font-medium text-amber-800">Repay {peerCard.ownerName} by<Req /></span>
                               <input name="repayBy" type="date" required className="input mt-0.5 w-full py-1.5 text-sm" />
                             </label>
                             <label>
@@ -252,6 +262,94 @@ export function PersonalSpendModal({
                       <p className="mt-1 text-[11px] text-slate-400">
                         It counts against this month either way. A credit card is paid later at its bill; a debit/prepaid card comes off the card&apos;s balance now.{shared ? " Others owe you their shares." : ""}
                       </p>
+                    )}
+                  </div>
+                )}
+
+                {!isEdit && !peerCard && (
+                  <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                    <label className="flex cursor-pointer items-center gap-2 text-sm font-medium text-slate-700">
+                      <input type="checkbox" checked={shared} onChange={(e) => toggleShared(e.target.checked)} className="h-4 w-4 rounded border-slate-300" />
+                      🤝 Split this spend (I paid, others owe me)
+                    </label>
+                    {shared && splits && (
+                      <div className="mt-3 rounded-lg bg-white p-3 text-sm">
+                        <div className="font-medium text-slate-700">Your share {formatINR(myShare)}</div>
+                        <ul className="mt-1 space-y-0.5 text-xs text-slate-500">
+                          {splits.map((s, i) => (
+                            <li key={i} className="flex justify-between"><span>{s.memberId ? "🔗 " : ""}{s.name}</span><span className="tabular-nums">{formatINR(s.amount)}</span></li>
+                          ))}
+                        </ul>
+                        <button type="button" onClick={() => setSplitOpen(true)} className="mt-2 text-xs font-medium text-emerald-700">Edit split</button>
+                      </div>
+                    )}
+                    <label className="mt-2 flex cursor-pointer items-center gap-2 border-t border-slate-200 pt-2 text-sm font-medium text-slate-700">
+                      <input type="checkbox" checked={reimburse} onChange={(e) => toggleReimburse(e.target.checked)} className="h-4 w-4 rounded border-slate-300" />
+                      ↩️ I&apos;ll get this back (reimbursement)
+                    </label>
+                    {reimburse && (
+                      <div className="mt-2 space-y-2 pl-6">
+                        <div>
+                          <label className="text-[11px] font-medium text-slate-600">Collect from<Req /></label>
+                          {hasMembers ? (
+                            <>
+                              <select value={reimbSel} onChange={(e) => setReimbSel(e.target.value)} required className="input mt-0.5 w-full py-1.5 text-sm">
+                                <option value="" disabled>Choose…</option>
+                                <optgroup label="Family members">
+                                  {members.map((m) => <option key={m.id} value={String(m.id)}>{m.name}</option>)}
+                                </optgroup>
+                                <option value="other">Someone else (type a name)</option>
+                              </select>
+                              {reimbIsOther && <input name="reimburseName" required placeholder="Name" className="input mt-1 w-full py-1.5 text-sm" />}
+                              {reimbMember && (
+                                <p className="mt-1 rounded-lg bg-emerald-50 px-2.5 py-1.5 text-[11px] leading-relaxed text-emerald-800">
+                                  🔗 Shows in <b>{reimbMember.name}</b>&apos;s Lending as money they owe you — they get a one-time heads-up. Settling either side clears both.
+                                </p>
+                              )}
+                            </>
+                          ) : (
+                            <input name="reimburseName" placeholder="Who owes you back?" className="input mt-0.5 w-full py-1.5 text-sm" />
+                          )}
+                        </div>
+                        <p className="text-xs text-slate-500">
+                          Adds a “{note.trim() || "this spend"}” receivable for {formatINR(amountNum)} to Lending. It won&apos;t reduce this month&apos;s budget — mark it received when the money comes back.
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Collect-by date for a split/reimbursement — auto & locked from your credit card's cycle,
+                    otherwise a required manual pick. */}
+                {needsOwed && (
+                  <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                    {ownCreditDue ? (
+                      <div className="flex flex-wrap items-end gap-2">
+                        <label className="flex-1">
+                          <span className="text-[11px] font-medium text-slate-600">Collect by</span>
+                          <input
+                            type="date" value={toISODate(ownCreditDue)} disabled readOnly
+                            className="input pointer-events-none mt-0.5 w-full bg-slate-100 py-1.5 text-sm text-slate-500"
+                          />
+                        </label>
+                        <label>
+                          <span className="text-[11px] font-medium text-slate-600">Remind (days before)</span>
+                          <input name="notifyDaysBefore" type="number" min="0" step="1" defaultValue="3" className="input mt-0.5 w-24 py-1.5 text-sm" />
+                        </label>
+                        <p className="w-full text-[11px] text-slate-400">📅 Auto-set from {selectedCard?.name}&apos;s due date — collect before your bill lands.</p>
+                      </div>
+                    ) : (
+                      <div className="flex flex-wrap items-end gap-2">
+                        <label className="flex-1">
+                          <span className="text-[11px] font-medium text-slate-600">Collect by<Req /></span>
+                          <input name="collectBy" type="date" required className="input mt-0.5 w-full py-1.5 text-sm" />
+                        </label>
+                        <label>
+                          <span className="text-[11px] font-medium text-slate-600">Remind (days before)</span>
+                          <input name="notifyDaysBefore" type="number" min="0" step="1" defaultValue="3" className="input mt-0.5 w-24 py-1.5 text-sm" />
+                        </label>
+                        <p className="w-full text-[11px] text-slate-400">Nudges everyone from that many days before — in the bell and top bar — until it&apos;s settled.</p>
+                      </div>
                     )}
                   </div>
                 )}
@@ -271,6 +369,7 @@ export function PersonalSpendModal({
         <PersonalSplitModal
           total={amountNum}
           initial={splits ?? undefined}
+          members={members}
           onClose={() => setSplitOpen(false)}
           onConfirm={(others, mine) => { setSplits(others); setMyShare(mine); setSplitOpen(false); }}
         />

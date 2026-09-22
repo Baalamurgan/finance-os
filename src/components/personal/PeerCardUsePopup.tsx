@@ -4,10 +4,11 @@ import { useEffect, useState } from "react";
 import { getMyIncomingPeerCardUses, type PeerCardUse } from "@/app/personal/actions";
 import { formatINR } from "@/lib/format";
 
-// A one-time popup that tells the card OWNER their card was used by another member (peer-card spend).
-// Shows each usage exactly once — the shown ids are remembered per-device in localStorage, so it won't
-// nag again. Fetches its own data on mount (like CardDueHighAlert), so no page threads props. New
-// usages surface the next time the owner opens Personal until acknowledged.
+// A one-time popup for the receiving end of a household-linked spend you didn't make: your card was used
+// by another member (peer-card spend), OR someone split a spend / reimbursement with you and you now owe.
+// Shows each exactly once — the shown ids are remembered per-device in localStorage, so it won't nag
+// again. Fetches its own data on mount (like CardDueHighAlert), so no page threads props. New items
+// surface the next time you open Personal until acknowledged.
 const SEEN_KEY = "peercarduse:seen";
 
 function readSeen(): number[] {
@@ -41,6 +42,19 @@ export function PeerCardUsePopup() {
   };
 
   const one = uses.length === 1;
+  const allCard = uses.every((u) => u.kind === "card");
+  const allSplit = uses.every((u) => u.kind === "split");
+  const icon = allCard ? "💳" : allSplit ? "🤝" : "🔔";
+  const title = allCard
+    ? one ? "Your card was used" : "Your cards were used"
+    : allSplit
+      ? one ? "You've got a shared spend" : "You've got shared spends"
+      : "New from your family";
+  const subtitle = allCard
+    ? "Someone in the family paid with your card — you'll be repaid. Track it in Lending."
+    : allSplit
+      ? "A family member shared a spend with you — you owe your share. Track it in Lending."
+      : "Family members shared spends with you. Track them in Lending.";
 
   return (
     <div className="fixed inset-0 z-[95] flex items-end justify-center overflow-y-auto bg-black/40 sm:items-center sm:p-4" onClick={close}>
@@ -50,15 +64,19 @@ export function PeerCardUsePopup() {
         style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
       >
         <div className="px-6 pt-6 text-center">
-          <div className="mx-auto grid h-14 w-14 place-items-center rounded-full bg-indigo-100 text-3xl">💳</div>
-          <h2 className="mt-3 text-lg font-bold text-indigo-700">{one ? "Your card was used" : "Your cards were used"}</h2>
-          <p className="mt-1 text-xs text-slate-400">Someone in the family paid with your card — you&apos;ll be repaid. Track it in Lending.</p>
+          <div className="mx-auto grid h-14 w-14 place-items-center rounded-full bg-indigo-100 text-3xl">{icon}</div>
+          <h2 className="mt-3 text-lg font-bold text-indigo-700">{title}</h2>
+          <p className="mt-1 text-xs text-slate-400">{subtitle}</p>
           <ul className="mt-3 space-y-2 text-left">
             {uses.map((u) => (
               <li key={u.id} className="rounded-xl bg-slate-50 px-3 py-2.5">
                 <div className="flex items-baseline justify-between gap-2">
                   <span className="min-w-0 text-sm text-slate-700">
-                    <b className="text-slate-900">{u.spender}</b> used {u.cardName ? <b>{u.cardName}</b> : "your card"}
+                    {u.kind === "card" ? (
+                      <><b className="text-slate-900">{u.spender}</b> used {u.cardName ? <b>{u.cardName}</b> : "your card"}</>
+                    ) : (
+                      <><b className="text-slate-900">{u.spender}</b> split a spend with you — <span className="text-amber-700">you owe</span></>
+                    )}
                   </span>
                   <span className="shrink-0 text-sm font-bold tabular-nums text-slate-900">{formatINR(u.amount)}</span>
                 </div>

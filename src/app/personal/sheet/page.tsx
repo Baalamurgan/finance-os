@@ -259,7 +259,7 @@ export default async function PersonalSheet({
         <p className="text-center text-xs text-slate-400">Daily spends live in the <b>Spends</b> tab and draw down your personal expense.</p>
       </main>
 
-      <PersonalSpendFab periodId={period.id} categories={catList} cards={c.creditCards} remaining={canSpend} showButton={false} />
+      <PersonalSpendFab periodId={period.id} categories={catList} cards={c.spendCards} members={c.members} remaining={canSpend} showButton={false} />
     </>
   );
 }

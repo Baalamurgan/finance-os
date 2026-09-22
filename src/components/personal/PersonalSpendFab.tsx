@@ -5,7 +5,11 @@ import { usePathname, useRouter } from "next/navigation";
 import { PersonalSpendModal } from "@/components/personal/PersonalSpendModal";
 
 type Cat = { id: number; name: string; icon: string | null };
-type Card = { id: number; name: string; color: string };
+type Card = {
+  id: number; name: string; color: string; type?: string; ownerName?: string; mine?: boolean;
+  statementDay?: number | null; dueOffsetDays?: number | null;
+};
+type Member = { id: number; name: string };
 
 // Add-Spend modal host. Launched from the global PersonalDock (a `?add=1` deep link opens it
 // via `autoOpen`); `showButton` renders the legacy draggable FAB when the dock isn't present.
@@ -13,6 +17,7 @@ export function PersonalSpendFab({
   periodId,
   categories,
   cards = [],
+  members = [],
   remaining,
   autoOpen = false,
   showButton = true,
@@ -20,6 +25,7 @@ export function PersonalSpendFab({
   periodId: number;
   categories: Cat[];
   cards?: Card[];
+  members?: Member[];
   remaining: number;
   autoOpen?: boolean;
   showButton?: boolean;
@@ -98,6 +104,7 @@ export function PersonalSpendFab({
         periodId={periodId}
         categories={categories}
         cards={cards}
+        members={members}
         remaining={remaining}
         hideTrigger
         controlledOpen={open}

@@ -77,11 +77,28 @@ export async function loadPersonal(params?: { y?: string; m?: string }) {
     await prisma.financeAccount.findMany({
       where: { active: true, member: { householdId: member.householdId } },
       orderBy: [{ sortOrder: "asc" }, { id: "asc" }],
-      select: { id: true, name: true, color: true, type: true, memberId: true, member: { select: { name: true } } },
+      select: {
+        id: true, name: true, color: true, type: true, memberId: true, member: { select: { name: true } },
+        credit: { select: { statementDay: true, dueOffsetDays: true } },
+      },
     })
   )
-    .map((a) => ({ id: a.id, name: a.name, color: a.color, type: a.type, ownerId: a.memberId, ownerName: a.member.name, mine: a.memberId === member.id }))
+    // statementDay/dueOffsetDays let the spend modal auto-derive a "collect by" date for a split paid on
+    // a credit card (mirrors the peer-card cycle logic, client-side, so it can be shown disabled).
+    .map((a) => ({
+      id: a.id, name: a.name, color: a.color, type: a.type, ownerId: a.memberId, ownerName: a.member.name,
+      mine: a.memberId === member.id,
+      statementDay: a.credit?.statementDay ?? null, dueOffsetDays: a.credit?.dueOffsetDays ?? null,
+    }))
     .sort((a, b) => Number(b.mine) - Number(a.mine)); // your cards first
+
+  // Other household members — the split/reimburse picker mirrors a shared spend into their Lending tab
+  // and notifies them, exactly like a peer-card spend does for the card owner.
+  const members = await prisma.member.findMany({
+    where: { householdId: member.householdId, id: { not: member.id } },
+    orderBy: { name: "asc" },
+    select: { id: true, name: true },
+  });
 
   // Due-bill reminders (soon/overdue) — drives the landing banner + the Finance-tab badge.
   const cardReminders = creditCards.length > 0 ? await getCardBillReminders(member.id) : [];
@@ -96,6 +113,7 @@ export async function loadPersonal(params?: { y?: string; m?: string }) {
     categories,
     creditCards,
     spendCards,
+    members,
     cardReminders,
     hasBiometric,
   };

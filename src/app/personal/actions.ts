@@ -98,19 +98,29 @@ export async function getMyLendingReminders(): Promise<LendingReminder[]> {
     }));
 }
 
-// One-time "your card was used by someone else" alert for the card OWNER. Each peer-card spend created a
-// `lent` loan on the owner (linkGroup set); this returns the open ones so the popup can show them once
-// (the client remembers which it has shown). Clears naturally once the debt is settled/deleted.
-export type PeerCardUse = { id: number; spender: string; note: string | null; amount: number; cardName: string | null; atISO: string };
+// One-time heads-up for the person on the receiving end of a household-linked spend they didn't make:
+//   • "card"  — the card OWNER, when someone paid with their card (peer-card spend), or
+//   • "split" — the person who now OWES, when someone split a spend / logged a reimbursement with them.
+// Both are linkGroup loans on ME tied to a spend SOMEONE ELSE logged (spend.memberId ≠ me), so the rule
+// "notify the side that didn't initiate it" covers both. Card loans carry the card; split loans don't.
+// Returns the open ones so the popup can show each once (the client remembers which it has shown); the
+// row clears naturally once the debt is settled/deleted.
+export type PeerCardUse = { id: number; kind: "card" | "split"; spender: string; note: string | null; amount: number; cardName: string | null; atISO: string };
 export async function getMyIncomingPeerCardUses(): Promise<PeerCardUse[]> {
   const member = await meRead();
   if (!member) return [];
   const loans = await prisma.personalLoan.findMany({
-    where: { memberId: member.id, direction: "lent", status: "open", linkGroup: { not: null } },
+    where: {
+      memberId: member.id, status: "open", linkGroup: { not: null },
+      spendId: { not: null }, spend: { memberId: { not: member.id } },
+    },
     select: { id: true, counterparty: true, note: true, amount: true, createdAt: true, cardAccount: { select: { name: true } } },
     orderBy: { createdAt: "desc" },
   });
-  return loans.map((l) => ({ id: l.id, spender: l.counterparty, note: l.note, amount: l.amount, cardName: l.cardAccount?.name ?? null, atISO: l.createdAt.toISOString() }));
+  return loans.map((l) => ({
+    id: l.id, kind: l.cardAccount ? "card" : "split",
+    spender: l.counterparty, note: l.note, amount: l.amount, cardName: l.cardAccount?.name ?? null, atISO: l.createdAt.toISOString(),
+  }));
 }
 
 // Resolve the signed-in member WITHOUT touching the personal lock. Used by read-only actions
@@ -219,6 +229,22 @@ function resolvePeerRepay(
   return { dueDate, notifyDaysBefore };
 }
 
+// "Collect by" for a SPLIT / REIMBURSEMENT (you paid; others owe you). Paid on your own credit card →
+// derive it from that card's cycle (matches the modal's disabled auto date). Cash/UPI or a debit/prepaid
+// card → the payer must pick a date. notifyDaysBefore = how many days ahead the nudge starts (default 3).
+function resolveCollectBy(
+  card: SpendCard | null, formData: FormData, when: Date,
+): { dueDate: Date; notifyDaysBefore: number } | { error: string } {
+  const nd = Number(formData.get("notifyDaysBefore"));
+  const notifyDaysBefore = Number.isFinite(nd) && nd >= 0 ? Math.round(nd) : 3;
+  const auto = card ? peerRepayDate(card, when) : null; // own credit card → from its cycle
+  if (auto) return { dueDate: auto, notifyDaysBefore };
+  const raw = String(formData.get("collectBy") ?? "").trim();
+  const d = raw ? new Date(`${raw}T00:00:00`) : null;
+  if (!d || Number.isNaN(d.getTime())) return { error: "Pick a collect-by date for the split." };
+  return { dueDate: d, notifyDaysBefore };
+}
+
 // Keep a card's LEDGER line in sync with a personal spend, so the spend shows as a line item under that
 // card (and drives its balance for debit/prepaid, its outstanding for credit). This is a VIEW layer:
 // the month's spendable, cash-in-hand and credit dues still run through the card TAG (getPersonalCash /
@@ -263,6 +289,39 @@ async function syncPeerCardLoans(
       { memberId: a.card.ownerId, direction: "lent", counterparty: a.payerName, ...common },
     ],
   });
+}
+
+// Create the receivable(s) for a split or reimbursement. Always writes the LENDER row on the payer
+// (counterparty = who owes; sharedPaid/sharedShare recorded so it posts back as income when received).
+// If the counterparty is a household MEMBER, also writes the mirrored BORROWER row on them, sharing a
+// linkGroup so it shows in their Lending tab, pings them once, and settles/deletes as one unit.
+async function createSharedReceivable(
+  tx: Prisma.TransactionClient,
+  a: {
+    payerId: number; payerName: string; spendId: number; note: string;
+    counterpartyMemberId: number | null; counterpartyName: string;
+    owedAmount: number; fullPaid: number; myShare: number;
+    dueDate: Date | null; notifyDaysBefore: number;
+  },
+) {
+  const linkGroup = a.counterpartyMemberId ? randomUUID() : null;
+  await tx.personalLoan.create({
+    data: {
+      memberId: a.payerId, direction: "lent", counterparty: a.counterpartyName,
+      amount: a.owedAmount, outstanding: a.owedAmount, note: a.note,
+      sharedPaid: a.fullPaid, sharedShare: a.myShare, spendId: a.spendId,
+      dueDate: a.dueDate, notifyDaysBefore: a.notifyDaysBefore, linkGroup,
+    },
+  });
+  if (a.counterpartyMemberId && linkGroup) {
+    await tx.personalLoan.create({
+      data: {
+        memberId: a.counterpartyMemberId, direction: "borrowed", counterparty: a.payerName,
+        amount: a.owedAmount, outstanding: a.owedAmount, note: a.note, spendId: a.spendId,
+        dueDate: a.dueDate, notifyDaysBefore: a.notifyDaysBefore, linkGroup,
+      },
+    });
+  }
 }
 
 export type PersonalSaveState = { ok: boolean; error?: string; n: number };
@@ -439,14 +498,14 @@ export async function addPersonalSpend(
     if ("error" in r) return { ok: false, error: r.error, n };
     peerRepay = r;
   }
-  let splits: { name: string; amount: number }[] = [];
+  let splits: { name: string; amount: number; memberId: number | null }[] = [];
   let myShare = 0;
   if (shared) {
     try {
       const raw = JSON.parse(String(formData.get("splits") ?? "[]"));
       if (Array.isArray(raw)) {
         splits = raw
-          .map((s) => ({ name: String(s?.name ?? "").trim(), amount: Math.round((Number(s?.amount) || 0) * 100) / 100 }))
+          .map((s) => ({ name: String(s?.name ?? "").trim(), amount: Math.round((Number(s?.amount) || 0) * 100) / 100, memberId: Number(s?.memberId) || null }))
           .filter((s) => s.name && s.amount > 0);
       }
     } catch { splits = []; }
@@ -455,6 +514,34 @@ export async function addPersonalSpend(
     if (splits.length === 0 || othersSum > amount + 0.01 || myShare < -0.01)
       return { ok: false, error: "Check the split — the shares must add up to what you paid.", n };
   }
+
+  // Resolve the person a reimbursement is collected from — a household member (→ mirrored + notified) or
+  // a typed name (single-sided). Falls back to the spend name if nothing was entered.
+  let reimbMember: { id: number; name: string } | null = null;
+  let reimbName = "";
+  if (reimburse) {
+    const rid = Number(formData.get("reimburseMemberId")) || 0;
+    if (rid && rid !== member.id) {
+      const m = await prisma.member.findUnique({ where: { id: rid }, select: { id: true, name: true, householdId: true } });
+      if (m && m.householdId === member.householdId) reimbMember = { id: m.id, name: m.name };
+    }
+    reimbName = String(formData.get("reimburseName") ?? "").trim() || reimbMember?.name || note;
+  }
+
+  // A split/reimbursement needs a "collect by" date (auto from your own credit card's cycle, else picked).
+  let owed: { dueDate: Date; notifyDaysBefore: number } | null = null;
+  if (shared || reimburse) {
+    const r = resolveCollectBy(card, formData, new Date());
+    if ("error" in r) return { ok: false, error: r.error, n };
+    owed = r;
+  }
+
+  // Household members that a split/reimburse row may legitimately mirror to — guard against a crafted id
+  // writing a loan onto an arbitrary member. Authoritative names come from here, not the client payload.
+  const memberNameById = new Map(
+    (await prisma.member.findMany({ where: { householdId: member.householdId }, select: { id: true, name: true } })).map((m) => [m.id, m.name] as const),
+  );
+
   // others' total share — full amount when it's a reimbursement (nothing is your expense)
   const sharedOthers = shared ? Math.round((amount - myShare) * 100) / 100 : reimburse ? amount : null;
   await prisma.$transaction(async (tx) => {
@@ -464,22 +551,22 @@ export async function addPersonalSpend(
     await syncPersonalSpendLedger(tx, { spendId: created.id, card, amount, label: note, date: created.date, categoryName: cat.name, payerName: member.name });
     await syncPeerCardLoans(tx, { spendId: created.id, payerId: member.id, payerName: member.name, card, amount, note, dueDate: peerRepay?.dueDate ?? null, notifyDaysBefore: peerRepay?.notifyDaysBefore ?? 3 });
     for (const s of splits) {
-      await tx.personalLoan.create({
-        data: {
-          memberId: member.id, direction: "lent", counterparty: s.name,
-          amount: s.amount, outstanding: s.amount, note, sharedPaid: amount, sharedShare: myShare,
-          spendId: created.id,
-        },
+      await createSharedReceivable(tx, {
+        payerId: member.id, payerName: member.name, spendId: created.id, note,
+        counterpartyMemberId: s.memberId && memberNameById.has(s.memberId) && s.memberId !== member.id ? s.memberId : null,
+        counterpartyName: (s.memberId && memberNameById.get(s.memberId)) || s.name,
+        owedAmount: s.amount, fullPaid: amount, myShare,
+        dueDate: owed?.dueDate ?? null, notifyDaysBefore: owed?.notifyDaysBefore ?? 3,
       });
     }
     if (reimburse) {
-      // one receivable for the full amount, filed under the spend name; sharedShare 0 marks it a reimbursement
-      await tx.personalLoan.create({
-        data: {
-          memberId: member.id, direction: "lent", counterparty: note,
-          amount, outstanding: amount, note, sharedPaid: amount, sharedShare: 0,
-          spendId: created.id,
-        },
+      // one receivable for the full amount; sharedShare 0 marks it a reimbursement (nothing is your expense)
+      await createSharedReceivable(tx, {
+        payerId: member.id, payerName: member.name, spendId: created.id, note,
+        counterpartyMemberId: reimbMember?.id ?? null,
+        counterpartyName: reimbName,
+        owedAmount: amount, fullPaid: amount, myShare: 0,
+        dueDate: owed?.dueDate ?? null, notifyDaysBefore: owed?.notifyDaysBefore ?? 3,
       });
     }
   });
