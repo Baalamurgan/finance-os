@@ -149,7 +149,14 @@ export async function generateMonth(
       },
     });
     if (cat.tracked) {
-      await tx.budget.create({ data: { periodId: targetId, categoryId: cat.id, planned: cat.monthlyBudget } });
+      // Idempotent: on a rebuild a pinned envelope's Budget survives clearGeneratedRows, and its
+      // (member/label) may not match the skip key above — so upsert (preserve a kept row, create otherwise)
+      // instead of create, which would throw P2002 on the (periodId, categoryId) unique constraint.
+      await tx.budget.upsert({
+        where: { periodId_categoryId: { periodId: targetId, categoryId: cat.id } },
+        create: { periodId: targetId, categoryId: cat.id, planned: cat.monthlyBudget },
+        update: {},
+      });
     }
   }
 

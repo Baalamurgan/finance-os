@@ -2702,8 +2702,11 @@ async function clearGeneratedRows(tx: Tx, periodId: number) {
   // Preserve the head's intentional overrides through a rebuild: PINNED edits and "removed" tombstones
   // (oneOff + REMOVED_NOTE) survive; only untouched generated rows are wiped so generateMonth can
   // re-create them. generateMonth then skips regenerating any source that still has an override.
+  // A Budget belongs to the category's generated ENVELOPE line (oneOff:false), so keep it only when THAT
+  // line is pinned. Keying off any pinned line (e.g. a pinned misc one-off in a tracked category) kept a
+  // budget that generateMonth then re-created → P2002 on (periodId, categoryId).
   const pinnedCats = (
-    await tx.expenseEntry.findMany({ where: { periodId, pinned: true }, select: { categoryId: true } })
+    await tx.expenseEntry.findMany({ where: { periodId, pinned: true, oneOff: false }, select: { categoryId: true } })
   ).map((e) => e.categoryId);
   await tx.budget.deleteMany({ where: { periodId, ...(pinnedCats.length ? { categoryId: { notIn: pinnedCats } } : {}) } });
   await tx.expenseEntry.deleteMany({ where: { periodId, OR: [{ oneOff: false, NOT: { pinned: true } }, { note: CARRY_NOTE }] } });
