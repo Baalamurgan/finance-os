@@ -458,7 +458,7 @@ export function InHandPersonGroup({
               <div className="border-t border-slate-200" />
               <div className="mt-1.5 flex items-center justify-between gap-2">
                 <span className="text-[10px] font-semibold uppercase tracking-wide text-fuchsia-600">Card bills to pay</span>
-                <span className="text-[9px] text-slate-400">you hold this cash · included in your in-hand</span>
+                <span className="text-[9px] text-slate-400">held to pay this bill · not spare, not for Piggy</span>
               </div>
             </li>
             {(pendingCardBills ?? []).filter((b) => !b.done).map((b) => (
