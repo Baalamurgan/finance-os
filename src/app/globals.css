@@ -123,7 +123,20 @@ main {
 }
 .animate-float-slower { animation: float-slower 9s ease-in-out infinite; }
 
+/* Loading shimmer — a light sweep across a neutral block, for skeleton placeholders. */
+@keyframes shimmer { 100% { transform: translateX(100%); } }
+.shimmer-block { position: relative; overflow: hidden; background: #e2e8f0; }
+.shimmer-block::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.65), transparent);
+  animation: shimmer 1.4s infinite;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .reveal { opacity: 1; transform: none; transition: none; }
   .animate-float-slow, .animate-float-slower { animation: none; }
+  .shimmer-block::after { animation: none; }
 }

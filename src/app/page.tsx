@@ -18,6 +18,7 @@ import { ConfirmForm } from "@/components/ConfirmForm";
 import { SheetLockNotice } from "@/components/SheetLockNotice";
 import { RebuildDraftButton } from "@/components/RebuildDraftButton";
 import { SheetRefreshButton } from "@/components/SheetRefreshButton";
+import { PreviewNextMonthButton } from "@/components/PreviewNextMonthButton";
 import { monthsUntilNextDue } from "@/lib/schedule";
 import { SURPLUS_NOTE, LEFTOVER_NOTE, PIGGY_INCOME_NOTE, CARRY_NOTE, REMOVED_NOTE } from "@/lib/notes";
 
@@ -28,7 +29,7 @@ const KEPT_INCOME_NOTES = new Set<string>([SURPLUS_NOTE, LEFTOVER_NOTE, PIGGY_IN
 function KeptTag({ title }: { title: string }) {
   return <span title={title} className="shrink-0 rounded-full bg-amber-50 px-1.5 py-0.5 text-[9px] font-medium text-amber-600">📌 kept</span>;
 }
-import { createPeriod, deleteIncome, createNextMonthDraft, discardDraft, skipSetAside, restoreSetAside } from "./actions";
+import { createPeriod, deleteIncome, discardDraft, skipSetAside, restoreSetAside } from "./actions";
 
 const SECTION_COLOR: Record<string, string> = {
   Loans: "#ef4444",
@@ -511,12 +512,7 @@ export default async function SheetPage({
               <SheetRefreshButton periodId={c.selected.id} />
             )}
             {c.canEdit && open && !isDraft && !c.provisional && (
-              <form action={createNextMonthDraft}>
-                <input type="hidden" name="householdId" value={c.household.id} />
-                <button className="rounded-full border border-violet-300 bg-violet-50 px-3 py-1 text-xs font-medium text-violet-700 hover:bg-violet-100">
-                  🔮 Preview next month →
-                </button>
-              </form>
+              <PreviewNextMonthButton householdId={c.household.id} />
             )}
             {!c.canEdit && open && !isDraft && !c.provisional && draftPeriod && (
               <a
