@@ -90,6 +90,17 @@ type ExpRow = Awaited<ReturnType<typeof getRollup>>["expenses"][number];
 type CatLite = { id: number; name: string; section?: string };
 type MemLite = { id: number; name: string };
 
+// On a preview/provisional month, a generated budgeted envelope whose amount sits below its Setup
+// template was trimmed by applyBudgetShortfall (last month's overspend ate into it). Flag it so the
+// reduction is visible rather than looking like a random smaller number.
+function shortfallTrim(e: ExpRow, previewMonth: boolean): number | null {
+  if (!previewMonth || e.oneOff) return null;
+  const c = e.category;
+  if (!c.tracked || c.sinking || c.onHold || c.fundingStyle != null || c.monthlyBudget == null) return null;
+  const reducedBy = Math.round((c.monthlyBudget - e.amount) * 100) / 100;
+  return reducedBy > 0.005 ? reducedBy : null;
+}
+
 function ExpenseRow({
   e,
   canEditHere,
@@ -97,6 +108,7 @@ function ExpenseRow({
   members,
   periodId,
   periodMonth,
+  previewMonth = false,
   isNew,
 }: {
   e: ExpRow;
@@ -106,6 +118,7 @@ function ExpenseRow({
   members: MemLite[];
   periodId: number;
   periodMonth: number;
+  previewMonth?: boolean;
 }) {
   // A "removed" tombstone: the head deleted this Setup line for the month. Show it struck-through with a
   // Restore control instead of a live row (amount is 0, so it's already out of every total).
@@ -148,8 +161,25 @@ function ExpenseRow({
         ? `The remaining months' share rises to about ${formatINR(newShare)} to keep the fund on track for the due month.`
         : `This was the last set-aside before the bill — the shortfall will be paid out-of-pocket on the due month.`) +
       `\n\nIt won't come back on a rebuild; Setup stays the template.`;
+  const trimmedBy = shortfallTrim(e, previewMonth);
   return (
-    <Row label={withShareCount(e.label, e.category.billEveryMonths)} sub={e.category.name} emoji={categoryEmoji(e.category.name)} tag={e.member?.name} amount={e.amount} isNew={isNew} pinnedControl={e.pinned ? <PinnedBadge kind="expense" id={e.id} canEdit={canEditHere} /> : sheetSection(e) === "Misc" && e.note !== CARRY_NOTE ? <KeptTag title="Planned / added this month — kept through a Sheet refresh" /> : null}>
+    <Row
+      label={withShareCount(e.label, e.category.billEveryMonths)}
+      sub={e.category.name}
+      emoji={categoryEmoji(e.category.name)}
+      tag={e.member?.name}
+      amount={e.amount}
+      isNew={isNew}
+      extraTag={trimmedBy != null ? (
+        <span
+          className="shrink-0 rounded-full bg-amber-100 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-amber-700"
+          title={`Trimmed by ${formatINR(trimmedBy)} — last month went over budget, so this is less than the usual ${formatINR(e.category.monthlyBudget ?? 0)}.`}
+        >
+          ✂️ Trimmed
+        </span>
+      ) : undefined}
+      pinnedControl={e.pinned ? <PinnedBadge kind="expense" id={e.id} canEdit={canEditHere} /> : sheetSection(e) === "Misc" && e.note !== CARRY_NOTE ? <KeptTag title="Planned / added this month — kept through a Sheet refresh" /> : null}
+    >
       {canEditHere && isSetAside && (
         <ConfirmForm action={skipSetAside} message={removeMsg}>
           <input type="hidden" name="categoryId" value={e.categoryId} />
@@ -188,6 +218,7 @@ function ExpenseSection({
   members,
   periodId,
   periodMonth,
+  previewMonth = false,
 }: {
   g: { section: string; rows: ExpRow[]; subtotal: number };
   canEditHere: boolean;
@@ -195,6 +226,7 @@ function ExpenseSection({
   members: MemLite[];
   periodId: number;
   periodMonth: number;
+  previewMonth?: boolean;
   newIds?: Set<number>;
 }) {
   return (
@@ -221,6 +253,7 @@ function ExpenseSection({
             members={members}
             periodId={periodId}
             periodMonth={periodMonth}
+            previewMonth={previewMonth}
             isNew={newIds?.has(e.id)}
           />
         ))}
@@ -300,6 +333,8 @@ export default async function SheetPage({
   // kind:"piggy"). On a PREVIEW/PROVISIONAL month, show the PROJECTED general Piggy (what it'll be
   // once the working month winds down) to match the Piggy tab — not the stale live balance.
   const piggyPreview = isDraft || !!c.provisional;
+  // Shortfall trims (budgeted lines cut because last month overspent) live on preview/provisional months.
+  const previewMonth = piggyPreview;
   const piggySource = piggyPreview
     ? c.periods.find((p) => p.status === "open" && (p.year < c.selected!.year || (p.year === c.selected!.year && p.month < c.selected!.month))) ?? null
     : null;
@@ -616,6 +651,7 @@ export default async function SheetPage({
                       members={c.members}
                       periodId={c.selected!.id}
                       periodMonth={c.selected!.month}
+                      previewMonth={previewMonth}
                       newIds={newExpenseIds}
                     />
                   ))}
@@ -666,6 +702,7 @@ export default async function SheetPage({
                           members={c.members}
                           periodId={c.selected!.id}
                           periodMonth={c.selected!.month}
+                          previewMonth={previewMonth}
                           isNew={newExpenseIds.has(e.id)}
                         />
                       ))
@@ -736,6 +773,7 @@ export default async function SheetPage({
                           members={c.members}
                           periodId={c.selected!.id}
                           periodMonth={c.selected!.month}
+                          previewMonth={previewMonth}
                         />
                       ))
                     )}
@@ -872,6 +910,7 @@ function Row({
   amount,
   emoji,
   pinnedControl,
+  extraTag,
   isNew,
   children,
 }: {
@@ -881,6 +920,7 @@ function Row({
   amount: number;
   emoji?: string | null;
   pinnedControl?: React.ReactNode;
+  extraTag?: React.ReactNode; // small status pill after the label (e.g. shortfall-trimmed)
   isNew?: boolean; // first appeared this month (not on last month's sheet)
   children?: React.ReactNode;
 }) {
@@ -904,6 +944,7 @@ function Row({
               New
             </span>
           )}
+          {extraTag}
           {pinnedControl}
         </div>
         {(sub || tag) && (
