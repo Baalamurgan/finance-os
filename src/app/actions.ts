@@ -2373,7 +2373,7 @@ export async function updateLoan(formData: FormData) {
   if (!(await isHead())) return;
   const loanId = Number(formData.get("loanId"));
   if (!loanId) return;
-  const loan = await prisma.loan.findUnique({ where: { id: loanId }, include: { _count: { select: { payments: true } } } });
+  const loan = await prisma.loan.findUnique({ where: { id: loanId } });
   if (!loan) return;
   const name = String(formData.get("name") ?? "").trim() || loan.name;
   const monthlyAmount = formData.get("monthlyAmount") != null ? Number(formData.get("monthlyAmount")) || 0 : loan.monthlyAmount;
@@ -2381,8 +2381,6 @@ export async function updateLoan(formData: FormData) {
   const memberId = memberRaw === "" ? null : Number(memberRaw);
   const note = String(formData.get("note") ?? "").trim() || null;
   const m = parseLoanMaster(formData);
-  // If no payments have been recorded yet, keep `outstanding` in step with an edited principal (setup fixups);
-  // once payments exist, never silently overwrite the live balance from a details edit.
   const data: Record<string, unknown> = {
     name, monthlyAmount, memberId, note,
     interestRate: m.interestRate,
@@ -2392,7 +2390,10 @@ export async function updateLoan(formData: FormData) {
     emiAmount: m.emiAmount,
     prepaymentStrategy: m.prepaymentStrategy,
   };
-  if (loan._count.payments === 0 && m.originalPrincipal != null) data.outstanding = m.originalPrincipal;
+  // Current outstanding is set ONLY from the explicit field — the real live balance, which for an imported
+  // mid-life loan is NOT the original principal. Never auto-derive it here (that was the ₹8L→₹45L bug).
+  const outRaw = String(formData.get("outstanding") ?? "").trim();
+  if (outRaw !== "") data.outstanding = Math.max(0, Number(outRaw) || 0);
   await prisma.loan.update({ where: { id: loanId }, data });
   await logActivity("loan", "updated", `Edited loan “${name}”`);
   revalidateFamily();

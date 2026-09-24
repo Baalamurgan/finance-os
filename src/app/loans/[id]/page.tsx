@@ -145,6 +145,7 @@ export default async function LoanDetailPage({
               <input type="hidden" name="loanId" value={loan.id} />
               <label className="text-xs text-slate-500">Name<input name="name" defaultValue={loan.name} className="input mt-0.5 block w-full" /></label>
               <label className="text-xs text-slate-500">Original principal (₹)<input name="originalPrincipal" type="number" step="0.01" defaultValue={loan.originalPrincipal ?? ""} className="input mt-0.5 block w-full" /></label>
+              <label className="text-xs text-slate-500">Current outstanding (₹)<input name="outstanding" type="number" step="0.01" defaultValue={loan.outstanding} className="input mt-0.5 block w-full" /></label>
               <label className="text-xs text-slate-500">Interest rate (% p.a.)<input name="interestRate" type="number" step="0.01" defaultValue={loan.interestRate ?? ""} className="input mt-0.5 block w-full" /></label>
               <label className="text-xs text-slate-500">Tenure (months)<input name="originalTenureMonths" type="number" defaultValue={loan.originalTenureMonths ?? ""} className="input mt-0.5 block w-full" /></label>
               <label className="text-xs text-slate-500">Start date<input name="startDate" type="date" defaultValue={loan.startDate ? new Date(loan.startDate).toISOString().slice(0, 10) : ""} className="input mt-0.5 block w-full" /></label>
@@ -164,7 +165,7 @@ export default async function LoanDetailPage({
               <label className="text-xs text-slate-500">Note<input name="note" defaultValue={loan.note ?? ""} className="input mt-0.5 block w-full" /></label>
               <div className="col-span-2 sm:col-span-3"><button className="rounded-md bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-indigo-700">Save details</button></div>
             </ToastForm>
-            <p className="mt-2 text-[11px] text-slate-400">Editing details never changes the outstanding balance (that only moves with payments), unless no payments exist yet.</p>
+            <p className="mt-2 text-[11px] text-slate-400">Set <b>Current outstanding</b> to your real remaining balance (for a mid-life loan it isn&apos;t the original principal). Once EMI payments are recorded, it also moves automatically.</p>
           </details>
         )}
 
