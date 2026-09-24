@@ -32,3 +32,6 @@ ALTER TABLE "ExpenseEntry"
 ALTER TABLE "LoanPayment"
   ADD CONSTRAINT "LoanPayment_expenseEntryId_fkey"
   FOREIGN KEY ("expenseEntryId") REFERENCES "ExpenseEntry"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- Saved what-if plan (per-month EMI overrides) for the Planned schedule.
+ALTER TABLE "Loan" ADD COLUMN "plannedOverrides" JSONB;

@@ -2399,6 +2399,20 @@ export async function updateLoan(formData: FormData) {
   revalidateFamily();
 }
 
+// Persist the what-if "Planned" schedule (per-month EMI overrides) on the loan, so it survives reloads
+// and drives the projected closure. An empty list clears the saved plan. Head-only.
+export async function saveLoanPlan(loanId: number, overrides: { monthIndex: number; emi: number }[]) {
+  if (!(await isHead())) return { ok: false as const };
+  if (!loanId) return { ok: false as const };
+  const clean = (Array.isArray(overrides) ? overrides : [])
+    .map((o) => ({ monthIndex: Math.round(Number(o.monthIndex)), emi: Math.round((Number(o.emi) || 0) * 100) / 100 }))
+    .filter((o) => Number.isFinite(o.monthIndex) && o.monthIndex >= 1 && Number.isFinite(o.emi) && o.emi >= 0);
+  await prisma.loan.update({ where: { id: loanId }, data: { plannedOverrides: clean } });
+  await logActivity("loan", "updated", `Saved a repayment plan (${clean.length} custom month${clean.length === 1 ? "" : "s"})`);
+  revalidateFamily();
+  return { ok: true as const, count: clean.length };
+}
+
 // Record a monthly payment / prepayment. principalPart reduces the outstanding;
 // for chits it bumps the installment count. Auto-closes when done.
 export async function recordLoanPayment(formData: FormData) {

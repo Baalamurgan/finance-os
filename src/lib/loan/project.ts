@@ -3,7 +3,7 @@
 // remaining, closure date) and the reference original-term figures. Pure & testable — takes a plain
 // object, touches no DB. Planned prepayments (from linked Spend lines) are passed in by the caller.
 
-import { amortize, emiFor, isoAddMonths, round2, type AmortResult, type Prepayment } from "./amortize";
+import { amortize, emiFor, isoAddMonths, round2, type AmortResult, type Prepayment, type EmiOverride } from "./amortize";
 
 export type LoanLike = {
   originalPrincipal: number | null;
@@ -51,7 +51,7 @@ function addMonthsLocal(start: Date, k: number): Date {
   return new Date(y, m - 1, d);
 }
 
-export function projectLoan(l: LoanLike, opts?: { asOf?: Date; plannedPrepayments?: Prepayment[] }): LoanProjection | null {
+export function projectLoan(l: LoanLike, opts?: { asOf?: Date; plannedPrepayments?: Prepayment[]; emiOverrides?: EmiOverride[] }): LoanProjection | null {
   if (!isAmortizable(l)) return null;
   const rate = l.interestRate as number;
   const asOf = opts?.asOf ?? new Date();
@@ -69,6 +69,7 @@ export function projectLoan(l: LoanLike, opts?: { asOf?: Date; plannedPrepayment
     startDate: forwardStart,
     startIndex: elapsed + 1,
     prepayments: opts?.plannedPrepayments ?? [],
+    emiOverrides: opts?.emiOverrides ?? [],
   });
 
   let originalClosureDate: string | null = null;

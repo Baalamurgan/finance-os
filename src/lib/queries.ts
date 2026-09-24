@@ -1942,9 +1942,16 @@ export async function getLoanDetail(householdId: number, id: number) {
   const interestPaid = loan.payments.reduce((s, p) => s + p.interestPart, 0);
   const principalPaidActual = loan.payments.reduce((s, p) => s + p.principalPart, 0);
   const prepaymentsMade = loan.payments.filter((p) => p.type === "prepayment").reduce((s, p) => s + p.principalPart, 0);
-  // Forward projection for amortizable loans (null for chits / legacy manual trackers). Planned
-  // prepayments (from linked Spend lines) are wired in a later phase — none fed yet.
-  const projection = projectLoan(loan);
+  // Saved what-if plan (per-month EMI overrides) → drives both the Planned table and the headline
+  // projection so the page reflects the plan once saved.
+  const savedOverrides = Array.isArray(loan.plannedOverrides)
+    ? (loan.plannedOverrides as unknown[])
+        .map((o) => o as { monthIndex?: unknown; emi?: unknown })
+        .map((o) => ({ monthIndex: Number(o.monthIndex), emi: Number(o.emi) }))
+        .filter((o) => Number.isFinite(o.monthIndex) && Number.isFinite(o.emi) && o.emi >= 0)
+    : [];
+  // Forward projection for amortizable loans (null for chits / legacy manual trackers).
+  const projection = projectLoan(loan, { emiOverrides: savedOverrides });
   return {
     loan,
     memberName,
@@ -1957,6 +1964,7 @@ export async function getLoanDetail(householdId: number, id: number) {
     principalPaidActual,
     prepaymentsMade,
     projection,
+    savedOverrides,
   };
 }
 

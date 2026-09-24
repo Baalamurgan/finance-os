@@ -1,8 +1,10 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useState, useTransition } from "react";
 import { amortize, round2, type EmiOverride } from "@/lib/loan/amortize";
 import { formatINR } from "@/lib/format";
+import { useToast } from "@/components/Toast";
+import { saveLoanPlan } from "@/app/actions";
 
 // Interactive repayment-schedule what-if. Shows the CURRENT projection (from the loan's live outstanding)
 // next to an editable PLANNED projection: change the EMI paid in any month, hit Recalculate (with a brief
@@ -10,23 +12,29 @@ import { formatINR } from "@/lib/format";
 // math via the amortization engine — nothing is saved; it's a sandbox for "what if I paid differently".
 
 type Props = {
+  loanId: number;
+  canEdit: boolean;
   outstanding: number;
   annualRatePct: number;
   emi: number;
   startISO: string | null;
   startIndex: number;
+  savedOverrides: EmiOverride[];
 };
 
 const fmtDate = (iso: string | null) => (iso ? new Date(iso).toLocaleDateString("en-GB", { month: "short", year: "2-digit" }) : "—");
+const keyOf = (ov: EmiOverride[]) => JSON.stringify([...ov].sort((a, b) => a.monthIndex - b.monthIndex));
 
-export function LoanScheduleWhatIf({ outstanding, annualRatePct, emi, startISO, startIndex }: Props) {
+export function LoanScheduleWhatIf({ loanId, canEdit, outstanding, annualRatePct, emi, startISO, startIndex, savedOverrides }: Props) {
+  const toast = useToast();
+  const [savingPending, startSaving] = useTransition();
   const base = useMemo(
     () => amortize({ principal: outstanding, annualRatePct, emi, startDate: startISO, startIndex }),
     [outstanding, annualRatePct, emi, startISO, startIndex],
   );
 
   const [drafts, setDrafts] = useState<Record<number, string>>({}); // monthIndex → typed EMI (uncommitted)
-  const [committed, setCommitted] = useState<EmiOverride[]>([]); // applied overrides
+  const [committed, setCommitted] = useState<EmiOverride[]>(savedOverrides); // applied overrides (seeded from the saved plan)
   const [loading, setLoading] = useState(false);
 
   const planned = useMemo(
@@ -34,18 +42,29 @@ export function LoanScheduleWhatIf({ outstanding, annualRatePct, emi, startISO, 
     [committed, base, outstanding, annualRatePct, emi, startISO, startIndex],
   );
 
+  // Effective overrides = committed with any typed drafts layered on top.
+  const collect = (): EmiOverride[] => {
+    const map = new Map<number, number>();
+    for (const o of committed) map.set(o.monthIndex, o.emi);
+    for (const [k, v] of Object.entries(drafts)) {
+      const n = Number(v);
+      if (Number.isFinite(n) && n >= 0) map.set(Number(k), n);
+    }
+    return [...map.entries()].map(([monthIndex, emi]) => ({ monthIndex, emi }));
+  };
+
   const dirty = Object.keys(drafts).length > 0 || committed.length > 0;
+  const unsaved = keyOf(collect()) !== keyOf(savedOverrides);
   const interestSaved = round2(base.totalInterest - planned.totalInterest);
   const monthsSaved = base.months - planned.months;
 
   const recalc = () => {
-    const overrides: EmiOverride[] = Object.entries(drafts)
-      .map(([k, v]) => ({ monthIndex: Number(k), emi: Number(v) }))
-      .filter((o) => Number.isFinite(o.emi) && o.emi >= 0 && Number.isFinite(o.monthIndex));
+    const overrides = collect();
     setLoading(true);
     // A deliberate beat so the shimmer reads as "recalculating", then swap in the new schedule.
     setTimeout(() => {
       setCommitted(overrides);
+      setDrafts({});
       setLoading(false);
     }, 650);
   };
@@ -53,18 +72,28 @@ export function LoanScheduleWhatIf({ outstanding, annualRatePct, emi, startISO, 
     setDrafts({});
     setCommitted([]);
   };
+  const savePlan = () => {
+    const overrides = collect();
+    setCommitted(overrides);
+    setDrafts({});
+    startSaving(async () => {
+      const res = await saveLoanPlan(loanId, overrides);
+      toast(res.ok ? (overrides.length ? "Plan saved" : "Plan cleared") : "Couldn't save the plan", res.ok ? "success" : "error");
+    });
+  };
 
   return (
     <section className="rounded-xl border border-slate-200 bg-white p-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h2 className="text-sm font-semibold text-slate-900">
           Repayment schedule <span className="text-xs font-normal text-slate-400">· what-if</span>
+          {canEdit && (unsaved ? <span className="ml-1.5 text-[11px] font-normal text-amber-600">· unsaved</span> : savedOverrides.length > 0 ? <span className="ml-1.5 text-[11px] font-normal text-emerald-600">· plan saved</span> : null)}
         </h2>
         <div className="flex items-center gap-2">
           <button
             type="button"
             onClick={revert}
-            disabled={!dirty || loading}
+            disabled={!dirty || loading || savingPending}
             className="rounded-md border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-500 hover:bg-slate-100 disabled:opacity-40"
           >
             ↺ Revert
@@ -72,11 +101,21 @@ export function LoanScheduleWhatIf({ outstanding, annualRatePct, emi, startISO, 
           <button
             type="button"
             onClick={recalc}
-            disabled={loading}
+            disabled={loading || savingPending}
             className="inline-flex items-center gap-1.5 rounded-md bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-indigo-700 disabled:opacity-60"
           >
             {loading ? <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-indigo-300 border-t-white" /> : "↻"} Recalculate
           </button>
+          {canEdit && (
+            <button
+              type="button"
+              onClick={savePlan}
+              disabled={savingPending || loading || !unsaved}
+              className="inline-flex items-center gap-1.5 rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700 disabled:opacity-40"
+            >
+              {savingPending ? <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-emerald-300 border-t-white" /> : "💾"} Save plan
+            </button>
+          )}
         </div>
       </div>
 
