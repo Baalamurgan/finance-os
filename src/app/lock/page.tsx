@@ -2,7 +2,7 @@ import { redirect } from "next/navigation";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
 import { getHousehold } from "@/lib/queries";
-import { isUnlocked, setUnlockCookie } from "@/lib/applock";
+import { isUnlocked } from "@/lib/applock";
 import { LockScreen } from "@/components/LockScreen";
 
 export const metadata = { title: "Locked · Family Finance OS" };
@@ -14,11 +14,9 @@ export default async function LockPage({ searchParams }: { searchParams: Promise
   const household = await getHousehold();
   if (!household) redirect("/signin");
 
-  // no PIN set, or already unlocked → nothing to do here
-  if (!household.pinHash) {
-    await setUnlockCookie(household.id);
-    redirect("/");
-  }
+  // No PIN set → the app isn't locked at all (load.ts only gates on /lock when pinHash exists), so there's
+  // nothing to unlock. Just go home. (Setting a cookie here is illegal — a page render can't modify cookies.)
+  if (!household.pinHash) redirect("/");
   if (await isUnlocked(household.id)) redirect("/");
 
   const memberId = session.user.memberId;
