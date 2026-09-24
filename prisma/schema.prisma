@@ -71,10 +71,19 @@ model Loan {
   paidInstallments  Int      @default(0) // chit: installments paid so far
   chitWonInstallment Int?    // chit: the installment number in which the pot was won (null = not yet)
   chitPotAmount     Float?   // chit: the pot amount received when won
-  interestRate      Float?   // annual % (loans, display only)
+  interestRate      Float?   // annual % — reused as the amortization engine's rate (was display-only)
   note              String?
   status            String   @default("active") // active | closed
+  // ── Loan-master fields for the amortization engine (all nullable → existing rows/chits stay valid).
+  // A loan is "amortizable" when originalPrincipal + interestRate + (emiAmount or tenure) + startDate are
+  // set; otherwise it behaves as the legacy manual tracker. `outstanding` remains the ACTUAL live balance.
+  originalPrincipal    Float?    // principal at disbursement
+  originalTenureMonths Int?      // scheduled tenure in months
+  startDate            DateTime? // first EMI / disbursement date (drives the schedule dates)
+  emiAmount            Float?    // planning EMI; engine uses emiAmount ?? monthlyAmount ?? emiFor(...)
+  prepaymentStrategy   String    @default("reduce_tenure") // reduce_tenure | reduce_emi
   payments          LoanPayment[]
+  bills             ExpenseEntry[] @relation("LoanBills") // planned EMI/prepayment Spend lines linked to this loan
   createdAt         DateTime @default(now())
 }
 
@@ -85,8 +94,16 @@ model LoanPayment {
   periodId      Int? // the month it was paid in (optional link)
   amount        Float // total paid
   principalPart Float    @default(0) // amount that reduced outstanding (prepayments = full amount)
+  interestPart  Float    @default(0) // computed interest portion of an EMI (0 for prepayments) — auditable actual
   dividend      Float    @default(0) // chit: dividend received that month (reduces net cost)
+  type          String   @default("emi") // emi | prepayment | manual
+  paidOn        DateTime? // actual payment date (distinct from createdAt); defaults to when it was marked paid
   note          String?
+  // When an EMI/prepayment Spend line is marked Paid, the resulting actual payment links back to that
+  // ExpenseEntry (unique → one payment per line). SetNull so deleting the Spend reverses cleanly without
+  // orphaning the loan history. NULL for manually-recorded payments.
+  expenseEntry   ExpenseEntry? @relation("LoanPaymentSource", fields: [expenseEntryId], references: [id], onDelete: SetNull)
+  expenseEntryId Int?     @unique
   createdAt     DateTime @default(now())
 }
 
@@ -132,6 +149,10 @@ model RecurringItem {
   installmentStartYear  Int?
   installmentStartMonth Int?
   dueDay              Int?     // informational day-of-month the bill lands (display only)
+  // Loan link (scalars, matching this model's relation-free style): a recurring EMI template. generateMonth
+  // copies loanId + loanPaymentType onto each generated ExpenseEntry so the monthly bill is loan-linked.
+  loanId          Int?
+  loanPaymentType String? // emi | prepayment
   createdAt   DateTime @default(now())
 
   @@index([householdId])
@@ -717,6 +738,13 @@ model ExpenseEntry {
   // track leg 2 (member → vendor payment). Unused (false/null) for every other kind of line.
   vendorPaid   Boolean  @default(false)
   vendorPaidAt DateTime?
+  // Loan link: a planned EMI/prepayment bill for a loan. The SAME line that already reduces "budget in
+  // hand" is the plan — no duplicate transaction. Marking it Paid (toggleBillPaid) creates the actual
+  // LoanPayment (below, 1:1) with computed principal/interest; un-paying/deleting reverses it.
+  loan            Loan?   @relation("LoanBills", fields: [loanId], references: [id], onDelete: SetNull)
+  loanId          Int?
+  loanPaymentType String? // emi | prepayment (null = not a loan line)
+  loanPayment     LoanPayment? @relation("LoanPaymentSource") // the actual payment created when marked paid
   createdAt  DateTime @default(now())
 }
 
