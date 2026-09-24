@@ -6,7 +6,7 @@ import { getLoanDetail } from "@/lib/queries";
 import { NavHeader } from "@/components/NavHeader";
 import { ConfirmForm } from "@/components/ConfirmForm";
 import { ToastForm } from "@/components/ToastForm";
-import { recordLoanPayment, setChitWon, deleteLoanPayment, closeLoan } from "@/app/actions";
+import { recordLoanPayment, setChitWon, deleteLoanPayment, closeLoan, updateLoan } from "@/app/actions";
 
 export default async function LoanDetailPage({
   params,
@@ -22,9 +22,11 @@ export default async function LoanDetailPage({
   const detail = await getLoanDetail(c.household.id, Number(id));
   if (!detail) notFound();
 
-  const { loan, memberName, totalPaid, totalDividend, potReceived, chitNet } = detail;
+  const { loan, memberName, totalPaid, totalDividend, potReceived, chitNet, interestPaid, prepaymentsMade, projection } = detail;
   const isChit = loan.kind === "chit";
   const canEdit = c.isHead;
+  const fmtMonths = (m: number) => `${Math.floor(m / 12)}y ${m % 12}m`;
+  const fmtDate = (iso: string | null) => (iso ? new Date(iso).toLocaleDateString("en-GB", { month: "short", year: "numeric" }) : "—");
 
   return (
     <>
@@ -95,6 +97,100 @@ export default async function LoanDetailPage({
             <Stat label="Outstanding" value={formatINR(loan.outstanding)} accent />
           )}
         </div>
+
+        {/* amortizable loan: projection summary + repayment schedule */}
+        {projection && (
+          <>
+            <section className="rounded-xl border border-slate-200 bg-white p-4">
+              <div className="flex items-center justify-between">
+                <h2 className="text-sm font-semibold text-slate-900">Projection</h2>
+                <span className="rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-medium text-amber-700" title="A monthly reducing-balance planning estimate — your bank may use daily reducing balance, so actual figures can differ slightly.">
+                  planning estimate
+                </span>
+              </div>
+              <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
+                <Stat label="Original principal" value={formatINR(projection.originalPrincipal ?? 0)} />
+                <Stat label="Outstanding" value={formatINR(projection.currentOutstanding)} accent />
+                <Stat label="Rate" value={`${projection.annualRatePct}% p.a.`} />
+                <Stat label="EMI" value={formatINR(projection.emi)} />
+                <Stat label="Principal paid" value={formatINR(projection.principalPaid ?? 0)} />
+                <Stat label="Interest paid" value={formatINR(interestPaid)} />
+                <Stat label="Prepayments" value={formatINR(prepaymentsMade)} />
+                <Stat label="Interest remaining" value={formatINR(projection.totalInterestRemaining)} accent />
+                <Stat label="Original tenure" value={projection.originalTenureMonths ? fmtMonths(projection.originalTenureMonths) : "—"} />
+                <Stat label="Remaining tenure" value={fmtMonths(projection.remainingMonths)} />
+                <Stat label="Est. closure" value={fmtDate(projection.closureDate)} accent />
+                <Stat label="Original closure" value={fmtDate(projection.originalClosureDate)} />
+              </div>
+            </section>
+
+            <section className="rounded-xl border border-slate-200 bg-white p-4">
+              <h2 className="text-sm font-semibold text-slate-900">Repayment schedule <span className="text-xs font-normal text-slate-400">· from current outstanding</span></h2>
+              <div className="mt-3 max-h-96 overflow-auto rounded-lg border border-slate-100">
+                <table className="w-full min-w-[520px] text-right text-xs tabular-nums">
+                  <thead className="sticky top-0 bg-slate-50 text-[10px] uppercase tracking-wide text-slate-500">
+                    <tr>
+                      <th className="px-2 py-1.5 text-left">#</th>
+                      <th className="px-2 py-1.5 text-left">Month</th>
+                      <th className="px-2 py-1.5">EMI</th>
+                      <th className="px-2 py-1.5">Principal</th>
+                      <th className="px-2 py-1.5">Interest</th>
+                      <th className="px-2 py-1.5">Prepay</th>
+                      <th className="px-2 py-1.5">Balance</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {projection.schedule.map((row) => (
+                      <tr key={row.index} className={row.prepayment > 0 ? "bg-emerald-50/50" : undefined}>
+                        <td className="px-2 py-1 text-left text-slate-400">{row.index}</td>
+                        <td className="px-2 py-1 text-left text-slate-500">{fmtDate(row.date)}</td>
+                        <td className="px-2 py-1 text-slate-700">{formatINR(row.emi)}</td>
+                        <td className="px-2 py-1 text-slate-700">{formatINR(row.principal)}</td>
+                        <td className="px-2 py-1 text-slate-500">{formatINR(row.interest)}</td>
+                        <td className="px-2 py-1 text-emerald-700">{row.prepayment > 0 ? formatINR(row.prepayment) : "—"}</td>
+                        <td className="px-2 py-1 font-medium text-slate-800">{formatINR(row.balance)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <p className="mt-2 text-[11px] text-slate-400">
+                {projection.schedule.length} projected payments · a planning estimate, not a bank statement.
+              </p>
+            </section>
+          </>
+        )}
+
+        {/* edit loan master (amortization details) */}
+        {canEdit && !isChit && (
+          <details className="rounded-xl border border-slate-200 bg-white p-4">
+            <summary className="cursor-pointer text-sm font-semibold text-slate-900">Edit loan details</summary>
+            <ToastForm action={updateLoan} successMessage="Loan updated" className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3">
+              <input type="hidden" name="loanId" value={loan.id} />
+              <label className="text-xs text-slate-500">Name<input name="name" defaultValue={loan.name} className="input mt-0.5 block w-full" /></label>
+              <label className="text-xs text-slate-500">Original principal (₹)<input name="originalPrincipal" type="number" step="0.01" defaultValue={loan.originalPrincipal ?? ""} className="input mt-0.5 block w-full" /></label>
+              <label className="text-xs text-slate-500">Interest rate (% p.a.)<input name="interestRate" type="number" step="0.01" defaultValue={loan.interestRate ?? ""} className="input mt-0.5 block w-full" /></label>
+              <label className="text-xs text-slate-500">Tenure (months)<input name="originalTenureMonths" type="number" defaultValue={loan.originalTenureMonths ?? ""} className="input mt-0.5 block w-full" /></label>
+              <label className="text-xs text-slate-500">Start date<input name="startDate" type="date" defaultValue={loan.startDate ? new Date(loan.startDate).toISOString().slice(0, 10) : ""} className="input mt-0.5 block w-full" /></label>
+              <label className="text-xs text-slate-500">EMI (₹, blank = auto)<input name="emiAmount" type="number" step="0.01" defaultValue={loan.emiAmount ?? ""} className="input mt-0.5 block w-full" /></label>
+              <label className="text-xs text-slate-500">Prepayment strategy
+                <select name="prepaymentStrategy" defaultValue={loan.prepaymentStrategy} className="input mt-0.5 block w-full">
+                  <option value="reduce_tenure">Extra → reduce tenure</option>
+                  <option value="reduce_emi">Extra → reduce EMI</option>
+                </select>
+              </label>
+              <label className="text-xs text-slate-500">Responsible
+                <select name="memberId" defaultValue={loan.memberId ?? ""} className="input mt-0.5 block w-full">
+                  <option value="">Shared</option>
+                  {detail.members.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+                </select>
+              </label>
+              <label className="text-xs text-slate-500">Note<input name="note" defaultValue={loan.note ?? ""} className="input mt-0.5 block w-full" /></label>
+              <div className="col-span-2 sm:col-span-3"><button className="rounded-md bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-indigo-700">Save details</button></div>
+            </ToastForm>
+            <p className="mt-2 text-[11px] text-slate-400">Editing details never changes the outstanding balance (that only moves with payments), unless no payments exist yet.</p>
+          </details>
+        )}
 
         {/* chit: pot won */}
         {isChit && (

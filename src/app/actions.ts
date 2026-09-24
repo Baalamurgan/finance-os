@@ -19,6 +19,7 @@ import { ensurePersonalMonth } from "@/lib/personal";
 import { planBillMonth, type FundingStyle } from "@/lib/schedule";
 import { getBillReminders } from "@/lib/billReminders";
 import { applyBudgetShortfall, windDownPeriod } from "@/lib/windDown";
+import { emiFor } from "@/lib/loan/amortize";
 import { SURPLUS_NOTE, CARRY_NOTE, DEFERRED_NOTE, PIGGY_INCOME_NOTE, POOL_NOTE, POOL_BILL_NOTE, REMOVED_NOTE, isPoolNote } from "@/lib/notes";
 import { canActOnStep } from "@/lib/planAuth";
 
@@ -2313,26 +2314,87 @@ export async function unsettleAdvance(formData: FormData) {
 }
 
 // ---- Loans & chits (head-only) ----
+// Parse the loan-master fields (amortization) shared by create + update. Nullable throughout so a chit
+// or a legacy manual loan can skip them. EMI is derived from principal+rate+tenure when left blank.
+function parseLoanMaster(formData: FormData) {
+  const numOrNull = (k: string) => {
+    const v = String(formData.get(k) ?? "").trim();
+    return v === "" ? null : Number(v);
+  };
+  const originalPrincipal = numOrNull("originalPrincipal");
+  const originalTenureMonths = numOrNull("originalTenureMonths");
+  const interestRate = numOrNull("interestRate");
+  const startRaw = String(formData.get("startDate") ?? "").trim();
+  const startDate = startRaw ? new Date(`${startRaw}T00:00:00`) : null;
+  let emiAmount = numOrNull("emiAmount");
+  if ((emiAmount == null || emiAmount <= 0) && originalPrincipal && interestRate && originalTenureMonths) {
+    emiAmount = emiFor(originalPrincipal, interestRate, originalTenureMonths);
+  }
+  const strat = String(formData.get("prepaymentStrategy") ?? "reduce_tenure");
+  const prepaymentStrategy = strat === "reduce_emi" ? "reduce_emi" : "reduce_tenure";
+  return { originalPrincipal, originalTenureMonths, interestRate, startDate, emiAmount, prepaymentStrategy };
+}
+
 export async function createLoan(formData: FormData) {
   if (!(await isHead())) return;
   const householdId = Number(formData.get("householdId"));
   const name = String(formData.get("name") ?? "").trim();
   const kind = String(formData.get("kind") ?? "loan") === "chit" ? "chit" : "loan";
-  const outstanding = Number(formData.get("outstanding")) || 0;
   const monthlyAmount = Number(formData.get("monthlyAmount")) || 0;
   const memberRaw = String(formData.get("memberId") ?? "").trim();
   const memberId = memberRaw === "" ? null : Number(memberRaw);
   const totalRaw = String(formData.get("totalInstallments") ?? "").trim();
   const totalInstallments = totalRaw === "" ? null : Number(totalRaw);
   const paidInstallments = Number(formData.get("paidInstallments")) || 0;
-  const rateRaw = String(formData.get("interestRate") ?? "").trim();
-  const interestRate = rateRaw === "" ? null : Number(rateRaw);
   const note = String(formData.get("note") ?? "").trim() || null;
   if (!householdId || !name) return;
+  const m = parseLoanMaster(formData);
+  // A fresh amortizable loan with no explicit opening balance starts fully outstanding at its principal.
+  let outstanding = Number(formData.get("outstanding")) || 0;
+  if (outstanding <= 0 && m.originalPrincipal) outstanding = m.originalPrincipal;
   await prisma.loan.create({
-    data: { householdId, name, kind, outstanding, monthlyAmount, memberId, totalInstallments, paidInstallments, interestRate, note },
+    data: {
+      householdId, name, kind, outstanding, monthlyAmount, memberId, totalInstallments, paidInstallments, note,
+      interestRate: m.interestRate,
+      originalPrincipal: m.originalPrincipal,
+      originalTenureMonths: m.originalTenureMonths,
+      startDate: m.startDate,
+      emiAmount: m.emiAmount,
+      prepaymentStrategy: m.prepaymentStrategy,
+    },
   });
   await logActivity("loan", "created", `Added ${kind} “${name}”`);
+  revalidateFamily();
+}
+
+// Edit a loan's master details (head only). Does NOT change `outstanding` — that's actual ground truth,
+// moved only by payments — unless the loan has no payments yet and the principal is being set (initial setup).
+export async function updateLoan(formData: FormData) {
+  if (!(await isHead())) return;
+  const loanId = Number(formData.get("loanId"));
+  if (!loanId) return;
+  const loan = await prisma.loan.findUnique({ where: { id: loanId }, include: { _count: { select: { payments: true } } } });
+  if (!loan) return;
+  const name = String(formData.get("name") ?? "").trim() || loan.name;
+  const monthlyAmount = formData.get("monthlyAmount") != null ? Number(formData.get("monthlyAmount")) || 0 : loan.monthlyAmount;
+  const memberRaw = String(formData.get("memberId") ?? "").trim();
+  const memberId = memberRaw === "" ? null : Number(memberRaw);
+  const note = String(formData.get("note") ?? "").trim() || null;
+  const m = parseLoanMaster(formData);
+  // If no payments have been recorded yet, keep `outstanding` in step with an edited principal (setup fixups);
+  // once payments exist, never silently overwrite the live balance from a details edit.
+  const data: Record<string, unknown> = {
+    name, monthlyAmount, memberId, note,
+    interestRate: m.interestRate,
+    originalPrincipal: m.originalPrincipal,
+    originalTenureMonths: m.originalTenureMonths,
+    startDate: m.startDate,
+    emiAmount: m.emiAmount,
+    prepaymentStrategy: m.prepaymentStrategy,
+  };
+  if (loan._count.payments === 0 && m.originalPrincipal != null) data.outstanding = m.originalPrincipal;
+  await prisma.loan.update({ where: { id: loanId }, data });
+  await logActivity("loan", "updated", `Edited loan “${name}”`);
   revalidateFamily();
 }
 

@@ -214,6 +214,27 @@ function AddLoan({
           Monthly amount
           <input name="monthlyAmount" type="number" step="0.01" placeholder="0" className="input mt-0.5 block w-32" />
         </label>
+        {/* Loan-master fields — fill these for a full EMI schedule + payoff projection (leave blank for chits). */}
+        <label className="text-xs text-slate-500">
+          Original principal (loan)
+          <input name="originalPrincipal" type="number" step="0.01" placeholder="4500000" className="input mt-0.5 block w-32" />
+        </label>
+        <label className="text-xs text-slate-500">
+          Interest rate (% p.a.)
+          <input name="interestRate" type="number" step="0.01" placeholder="8.5" className="input mt-0.5 block w-24" />
+        </label>
+        <label className="text-xs text-slate-500">
+          Tenure (months)
+          <input name="originalTenureMonths" type="number" placeholder="108" className="input mt-0.5 block w-24" />
+        </label>
+        <label className="text-xs text-slate-500">
+          Start date
+          <input name="startDate" type="date" className="input mt-0.5 block w-36" />
+        </label>
+        <label className="text-xs text-slate-500">
+          EMI (blank = auto)
+          <input name="emiAmount" type="number" step="0.01" placeholder="auto" className="input mt-0.5 block w-28" />
+        </label>
         <label className="text-xs text-slate-500">
           Total installments (chit)
           <input name="totalInstallments" type="number" placeholder="20" className="input mt-0.5 block w-28" />

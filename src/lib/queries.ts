@@ -8,6 +8,7 @@ import { planBillMonth, isLumpDue, monthsUntilNextDue, type FundingStyle } from 
 import { suggestCategoryName, normalizeItem, resolveCategoryId } from "@/lib/spendCategorize";
 import { withShareCount } from "@/lib/format";
 import { getCardDues, type MonthAmount } from "@/lib/personal/cash";
+import { projectLoan } from "@/lib/loan/project";
 
 // Keywords that drive the on-save category suggestion: the household's LEARNED words
 // (SpendKeyword) plus its head-curated shortcuts (SpendShortcut, weighted high since
@@ -1937,6 +1938,13 @@ export async function getLoanDetail(householdId: number, id: number) {
   const potReceived = loan.chitWonInstallment ? loan.chitPotAmount ?? 0 : 0;
   // chit net cost so far = paid − dividends received − pot won (if any)
   const chitNet = totalPaid - totalDividend - potReceived;
+  // Actual repayment stats from recorded payments (auditable ground truth).
+  const interestPaid = loan.payments.reduce((s, p) => s + p.interestPart, 0);
+  const principalPaidActual = loan.payments.reduce((s, p) => s + p.principalPart, 0);
+  const prepaymentsMade = loan.payments.filter((p) => p.type === "prepayment").reduce((s, p) => s + p.principalPart, 0);
+  // Forward projection for amortizable loans (null for chits / legacy manual trackers). Planned
+  // prepayments (from linked Spend lines) are wired in a later phase — none fed yet.
+  const projection = projectLoan(loan);
   return {
     loan,
     memberName,
@@ -1945,6 +1953,10 @@ export async function getLoanDetail(householdId: number, id: number) {
     totalDividend,
     potReceived,
     chitNet,
+    interestPaid,
+    principalPaidActual,
+    prepaymentsMade,
+    projection,
   };
 }
 
