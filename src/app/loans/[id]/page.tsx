@@ -7,6 +7,7 @@ import { NavHeader } from "@/components/NavHeader";
 import { ConfirmForm } from "@/components/ConfirmForm";
 import { ToastForm } from "@/components/ToastForm";
 import { recordLoanPayment, setChitWon, deleteLoanPayment, closeLoan, updateLoan } from "@/app/actions";
+import { LoanScheduleWhatIf } from "@/components/LoanScheduleWhatIf";
 
 export default async function LoanDetailPage({
   params,
@@ -124,40 +125,15 @@ export default async function LoanDetailPage({
               </div>
             </section>
 
-            <section className="rounded-xl border border-slate-200 bg-white p-4">
-              <h2 className="text-sm font-semibold text-slate-900">Repayment schedule <span className="text-xs font-normal text-slate-400">· from current outstanding</span></h2>
-              <div className="mt-3 max-h-96 overflow-auto rounded-lg border border-slate-100">
-                <table className="w-full min-w-[520px] text-right text-xs tabular-nums">
-                  <thead className="sticky top-0 bg-slate-50 text-[10px] uppercase tracking-wide text-slate-500">
-                    <tr>
-                      <th className="px-2 py-1.5 text-left">#</th>
-                      <th className="px-2 py-1.5 text-left">Month</th>
-                      <th className="px-2 py-1.5">EMI</th>
-                      <th className="px-2 py-1.5">Principal</th>
-                      <th className="px-2 py-1.5">Interest</th>
-                      <th className="px-2 py-1.5">Prepay</th>
-                      <th className="px-2 py-1.5">Balance</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100">
-                    {projection.schedule.map((row) => (
-                      <tr key={row.index} className={row.prepayment > 0 ? "bg-emerald-50/50" : undefined}>
-                        <td className="px-2 py-1 text-left text-slate-400">{row.index}</td>
-                        <td className="px-2 py-1 text-left text-slate-500">{fmtDate(row.date)}</td>
-                        <td className="px-2 py-1 text-slate-700">{formatINR(row.emi)}</td>
-                        <td className="px-2 py-1 text-slate-700">{formatINR(row.principal)}</td>
-                        <td className="px-2 py-1 text-slate-500">{formatINR(row.interest)}</td>
-                        <td className="px-2 py-1 text-emerald-700">{row.prepayment > 0 ? formatINR(row.prepayment) : "—"}</td>
-                        <td className="px-2 py-1 font-medium text-slate-800">{formatINR(row.balance)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-              <p className="mt-2 text-[11px] text-slate-400">
-                {projection.schedule.length} projected payments · a planning estimate, not a bank statement.
-              </p>
-            </section>
+            {projection.schedule.length > 0 && (
+              <LoanScheduleWhatIf
+                outstanding={projection.currentOutstanding}
+                annualRatePct={projection.annualRatePct}
+                emi={projection.emi}
+                startISO={projection.schedule[0].date}
+                startIndex={projection.schedule[0].index}
+              />
+            )}
           </>
         )}
 

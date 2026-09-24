@@ -15,6 +15,7 @@
 // interest is rounded to paise). Inputs/outputs are rupees (numbers) with at most 2 decimals.
 
 export type Prepayment = { monthIndex: number; amount: number }; // 1-based EMI number; extra principal (₹)
+export type EmiOverride = { monthIndex: number; emi: number }; // 1-based month; the payment actually made that month (₹)
 
 export type ScheduleRow = {
   index: number; // 1-based period number
@@ -45,6 +46,7 @@ export type AmortInput = {
   startDate?: Date | string | null; // first period's date; period k is startDate + (k−1) months
   startIndex?: number; // label the first row with this index (default 1) — for mid-loan projections
   prepayments?: Prepayment[]; // extra principal by (labelled) month index
+  emiOverrides?: EmiOverride[]; // per-month payment override (what-if: "this month I pay ₹X instead")
 };
 
 const toPaise = (rupees: number) => Math.round(rupees * 100);
@@ -93,6 +95,12 @@ export function amortize(input: AmortInput): AmortResult {
     }
   }
 
+  // Per-month payment overrides (what-if: "in month k I actually pay ₹X instead of the EMI").
+  const overrideByIdx = new Map<number, number>();
+  for (const o of input.emiOverrides ?? []) {
+    if (o.emi >= 0 && Number.isFinite(o.monthIndex)) overrideByIdx.set(o.monthIndex, toPaise(o.emi));
+  }
+
   // Safety cap so a too-small EMI (never amortizes) can't loop forever.
   const cap = Math.max(1200, (input.tenureMonths ?? 0) * 3 + 1200);
 
@@ -104,10 +112,12 @@ export function amortize(input: AmortInput): AmortResult {
   while (balance > 0 && step < cap) {
     const label = startIdx + step;
     const interest = Math.round(balance * rate);
-    let principalComp = emiPaise - interest;
-    let paymentPaise = emiPaise;
+    // This month's payment: an override if the user set one, else the standard EMI.
+    const override = overrideByIdx.get(label);
+    let paymentPaise = override != null ? override : emiPaise;
+    let principalComp = paymentPaise - interest;
 
-    if (principalComp < 0) principalComp = 0; // EMI < interest → no regular principal (needs a prepayment to move)
+    if (principalComp < 0) principalComp = 0; // payment < interest → no regular principal (balance won't fall)
     if (principalComp >= balance) {
       // Final regular period: pay exactly the remaining balance + this month's interest (closure adjustment).
       principalComp = balance;

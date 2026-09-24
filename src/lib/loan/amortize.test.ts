@@ -110,6 +110,34 @@ describe("amortize — prepayments (reduce tenure)", () => {
   });
 });
 
+describe("amortize — per-month EMI overrides (what-if)", () => {
+  const emi = emiFor(800000, 8.5, 0 || 14); // ~₹8L over ~14 months for a quick example
+  const base = amortize({ principal: 800000, annualRatePct: 8.5, emi });
+
+  it("paying MORE in a month shortens the tenure and cuts interest", () => {
+    const r = amortize({ principal: 800000, annualRatePct: 8.5, emi, emiOverrides: [{ monthIndex: 2, emi: emi + 100000 }] });
+    expect(r.rows[1].emi).toBe(emi + 100000);
+    expect(r.months).toBeLessThan(base.months);
+    expect(r.totalInterest).toBeLessThan(base.totalInterest);
+    expect(round2(r.totalPrincipal)).toBe(800000);
+  });
+
+  it("paying LESS in a month lengthens the tenure and adds interest", () => {
+    const r = amortize({ principal: 800000, annualRatePct: 8.5, emi, emiOverrides: [{ monthIndex: 2, emi: 20000 }] });
+    expect(r.rows[1].emi).toBe(20000);
+    expect(r.months).toBeGreaterThanOrEqual(base.months);
+    expect(r.totalInterest).toBeGreaterThan(base.totalInterest);
+    expect(round2(r.totalPrincipal)).toBe(800000);
+  });
+
+  it("an override never overshoots — the loan still closes at exactly zero", () => {
+    const r = amortize({ principal: 800000, annualRatePct: 8.5, emi, emiOverrides: [{ monthIndex: 1, emi: 5000000 }] });
+    expect(r.months).toBe(1);
+    expect(r.rows.at(-1)!.balance).toBe(0);
+    expect(round2(r.totalPrincipal)).toBe(800000);
+  });
+});
+
 describe("amortize — dates", () => {
   it("increments monthly from startDate and clamps month-end overflow", () => {
     const r = amortize({ principal: 100000, annualRatePct: 12, emi: emiFor(100000, 12, 12), startDate: "2026-01-31" });
