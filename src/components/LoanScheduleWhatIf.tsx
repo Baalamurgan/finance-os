@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState, useTransition } from "react";
-import { amortize, round2, type EmiOverride } from "@/lib/loan/amortize";
+import { amortize, round2, type EmiOverride, type Prepayment } from "@/lib/loan/amortize";
 import { formatINR } from "@/lib/format";
 import { useToast } from "@/components/Toast";
 import { saveLoanPlan } from "@/app/actions";
@@ -20,14 +20,17 @@ type Props = {
   startISO: string | null;
   startIndex: number;
   savedOverrides: EmiOverride[];
+  plannedPrepayments: Prepayment[]; // unpaid linked Sheet prepayments — folded into Planned until paid
 };
 
 const fmtDate = (iso: string | null) => (iso ? new Date(iso).toLocaleDateString("en-GB", { month: "short", year: "2-digit" }) : "—");
 const keyOf = (ov: EmiOverride[]) => JSON.stringify([...ov].sort((a, b) => a.monthIndex - b.monthIndex));
 
-export function LoanScheduleWhatIf({ loanId, canEdit, outstanding, annualRatePct, emi, startISO, startIndex, savedOverrides }: Props) {
+export function LoanScheduleWhatIf({ loanId, canEdit, outstanding, annualRatePct, emi, startISO, startIndex, savedOverrides, plannedPrepayments }: Props) {
   const toast = useToast();
   const [savingPending, startSaving] = useTransition();
+  const prepayKey = JSON.stringify(plannedPrepayments);
+  // Current = keep paying the normal EMI from your actual balance (paid items are already in `outstanding`).
   const base = useMemo(
     () => amortize({ principal: outstanding, annualRatePct, emi, startDate: startISO, startIndex }),
     [outstanding, annualRatePct, emi, startISO, startIndex],
@@ -37,9 +40,12 @@ export function LoanScheduleWhatIf({ loanId, canEdit, outstanding, annualRatePct
   const [committed, setCommitted] = useState<EmiOverride[]>(savedOverrides); // applied overrides (seeded from the saved plan)
   const [loading, setLoading] = useState(false);
 
+  // Planned = Current + everything not-yet-paid: the unpaid linked Sheet prepayments AND your what-if EMI
+  // edits. Once a Sheet item is marked paid it leaves this list (and lands in `outstanding` → Current).
   const planned = useMemo(
-    () => (committed.length ? amortize({ principal: outstanding, annualRatePct, emi, startDate: startISO, startIndex, emiOverrides: committed }) : base),
-    [committed, base, outstanding, annualRatePct, emi, startISO, startIndex],
+    () => amortize({ principal: outstanding, annualRatePct, emi, startDate: startISO, startIndex, emiOverrides: committed, prepayments: plannedPrepayments }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [committed, outstanding, annualRatePct, emi, startISO, startIndex, prepayKey],
   );
 
   // Effective overrides = committed with any typed drafts layered on top.
@@ -127,7 +133,7 @@ export function LoanScheduleWhatIf({ loanId, canEdit, outstanding, annualRatePct
         <Metric label="Months saved" value={`${monthsSaved >= 0 ? "" : "+"}${Math.abs(monthsSaved)} mo`} good={monthsSaved > 0} bad={monthsSaved < 0} />
       </div>
       <p className="mt-2 text-[11px] text-slate-400">
-        Edit the EMI for any month in the <b>Planned</b> table, then Recalculate. Pay more → finish sooner &amp; save interest; pay less → the opposite. Planning estimate; nothing is saved.
+        <b>Planned</b> folds in your unpaid Sheet items (EMIs + <span className="text-emerald-700">＋prepayments</span>) and any EMI you edit here; once a Sheet item is marked <b>Paid</b> it drops out of Planned and lands in <b>Current</b> (the actual balance). Edit an EMI, then Recalculate. Planning estimate.
       </p>
 
       <div className="mt-3 grid grid-cols-1 gap-4 lg:grid-cols-2">
@@ -177,8 +183,11 @@ export function LoanScheduleWhatIf({ loanId, canEdit, outstanding, annualRatePct
                   const draft = drafts[r.index];
                   const edited = draft != null && Number(draft) !== r.emi;
                   return (
-                    <tr key={r.index} className={edited ? "bg-amber-50" : undefined}>
-                      <td className="px-2 py-1 text-left text-slate-500">{r.index}. {fmtDate(r.date)}</td>
+                    <tr key={r.index} className={r.prepayment > 0 ? "bg-emerald-50" : edited ? "bg-amber-50" : undefined}>
+                      <td className="px-2 py-1 text-left text-slate-500">
+                        {r.index}. {fmtDate(r.date)}
+                        {r.prepayment > 0 && <span className="ml-1 rounded bg-emerald-100 px-1 text-[9px] font-semibold text-emerald-700" title="Planned prepayment from the Sheet">＋{formatINR(r.prepayment)}</span>}
+                      </td>
                       <td className="px-1 py-0.5">
                         <input
                           value={draft ?? String(r.emi)}

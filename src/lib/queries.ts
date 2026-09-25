@@ -1988,6 +1988,7 @@ export async function getLoanDetail(householdId: number, id: number) {
     projection,
     savedOverrides,
     linkedEntries,
+    plannedPrepayments, // unpaid linked prepayments, mapped to schedule month indices (for the what-if)
   };
 }
 
