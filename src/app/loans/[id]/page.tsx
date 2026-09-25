@@ -149,9 +149,10 @@ export default async function LoanDetailPage({
               {linkedEntries.map((e) => (
                 <li key={e.id} className="flex items-center justify-between py-2 text-sm">
                   <div className="min-w-0">
-                    <span className="text-slate-700">{e.type === "prepayment" ? "Prepayment" : "EMI"}</span>
+                    <span className="text-slate-700">{e.type === "prepayment" ? "Prepayment" : e.type === "interest" ? "Interest" : "EMI"}</span>
                     <span className="ml-1.5 text-xs text-slate-400">{e.periodLabel}</span>
                     {e.type === "prepayment" && <span className="ml-1.5 rounded-full bg-emerald-50 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700">principal</span>}
+                    {e.type === "interest" && <span className="ml-1.5 rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-500">interest only</span>}
                   </div>
                   <div className="flex items-center gap-2">
                     <span className="tabular-nums text-slate-800">{formatINR(e.amount)}</span>

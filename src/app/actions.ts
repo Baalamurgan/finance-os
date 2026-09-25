@@ -1860,11 +1860,14 @@ async function syncLoanFromEntry(
   const existing = await prisma.loanPayment.findUnique({ where: { expenseEntryId: entry.id } });
   if (nowPaid) {
     if (existing) return; // already recorded
-    const isPrepay = entry.loanPaymentType === "prepayment";
-    const { interest, principal } = splitLoanPayment(loan.outstanding, loan.interestRate ?? 0, entry.amount, isPrepay);
+    const t = entry.loanPaymentType;
+    // interest-only payment (gold/jewel loans): the whole amount is interest, principal untouched.
+    let interest: number, principal: number, type: string;
+    if (t === "interest") { interest = r2(entry.amount); principal = 0; type = "interest"; }
+    else { const s = splitLoanPayment(loan.outstanding, loan.interestRate ?? 0, entry.amount, t === "prepayment"); interest = s.interest; principal = s.principal; type = t === "prepayment" ? "prepayment" : "emi"; }
     const newOut = Math.max(0, r2(loan.outstanding - principal));
     await prisma.$transaction([
-      prisma.loanPayment.create({ data: { loanId: loan.id, expenseEntryId: entry.id, periodId: entry.periodId, amount: entry.amount, principalPart: principal, interestPart: interest, type: isPrepay ? "prepayment" : "emi", paidOn: new Date() } }),
+      prisma.loanPayment.create({ data: { loanId: loan.id, expenseEntryId: entry.id, periodId: entry.periodId, amount: entry.amount, principalPart: principal, interestPart: interest, type, paidOn: new Date() } }),
       prisma.loan.update({ where: { id: loan.id }, data: { outstanding: newOut, status: newOut <= 0.005 ? "closed" : loan.status } }),
     ]);
   } else {
