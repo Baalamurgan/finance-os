@@ -132,8 +132,8 @@ export function LoanScheduleWhatIf({ loanId, canEdit, outstanding, annualRatePct
         <Metric label="Interest saved" value={`${interestSaved >= 0 ? "" : "+"}${formatINR(Math.abs(interestSaved))}`} good={interestSaved > 0} bad={interestSaved < 0} />
         <Metric label="Months saved" value={`${monthsSaved >= 0 ? "" : "+"}${Math.abs(monthsSaved)} mo`} good={monthsSaved > 0} bad={monthsSaved < 0} />
       </div>
-      <p className="mt-2 text-[11px] text-slate-400">
-        <b>Planned</b> folds in your unpaid Sheet items (EMIs + <span className="text-emerald-700">＋prepayments</span>) and any EMI you edit here; once a Sheet item is marked <b>Paid</b> it drops out of Planned and lands in <b>Current</b> (the actual balance). Edit an EMI, then Recalculate. Planning estimate.
+      <p className="mt-2 text-[11px] leading-relaxed text-slate-400">
+        <b className="text-slate-500">EMI</b> = the full monthly payment (it splits into <b className="text-slate-500">Principal</b> + <b className="text-slate-500">Interest</b>). <b className="text-emerald-700">Prepay</b> = extra principal on top. <b>Planned</b> folds in your unpaid Sheet items and any EMI you edit; when a Sheet item is marked <b>Paid</b> it moves from Planned into <b>Current</b> (the actual balance). Planning estimate.
       </p>
 
       <div className="mt-3 grid grid-cols-1 gap-4 lg:grid-cols-2">
@@ -141,16 +141,25 @@ export function LoanScheduleWhatIf({ loanId, canEdit, outstanding, annualRatePct
         <div>
           <div className="mb-1.5 text-xs font-semibold text-slate-600">Current <span className="font-normal text-slate-400">· {base.months} payments · closes {fmtDate(base.closureDate)}</span></div>
           <div className="max-h-96 overflow-auto rounded-lg border border-slate-100">
-            <table className="w-full min-w-[320px] text-right text-xs tabular-nums">
+            <table className="w-full min-w-[460px] text-right text-xs tabular-nums">
               <thead className="sticky top-0 bg-slate-50 text-[10px] uppercase tracking-wide text-slate-500">
-                <tr><th className="px-2 py-1.5 text-left">Month</th><th className="px-2 py-1.5">EMI</th><th className="px-2 py-1.5">Interest</th><th className="px-2 py-1.5">Balance</th></tr>
+                <tr>
+                  <th className="px-2 py-1.5 text-left">Month</th>
+                  <th className="px-2 py-1.5" title="Full monthly payment (principal + interest)">EMI</th>
+                  <th className="px-2 py-1.5">Principal</th>
+                  <th className="px-2 py-1.5">Interest</th>
+                  <th className="px-2 py-1.5">Prepay</th>
+                  <th className="px-2 py-1.5">Balance</th>
+                </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {base.rows.map((r) => (
                   <tr key={r.index}>
                     <td className="px-2 py-1 text-left text-slate-500">{r.index}. {fmtDate(r.date)}</td>
                     <td className="px-2 py-1 text-slate-700">{formatINR(r.emi)}</td>
+                    <td className="px-2 py-1 text-slate-600">{formatINR(r.principal)}</td>
                     <td className="px-2 py-1 text-slate-400">{formatINR(r.interest)}</td>
+                    <td className="px-2 py-1 text-slate-300">—</td>
                     <td className="px-2 py-1 font-medium text-slate-800">{formatINR(r.balance)}</td>
                   </tr>
                 ))}
@@ -174,9 +183,16 @@ export function LoanScheduleWhatIf({ loanId, canEdit, outstanding, annualRatePct
                 ))}
               </div>
             )}
-            <table className="w-full min-w-[360px] text-right text-xs tabular-nums">
+            <table className="w-full min-w-[500px] text-right text-xs tabular-nums">
               <thead className="sticky top-0 bg-indigo-50 text-[10px] uppercase tracking-wide text-indigo-500">
-                <tr><th className="px-2 py-1.5 text-left">Month</th><th className="px-2 py-1.5">EMI (edit)</th><th className="px-2 py-1.5">Interest</th><th className="px-2 py-1.5">Balance</th></tr>
+                <tr>
+                  <th className="px-2 py-1.5 text-left">Month</th>
+                  <th className="px-2 py-1.5" title="Full monthly payment you'd make — edit it">EMI ✎</th>
+                  <th className="px-2 py-1.5">Principal</th>
+                  <th className="px-2 py-1.5">Interest</th>
+                  <th className="px-2 py-1.5">Prepay</th>
+                  <th className="px-2 py-1.5">Balance</th>
+                </tr>
               </thead>
               <tbody className="divide-y divide-indigo-50">
                 {planned.rows.map((r) => {
@@ -184,19 +200,19 @@ export function LoanScheduleWhatIf({ loanId, canEdit, outstanding, annualRatePct
                   const edited = draft != null && Number(draft) !== r.emi;
                   return (
                     <tr key={r.index} className={r.prepayment > 0 ? "bg-emerald-50" : edited ? "bg-amber-50" : undefined}>
-                      <td className="px-2 py-1 text-left text-slate-500">
-                        {r.index}. {fmtDate(r.date)}
-                        {r.prepayment > 0 && <span className="ml-1 rounded bg-emerald-100 px-1 text-[9px] font-semibold text-emerald-700" title="Planned prepayment from the Sheet">＋{formatINR(r.prepayment)}</span>}
-                      </td>
+                      <td className="px-2 py-1 text-left text-slate-500">{r.index}. {fmtDate(r.date)}</td>
                       <td className="px-1 py-0.5">
                         <input
                           value={draft ?? String(r.emi)}
                           onChange={(e) => setDrafts((d) => ({ ...d, [r.index]: e.target.value }))}
                           inputMode="decimal"
+                          aria-label={`EMI for month ${r.index}`}
                           className="w-24 rounded border border-slate-200 px-1.5 py-1 text-right text-xs tabular-nums outline-none focus:border-indigo-400 focus:ring-1 focus:ring-indigo-100"
                         />
                       </td>
+                      <td className="px-2 py-1 text-slate-600">{formatINR(r.principal)}</td>
                       <td className="px-2 py-1 text-slate-400">{formatINR(r.interest)}</td>
+                      <td className="px-2 py-1 font-semibold text-emerald-700">{r.prepayment > 0 ? `＋${formatINR(r.prepayment)}` : <span className="text-slate-300">—</span>}</td>
                       <td className="px-2 py-1 font-medium text-slate-800">{formatINR(r.balance)}</td>
                     </tr>
                   );
