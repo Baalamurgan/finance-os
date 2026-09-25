@@ -47,6 +47,8 @@ export type AmortInput = {
   startIndex?: number; // label the first row with this index (default 1) — for mid-loan projections
   prepayments?: Prepayment[]; // extra principal by (labelled) month index
   emiOverrides?: EmiOverride[]; // per-month payment override (what-if: "this month I pay ₹X instead")
+  maxMonths?: number; // cap the schedule at N periods and RETURN (don't throw) — for interest-only loans
+                      // whose payment ≈ interest and so never fully amortize on their own.
 };
 
 const toPaise = (rupees: number) => Math.round(rupees * 100);
@@ -112,8 +114,9 @@ export function amortize(input: AmortInput): AmortResult {
     if (o.emi >= 0 && Number.isFinite(o.monthIndex)) overrideByIdx.set(o.monthIndex, toPaise(o.emi));
   }
 
-  // Safety cap so a too-small EMI (never amortizes) can't loop forever.
-  const cap = Math.max(1200, (input.tenureMonths ?? 0) * 3 + 1200);
+  // Horizon: an explicit maxMonths (interest-only display) caps and returns; otherwise a safety cap that,
+  // if hit, means the EMI can't amortize → we throw below.
+  const cap = input.maxMonths ?? Math.max(1200, (input.tenureMonths ?? 0) * 3 + 1200);
 
   const rows: ScheduleRow[] = [];
   let cumI = 0;
@@ -157,7 +160,9 @@ export function amortize(input: AmortInput): AmortResult {
     if (balance <= 0) break;
   }
 
-  if (balance > 0) {
+  // With an explicit maxMonths the caller WANTS a capped (possibly non-closing) schedule — return it.
+  // Without one, a leftover balance means the EMI can't cover interest — a real error.
+  if (balance > 0 && input.maxMonths == null) {
     throw new Error("amortize: loan does not close within the safety cap — the EMI is too low to cover interest");
   }
 

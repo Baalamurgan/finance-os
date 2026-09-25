@@ -177,6 +177,20 @@ describe("amortize — dates", () => {
   });
 });
 
+describe("amortize — maxMonths horizon (interest-only)", () => {
+  it("caps and returns (no throw) when the payment can't amortize", () => {
+    const r = amortize({ principal: 1000000, annualRatePct: 9, emi: 5000, maxMonths: 60 }); // EMI < interest
+    expect(r.rows.length).toBe(60);
+    expect(r.rows.at(-1)!.balance).toBeGreaterThan(0); // never closes — flat balance
+    expect(r.rows[0].principal).toBe(0); // whole payment is interest
+  });
+  it("still closes early within the cap when it can amortize", () => {
+    const r = amortize({ principal: 100000, annualRatePct: 12, emi: emiFor(100000, 12, 12), maxMonths: 60 });
+    expect(r.months).toBe(12);
+    expect(r.rows.at(-1)!.balance).toBe(0);
+  });
+});
+
 describe("amortize — guards", () => {
   it("throws when the EMI can never cover interest (unpayable)", () => {
     expect(() => amortize({ principal: 4500000, annualRatePct: 8.5, emi: 100 })).toThrow();

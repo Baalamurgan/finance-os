@@ -21,19 +21,20 @@ type Props = {
   startIndex: number;
   savedOverrides: EmiOverride[];
   plannedPrepayments: Prepayment[]; // unpaid linked Sheet prepayments — folded into Planned until paid
+  maxMonths?: number; // horizon cap for interest-only loans (payment ≈ interest, balance ~flat)
 };
 
 const fmtDate = (iso: string | null) => (iso ? new Date(iso).toLocaleDateString("en-GB", { month: "short", year: "2-digit" }) : "—");
 const keyOf = (ov: EmiOverride[]) => JSON.stringify([...ov].sort((a, b) => a.monthIndex - b.monthIndex));
 
-export function LoanScheduleWhatIf({ loanId, canEdit, outstanding, annualRatePct, emi, startISO, startIndex, savedOverrides, plannedPrepayments }: Props) {
+export function LoanScheduleWhatIf({ loanId, canEdit, outstanding, annualRatePct, emi, startISO, startIndex, savedOverrides, plannedPrepayments, maxMonths }: Props) {
   const toast = useToast();
   const [savingPending, startSaving] = useTransition();
   const prepayKey = JSON.stringify(plannedPrepayments);
   // Current = keep paying the normal EMI from your actual balance (paid items are already in `outstanding`).
   const base = useMemo(
-    () => amortize({ principal: outstanding, annualRatePct, emi, startDate: startISO, startIndex }),
-    [outstanding, annualRatePct, emi, startISO, startIndex],
+    () => amortize({ principal: outstanding, annualRatePct, emi, startDate: startISO, startIndex, maxMonths }),
+    [outstanding, annualRatePct, emi, startISO, startIndex, maxMonths],
   );
 
   const [drafts, setDrafts] = useState<Record<number, string>>({}); // monthIndex → typed EMI (uncommitted)
@@ -43,9 +44,9 @@ export function LoanScheduleWhatIf({ loanId, canEdit, outstanding, annualRatePct
   // Planned = Current + everything not-yet-paid: the unpaid linked Sheet prepayments AND your what-if EMI
   // edits. Once a Sheet item is marked paid it leaves this list (and lands in `outstanding` → Current).
   const planned = useMemo(
-    () => amortize({ principal: outstanding, annualRatePct, emi, startDate: startISO, startIndex, emiOverrides: committed, prepayments: plannedPrepayments }),
+    () => amortize({ principal: outstanding, annualRatePct, emi, startDate: startISO, startIndex, emiOverrides: committed, prepayments: plannedPrepayments, maxMonths }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [committed, outstanding, annualRatePct, emi, startISO, startIndex, prepayKey],
+    [committed, outstanding, annualRatePct, emi, startISO, startIndex, prepayKey, maxMonths],
   );
 
   // Effective overrides = committed with any typed drafts layered on top.

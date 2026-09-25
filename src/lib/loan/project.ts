@@ -29,12 +29,12 @@ export type LoanProjection = {
   closureDate: string | null;
   originalClosureDate: string | null;
   schedule: AmortResult["rows"]; // forward rows from the current outstanding
+  interestOnly: boolean; // payment ≈ interest → balance ~flat; schedule is a capped horizon, doesn't close
 };
 
 // A loan is "amortizable" (gets the engine treatment) once it has a rate + principal + (EMI or tenure).
 // Otherwise it stays the legacy manual tracker / chit.
 export function isAmortizable(l: LoanLike): boolean {
-  if (l.interestOnly) return false; // interest-only loans don't amortize — no EMI schedule
   const emi = (l.emiAmount ?? l.monthlyAmount) || 0;
   const principal = (l.originalPrincipal ?? l.outstanding) || 0;
   return l.interestRate != null && l.interestRate > 0 && principal > 0 && (emi > 0 || (l.originalTenureMonths ?? 0) > 0);
@@ -64,7 +64,13 @@ export function projectLoan(l: LoanLike, opts?: { asOf?: Date; plannedPrepayment
   const elapsed = start ? monthsBetween(start, asOf) : 0;
   const forwardStart = start ? addMonthsLocal(start, elapsed) : null;
 
-  const forward = amortize({
+  // Run out to a long detection cap (never throws). If it clears the balance, it's an amortizing loan and
+  // we show the full run to closure. If it doesn't clear within the cap, the payment ≈ interest (gold/jewel
+  // interest-only): mark it interest-only and show a shorter flat horizon in the SAME table format. The
+  // what-if still lets you add prepayments / bigger EMIs to see the balance actually drop.
+  const DETECT_CAP = 600;
+  const HORIZON = 60;
+  const forwardFull = amortize({
     principal: opening,
     annualRatePct: rate,
     emi,
@@ -72,11 +78,16 @@ export function projectLoan(l: LoanLike, opts?: { asOf?: Date; plannedPrepayment
     startIndex: elapsed + 1,
     prepayments: opts?.plannedPrepayments ?? [],
     emiOverrides: opts?.emiOverrides ?? [],
+    maxMonths: DETECT_CAP,
   });
+  const closes = forwardFull.rows.length > 0 && forwardFull.rows[forwardFull.rows.length - 1].balance <= 0.005;
+  const interestOnly = !closes;
+  const rows = interestOnly ? forwardFull.rows.slice(0, HORIZON) : forwardFull.rows;
+  const totalInterestRemaining = interestOnly ? round2(rows.reduce((s, r) => s + r.interest, 0)) : forwardFull.totalInterest;
 
   let originalClosureDate: string | null = null;
-  if (originalPrincipal && (l.originalTenureMonths || emi)) {
-    originalClosureDate = amortize({ principal: originalPrincipal, annualRatePct: rate, emi, startDate: start }).closureDate;
+  if (!interestOnly && originalPrincipal && (l.originalTenureMonths || emi)) {
+    originalClosureDate = amortize({ principal: originalPrincipal, annualRatePct: rate, emi, startDate: start, maxMonths: DETECT_CAP }).closureDate;
   }
 
   return {
@@ -87,10 +98,11 @@ export function projectLoan(l: LoanLike, opts?: { asOf?: Date; plannedPrepayment
     principalPaid: originalPrincipal != null ? round2(originalPrincipal - l.outstanding) : null,
     originalTenureMonths: l.originalTenureMonths ?? null,
     elapsedMonths: elapsed,
-    remainingMonths: forward.months,
-    totalInterestRemaining: forward.totalInterest,
-    closureDate: forward.closureDate,
+    remainingMonths: closes ? rows.length : 0, // 0 = doesn't close on its own (interest-only)
+    totalInterestRemaining,
+    closureDate: closes ? forwardFull.closureDate : null,
     originalClosureDate,
-    schedule: forward.rows,
+    schedule: rows,
+    interestOnly,
   };
 }

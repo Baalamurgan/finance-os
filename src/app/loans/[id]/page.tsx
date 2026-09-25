@@ -23,7 +23,7 @@ export default async function LoanDetailPage({
   const detail = await getLoanDetail(c.household.id, Number(id));
   if (!detail) notFound();
 
-  const { loan, memberName, totalPaid, totalDividend, potReceived, chitNet, interestPaid, prepaymentsMade, projection, savedOverrides, linkedEntries, plannedPrepayments, monthlyInterest } = detail;
+  const { loan, memberName, totalPaid, totalDividend, potReceived, chitNet, interestPaid, prepaymentsMade, projection, savedOverrides, linkedEntries, plannedPrepayments } = detail;
   const isChit = loan.kind === "chit";
   const canEdit = c.isHead;
   const fmtMonths = (m: number) => `${Math.floor(m / 12)}y ${m % 12}m`;
@@ -99,47 +99,33 @@ export default async function LoanDetailPage({
           )}
         </div>
 
-        {/* interest-only (gold/jewel) loan: no amortization — interest tracking + principal payments */}
-        {loan.interestOnly && (
-          <section className="rounded-xl border border-slate-200 bg-white p-4">
-            <div className="flex items-center justify-between">
-              <h2 className="text-sm font-semibold text-slate-900">Interest-only loan</h2>
-              <span className="rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-medium text-amber-700" title="Gold/jewel loan: you pay monthly interest; the principal is cleared by separate principal payments.">gold / jewel</span>
-            </div>
-            <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
-              <Stat label="Outstanding" value={formatINR(loan.outstanding)} accent />
-              <Stat label="Monthly interest" value={monthlyInterest != null ? formatINR(monthlyInterest) : "—"} />
-              <Stat label="Interest paid" value={formatINR(interestPaid)} accent />
-              <Stat label="Principal paid" value={formatINR(prepaymentsMade)} />
-            </div>
-            <p className="mt-2 text-[11px] text-slate-400">Monthly payments are interest (from the Sheet); the balance falls only when you make a principal payment. No EMI schedule.</p>
-          </section>
-        )}
-
-        {/* amortizable loan: projection summary + repayment schedule */}
+        {/* projection summary + repayment schedule — same format for every loan (amortizing or interest-only) */}
         {projection && (
           <>
             <section className="rounded-xl border border-slate-200 bg-white p-4">
               <div className="flex items-center justify-between">
                 <h2 className="text-sm font-semibold text-slate-900">Projection</h2>
-                <span className="rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-medium text-amber-700" title="A monthly reducing-balance planning estimate — your bank may use daily reducing balance, so actual figures can differ slightly.">
-                  planning estimate
+                <span className="rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-medium text-amber-700" title={projection.interestOnly ? "Interest-only (gold/jewel): the monthly payment ≈ interest, so the balance stays flat until you make a principal payment." : "A monthly reducing-balance planning estimate — your bank may use daily reducing balance, so actual figures can differ slightly."}>
+                  {projection.interestOnly ? "interest-only" : "planning estimate"}
                 </span>
               </div>
               <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
-                <Stat label="Original principal" value={formatINR(projection.originalPrincipal ?? 0)} />
                 <Stat label="Outstanding" value={formatINR(projection.currentOutstanding)} accent />
                 <Stat label="Rate" value={`${projection.annualRatePct}% p.a.`} />
-                <Stat label="EMI" value={formatINR(projection.emi)} />
-                <Stat label="Principal paid" value={formatINR(projection.principalPaid ?? 0)} />
-                <Stat label="Interest paid" value={formatINR(interestPaid)} />
-                <Stat label="Prepayments" value={formatINR(prepaymentsMade)} />
-                <Stat label="Interest remaining" value={formatINR(projection.totalInterestRemaining)} accent />
-                <Stat label="Original tenure" value={projection.originalTenureMonths ? fmtMonths(projection.originalTenureMonths) : "—"} />
-                <Stat label="Remaining tenure" value={fmtMonths(projection.remainingMonths)} />
-                <Stat label="Est. closure" value={fmtDate(projection.closureDate)} accent />
-                <Stat label="Original closure" value={fmtDate(projection.originalClosureDate)} />
+                <Stat label={projection.interestOnly ? "Monthly interest" : "EMI"} value={formatINR(projection.emi)} />
+                <Stat label="Interest paid" value={formatINR(interestPaid)} accent />
+                {!projection.interestOnly && <Stat label="Original principal" value={formatINR(projection.originalPrincipal ?? 0)} />}
+                <Stat label="Principal paid" value={formatINR(projection.interestOnly ? prepaymentsMade : projection.principalPaid ?? 0)} />
+                {!projection.interestOnly && <Stat label="Prepayments" value={formatINR(prepaymentsMade)} />}
+                {!projection.interestOnly && <Stat label="Interest remaining" value={formatINR(projection.totalInterestRemaining)} accent />}
+                {!projection.interestOnly && <Stat label="Original tenure" value={projection.originalTenureMonths ? fmtMonths(projection.originalTenureMonths) : "—"} />}
+                <Stat label="Remaining tenure" value={projection.interestOnly ? "ongoing" : fmtMonths(projection.remainingMonths)} />
+                <Stat label="Est. closure" value={projection.interestOnly ? "—" : fmtDate(projection.closureDate)} accent />
+                {!projection.interestOnly && <Stat label="Original closure" value={fmtDate(projection.originalClosureDate)} />}
               </div>
+              {projection.interestOnly && (
+                <p className="mt-2 text-[11px] text-slate-400">Interest-only (gold/jewel): the monthly payment ≈ interest, so the balance stays flat until a principal payment. Use the what-if below to model paying it down.</p>
+              )}
             </section>
 
             {projection.schedule.length > 0 && (
@@ -153,6 +139,7 @@ export default async function LoanDetailPage({
                 startIndex={projection.schedule[0].index}
                 savedOverrides={savedOverrides}
                 plannedPrepayments={plannedPrepayments}
+                maxMonths={projection.interestOnly ? 60 : undefined}
               />
             )}
           </>
