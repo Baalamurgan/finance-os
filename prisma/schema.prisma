@@ -82,6 +82,9 @@ model Loan {
   startDate            DateTime? // first EMI / disbursement date (drives the schedule dates)
   emiAmount            Float?    // planning EMI; engine uses emiAmount ?? monthlyAmount ?? emiFor(...)
   prepaymentStrategy   String    @default("reduce_tenure") // reduce_tenure | reduce_emi
+  // Interest-only loan (gold/jewel): the monthly payment is pure interest; principal doesn't amortize and
+  // is cleared by separate principal payments. Such loans skip the amortization schedule/what-if.
+  interestOnly         Boolean   @default(false)
   // Saved "planned" schedule from the what-if: per-month EMI overrides [{monthIndex, emi}], keyed by the
   // forward schedule's row index. Drives the Planned table + the projected closure. null = no saved plan.
   plannedOverrides     Json?

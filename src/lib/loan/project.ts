@@ -13,6 +13,7 @@ export type LoanLike = {
   emiAmount: number | null;
   monthlyAmount: number;
   startDate: Date | string | null;
+  interestOnly?: boolean; // gold/jewel loan — no amortization schedule
 };
 
 export type LoanProjection = {
@@ -33,6 +34,7 @@ export type LoanProjection = {
 // A loan is "amortizable" (gets the engine treatment) once it has a rate + principal + (EMI or tenure).
 // Otherwise it stays the legacy manual tracker / chit.
 export function isAmortizable(l: LoanLike): boolean {
+  if (l.interestOnly) return false; // interest-only loans don't amortize — no EMI schedule
   const emi = (l.emiAmount ?? l.monthlyAmount) || 0;
   const principal = (l.originalPrincipal ?? l.outstanding) || 0;
   return l.interestRate != null && l.interestRate > 0 && principal > 0 && (emi > 0 || (l.originalTenureMonths ?? 0) > 0);

@@ -23,7 +23,7 @@ export default async function LoanDetailPage({
   const detail = await getLoanDetail(c.household.id, Number(id));
   if (!detail) notFound();
 
-  const { loan, memberName, totalPaid, totalDividend, potReceived, chitNet, interestPaid, prepaymentsMade, projection, savedOverrides, linkedEntries, plannedPrepayments } = detail;
+  const { loan, memberName, totalPaid, totalDividend, potReceived, chitNet, interestPaid, prepaymentsMade, projection, savedOverrides, linkedEntries, plannedPrepayments, monthlyInterest } = detail;
   const isChit = loan.kind === "chit";
   const canEdit = c.isHead;
   const fmtMonths = (m: number) => `${Math.floor(m / 12)}y ${m % 12}m`;
@@ -98,6 +98,23 @@ export default async function LoanDetailPage({
             <Stat label="Outstanding" value={formatINR(loan.outstanding)} accent />
           )}
         </div>
+
+        {/* interest-only (gold/jewel) loan: no amortization — interest tracking + principal payments */}
+        {loan.interestOnly && (
+          <section className="rounded-xl border border-slate-200 bg-white p-4">
+            <div className="flex items-center justify-between">
+              <h2 className="text-sm font-semibold text-slate-900">Interest-only loan</h2>
+              <span className="rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-medium text-amber-700" title="Gold/jewel loan: you pay monthly interest; the principal is cleared by separate principal payments.">gold / jewel</span>
+            </div>
+            <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
+              <Stat label="Outstanding" value={formatINR(loan.outstanding)} accent />
+              <Stat label="Monthly interest" value={monthlyInterest != null ? formatINR(monthlyInterest) : "—"} />
+              <Stat label="Interest paid" value={formatINR(interestPaid)} accent />
+              <Stat label="Principal paid" value={formatINR(prepaymentsMade)} />
+            </div>
+            <p className="mt-2 text-[11px] text-slate-400">Monthly payments are interest (from the Sheet); the balance falls only when you make a principal payment. No EMI schedule.</p>
+          </section>
+        )}
 
         {/* amortizable loan: projection summary + repayment schedule */}
         {projection && (

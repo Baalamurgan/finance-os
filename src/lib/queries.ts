@@ -1989,6 +1989,15 @@ export async function getLoanDetail(householdId: number, id: number) {
     savedOverrides,
     linkedEntries,
     plannedPrepayments, // unpaid linked prepayments, mapped to schedule month indices (for the what-if)
+    // Interest-only (gold/jewel) loans: the ACTUAL latest monthly interest from the Sheet (falls back to
+    // a rate estimate if no linked interest entries exist yet).
+    monthlyInterest: loan.interestOnly
+      ? (() => {
+          const ints = linkedEntries.filter((e) => e.type === "interest");
+          if (ints.length) return ints[ints.length - 1].amount;
+          return loan.interestRate ? Math.round(loan.outstanding * (loan.interestRate / 1200) * 100) / 100 : null;
+        })()
+      : null,
   };
 }
 

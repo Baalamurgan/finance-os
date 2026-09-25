@@ -35,3 +35,6 @@ ALTER TABLE "LoanPayment"
 
 -- Saved what-if plan (per-month EMI overrides) for the Planned schedule.
 ALTER TABLE "Loan" ADD COLUMN "plannedOverrides" JSONB;
+
+-- Interest-only loans (gold/jewel): monthly interest, principal cleared separately; no amortization.
+ALTER TABLE "Loan" ADD COLUMN "interestOnly" BOOLEAN NOT NULL DEFAULT false;
