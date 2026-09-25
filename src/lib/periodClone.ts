@@ -127,6 +127,8 @@ export async function generateMonth(
         necessary: cat?.necessary ?? true,
         oneOff: false,
         dueDay: it.dueDay,
+        loanId: it.loanId, // carry the loan link so each generated EMI is loan-aware
+        loanPaymentType: it.loanPaymentType,
       },
     });
   }

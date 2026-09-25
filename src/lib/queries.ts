@@ -1950,8 +1950,30 @@ export async function getLoanDetail(householdId: number, id: number) {
         .map((o) => ({ monthIndex: Number(o.monthIndex), emi: Number(o.emi) }))
         .filter((o) => Number.isFinite(o.monthIndex) && Number.isFinite(o.emi) && o.emi >= 0)
     : [];
-  // Forward projection for amortizable loans (null for chits / legacy manual trackers).
-  const projection = projectLoan(loan, { emiOverrides: savedOverrides });
+  // Sheet entries linked to this loan (EMI / prepayment bills). Paid ones already moved the balance via
+  // toggleBillPaid; unpaid ones are the upcoming plan.
+  const linkedEntries = (
+    await prisma.expenseEntry.findMany({
+      where: { loanId: id },
+      select: { id: true, label: true, amount: true, paid: true, loanPaymentType: true, period: { select: { label: true, status: true, year: true, month: true } } },
+      orderBy: [{ period: { year: "asc" } }, { period: { month: "asc" } }, { id: "asc" }],
+    })
+  ).map((e) => ({ id: e.id, label: e.label, amount: e.amount, paid: e.paid, type: e.loanPaymentType, periodLabel: e.period.label, status: e.period.status, year: e.period.year, month: e.period.month }));
+
+  // Forward projection for amortizable loans (null for chits / legacy manual trackers). Fold in any
+  // UNPAID linked prepayments as upcoming extra principal, mapped to their calendar month in the schedule,
+  // so the projected closure/interest reflects the Sheet plan.
+  const base = projectLoan(loan, { emiOverrides: savedOverrides });
+  const plannedPrepayments = base
+    ? linkedEntries
+        .filter((e) => !e.paid && e.type === "prepayment")
+        .map((e) => {
+          const row = base.schedule.find((r) => r.date && new Date(r.date).getFullYear() === e.year && new Date(r.date).getMonth() + 1 === e.month);
+          return row ? { monthIndex: row.index, amount: e.amount } : null;
+        })
+        .filter((p): p is { monthIndex: number; amount: number } => p != null)
+    : [];
+  const projection = plannedPrepayments.length ? projectLoan(loan, { emiOverrides: savedOverrides, plannedPrepayments }) : base;
   return {
     loan,
     memberName,
@@ -1965,6 +1987,7 @@ export async function getLoanDetail(householdId: number, id: number) {
     prepaymentsMade,
     projection,
     savedOverrides,
+    linkedEntries,
   };
 }
 

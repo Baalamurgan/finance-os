@@ -19,7 +19,7 @@ import { ensurePersonalMonth } from "@/lib/personal";
 import { planBillMonth, type FundingStyle } from "@/lib/schedule";
 import { getBillReminders } from "@/lib/billReminders";
 import { applyBudgetShortfall, windDownPeriod } from "@/lib/windDown";
-import { emiFor } from "@/lib/loan/amortize";
+import { emiFor, splitLoanPayment } from "@/lib/loan/amortize";
 import { SURPLUS_NOTE, CARRY_NOTE, DEFERRED_NOTE, PIGGY_INCOME_NOTE, POOL_NOTE, POOL_BILL_NOTE, REMOVED_NOTE, isPoolNote } from "@/lib/notes";
 import { canActOnStep } from "@/lib/planAuth";
 
@@ -1844,6 +1844,39 @@ export async function setTreasurer(formData: FormData) {
 }
 
 // Mark / unmark a bill as paid — head/manager, on an open month. A paid bill drops out
+// When a loan-linked bill (ExpenseEntry.loanId set) flips paid, record or reverse the ACTUAL LoanPayment
+// and move the loan's outstanding — computing the interest/principal split from the loan's live balance
+// (a prepayment is all principal). Idempotent via LoanPayment.expenseEntryId (unique): a historical entry
+// paid before it was linked has no LoanPayment, so it doesn't disturb the anchored balance unless toggled.
+// No duplicate transaction — the ExpenseEntry IS the money movement; the LoanPayment is its loan-side record.
+async function syncLoanFromEntry(
+  entry: { id: number; loanId: number | null; loanPaymentType: string | null; amount: number; periodId: number },
+  nowPaid: boolean,
+) {
+  if (!entry.loanId) return;
+  const loan = await prisma.loan.findUnique({ where: { id: entry.loanId } });
+  if (!loan) return;
+  const r2 = (n: number) => Math.round(n * 100) / 100;
+  const existing = await prisma.loanPayment.findUnique({ where: { expenseEntryId: entry.id } });
+  if (nowPaid) {
+    if (existing) return; // already recorded
+    const isPrepay = entry.loanPaymentType === "prepayment";
+    const { interest, principal } = splitLoanPayment(loan.outstanding, loan.interestRate ?? 0, entry.amount, isPrepay);
+    const newOut = Math.max(0, r2(loan.outstanding - principal));
+    await prisma.$transaction([
+      prisma.loanPayment.create({ data: { loanId: loan.id, expenseEntryId: entry.id, periodId: entry.periodId, amount: entry.amount, principalPart: principal, interestPart: interest, type: isPrepay ? "prepayment" : "emi", paidOn: new Date() } }),
+      prisma.loan.update({ where: { id: loan.id }, data: { outstanding: newOut, status: newOut <= 0.005 ? "closed" : loan.status } }),
+    ]);
+  } else {
+    if (!existing) return;
+    const restored = r2(loan.outstanding + existing.principalPart);
+    await prisma.$transaction([
+      prisma.loanPayment.delete({ where: { id: existing.id } }),
+      prisma.loan.update({ where: { id: loan.id }, data: { outstanding: restored, status: restored > 0.005 && loan.status === "closed" ? "active" : loan.status } }),
+    ]);
+  }
+}
+
 // of "budget left in hand" (that cash went out) and into the "Paid this month" list.
 export async function toggleBillPaid(formData: FormData) {
   const session = await auth();
@@ -1888,6 +1921,8 @@ export async function toggleBillPaid(formData: FormData) {
   }
   // Stamp the paid time when marking paid (cleared on un-mark) so the plan can show "paid <day>".
   await prisma.expenseEntry.update({ where: { id }, data: { paid: !e.paid, paidAt: e.paid ? null : new Date() } });
+  // If this bill is a loan EMI/prepayment, record/reverse the actual loan payment + move the balance.
+  await syncLoanFromEntry({ id, loanId: e.loanId, loanPaymentType: e.loanPaymentType, amount: e.amount, periodId: e.periodId }, !e.paid);
   log.info("toggleBillPaid", "ok", { outcome: "ok", memberId, id, paid: !e.paid, periodId: e.periodId });
   await logActivity("expense", "updated", `${e.paid ? "Unmarked" : "Marked"} bill “${e.label}” ${formatINR(e.amount)} paid`, e.periodId);
   revalidateFamily();

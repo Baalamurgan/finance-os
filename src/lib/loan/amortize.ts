@@ -72,6 +72,17 @@ export function emiFor(principal: number, annualRatePct: number, months: number)
   return round2((principal * r * f) / (f - 1));
 }
 
+// Split a single actual payment into interest + principal against a live balance (planning basis: this
+// month's interest = balance · monthly rate). A prepayment is all principal. Principal is clamped so it
+// never exceeds the outstanding. Used when a loan-linked Sheet bill is marked paid.
+export function splitLoanPayment(outstanding: number, annualRatePct: number, amount: number, isPrepayment: boolean): { interest: number; principal: number } {
+  const interest = isPrepayment ? 0 : round2(Math.max(0, outstanding) * (annualRatePct / 1200));
+  let principal = round2(amount - interest);
+  if (principal < 0) principal = 0;
+  if (principal > outstanding) principal = round2(outstanding);
+  return { interest, principal };
+}
+
 export function amortize(input: AmortInput): AmortResult {
   const rate = input.annualRatePct / 1200;
   const startIdx = input.startIndex ?? 1;

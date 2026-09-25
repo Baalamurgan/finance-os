@@ -23,7 +23,7 @@ export default async function LoanDetailPage({
   const detail = await getLoanDetail(c.household.id, Number(id));
   if (!detail) notFound();
 
-  const { loan, memberName, totalPaid, totalDividend, potReceived, chitNet, interestPaid, prepaymentsMade, projection, savedOverrides } = detail;
+  const { loan, memberName, totalPaid, totalDividend, potReceived, chitNet, interestPaid, prepaymentsMade, projection, savedOverrides, linkedEntries } = detail;
   const isChit = loan.kind === "chit";
   const canEdit = c.isHead;
   const fmtMonths = (m: number) => `${Math.floor(m / 12)}y ${m % 12}m`;
@@ -138,6 +138,35 @@ export default async function LoanDetailPage({
               />
             )}
           </>
+        )}
+
+        {/* Sheet entries linked to this loan */}
+        {linkedEntries.length > 0 && (
+          <section className="rounded-xl border border-slate-200 bg-white p-4">
+            <h2 className="text-sm font-semibold text-slate-900">Linked Sheet payments <span className="text-xs font-normal text-slate-400">· from the monthly Sheet</span></h2>
+            <ul className="mt-3 divide-y divide-slate-100">
+              {linkedEntries.map((e) => (
+                <li key={e.id} className="flex items-center justify-between py-2 text-sm">
+                  <div className="min-w-0">
+                    <span className="text-slate-700">{e.type === "prepayment" ? "Prepayment" : "EMI"}</span>
+                    <span className="ml-1.5 text-xs text-slate-400">{e.periodLabel}</span>
+                    {e.type === "prepayment" && <span className="ml-1.5 rounded-full bg-emerald-50 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700">principal</span>}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="tabular-nums text-slate-800">{formatINR(e.amount)}</span>
+                    {e.paid ? (
+                      <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-medium text-emerald-700">✓ paid → recorded</span>
+                    ) : (
+                      <span className="rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-medium text-amber-700">planned</span>
+                    )}
+                  </div>
+                </li>
+              ))}
+            </ul>
+            <p className="mt-2 text-[11px] text-slate-400">
+              Marking one <b>Paid</b> in the Sheet records the actual principal/interest here and reduces the outstanding — no duplicate transaction. Unpaid prepayments are folded into the projection above.
+            </p>
+          </section>
         )}
 
         {/* edit loan master (amortization details) */}

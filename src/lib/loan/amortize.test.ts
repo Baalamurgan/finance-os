@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { emiFor, amortize, isoAddMonths, round2, type AmortResult } from "./amortize";
+import { emiFor, amortize, isoAddMonths, round2, splitLoanPayment, type AmortResult } from "./amortize";
 
 // Sum helper tolerant of paise rounding.
 const near = (a: number, b: number, eps = 0.02) => Math.abs(a - b) <= eps;
@@ -135,6 +135,28 @@ describe("amortize — per-month EMI overrides (what-if)", () => {
     expect(r.months).toBe(1);
     expect(r.rows.at(-1)!.balance).toBe(0);
     expect(round2(r.totalPrincipal)).toBe(800000);
+  });
+});
+
+describe("splitLoanPayment (mark-a-bill-paid split)", () => {
+  it("EMI splits into interest (balance·rate) + principal", () => {
+    // ₹8L @ 8.5% → monthly interest = 800000·0.085/12 = 5666.67
+    const s = splitLoanPayment(800000, 8.5, 61750, false);
+    expect(s.interest).toBe(5666.67);
+    expect(s.principal).toBe(round2(61750 - 5666.67));
+  });
+  it("a prepayment is all principal (no interest)", () => {
+    const s = splitLoanPayment(800000, 8.5, 270000, true);
+    expect(s.interest).toBe(0);
+    expect(s.principal).toBe(270000);
+  });
+  it("principal never exceeds the outstanding (final payment)", () => {
+    const s = splitLoanPayment(5000, 8.5, 61750, false);
+    expect(s.principal).toBe(5000);
+  });
+  it("a payment smaller than the interest yields zero principal", () => {
+    const s = splitLoanPayment(800000, 8.5, 1000, false);
+    expect(s.principal).toBe(0);
   });
 });
 
