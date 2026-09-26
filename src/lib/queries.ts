@@ -8,8 +8,8 @@ import { planBillMonth, isLumpDue, monthsUntilNextDue, type FundingStyle } from 
 import { suggestCategoryName, normalizeItem, resolveCategoryId } from "@/lib/spendCategorize";
 import { withShareCount } from "@/lib/format";
 import { getCardDues, type MonthAmount } from "@/lib/personal/cash";
-import { projectLoan } from "@/lib/loan/project";
-import { round2 } from "@/lib/loan/amortize";
+import { projectLoan, type LoanProjection } from "@/lib/loan/project";
+import { round2, type EmiOverride, type Prepayment } from "@/lib/loan/amortize";
 
 // Keywords that drive the on-save category suggestion: the household's LEARNED words
 // (SpendKeyword) plus its head-curated shortcuts (SpendShortcut, weighted high since
@@ -546,39 +546,48 @@ export async function getLoans(householdId: number) {
   };
 }
 
-// ── Debt overview (the /loans cockpit) ────────────────────────────────────────────────────────────
-// Aggregates every active loan into the whole-picture numbers you can't see on one loan alone: total
-// outstanding, blended rate, what interest is costing per day, the household debt-free date, and a
-// combined balance-over-time curve for the chart. Reuses the same amortization projection as the
-// detail page — this is a read-only rollup, it changes nothing.
-export type DebtOverview = Awaited<ReturnType<typeof getDebtOverview>>;
-export async function getDebtOverview(householdId: number) {
-  const loans = await prisma.loan.findMany({
-    where: { householdId, kind: "loan", status: "active" },
-    orderBy: { outstanding: "desc" },
-  });
+// Parse a loan's saved what-if plan (Loan.plannedOverrides) into EMI overrides + prepayments. Supports
+// the legacy shape (a bare array of EMI overrides) and the current { overrides, prepayments } shape.
+// Mirrors getLoanDetail so the overview's "Planned" numbers match each loan's Planned column exactly.
+function parseSavedPlan(rawPlan: unknown): { savedOverrides: EmiOverride[]; savedPrepayments: Prepayment[] } {
+  const emiRaw = Array.isArray(rawPlan) ? rawPlan : (rawPlan as { overrides?: unknown })?.overrides;
+  const preRaw = Array.isArray(rawPlan) ? [] : (rawPlan as { prepayments?: unknown })?.prepayments;
+  const savedOverrides = (Array.isArray(emiRaw) ? emiRaw : [])
+    .map((o) => o as { monthIndex?: unknown; emi?: unknown })
+    .map((o) => ({ monthIndex: Number(o.monthIndex), emi: Number(o.emi) }))
+    .filter((o) => Number.isFinite(o.monthIndex) && Number.isFinite(o.emi) && o.emi >= 0);
+  const savedPrepayments = (Array.isArray(preRaw) ? preRaw : [])
+    .map((o) => o as { monthIndex?: unknown; amount?: unknown })
+    .map((o) => ({ monthIndex: Number(o.monthIndex), amount: Number(o.amount) }))
+    .filter((o) => Number.isFinite(o.monthIndex) && Number.isFinite(o.amount) && o.amount > 0);
+  return { savedOverrides, savedPrepayments };
+}
 
-  const perLoan = loans.map((l) => {
-    const proj = projectLoan(l);
-    const rate = l.interestRate ?? 0;
-    const monthlyInterest = rate > 0 ? round2(l.outstanding * (rate / 1200)) : 0;
-    const emi = (proj?.emi ?? l.emiAmount ?? l.monthlyAmount) || monthlyInterest;
-    return {
-      id: l.id,
-      name: l.name,
-      outstanding: l.outstanding,
-      rate,
-      emi,
-      amortizable: proj != null,
-      interestOnly: proj?.interestOnly ?? false,
-      monthlyInterest,
-      remainingMonths: proj?.remainingMonths ?? 0, // 0 = doesn't close on its own
-      closureDate: proj?.closureDate ?? null,
-      interestRemaining: proj && !proj.interestOnly ? proj.totalInterestRemaining : null,
-      schedule: proj?.schedule ?? [],
-    };
-  });
+// One loan reduced to the figures the overview aggregates (for either the current or planned projection).
+type LoanSummary = {
+  id: number; name: string; outstanding: number; rate: number; emi: number;
+  interestOnly: boolean; monthlyInterest: number; remainingMonths: number;
+  closureDate: string | null; interestRemaining: number | null; schedule: LoanProjection["schedule"];
+};
+function summarizeLoan(l: { id: number; name: string; outstanding: number; interestRate: number | null; emiAmount: number | null; monthlyAmount: number }, proj: LoanProjection | null): LoanSummary {
+  const rate = l.interestRate ?? 0;
+  const monthlyInterest = rate > 0 ? round2(l.outstanding * (rate / 1200)) : 0;
+  const emi = (proj?.emi ?? l.emiAmount ?? l.monthlyAmount) || monthlyInterest;
+  return {
+    id: l.id, name: l.name, outstanding: l.outstanding, rate, emi,
+    interestOnly: proj?.interestOnly ?? false,
+    monthlyInterest,
+    remainingMonths: proj?.remainingMonths ?? 0, // 0 = doesn't close on its own
+    closureDate: proj?.closureDate ?? null,
+    interestRemaining: proj && !proj.interestOnly ? proj.totalInterestRemaining : null,
+    schedule: proj?.schedule ?? [],
+  };
+}
 
+// Roll a set of per-loan summaries up into the cockpit view (totals + the combined balance curve). The
+// point-in-time figures (outstanding / blended rate / interest-per-day) are the same across views; the
+// forward figures (interest remaining, debt-free date, the curve) differ between current and planned.
+function aggregateDebt(perLoan: LoanSummary[], horizon: number) {
   const totalOutstanding = round2(perLoan.reduce((s, l) => s + l.outstanding, 0));
   const totalMonthlyInterest = round2(perLoan.reduce((s, l) => s + l.monthlyInterest, 0));
   const dailyInterest = round2((totalMonthlyInterest * 12) / 365);
@@ -587,15 +596,10 @@ export async function getDebtOverview(householdId: number) {
   const blendedRate = weightBase > 0 ? round2(rated.reduce((s, l) => s + l.outstanding * l.rate, 0) / weightBase) : null;
   const totalInterestRemaining = round2(perLoan.reduce((s, l) => s + (l.interestRemaining ?? 0), 0));
 
-  // A loan with a balance that never closes on its own (interest-only, or a non-amortizable manual
-  // loan) means there is no natural debt-free date until you throw extra at it → prompt a payoff plan.
   const openEnded = perLoan.filter((l) => l.outstanding > 0 && !l.closureDate);
   const closureDates = perLoan.map((l) => l.closureDate).filter((d): d is string => d != null);
-  const debtFreeDate = openEnded.length === 0 && closureDates.length ? closureDates.sort().at(-1)! : null;
+  const debtFreeDate = openEnded.length === 0 && closureDates.length ? closureDates.slice().sort().at(-1)! : null;
 
-  // Combined balance curve: sum every loan's projected balance at each month offset (0 = today).
-  const amortizingHorizons = perLoan.filter((l) => l.remainingMonths > 0).map((l) => l.remainingMonths);
-  const horizon = Math.min(240, Math.max(12, ...amortizingHorizons, 0));
   const timeline = [{ monthIndex: 0, balance: totalOutstanding }];
   for (let m = 1; m <= horizon; m++) {
     let bal = 0;
@@ -606,26 +610,80 @@ export async function getDebtOverview(householdId: number) {
     }
     timeline.push({ monthIndex: m, balance: round2(bal) });
   }
+  return { totalOutstanding, totalMonthlyInterest, dailyInterest, blendedRate, totalInterestRemaining, debtFreeDate, hasOpenEnded: openEnded.length > 0, hasInterestOnly: perLoan.some((l) => l.interestOnly), timeline };
+}
+
+// ── Debt overview (the /loans cockpit) ────────────────────────────────────────────────────────────
+// Aggregates every active loan into the whole-picture numbers you can't see on one loan alone: total
+// outstanding, blended rate, what interest is costing per day, the household debt-free date, and a
+// combined balance-over-time curve for the chart. Computed TWICE — once for the "current" trajectory
+// (each loan on its normal EMI, no plan) and once for the "planned" trajectory (each loan's saved
+// what-if plan + its unpaid linked Sheet prepayments) — so the page can toggle the whole cockpit and
+// graph between the two, exactly matching each loan's own Current/Planned columns. Read-only rollup.
+export type DebtOverview = Awaited<ReturnType<typeof getDebtOverview>>;
+export type DebtView = ReturnType<typeof aggregateDebt>;
+export async function getDebtOverview(householdId: number) {
+  const loans = await prisma.loan.findMany({
+    where: { householdId, kind: "loan", status: "active" },
+    orderBy: { outstanding: "desc" },
+  });
+
+  // Unpaid loan-linked prepayment lines across all these loans (the Sheet's upcoming extra principal).
+  const linked = await prisma.expenseEntry.findMany({
+    where: { loanId: { in: loans.map((l) => l.id) }, loanPaymentType: "prepayment", paid: false },
+    select: { loanId: true, amount: true, period: { select: { year: true, month: true } } },
+  });
+  const sheetPreByLoan = new Map<number, { year: number; month: number; amount: number }[]>();
+  for (const e of linked) {
+    if (e.loanId == null) continue;
+    const arr = sheetPreByLoan.get(e.loanId) ?? [];
+    arr.push({ year: e.period.year, month: e.period.month, amount: e.amount });
+    sheetPreByLoan.set(e.loanId, arr);
+  }
+
+  const currentSummaries: LoanSummary[] = [];
+  const plannedSummaries: LoanSummary[] = [];
+  let anyPlan = false;
+
+  for (const l of loans) {
+    const base = projectLoan(l); // current trajectory — normal EMI, no plan
+    currentSummaries.push(summarizeLoan(l, base));
+
+    // Planned trajectory: saved EMI overrides + saved prepayments + unpaid Sheet prepayments (mapped to
+    // the schedule month by calendar date), merged exactly as getLoanDetail / the what-if does.
+    const { savedOverrides, savedPrepayments } = parseSavedPlan(l.plannedOverrides as unknown);
+    const sheetPre = base
+      ? (sheetPreByLoan.get(l.id) ?? [])
+          .map((e) => {
+            const row = base.schedule.find((r) => r.date && new Date(r.date).getFullYear() === e.year && new Date(r.date).getMonth() + 1 === e.month);
+            return row ? { monthIndex: row.index, amount: e.amount } : null;
+          })
+          .filter((p): p is Prepayment => p != null)
+      : [];
+    const mergedPre = new Map<number, number>();
+    for (const p of sheetPre) mergedPre.set(p.monthIndex, p.amount);
+    for (const p of savedPrepayments) mergedPre.set(p.monthIndex, p.amount);
+    const projPre = [...mergedPre.entries()].filter(([, a]) => a > 0).map(([monthIndex, amount]) => ({ monthIndex, amount }));
+    const hasPlan = projPre.length > 0 || savedOverrides.length > 0;
+    if (hasPlan) anyPlan = true;
+    const planned = hasPlan ? projectLoan(l, { emiOverrides: savedOverrides, plannedPrepayments: projPre }) : base;
+    plannedSummaries.push(summarizeLoan(l, planned));
+  }
+
+  // Share one horizon across both curves so the x-axis lines up when you flip the toggle.
+  const horizons = [...currentSummaries, ...plannedSummaries].filter((l) => l.remainingMonths > 0).map((l) => l.remainingMonths);
+  const horizon = Math.min(240, Math.max(12, ...horizons, 0));
+
+  const current = aggregateDebt(currentSummaries, horizon);
+  const planned = aggregateDebt(plannedSummaries, horizon);
+  const interestSaved = round2(current.totalInterestRemaining - planned.totalInterestRemaining);
 
   // Loans eligible for the avalanche/snowball planner (need a rate + a live balance).
-  const strategyLoans = perLoan
+  const strategyLoans = currentSummaries
     .filter((l) => l.rate > 0 && l.outstanding > 0)
     .map((l) => ({ id: l.id, name: l.name, outstanding: l.outstanding, annualRatePct: l.rate, emi: l.emi }));
 
-  return {
-    perLoan,
-    totalOutstanding,
-    totalMonthlyInterest,
-    dailyInterest,
-    blendedRate,
-    totalInterestRemaining,
-    debtFreeDate,
-    hasOpenEnded: openEnded.length > 0,
-    hasInterestOnly: perLoan.some((l) => l.interestOnly),
-    horizon,
-    timeline,
-    strategyLoans,
-  };
+  return { current, planned, hasPlan: anyPlan, interestSaved, horizon, strategyLoans };
 }
 
 export type Settlement = Awaited<ReturnType<typeof getSettlement>>;

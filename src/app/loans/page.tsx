@@ -6,18 +6,9 @@ import { NavHeader } from "@/components/NavHeader";
 import { ConfirmForm } from "@/components/ConfirmForm";
 import { ToastForm } from "@/components/ToastForm";
 import { LoanPaymentForm } from "@/components/LoanPaymentForm";
-import { DebtBalanceTrend } from "@/components/Charts";
+import { DebtOverview } from "@/components/DebtOverview";
 import { DebtStrategy } from "@/components/DebtStrategy";
 import { createLoan, closeLoan, deleteLoan } from "../actions";
-
-const monthLabel = (offset: number) => {
-  const d = new Date();
-  d.setDate(1);
-  d.setMonth(d.getMonth() + offset);
-  return d.toLocaleDateString("en-GB", { month: "short", year: "2-digit" });
-};
-const fmtClosure = (iso: string | null) =>
-  iso ? new Date(iso).toLocaleDateString("en-GB", { month: "short", year: "numeric" }) : "—";
 
 export default async function LoansPage({
   searchParams,
@@ -73,7 +64,7 @@ export default async function LoansPage({
           </div>
         </div>
 
-        {debt && <DebtCockpit debt={debt} />}
+        {debt && <DebtOverview current={debt.current} planned={debt.planned} hasPlan={debt.hasPlan} interestSaved={debt.interestSaved} />}
         {debt && debt.strategyLoans.length >= 1 && <DebtStrategy loans={debt.strategyLoans} />}
 
         <Section title="Loans">
@@ -115,51 +106,6 @@ export default async function LoansPage({
         {c.isHead && <AddLoan householdId={c.household.id} members={c.members} />}
       </main>
     </>
-  );
-}
-
-function DebtCockpit({ debt }: { debt: NonNullable<Awaited<ReturnType<typeof getDebtOverview>>> }) {
-  const chartData = debt.timeline.map((t) => ({ label: monthLabel(t.monthIndex), balance: t.balance }));
-  return (
-    <section className="space-y-3 rounded-xl border border-slate-200 bg-white p-4">
-      <div className="flex items-center justify-between">
-        <h2 className="text-sm font-semibold text-slate-900">Debt overview</h2>
-        <span className="text-[11px] text-slate-400">planning estimate</span>
-      </div>
-
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
-        <Cockpit label="Outstanding" value={formatINR(debt.totalOutstanding)} accent />
-        <Cockpit label="Blended rate" value={debt.blendedRate != null ? `${debt.blendedRate}%` : "—"} hint="weighted by balance" />
-        <Cockpit label="Interest / day" value={formatINR(debt.dailyInterest)} hint={`${formatINR(debt.totalMonthlyInterest)}/mo`} bad />
-        <Cockpit
-          label="Debt-free"
-          value={debt.debtFreeDate ? fmtClosure(debt.debtFreeDate) : "Needs a plan"}
-          hint={debt.hasOpenEnded ? "some loans don't self-close" : undefined}
-        />
-        <Cockpit label="Interest remaining" value={debt.totalInterestRemaining > 0 ? formatINR(debt.totalInterestRemaining) : "—"} hint="amortizing loans" />
-      </div>
-
-      <div>
-        <div className="mb-1 text-xs font-medium text-slate-500">Projected balance to zero</div>
-        <DebtBalanceTrend data={chartData} />
-        {debt.hasInterestOnly && (
-          <p className="mt-1 text-[11px] text-slate-400">
-            The flat portion is interest-only (jewel) debt — it holds steady until you put extra principal
-            toward it. See the payoff strategy above.
-          </p>
-        )}
-      </div>
-    </section>
-  );
-}
-
-function Cockpit({ label, value, hint, accent, bad }: { label: string; value: string; hint?: string; accent?: boolean; bad?: boolean }) {
-  return (
-    <div className="rounded-lg border border-slate-100 bg-slate-50/60 px-3 py-2">
-      <div className="text-[10px] font-medium uppercase tracking-wide text-slate-400">{label}</div>
-      <div className={`text-base font-bold tabular-nums ${accent ? "text-indigo-700" : bad ? "text-rose-600" : "text-slate-800"}`}>{value}</div>
-      {hint && <div className="text-[10px] text-slate-400">{hint}</div>}
-    </div>
   );
 }
 
