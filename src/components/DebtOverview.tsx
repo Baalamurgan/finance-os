@@ -28,7 +28,7 @@ export function DebtOverview({ current, planned, hasPlan, interestSaved }: { cur
   const showSaving = view === "planned" && hasPlan && interestSaved > 0;
 
   return (
-    <section className="space-y-3 rounded-xl border border-slate-200 bg-white p-4">
+    <section className="space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h2 className="text-sm font-semibold text-slate-900">Debt overview</h2>
         <div className="flex items-center gap-2">

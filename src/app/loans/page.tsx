@@ -7,7 +7,7 @@ import { ConfirmForm } from "@/components/ConfirmForm";
 import { ToastForm } from "@/components/ToastForm";
 import { LoanPaymentForm } from "@/components/LoanPaymentForm";
 import { DebtOverview } from "@/components/DebtOverview";
-import { DebtStrategy } from "@/components/DebtStrategy";
+import { DebtPlan } from "@/components/DebtPlan";
 import { createLoan, closeLoan, deleteLoan } from "../actions";
 
 export default async function LoansPage({
@@ -64,8 +64,19 @@ export default async function LoansPage({
           </div>
         </div>
 
-        {debt && <DebtOverview current={debt.current} planned={debt.planned} hasPlan={debt.hasPlan} interestSaved={debt.interestSaved} />}
-        {debt && debt.strategyLoans.length >= 1 && <DebtStrategy loans={debt.strategyLoans} />}
+        {debt && debt.planLoans.length >= 1 && <DebtPlan loans={debt.planLoans} />}
+        {debt && (
+          <details className="group rounded-xl border border-slate-200 bg-white">
+            <summary className="flex cursor-pointer list-none items-center justify-between px-4 py-3 text-sm font-medium text-slate-600 hover:bg-slate-50">
+              <span>See the full breakdown</span>
+              <span className="text-xs text-slate-400 group-open:hidden">▸ totals &amp; chart</span>
+              <span className="hidden text-xs text-slate-400 group-open:inline">▾ hide</span>
+            </summary>
+            <div className="border-t border-slate-100 p-4">
+              <DebtOverview current={debt.current} planned={debt.planned} hasPlan={debt.hasPlan} interestSaved={debt.interestSaved} />
+            </div>
+          </details>
+        )}
 
         <Section title="Loans">
           {activeLoans.length === 0 ? (

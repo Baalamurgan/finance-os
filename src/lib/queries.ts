@@ -678,12 +678,14 @@ export async function getDebtOverview(householdId: number) {
   const planned = aggregateDebt(plannedSummaries, horizon);
   const interestSaved = round2(current.totalInterestRemaining - planned.totalInterestRemaining);
 
-  // Loans eligible for the avalanche/snowball planner (need a rate + a live balance).
-  const strategyLoans = currentSummaries
+  // Loans the payoff planner reasons about (need a rate + a live balance). Carries the extra facts the
+  // plain-language recommendation needs: whether it's interest-only, its monthly interest cost, and when
+  // it closes on its own.
+  const planLoans = currentSummaries
     .filter((l) => l.rate > 0 && l.outstanding > 0)
-    .map((l) => ({ id: l.id, name: l.name, outstanding: l.outstanding, annualRatePct: l.rate, emi: l.emi }));
+    .map((l) => ({ id: l.id, name: l.name, outstanding: l.outstanding, annualRatePct: l.rate, emi: l.emi, interestOnly: l.interestOnly, monthlyInterest: l.monthlyInterest, closureDate: l.closureDate }));
 
-  return { current, planned, hasPlan: anyPlan, interestSaved, horizon, strategyLoans };
+  return { current, planned, hasPlan: anyPlan, interestSaved, horizon, planLoans };
 }
 
 export type Settlement = Awaited<ReturnType<typeof getSettlement>>;
