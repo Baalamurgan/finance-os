@@ -103,6 +103,10 @@ export function LoanScheduleWhatIf({ loanId, canEdit, outstanding, annualRatePct
     });
   };
 
+  // The EMI a row should DISPLAY: your edit for that month if any, else the loan's configured EMI — never
+  // the smaller actual closing-month payment the engine computes. (The schedule still clamps internally.)
+  const intendedEmi = (idx: number) => committedEmi.find((o) => o.monthIndex === idx)?.emi ?? emi;
+
   return (
     <section className="rounded-xl border border-slate-200 bg-white p-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -161,9 +165,9 @@ export function LoanScheduleWhatIf({ loanId, canEdit, outstanding, annualRatePct
                 <tr>
                   <th className="px-2 py-1.5 text-left">Month</th>
                   <th className="px-2 py-1.5" title="Full monthly payment (principal + interest)">EMI</th>
+                  <th className="px-2 py-1.5">Prepay</th>
                   <th className="px-2 py-1.5">Principal</th>
                   <th className="px-2 py-1.5">Interest</th>
-                  <th className="px-2 py-1.5">Prepay</th>
                   <th className="px-2 py-1.5">Balance</th>
                 </tr>
               </thead>
@@ -171,10 +175,10 @@ export function LoanScheduleWhatIf({ loanId, canEdit, outstanding, annualRatePct
                 {base.rows.map((r) => (
                   <tr key={r.index}>
                     <td className="px-2 py-1 text-left text-slate-500">{r.index}. {fmtDate(r.date)}</td>
-                    <td className="px-2 py-1 text-slate-700">{formatINR(r.emi)}</td>
+                    <td className="px-2 py-1 text-slate-700">{formatINR(emi)}</td>
+                    <td className="px-2 py-1 text-slate-300">—</td>
                     <td className="px-2 py-1 text-slate-600">{formatINR(r.principal)}</td>
                     <td className="px-2 py-1 text-slate-400">{formatINR(r.interest)}</td>
-                    <td className="px-2 py-1 text-slate-300">—</td>
                     <td className="px-2 py-1 font-medium text-slate-800">{formatINR(r.balance)}</td>
                   </tr>
                 ))}
@@ -203,9 +207,9 @@ export function LoanScheduleWhatIf({ loanId, canEdit, outstanding, annualRatePct
                 <tr>
                   <th className="px-2 py-1.5 text-left">Month</th>
                   <th className="px-2 py-1.5" title="Full monthly payment you'd make — edit it">EMI ✎</th>
+                  <th className="px-2 py-1.5" title="Extra principal on top of the EMI — edit it">Prepay ✎</th>
                   <th className="px-2 py-1.5">Principal</th>
                   <th className="px-2 py-1.5">Interest</th>
-                  <th className="px-2 py-1.5">Prepay</th>
                   <th className="px-2 py-1.5">Balance</th>
                 </tr>
               </thead>
@@ -213,21 +217,20 @@ export function LoanScheduleWhatIf({ loanId, canEdit, outstanding, annualRatePct
                 {planned.rows.map((r) => {
                   const emiDraft = emiDrafts[r.index];
                   const preDraft = preDrafts[r.index];
-                  const edited = (emiDraft != null && Number(emiDraft) !== r.emi) || (preDraft != null && Number(preDraft) !== r.prepayment);
+                  const shownEmi = intendedEmi(r.index);
+                  const edited = (emiDraft != null && Number(emiDraft) !== shownEmi) || (preDraft != null && Number(preDraft) !== r.prepayment);
                   return (
                     <tr key={r.index} className={edited ? "bg-amber-50" : r.prepayment > 0 ? "bg-emerald-50" : undefined}>
                       <td className="px-2 py-1 text-left text-slate-500">{r.index}. {fmtDate(r.date)}</td>
                       <td className="px-1 py-0.5">
                         <input
-                          value={emiDraft ?? String(r.emi)}
+                          value={emiDraft ?? String(shownEmi)}
                           onChange={(e) => setEmiDrafts((d) => ({ ...d, [r.index]: e.target.value }))}
                           inputMode="decimal"
                           aria-label={`EMI for month ${r.index}`}
                           className="w-24 rounded border border-slate-200 px-1.5 py-1 text-right text-xs tabular-nums outline-none focus:border-indigo-400 focus:ring-1 focus:ring-indigo-100"
                         />
                       </td>
-                      <td className="px-2 py-1 text-slate-600">{formatINR(r.principal)}</td>
-                      <td className="px-2 py-1 text-slate-400">{formatINR(r.interest)}</td>
                       <td className="px-1 py-0.5">
                         <input
                           value={preDraft ?? (r.prepayment > 0 ? String(r.prepayment) : "")}
@@ -238,6 +241,8 @@ export function LoanScheduleWhatIf({ loanId, canEdit, outstanding, annualRatePct
                           className="w-24 rounded border border-emerald-200 bg-emerald-50/40 px-1.5 py-1 text-right text-xs font-medium tabular-nums text-emerald-800 outline-none placeholder:font-normal placeholder:text-emerald-300 focus:border-emerald-400 focus:ring-1 focus:ring-emerald-100"
                         />
                       </td>
+                      <td className="px-2 py-1 text-slate-600">{formatINR(r.principal)}</td>
+                      <td className="px-2 py-1 text-slate-400">{formatINR(r.interest)}</td>
                       <td className="px-2 py-1 font-medium text-slate-800">{formatINR(r.balance)}</td>
                     </tr>
                   );
