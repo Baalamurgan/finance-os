@@ -8,7 +8,8 @@ import { headers } from "next/headers";
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { auth } from "@/auth";
-import { parseAmount } from "@/lib/format";
+import { parseAmount, formatINR } from "@/lib/format";
+import { recordActivity } from "@/lib/activity";
 import { validateSpendLabel } from "@/lib/spendCategorize";
 import { log } from "@/lib/log";
 import { isPersonalUnlocked } from "@/lib/personal-lock";
@@ -672,7 +673,7 @@ export async function markCardBillPaid(formData: FormData) {
   const cycleTotal = parseAmount(formData.get("cycleTotal")); // tagged total for the cycle (for cashback)
   const ctx = { memberId: member.id, cardAccountId };
   if (!cardAccountId || !cycleEndISO || !amount || amount <= 0) { log.warn("markCardBillPaid", "blocked", { outcome: "blocked", reason: "bad-input", ...ctx }); return; }
-  const card = await prisma.financeAccount.findUnique({ where: { id: cardAccountId }, select: { memberId: true, type: true } });
+  const card = await prisma.financeAccount.findUnique({ where: { id: cardAccountId }, select: { memberId: true, type: true, name: true } });
   if (!card || card.memberId !== member.id || card.type !== "credit_card") { log.warn("markCardBillPaid", "blocked", { outcome: "blocked", reason: "not-owner", ...ctx }); return; }
   const cycleEnd = new Date(cycleEndISO);
   if (isNaN(cycleEnd.getTime())) { log.warn("markCardBillPaid", "blocked", { outcome: "blocked", reason: "bad-date", ...ctx }); return; }
@@ -706,6 +707,10 @@ export async function markCardBillPaid(formData: FormData) {
     }
   });
   log.info("markCardBillPaid", "ok", { outcome: "ok", ...ctx, amount, cashback });
+  // Record it in the household audit trail so the payment shows in the Money Plan activity feed (entity
+  // "cardbill") — logged against the open family month, since that's the plan the payment settles.
+  const famPeriod = await prisma.period.findFirst({ where: { householdId: member.householdId, status: "open" }, orderBy: [{ year: "desc" }, { month: "desc" }], select: { id: true } });
+  await recordActivity({ householdId: member.householdId, memberId: member.id, memberName: member.name, entity: "cardbill", action: "created", summary: `Paid ${card.name} bill ${formatINR(amount)}`, periodId: famPeriod?.id ?? null });
   rev();
   // A card cycle can carry a FAMILY portion that sits in the family In-Hand as "held for the bill"
   // (getInHand → pendingCardHeld). Marking it paid must bust the family cache too, or the family view
@@ -717,7 +722,7 @@ export async function unmarkCardBillPaid(formData: FormData) {
   const member = await me("unmarkCardBillPaid");
   if (!member) return;
   const id = Number(formData.get("id"));
-  const bill = await prisma.personalCardBill.findUnique({ where: { id } });
+  const bill = await prisma.personalCardBill.findUnique({ where: { id }, include: { cardAccount: { select: { name: true } } } });
   if (!bill || bill.memberId !== member.id) { log.warn("unmarkCardBillPaid", "blocked", { outcome: "blocked", reason: "not-owner", memberId: member.id, id }); return; }
   const cashbackMarker = `__billcashback__:${bill.cycleEnd.toISOString()}`;
   await prisma.$transaction([
@@ -725,6 +730,8 @@ export async function unmarkCardBillPaid(formData: FormData) {
     prisma.personalCardBill.delete({ where: { id } }),
   ]);
   log.info("unmarkCardBillPaid", "ok", { outcome: "ok", memberId: member.id, id });
+  const famPeriod = await prisma.period.findFirst({ where: { householdId: member.householdId, status: "open" }, orderBy: [{ year: "desc" }, { month: "desc" }], select: { id: true } });
+  await recordActivity({ householdId: member.householdId, memberId: member.id, memberName: member.name, entity: "cardbill", action: "deleted", summary: `Undid ${bill.cardAccount?.name ?? "card"} bill payment ${formatINR(bill.amount)}`, periodId: famPeriod?.id ?? null });
   rev();
   revalidateFamily(); // family In-Hand holds the bill's family portion again → bust the family cache
 }

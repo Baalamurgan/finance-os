@@ -4,7 +4,7 @@ import type { MoneyPlanActivity as Activity } from "@/lib/queries";
 // settlement/bill/income done, piggy hand-overs, manual moves. Shown below the In-Hand cards as the
 // audit trail: after someone ticks a step, this is where you see it happened (and can back-track a
 // step that "disappeared" from the plan because it collapsed into a done line).
-const ICON: Record<string, string> = { settlement: "🔁", piggy: "🐷", income: "💰", expense: "🧾" };
+const ICON: Record<string, string> = { settlement: "🔁", piggy: "🐷", income: "💰", expense: "🧾", cardbill: "💳" };
 // Absolute IST timestamp — this is an audit feed cross-checked to the rupee, so a precise time
 // ("Aug 24, 4:18 AM") is more useful than a relative "2 days ago" that also goes stale on the server.
 const fmtAt = new Intl.DateTimeFormat("en-IN", { timeZone: "Asia/Kolkata", day: "numeric", month: "short", hour: "numeric", minute: "2-digit", hour12: true });

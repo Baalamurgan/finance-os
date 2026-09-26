@@ -1981,7 +1981,7 @@ export async function getLoanDetail(householdId: number, id: number) {
 // entities so daily-spend and loan noise stays out. Shown below the In-Hand cards as one combined
 // log — the audit trail for "who marked this step done, and when".
 export type MoneyPlanActivity = { id: number; memberName: string | null; action: string; entity: string; summary: string; at: Date };
-const MONEY_PLAN_ENTITIES = ["settlement", "piggy", "income", "expense"];
+const MONEY_PLAN_ENTITIES = ["settlement", "piggy", "income", "expense", "cardbill"];
 export async function getMoneyPlanActivity(periodId: number): Promise<MoneyPlanActivity[]> {
   // No cap — scoped to a single month, so the count is naturally bounded and the user expects the
   // WHOLE month's money-movement log, not a truncated tail.

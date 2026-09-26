@@ -1300,6 +1300,8 @@ export async function payFamilyCardBill(formData: FormData) {
     }
   });
   log.info("payFamilyCardBill", "ok", { outcome: "ok", cardAccountId, amount, difference });
+  const famPeriod = await prisma.period.findFirst({ where: { status: "open" }, orderBy: [{ year: "desc" }, { month: "desc" }], select: { id: true } });
+  await logActivity("cardbill", "created", `Paid ${card.name} bill ${formatINR(amount)}`, famPeriod?.id ?? null);
   revalidateFamily();
   revalidatePath("/personal", "layout");
   return { ok: true };
@@ -1314,7 +1316,7 @@ export async function unpayFamilyCardBill(formData: FormData) {
   const cardAccountId = Number(formData.get("cardId")) || 0;
   const cycleEndISO = String(formData.get("cycleEnd") ?? "");
   if (!cardAccountId || !cycleEndISO) return { ok: false, error: "Bad input." };
-  const card = await prisma.financeAccount.findUnique({ where: { id: cardAccountId }, select: { memberId: true } });
+  const card = await prisma.financeAccount.findUnique({ where: { id: cardAccountId }, select: { memberId: true, name: true } });
   if (!card || card.memberId !== selfId) { log.warn("unpayFamilyCardBill", "blocked", { outcome: "blocked", reason: "not-owner", selfId, cardAccountId }); return { ok: false, error: "Only the card owner can undo this." }; }
   const cycleEnd = new Date(cycleEndISO);
   if (isNaN(cycleEnd.getTime())) return { ok: false, error: "Bad cycle." };
@@ -1324,6 +1326,8 @@ export async function unpayFamilyCardBill(formData: FormData) {
     prisma.accountTransaction.deleteMany({ where: { accountId: cardAccountId, category: diffMarker } }),
   ]);
   log.info("unpayFamilyCardBill", "ok", { outcome: "ok", cardAccountId });
+  const famPeriod = await prisma.period.findFirst({ where: { status: "open" }, orderBy: [{ year: "desc" }, { month: "desc" }], select: { id: true } });
+  await logActivity("cardbill", "deleted", `Undid ${card.name} bill payment`, famPeriod?.id ?? null);
   revalidateFamily();
   revalidatePath("/personal", "layout");
   return { ok: true };
