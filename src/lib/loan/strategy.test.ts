@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { emiFor, amortize, round2 } from "./amortize";
-import { buildRecurringPrepayments, project, savingsVs, compareScenarios } from "./strategy";
+import { buildRecurringPrepayments, project, savingsVs, compareScenarios, simulateRollover, avalancheOrder, snowballOrder, compareDebtStrategies, type DebtLoan } from "./strategy";
 
 const P = 4500000;
 const RATE = 8.5;
@@ -103,5 +103,71 @@ describe("compareScenarios", () => {
     const [, monthly, quarterly, annual] = results;
     expect(monthly.interestSaved).toBeGreaterThan(quarterly.interestSaved);
     expect(quarterly.interestSaved).toBeGreaterThan(annual.interestSaved);
+  });
+});
+
+// ── Multi-loan payoff order (avalanche vs snowball) ──────────────────────────────────────────────
+// A realistic joint-family mix: a big cheap home loan + two small dear jewel (interest-only) loans.
+const HOME: DebtLoan = { id: 1, name: "Home loan", outstanding: 800000, annualRatePct: 8.5, emi: emiFor(800000, 8.5, 120) };
+const JL1: DebtLoan = { id: 2, name: "Jewel 1", outstanding: 700000, annualRatePct: 12.79, emi: round2(700000 * 12.79 / 1200) }; // EMI ≈ interest
+const JL2: DebtLoan = { id: 3, name: "Jewel 2", outstanding: 1000000, annualRatePct: 9.15, emi: round2(1000000 * 9.15 / 1200) };
+const LOANS = [HOME, JL1, JL2];
+
+describe("avalanche / snowball ordering", () => {
+  it("avalanche attacks the highest rate first", () => {
+    expect(avalancheOrder(LOANS)).toEqual([2, 3, 1]); // 12.79% → 9.15% → 8.5%
+  });
+  it("snowball attacks the smallest balance first", () => {
+    expect(snowballOrder(LOANS)).toEqual([2, 1, 3]); // 7L → 8L → 10L
+  });
+  it("drops already-cleared loans", () => {
+    expect(avalancheOrder([...LOANS, { id: 9, name: "Paid off", outstanding: 0, annualRatePct: 20, emi: 0 }])).not.toContain(9);
+  });
+});
+
+describe("simulateRollover", () => {
+  it("interest-only loans never clear on EMIs alone (baseline hits the cap)", () => {
+    const base = simulateRollover([JL1], [], 0, { rollover: false, maxMonths: 120 });
+    expect(base.cleared).toBe(false);
+    expect(base.months).toBe(120);
+    expect(base.perLoan[0].clearedMonth).toBeNull();
+  });
+  it("an extra pot clears the priority loan, then rolls its EMI to the next", () => {
+    const plan = simulateRollover(LOANS, avalancheOrder(LOANS), 30000, { rollover: true });
+    expect(plan.cleared).toBe(true);
+    const [jl1, jl2, home] = [plan.perLoan.find((p) => p.id === 2)!, plan.perLoan.find((p) => p.id === 3)!, plan.perLoan.find((p) => p.id === 1)!];
+    // Avalanche order 2 → 3 → 1, so they clear in that sequence.
+    expect(jl1.clearedMonth).toBeLessThan(jl2.clearedMonth!);
+    expect(jl2.clearedMonth).toBeLessThanOrEqual(home.clearedMonth!);
+  });
+  it("the total-balance timeline is monotonically non-increasing and ends at zero", () => {
+    const plan = simulateRollover(LOANS, avalancheOrder(LOANS), 30000);
+    for (let i = 1; i < plan.timeline.length; i++) expect(plan.timeline[i].balance).toBeLessThanOrEqual(plan.timeline[i - 1].balance + 0.01);
+    expect(plan.timeline.at(-1)!.balance).toBe(0);
+  });
+});
+
+describe("compareDebtStrategies", () => {
+  const cmp = compareDebtStrategies(LOANS, 30000);
+  it("avalanche is never more expensive than snowball on total interest", () => {
+    expect(cmp.avalanche.totalInterest).toBeLessThanOrEqual(cmp.snowball.totalInterest + 0.01);
+  });
+  it("recommends avalanche for this mix", () => {
+    expect(cmp.recommended).toBe("avalanche");
+  });
+  it("both strategies clear the debt with the extra pot", () => {
+    expect(cmp.avalanche.cleared).toBe(true);
+    expect(cmp.snowball.cleared).toBe(true);
+  });
+  it("baseline never clears (interest-only loans), so savings-vs-baseline is not computed", () => {
+    expect(cmp.baseline.cleared).toBe(false);
+    expect(cmp.interestSavedVsBaseline).toBeNull();
+  });
+  it("an all-amortizing set does clear at baseline and yields positive interest saved", () => {
+    const amortizing = [HOME, { id: 5, name: "Car", outstanding: 300000, annualRatePct: 10, emi: emiFor(300000, 10, 48) }];
+    const c = compareDebtStrategies(amortizing, 20000);
+    expect(c.baseline.cleared).toBe(true);
+    expect(c.interestSavedVsBaseline).toBeGreaterThan(0);
+    expect(c.monthsSavedVsBaseline).toBeGreaterThan(0);
   });
 });

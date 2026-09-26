@@ -121,6 +121,153 @@ export function savingsVs(base: AmortResult, scenario: AmortResult): { interestS
   };
 }
 
+// ── Multi-loan payoff order (avalanche vs snowball) ───────────────────────────────────────────────
+//
+// Given several loans and a fixed EXTRA amount you can throw at debt each month, which loan do you
+// attack first? Two classic orderings:
+//   • avalanche — highest interest rate first (mathematically cheapest: least total interest).
+//   • snowball  — smallest balance first (fastest first win: motivational).
+// Both use the DEBT-ROLLOVER method: every loan keeps getting its own EMI; the extra pot (your spare
+// amount + the EMIs freed as loans close) is piled onto the priority loan until it clears, then rolls
+// to the next. Interest-only (gold/jewel) loans fold in naturally — their EMI ≈ interest so the
+// balance only falls once the extra pot reaches them.
+
+export type DebtLoan = {
+  id: number;
+  name: string;
+  outstanding: number; // current balance (₹)
+  annualRatePct: number;
+  emi: number; // scheduled monthly payment (₹); may be ≈ interest for interest-only loans
+};
+
+export type DebtPlan = {
+  orderIds: number[]; // attack order actually used
+  orderNames: string[];
+  totalInterest: number; // interest paid across all loans until everything clears (or the cap)
+  months: number; // months until the last loan clears (= cap if it never clears)
+  cleared: boolean; // did every loan reach zero within the horizon?
+  closureDate: string | null;
+  perLoan: { id: number; name: string; clearedMonth: number | null }[]; // 1-based month each loan cleared
+  timeline: { monthIndex: number; date: string | null; balance: number }[]; // total balance after each month
+};
+
+const DEBT_CAP = 600; // 50-year horizon safety cap
+
+// Simulate paying down a set of loans in a given priority order, with a fixed monthly extra and EMI
+// rollover. Pure; integer-paise internally. `startDate` (default today) only labels the timeline.
+export function simulateRollover(
+  loans: DebtLoan[],
+  orderIds: number[],
+  extraMonthly: number,
+  opts?: { rollover?: boolean; startDate?: Date; maxMonths?: number },
+): DebtPlan {
+  const rollover = opts?.rollover ?? true;
+  const start = opts?.startDate ?? new Date();
+  const cap = opts?.maxMonths ?? DEBT_CAP;
+
+  const bal = new Map<number, number>(); // paise
+  const emi = new Map<number, number>();
+  const rate = new Map<number, number>();
+  const clearedMonth = new Map<number, number>();
+  for (const l of loans) {
+    bal.set(l.id, Math.max(0, Math.round(l.outstanding * 100)));
+    emi.set(l.id, Math.max(0, Math.round(l.emi * 100)));
+    rate.set(l.id, l.annualRatePct / 1200);
+  }
+  // Only loans that appear in orderIds receive the extra pot; any omitted loans still pay their EMI.
+  const order = orderIds.filter((id) => bal.has(id));
+  const extraPaise = Math.max(0, Math.round(extraMonthly * 100));
+
+  let totalInterest = 0;
+  const timeline: DebtPlan["timeline"] = [];
+  let month = 0;
+  const outstandingTotal = () => [...bal.values()].reduce((s, b) => s + b, 0);
+
+  while (outstandingTotal() > 0 && month < cap) {
+    month++;
+    // 1. Every open loan accrues interest and pays its own EMI.
+    for (const l of loans) {
+      let b = bal.get(l.id)!;
+      if (b <= 0) continue;
+      const r = rate.get(l.id)!;
+      const interest = Math.round(b * r);
+      let principal = emi.get(l.id)! - interest;
+      if (principal < 0) principal = 0; // EMI ≤ interest → balance flat (interest-only)
+      if (principal > b) principal = b;
+      b -= principal;
+      totalInterest += interest;
+      bal.set(l.id, b);
+    }
+    // 2. Build the extra pot: your spare cash + the EMIs of loans that have already closed (rollover).
+    let pot = extraPaise;
+    if (rollover) {
+      for (const l of loans) {
+        const cm = clearedMonth.get(l.id);
+        if (cm != null && cm < month) pot += emi.get(l.id)!;
+      }
+    }
+    // 3. Pour the pot onto the priority loans, in order.
+    for (const id of order) {
+      if (pot <= 0) break;
+      const b = bal.get(id)!;
+      if (b <= 0) continue;
+      const applied = Math.min(pot, b);
+      bal.set(id, b - applied);
+      pot -= applied;
+    }
+    // 4. Record any closures this month.
+    for (const l of loans) {
+      if (bal.get(l.id)! <= 0 && !clearedMonth.has(l.id)) clearedMonth.set(l.id, month);
+    }
+    timeline.push({ monthIndex: month, date: isoAddMonths(start, month), balance: outstandingTotal() / 100 });
+  }
+
+  const cleared = outstandingTotal() <= 0;
+  return {
+    orderIds: order,
+    orderNames: order.map((id) => loans.find((l) => l.id === id)?.name ?? String(id)),
+    totalInterest: round2(totalInterest / 100),
+    months: month,
+    cleared,
+    closureDate: cleared ? isoAddMonths(start, month) : null,
+    perLoan: loans.map((l) => ({ id: l.id, name: l.name, clearedMonth: clearedMonth.get(l.id) ?? null })),
+    timeline,
+  };
+}
+
+// Rank loans for the two classic strategies.
+export function avalancheOrder(loans: DebtLoan[]): number[] {
+  return [...loans].filter((l) => l.outstanding > 0).sort((a, b) => b.annualRatePct - a.annualRatePct || a.outstanding - b.outstanding).map((l) => l.id);
+}
+export function snowballOrder(loans: DebtLoan[]): number[] {
+  return [...loans].filter((l) => l.outstanding > 0).sort((a, b) => a.outstanding - b.outstanding || b.annualRatePct - a.annualRatePct).map((l) => l.id);
+}
+
+export type DebtComparison = {
+  extraMonthly: number;
+  baseline: DebtPlan; // EMIs only — no extra, no rollover
+  avalanche: DebtPlan;
+  snowball: DebtPlan;
+  recommended: "avalanche" | "snowball";
+  interestSavedVsBaseline: number | null; // recommended vs baseline (null if baseline never clears)
+  monthsSavedVsBaseline: number | null;
+};
+
+// Compare avalanche vs snowball for a given extra/month, both against the EMIs-only baseline.
+export function compareDebtStrategies(loans: DebtLoan[], extraMonthly: number, opts?: { startDate?: Date }): DebtComparison {
+  const startDate = opts?.startDate;
+  const baseline = simulateRollover(loans, [], 0, { rollover: false, startDate });
+  const avalanche = simulateRollover(loans, avalancheOrder(loans), extraMonthly, { rollover: true, startDate });
+  const snowball = simulateRollover(loans, snowballOrder(loans), extraMonthly, { rollover: true, startDate });
+  // Avalanche is never worse on interest; ties (or a snowball that clears sooner) still favour avalanche
+  // as the cheaper default, but surface snowball when it strictly costs less (can happen with rounding).
+  const recommended: "avalanche" | "snowball" = snowball.totalInterest < avalanche.totalInterest ? "snowball" : "avalanche";
+  const best = recommended === "avalanche" ? avalanche : snowball;
+  const interestSavedVsBaseline = baseline.cleared ? round2(baseline.totalInterest - best.totalInterest) : null;
+  const monthsSavedVsBaseline = baseline.cleared ? baseline.months - best.months : null;
+  return { extraMonthly, baseline, avalanche, snowball, recommended, interestSavedVsBaseline, monthsSavedVsBaseline };
+}
+
 export type NamedScenario = { name: string; prepayments?: Prepayment[]; recurring?: RecurringSpec; strategy?: Strategy };
 export type ScenarioResult = Summary & { name: string; interestSaved: number; monthsSaved: number };
 

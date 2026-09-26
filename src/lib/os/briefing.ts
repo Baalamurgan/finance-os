@@ -8,7 +8,7 @@ import type { TaskWithList } from "@/lib/integrations/google/tasks";
 // these same facts, so nothing here is throwaway. Calendar routine (recurring events) is filtered
 // out: you only hear what's different from a normal day.
 
-export const BRIEFING_SECTIONS = ["todos", "eventsToday", "eventsWeek", "familyBills", "cardBills", "cash", "windDown", "birthdays"] as const;
+export const BRIEFING_SECTIONS = ["todos", "eventsToday", "eventsWeek", "familyBills", "loanBills", "cardBills", "cash", "windDown", "birthdays"] as const;
 export type BriefingSection = (typeof BRIEFING_SECTIONS)[number];
 export type BriefingPrefs = Record<BriefingSection, boolean>;
 
@@ -17,6 +17,7 @@ export const DEFAULT_BRIEFING_PREFS: BriefingPrefs = {
   eventsToday: true,
   eventsWeek: true,
   familyBills: true,
+  loanBills: true,
   cardBills: true,
   cash: true,
   windDown: true,
@@ -29,6 +30,7 @@ export const BRIEFING_OPTIONS: { key: BriefingSection; label: string; hint: stri
   { key: "eventsToday", label: "Today's schedule", hint: "Only events that aren't your usual routine" },
   { key: "eventsWeek", label: "The week ahead", hint: "Non-routine events over the next 7 days" },
   { key: "familyBills", label: "Family bills due", hint: "Bills you're on the hook for, with amounts" },
+  { key: "loanBills", label: "Loan EMIs & prepayments", hint: "EMIs due soon and planned prepayments" },
   { key: "cardBills", label: "Card bills due", hint: "Credit-card dues coming up" },
   { key: "cash", label: "Cash & spending", hint: "What's left to spend, with a low-balance alert" },
   { key: "windDown", label: "Family wind-down", hint: "A heads-up as the monthly family close approaches" },
@@ -125,6 +127,16 @@ export function buildBriefing(input: BriefingInput, prefs: BriefingPrefs, now: D
       const disp = bills.map((b) => `${b.title}${b.amount ? ` ₹${money(b.amount)}` : ""}${b.overdue ? " (overdue)" : ""}`);
       const spk = bills.map((b) => `${b.title}${b.amount ? `, ${money(b.amount)} rupees` : ""}${b.overdue ? ", which is overdue" : ""}`);
       push("🔔", `Family bills: ${disp.join("; ")}`, `Don't forget, you've got ${bills.length} family bill${bills.length > 1 ? "s" : ""} to pay: ${andList(spk)}.`);
+    }
+  }
+
+  // ── Loan EMIs & planned prepayments ──
+  if (prefs.loanBills) {
+    const loans = input.items.filter((i) => i.kind === "loan");
+    if (loans.length) {
+      const disp = loans.map((l) => `${l.title}${l.amount ? ` ₹${money(l.amount)}` : ""}${l.overdue ? " (overdue)" : ""}`);
+      const spk = loans.map((l) => `${l.title}${l.amount ? `, ${money(l.amount)} rupees` : ""}${l.overdue ? ", which is overdue" : ""}`);
+      push("🏦", `Loans: ${disp.join("; ")}`, `On loans, you've got ${andList(spk)} coming up.`);
     }
   }
 

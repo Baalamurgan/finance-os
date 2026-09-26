@@ -72,4 +72,23 @@ describe("buildBriefing", () => {
     const b = buildBriefing({ ...base, canSpend: 500 }, { ...DEFAULT_BRIEFING_PREFS, cash: false }, now);
     expect(b.speech).not.toContain("running low");
   });
+
+  it("announces loan EMIs due, with amount and overdue flag", () => {
+    const input: BriefingInput = {
+      ...base,
+      items: [
+        item({ kind: "loan", title: "BOB EMI", subtitle: "EMI due", amount: 61750, overdue: false }),
+        item({ kind: "loan", title: "JL1 EMI", subtitle: "Overdue", amount: 7500, overdue: true }),
+      ],
+    };
+    const b = buildBriefing(input, DEFAULT_BRIEFING_PREFS, now);
+    expect(b.speech).toContain("BOB EMI, 61,750 rupees");
+    expect(b.speech).toContain("JL1 EMI, 7,500 rupees, which is overdue");
+  });
+
+  it("respects section prefs (loanBills off → no loan line)", () => {
+    const input: BriefingInput = { ...base, items: [item({ kind: "loan", title: "BOB EMI", amount: 61750 })] };
+    const b = buildBriefing(input, { ...DEFAULT_BRIEFING_PREFS, loanBills: false }, now);
+    expect(b.speech).not.toContain("BOB EMI");
+  });
 });

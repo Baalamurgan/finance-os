@@ -9,6 +9,7 @@ import { suggestCategoryName, normalizeItem, resolveCategoryId } from "@/lib/spe
 import { withShareCount } from "@/lib/format";
 import { getCardDues, type MonthAmount } from "@/lib/personal/cash";
 import { projectLoan } from "@/lib/loan/project";
+import { round2 } from "@/lib/loan/amortize";
 
 // Keywords that drive the on-save category suggestion: the household's LEARNED words
 // (SpendKeyword) plus its head-curated shortcuts (SpendShortcut, weighted high since
@@ -542,6 +543,88 @@ export async function getLoans(householdId: number) {
     activeLoans,
     activeChits,
     closed: rows.filter((r) => r.status === "closed"),
+  };
+}
+
+// ── Debt overview (the /loans cockpit) ────────────────────────────────────────────────────────────
+// Aggregates every active loan into the whole-picture numbers you can't see on one loan alone: total
+// outstanding, blended rate, what interest is costing per day, the household debt-free date, and a
+// combined balance-over-time curve for the chart. Reuses the same amortization projection as the
+// detail page — this is a read-only rollup, it changes nothing.
+export type DebtOverview = Awaited<ReturnType<typeof getDebtOverview>>;
+export async function getDebtOverview(householdId: number) {
+  const loans = await prisma.loan.findMany({
+    where: { householdId, kind: "loan", status: "active" },
+    orderBy: { outstanding: "desc" },
+  });
+
+  const perLoan = loans.map((l) => {
+    const proj = projectLoan(l);
+    const rate = l.interestRate ?? 0;
+    const monthlyInterest = rate > 0 ? round2(l.outstanding * (rate / 1200)) : 0;
+    const emi = (proj?.emi ?? l.emiAmount ?? l.monthlyAmount) || monthlyInterest;
+    return {
+      id: l.id,
+      name: l.name,
+      outstanding: l.outstanding,
+      rate,
+      emi,
+      amortizable: proj != null,
+      interestOnly: proj?.interestOnly ?? false,
+      monthlyInterest,
+      remainingMonths: proj?.remainingMonths ?? 0, // 0 = doesn't close on its own
+      closureDate: proj?.closureDate ?? null,
+      interestRemaining: proj && !proj.interestOnly ? proj.totalInterestRemaining : null,
+      schedule: proj?.schedule ?? [],
+    };
+  });
+
+  const totalOutstanding = round2(perLoan.reduce((s, l) => s + l.outstanding, 0));
+  const totalMonthlyInterest = round2(perLoan.reduce((s, l) => s + l.monthlyInterest, 0));
+  const dailyInterest = round2((totalMonthlyInterest * 12) / 365);
+  const rated = perLoan.filter((l) => l.rate > 0 && l.outstanding > 0);
+  const weightBase = rated.reduce((s, l) => s + l.outstanding, 0);
+  const blendedRate = weightBase > 0 ? round2(rated.reduce((s, l) => s + l.outstanding * l.rate, 0) / weightBase) : null;
+  const totalInterestRemaining = round2(perLoan.reduce((s, l) => s + (l.interestRemaining ?? 0), 0));
+
+  // A loan with a balance that never closes on its own (interest-only, or a non-amortizable manual
+  // loan) means there is no natural debt-free date until you throw extra at it → prompt a payoff plan.
+  const openEnded = perLoan.filter((l) => l.outstanding > 0 && !l.closureDate);
+  const closureDates = perLoan.map((l) => l.closureDate).filter((d): d is string => d != null);
+  const debtFreeDate = openEnded.length === 0 && closureDates.length ? closureDates.sort().at(-1)! : null;
+
+  // Combined balance curve: sum every loan's projected balance at each month offset (0 = today).
+  const amortizingHorizons = perLoan.filter((l) => l.remainingMonths > 0).map((l) => l.remainingMonths);
+  const horizon = Math.min(240, Math.max(12, ...amortizingHorizons, 0));
+  const timeline = [{ monthIndex: 0, balance: totalOutstanding }];
+  for (let m = 1; m <= horizon; m++) {
+    let bal = 0;
+    for (const l of perLoan) {
+      if (l.schedule.length && m - 1 < l.schedule.length) bal += l.schedule[m - 1].balance;
+      else if (l.remainingMonths > 0) bal += 0; // amortizing loan already closed by month m
+      else bal += l.outstanding; // interest-only / non-amortizable → flat until a plan hits it
+    }
+    timeline.push({ monthIndex: m, balance: round2(bal) });
+  }
+
+  // Loans eligible for the avalanche/snowball planner (need a rate + a live balance).
+  const strategyLoans = perLoan
+    .filter((l) => l.rate > 0 && l.outstanding > 0)
+    .map((l) => ({ id: l.id, name: l.name, outstanding: l.outstanding, annualRatePct: l.rate, emi: l.emi }));
+
+  return {
+    perLoan,
+    totalOutstanding,
+    totalMonthlyInterest,
+    dailyInterest,
+    blendedRate,
+    totalInterestRemaining,
+    debtFreeDate,
+    hasOpenEnded: openEnded.length > 0,
+    hasInterestOnly: perLoan.some((l) => l.interestOnly),
+    horizon,
+    timeline,
+    strategyLoans,
   };
 }
 

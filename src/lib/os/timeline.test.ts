@@ -41,8 +41,14 @@ describe("buildGrouped", () => {
     const items = [
       item({ kind: "event" }),
       item({ kind: "bill", atISO: at("2026-08-01T00:00:00") }),
+      item({ kind: "loan", atISO: at("2026-08-01T00:00:00") }),
       item({ kind: "birthday", atISO: at("2026-08-01T00:00:00"), allDay: true }),
     ];
-    expect(buildGrouped(items, now).map((g) => g.key)).toEqual(["bill", "event", "birthday"]);
+    // loans rank right after bills, before events
+    expect(buildGrouped(items, now).map((g) => g.key)).toEqual(["bill", "loan", "event", "birthday"]);
+  });
+
+  it("treats a loan EMI as a due item (overdue when past)", () => {
+    expect(urgencyOf(item({ kind: "loan", atISO: at("2026-07-28T00:00:00"), overdue: true }), now)).toBe("overdue");
   });
 });

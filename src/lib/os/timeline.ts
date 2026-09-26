@@ -3,7 +3,7 @@
 // two views the user can toggle — a chronological Timeline and a Grouped view — and derives
 // each item's urgency. Kept pure so it's unit-testable and reusable on client & server.
 
-export type TodayKind = "event" | "bill" | "card" | "birthday" | "task";
+export type TodayKind = "event" | "bill" | "card" | "loan" | "birthday" | "task";
 export type Urgency = "overdue" | "now" | "today" | "soon" | "upcoming";
 
 export type TodayItem = {
@@ -29,7 +29,7 @@ function sameCalendarDay(a: Date, b: Date): boolean {
 export function urgencyOf(item: TodayItem, now = new Date()): Urgency {
   const at = new Date(item.atISO).getTime();
   const delta = at - now.getTime();
-  const isDue = item.kind === "bill" || item.kind === "card" || item.kind === "task";
+  const isDue = item.kind === "bill" || item.kind === "card" || item.kind === "loan" || item.kind === "task";
   if (isDue && (item.overdue || delta < 0)) return "overdue";
   if (!item.allDay && delta >= 0 && delta <= 2 * HOUR) return "now";
   if (sameCalendarDay(new Date(at), now)) return "today";
@@ -55,6 +55,7 @@ export type TodayGroup = { key: TodayKind; label: string; icon: string; items: T
 
 const GROUP_ORDER: { key: TodayKind; label: string; icon: string }[] = [
   { key: "bill", label: "Bills", icon: "🔔" },
+  { key: "loan", label: "Loans", icon: "🏦" },
   { key: "card", label: "Cards", icon: "💳" },
   { key: "event", label: "Events", icon: "📅" },
   { key: "task", label: "To-dos", icon: "✅" },

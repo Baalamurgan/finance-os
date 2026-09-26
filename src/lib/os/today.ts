@@ -2,6 +2,7 @@ import { listUpcomingEvents, listCalendarBirthdays, calendarConnected, type Birt
 import { listContactBirthdays, contactsConnected } from "@/lib/integrations/google/contacts";
 import { listAllTasks, tasksConnected, type TaskWithList, type TaskList } from "@/lib/integrations/google/tasks";
 import { getBillReminders } from "@/lib/billReminders";
+import { getLoanReminders } from "@/lib/loanReminders";
 import { getCardBillReminders, getPersonalCash } from "@/lib/personal/cash";
 import { prisma } from "@/lib/prisma";
 import type { TodayItem } from "./timeline";
@@ -65,7 +66,7 @@ export async function getTodayData(opts: {
 }): Promise<TodayData> {
   const { memberId, householdId, personalPeriod } = opts;
 
-  const [calOn, contactsOn, tasksOn, weekEvents, calBdays, contactBdays, taskData, billReminders, cardReminders, cash] = await Promise.all([
+  const [calOn, contactsOn, tasksOn, weekEvents, calBdays, contactBdays, taskData, billReminders, loanReminders, cardReminders, cash] = await Promise.all([
     calendarConnected(memberId),
     contactsConnected(memberId),
     tasksConnected(memberId),
@@ -74,6 +75,7 @@ export async function getTodayData(opts: {
     listContactBirthdays(memberId),
     listAllTasks(memberId),
     getBillReminders(householdId).catch(() => []),
+    getLoanReminders(householdId).catch(() => []),
     getCardBillReminders(memberId).catch(() => []),
     personalPeriod ? getPersonalCash(personalPeriod).catch(() => null) : Promise.resolve(null),
   ]);
@@ -113,6 +115,23 @@ export async function getTodayData(opts: {
       amount: b.amount,
       href: "/in-hand",
       icon: "🔔",
+    });
+  }
+
+  // Loan EMIs due + planned prepayments where this member is on the hook
+  for (const l of loanReminders) {
+    if (!l.recipientIds.includes(memberId)) continue;
+    const isPrepay = l.kind === "prepayment";
+    items.push({
+      id: `loan-${l.kind}-${l.loanId}`,
+      kind: "loan",
+      title: isPrepay ? `${l.name} prepayment` : `${l.name} EMI`,
+      subtitle: l.overdue ? "Overdue" : isPrepay ? "Prepayment planned" : "EMI due",
+      atISO: l.dueISO,
+      overdue: l.overdue,
+      amount: l.amount,
+      href: `/loans`,
+      icon: "🏦",
     });
   }
 

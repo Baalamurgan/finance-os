@@ -2,6 +2,8 @@
 
 import { useState } from "react";
 import {
+  Area,
+  AreaChart,
   Bar,
   BarChart,
   Cell,
@@ -35,6 +37,31 @@ export function TrendChart({
         <Line type="monotone" dataKey="expense" stroke="#dc2626" name="Expense" strokeWidth={2} dot={{ r: 3 }} />
         <Line type="monotone" dataKey="balance" stroke="#4f46e5" name="Balance" strokeWidth={2} dot={{ r: 3 }} />
       </LineChart>
+    </ResponsiveContainer>
+  );
+}
+
+// Combined loan balance declining over time (the debt-overview cockpit). One area sloping to zero.
+export function DebtBalanceTrend({
+  data,
+}: {
+  data: { label: string; balance: number }[];
+}) {
+  const inrK = (v: number) => (v >= 1e7 ? `₹${(v / 1e7).toFixed(1)}Cr` : `₹${Math.round(v / 1000)}k`);
+  return (
+    <ResponsiveContainer width="100%" height={200}>
+      <AreaChart data={data} margin={{ top: 8, right: 12, left: 0, bottom: 0 }}>
+        <defs>
+          <linearGradient id="debtFill" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor="#6366f1" stopOpacity={0.35} />
+            <stop offset="100%" stopColor="#6366f1" stopOpacity={0.03} />
+          </linearGradient>
+        </defs>
+        <XAxis dataKey="label" tick={{ fontSize: 10 }} interval="preserveStartEnd" minTickGap={28} />
+        <YAxis tickFormatter={(v) => inrK(Number(v))} tick={{ fontSize: 10 }} width={52} />
+        <Tooltip formatter={(value) => inr(Number(value))} labelStyle={{ fontSize: 12 }} />
+        <Area type="monotone" dataKey="balance" stroke="#4f46e5" strokeWidth={2} fill="url(#debtFill)" name="Outstanding" />
+      </AreaChart>
     </ResponsiveContainer>
   );
 }
