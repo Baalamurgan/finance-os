@@ -2437,18 +2437,24 @@ export async function updateLoan(formData: FormData) {
   revalidateFamily();
 }
 
-// Persist the what-if "Planned" schedule (per-month EMI overrides) on the loan, so it survives reloads
-// and drives the projected closure. An empty list clears the saved plan. Head-only.
-export async function saveLoanPlan(loanId: number, overrides: { monthIndex: number; emi: number }[]) {
+// Persist the what-if "Planned" schedule (per-month EMI overrides + prepayments) on the loan, so it
+// survives reloads and drives the projected closure. Empty lists clear the saved plan. Head-only.
+export async function saveLoanPlan(
+  loanId: number,
+  plan: { overrides: { monthIndex: number; emi: number }[]; prepayments: { monthIndex: number; amount: number }[] },
+) {
   if (!(await isHead())) return { ok: false as const };
   if (!loanId) return { ok: false as const };
-  const clean = (Array.isArray(overrides) ? overrides : [])
+  const overrides = (Array.isArray(plan?.overrides) ? plan.overrides : [])
     .map((o) => ({ monthIndex: Math.round(Number(o.monthIndex)), emi: Math.round((Number(o.emi) || 0) * 100) / 100 }))
     .filter((o) => Number.isFinite(o.monthIndex) && o.monthIndex >= 1 && Number.isFinite(o.emi) && o.emi >= 0);
-  await prisma.loan.update({ where: { id: loanId }, data: { plannedOverrides: clean } });
-  await logActivity("loan", "updated", `Saved a repayment plan (${clean.length} custom month${clean.length === 1 ? "" : "s"})`);
+  const prepayments = (Array.isArray(plan?.prepayments) ? plan.prepayments : [])
+    .map((o) => ({ monthIndex: Math.round(Number(o.monthIndex)), amount: Math.round((Number(o.amount) || 0) * 100) / 100 }))
+    .filter((o) => Number.isFinite(o.monthIndex) && o.monthIndex >= 1 && Number.isFinite(o.amount) && o.amount > 0);
+  await prisma.loan.update({ where: { id: loanId }, data: { plannedOverrides: { overrides, prepayments } } });
+  await logActivity("loan", "updated", `Saved a repayment plan (${overrides.length} EMI edit${overrides.length === 1 ? "" : "s"}, ${prepayments.length} prepayment${prepayments.length === 1 ? "" : "s"})`);
   revalidateFamily();
-  return { ok: true as const, count: clean.length };
+  return { ok: true as const };
 }
 
 // Record a monthly payment / prepayment. principalPart reduces the outstanding;

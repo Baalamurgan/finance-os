@@ -1942,14 +1942,19 @@ export async function getLoanDetail(householdId: number, id: number) {
   const interestPaid = loan.payments.reduce((s, p) => s + p.interestPart, 0);
   const principalPaidActual = loan.payments.reduce((s, p) => s + p.principalPart, 0);
   const prepaymentsMade = loan.payments.filter((p) => p.type === "prepayment").reduce((s, p) => s + p.principalPart, 0);
-  // Saved what-if plan (per-month EMI overrides) → drives both the Planned table and the headline
-  // projection so the page reflects the plan once saved.
-  const savedOverrides = Array.isArray(loan.plannedOverrides)
-    ? (loan.plannedOverrides as unknown[])
-        .map((o) => o as { monthIndex?: unknown; emi?: unknown })
-        .map((o) => ({ monthIndex: Number(o.monthIndex), emi: Number(o.emi) }))
-        .filter((o) => Number.isFinite(o.monthIndex) && Number.isFinite(o.emi) && o.emi >= 0)
-    : [];
+  // Saved what-if plan → drives the Planned table + the headline projection. Supports both the legacy
+  // shape (a bare array of EMI overrides) and the new shape ({ overrides, prepayments }).
+  const rawPlan = loan.plannedOverrides as unknown;
+  const emiRaw = Array.isArray(rawPlan) ? rawPlan : (rawPlan as { overrides?: unknown })?.overrides;
+  const preRaw = Array.isArray(rawPlan) ? [] : (rawPlan as { prepayments?: unknown })?.prepayments;
+  const savedOverrides = (Array.isArray(emiRaw) ? emiRaw : [])
+    .map((o) => o as { monthIndex?: unknown; emi?: unknown })
+    .map((o) => ({ monthIndex: Number(o.monthIndex), emi: Number(o.emi) }))
+    .filter((o) => Number.isFinite(o.monthIndex) && Number.isFinite(o.emi) && o.emi >= 0);
+  const savedPrepayments = (Array.isArray(preRaw) ? preRaw : [])
+    .map((o) => o as { monthIndex?: unknown; amount?: unknown })
+    .map((o) => ({ monthIndex: Number(o.monthIndex), amount: Number(o.amount) }))
+    .filter((o) => Number.isFinite(o.monthIndex) && Number.isFinite(o.amount) && o.amount > 0);
   // Sheet entries linked to this loan (EMI / prepayment bills). Paid ones already moved the balance via
   // toggleBillPaid; unpaid ones are the upcoming plan.
   const linkedEntries = (
@@ -1973,7 +1978,13 @@ export async function getLoanDetail(householdId: number, id: number) {
         })
         .filter((p): p is { monthIndex: number; amount: number } => p != null)
     : [];
-  const projection = plannedPrepayments.length ? projectLoan(loan, { emiOverrides: savedOverrides, plannedPrepayments }) : base;
+  // The projection reflects BOTH the Sheet's linked prepayments and the saved what-if prepayments (the
+  // latter override a month when both exist) — mirroring the Planned table's effectivePre merge.
+  const mergedPre = new Map<number, number>();
+  for (const p of plannedPrepayments) mergedPre.set(p.monthIndex, p.amount);
+  for (const p of savedPrepayments) mergedPre.set(p.monthIndex, p.amount);
+  const projPrepayments = [...mergedPre.entries()].filter(([, a]) => a > 0).map(([monthIndex, amount]) => ({ monthIndex, amount }));
+  const projection = projPrepayments.length || savedOverrides.length ? projectLoan(loan, { emiOverrides: savedOverrides, plannedPrepayments: projPrepayments }) : base;
   return {
     loan,
     memberName,
@@ -1987,6 +1998,7 @@ export async function getLoanDetail(householdId: number, id: number) {
     prepaymentsMade,
     projection,
     savedOverrides,
+    savedPrepayments, // saved what-if prepayment edits (per schedule month index)
     linkedEntries,
     plannedPrepayments, // unpaid linked prepayments, mapped to schedule month indices (for the what-if)
     // Interest-only (gold/jewel) loans: the ACTUAL latest monthly interest from the Sheet (falls back to

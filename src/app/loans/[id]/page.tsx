@@ -23,7 +23,7 @@ export default async function LoanDetailPage({
   const detail = await getLoanDetail(c.household.id, Number(id));
   if (!detail) notFound();
 
-  const { loan, memberName, totalPaid, totalDividend, potReceived, chitNet, interestPaid, prepaymentsMade, projection, savedOverrides, linkedEntries, plannedPrepayments } = detail;
+  const { loan, memberName, totalPaid, totalDividend, potReceived, chitNet, interestPaid, prepaymentsMade, projection, savedOverrides, savedPrepayments, linkedEntries, plannedPrepayments } = detail;
   const isChit = loan.kind === "chit";
   const canEdit = c.isHead;
   const fmtMonths = (m: number) => `${Math.floor(m / 12)}y ${m % 12}m`;
@@ -138,6 +138,7 @@ export default async function LoanDetailPage({
                 startISO={projection.schedule[0].date}
                 startIndex={projection.schedule[0].index}
                 savedOverrides={savedOverrides}
+                savedPrepayments={savedPrepayments}
                 plannedPrepayments={plannedPrepayments}
                 maxMonths={projection.interestOnly ? 60 : undefined}
               />

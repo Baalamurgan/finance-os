@@ -19,7 +19,8 @@ type Props = {
   emi: number;
   startISO: string | null;
   startIndex: number;
-  savedOverrides: EmiOverride[];
+  savedOverrides: EmiOverride[]; // saved what-if per-month EMI edits
+  savedPrepayments: Prepayment[]; // saved what-if per-month prepayment edits
   plannedPrepayments: Prepayment[]; // unpaid linked Sheet prepayments — folded into Planned until paid
   maxMonths?: number; // horizon cap for interest-only loans (payment ≈ interest, balance ~flat)
 };
@@ -27,7 +28,7 @@ type Props = {
 const fmtDate = (iso: string | null) => (iso ? new Date(iso).toLocaleDateString("en-GB", { month: "short", year: "2-digit" }) : "—");
 const keyOf = (ov: EmiOverride[]) => JSON.stringify([...ov].sort((a, b) => a.monthIndex - b.monthIndex));
 
-export function LoanScheduleWhatIf({ loanId, canEdit, outstanding, annualRatePct, emi, startISO, startIndex, savedOverrides, plannedPrepayments, maxMonths }: Props) {
+export function LoanScheduleWhatIf({ loanId, canEdit, outstanding, annualRatePct, emi, startISO, startIndex, savedOverrides, savedPrepayments, plannedPrepayments, maxMonths }: Props) {
   const toast = useToast();
   const [savingPending, startSaving] = useTransition();
   const prepayKey = JSON.stringify(plannedPrepayments);
@@ -37,55 +38,68 @@ export function LoanScheduleWhatIf({ loanId, canEdit, outstanding, annualRatePct
     [outstanding, annualRatePct, emi, startISO, startIndex, maxMonths],
   );
 
-  const [drafts, setDrafts] = useState<Record<number, string>>({}); // monthIndex → typed EMI (uncommitted)
-  const [committed, setCommitted] = useState<EmiOverride[]>(savedOverrides); // applied overrides (seeded from the saved plan)
+  const [emiDrafts, setEmiDrafts] = useState<Record<number, string>>({}); // monthIndex → typed EMI
+  const [preDrafts, setPreDrafts] = useState<Record<number, string>>({}); // monthIndex → typed prepayment
+  const [committedEmi, setCommittedEmi] = useState<EmiOverride[]>(savedOverrides);
+  const [committedPre, setCommittedPre] = useState<Prepayment[]>(savedPrepayments);
   const [loading, setLoading] = useState(false);
 
-  // Planned = Current + everything not-yet-paid: the unpaid linked Sheet prepayments AND your what-if EMI
-  // edits. Once a Sheet item is marked paid it leaves this list (and lands in `outstanding` → Current).
-  const planned = useMemo(
-    () => amortize({ principal: outstanding, annualRatePct, emi, startDate: startISO, startIndex, emiOverrides: committed, prepayments: plannedPrepayments, maxMonths }),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [committed, outstanding, annualRatePct, emi, startISO, startIndex, prepayKey, maxMonths],
-  );
-
-  // Effective overrides = committed with any typed drafts layered on top.
-  const collect = (): EmiOverride[] => {
-    const map = new Map<number, number>();
-    for (const o of committed) map.set(o.monthIndex, o.emi);
-    for (const [k, v] of Object.entries(drafts)) {
-      const n = Number(v);
-      if (Number.isFinite(n) && n >= 0) map.set(Number(k), n);
-    }
-    return [...map.entries()].map(([monthIndex, emi]) => ({ monthIndex, emi }));
+  // Effective prepayments = the Sheet's linked prepayments, with your what-if prepay edits layered on top
+  // (an edit to a month overrides that month; 0 removes it). Filtered to > 0 for the schedule.
+  const effectivePre = (): Prepayment[] => {
+    const m = new Map<number, number>();
+    for (const p of plannedPrepayments) m.set(p.monthIndex, p.amount);
+    for (const p of committedPre) m.set(p.monthIndex, p.amount);
+    return [...m.entries()].filter(([, a]) => a > 0).map(([monthIndex, amount]) => ({ monthIndex, amount }));
   };
 
-  const dirty = Object.keys(drafts).length > 0 || committed.length > 0;
-  const unsaved = keyOf(collect()) !== keyOf(savedOverrides);
+  // Planned = Current + everything not-yet-paid: unpaid linked Sheet prepayments AND your what-if EMI +
+  // prepayment edits. When a Sheet item is marked paid it leaves this list (→ `outstanding` → Current).
+  const preKey = JSON.stringify(committedPre);
+  const planned = useMemo(
+    () => amortize({ principal: outstanding, annualRatePct, emi, startDate: startISO, startIndex, emiOverrides: committedEmi, prepayments: effectivePre(), maxMonths }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [committedEmi, preKey, outstanding, annualRatePct, emi, startISO, startIndex, prepayKey, maxMonths],
+  );
+
+  // Merge a committed list with typed drafts (drafts win). Used on Recalculate/Save.
+  const collectEmi = (): EmiOverride[] => {
+    const map = new Map<number, number>();
+    for (const o of committedEmi) map.set(o.monthIndex, o.emi);
+    for (const [k, v] of Object.entries(emiDrafts)) { const n = Number(v); if (Number.isFinite(n) && n >= 0) map.set(Number(k), n); }
+    return [...map.entries()].map(([monthIndex, emi]) => ({ monthIndex, emi }));
+  };
+  const collectPre = (): Prepayment[] => {
+    const map = new Map<number, number>();
+    for (const p of committedPre) map.set(p.monthIndex, p.amount);
+    for (const [k, v] of Object.entries(preDrafts)) { const n = Number(v); if (Number.isFinite(n) && n >= 0) map.set(Number(k), n); }
+    return [...map.entries()].map(([monthIndex, amount]) => ({ monthIndex, amount }));
+  };
+
+  const dirty = Object.keys(emiDrafts).length > 0 || Object.keys(preDrafts).length > 0 || committedEmi.length > 0 || committedPre.length > 0;
+  const savedKey = keyOf(savedOverrides) + "|" + JSON.stringify([...savedPrepayments].sort((a, b) => a.monthIndex - b.monthIndex));
+  const curKey = keyOf(collectEmi()) + "|" + JSON.stringify([...collectPre()].sort((a, b) => a.monthIndex - b.monthIndex));
+  const unsaved = curKey !== savedKey;
   const interestSaved = round2(base.totalInterest - planned.totalInterest);
   const monthsSaved = base.months - planned.months;
 
   const recalc = () => {
-    const overrides = collect();
+    const e = collectEmi(); const p = collectPre();
     setLoading(true);
-    // A deliberate beat so the shimmer reads as "recalculating", then swap in the new schedule.
     setTimeout(() => {
-      setCommitted(overrides);
-      setDrafts({});
-      setLoading(false);
+      setCommittedEmi(e); setCommittedPre(p); setEmiDrafts({}); setPreDrafts({}); setLoading(false);
     }, 650);
   };
   const revert = () => {
-    setDrafts({});
-    setCommitted([]);
+    setEmiDrafts({}); setPreDrafts({}); setCommittedEmi([]); setCommittedPre([]);
   };
   const savePlan = () => {
-    const overrides = collect();
-    setCommitted(overrides);
-    setDrafts({});
+    const overrides = collectEmi(); const prepayments = collectPre();
+    setCommittedEmi(overrides); setCommittedPre(prepayments); setEmiDrafts({}); setPreDrafts({});
     startSaving(async () => {
-      const res = await saveLoanPlan(loanId, overrides);
-      toast(res.ok ? (overrides.length ? "Plan saved" : "Plan cleared") : "Couldn't save the plan", res.ok ? "success" : "error");
+      const res = await saveLoanPlan(loanId, { overrides, prepayments });
+      const has = overrides.length > 0 || prepayments.some((x) => x.amount > 0);
+      toast(res.ok ? (has ? "Plan saved" : "Plan cleared") : "Couldn't save the plan", res.ok ? "success" : "error");
     });
   };
 
@@ -94,7 +108,7 @@ export function LoanScheduleWhatIf({ loanId, canEdit, outstanding, annualRatePct
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h2 className="text-sm font-semibold text-slate-900">
           Repayment schedule <span className="text-xs font-normal text-slate-400">· what-if</span>
-          {canEdit && (unsaved ? <span className="ml-1.5 text-[11px] font-normal text-amber-600">· unsaved</span> : savedOverrides.length > 0 ? <span className="ml-1.5 text-[11px] font-normal text-emerald-600">· plan saved</span> : null)}
+          {canEdit && (unsaved ? <span className="ml-1.5 text-[11px] font-normal text-amber-600">· unsaved</span> : savedOverrides.length > 0 || savedPrepayments.length > 0 ? <span className="ml-1.5 text-[11px] font-normal text-emerald-600">· plan saved</span> : null)}
         </h2>
         <div className="flex items-center gap-2">
           <button
@@ -129,12 +143,12 @@ export function LoanScheduleWhatIf({ loanId, canEdit, outstanding, annualRatePct
       {/* savings banner (planned vs current) */}
       <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
         <Metric label="Current interest left" value={formatINR(base.totalInterest)} />
-        <Metric label="Planned interest left" value={formatINR(planned.totalInterest)} accent={committed.length > 0} />
+        <Metric label="Planned interest left" value={formatINR(planned.totalInterest)} accent={committedEmi.length > 0 || committedPre.length > 0} />
         <Metric label="Interest saved" value={`${interestSaved >= 0 ? "" : "+"}${formatINR(Math.abs(interestSaved))}`} good={interestSaved > 0} bad={interestSaved < 0} />
         <Metric label="Months saved" value={`${monthsSaved >= 0 ? "" : "+"}${Math.abs(monthsSaved)} mo`} good={monthsSaved > 0} bad={monthsSaved < 0} />
       </div>
       <p className="mt-2 text-[11px] leading-relaxed text-slate-400">
-        <b className="text-slate-500">EMI</b> = the full monthly payment (it splits into <b className="text-slate-500">Principal</b> + <b className="text-slate-500">Interest</b>). <b className="text-emerald-700">Prepay</b> = extra principal on top. <b>Planned</b> folds in your unpaid Sheet items and any EMI you edit; when a Sheet item is marked <b>Paid</b> it moves from Planned into <b>Current</b> (the actual balance). Planning estimate.
+        In <b>Planned</b>, edit the <b className="text-slate-500">EMI</b> (full monthly payment = Principal + Interest) <b>and</b> the <b className="text-emerald-700">Prepay</b> (extra principal) for any month — just like the Sheet — then Recalculate. Your unpaid Sheet items pre-fill it; when a Sheet item is marked <b>Paid</b> it moves from Planned into <b>Current</b> (the actual balance). Planning estimate.
       </p>
 
       <div className="mt-3 grid grid-cols-1 gap-4 lg:grid-cols-2">
@@ -197,15 +211,16 @@ export function LoanScheduleWhatIf({ loanId, canEdit, outstanding, annualRatePct
               </thead>
               <tbody className="divide-y divide-indigo-50">
                 {planned.rows.map((r) => {
-                  const draft = drafts[r.index];
-                  const edited = draft != null && Number(draft) !== r.emi;
+                  const emiDraft = emiDrafts[r.index];
+                  const preDraft = preDrafts[r.index];
+                  const edited = (emiDraft != null && Number(emiDraft) !== r.emi) || (preDraft != null && Number(preDraft) !== r.prepayment);
                   return (
-                    <tr key={r.index} className={r.prepayment > 0 ? "bg-emerald-50" : edited ? "bg-amber-50" : undefined}>
+                    <tr key={r.index} className={edited ? "bg-amber-50" : r.prepayment > 0 ? "bg-emerald-50" : undefined}>
                       <td className="px-2 py-1 text-left text-slate-500">{r.index}. {fmtDate(r.date)}</td>
                       <td className="px-1 py-0.5">
                         <input
-                          value={draft ?? String(r.emi)}
-                          onChange={(e) => setDrafts((d) => ({ ...d, [r.index]: e.target.value }))}
+                          value={emiDraft ?? String(r.emi)}
+                          onChange={(e) => setEmiDrafts((d) => ({ ...d, [r.index]: e.target.value }))}
                           inputMode="decimal"
                           aria-label={`EMI for month ${r.index}`}
                           className="w-24 rounded border border-slate-200 px-1.5 py-1 text-right text-xs tabular-nums outline-none focus:border-indigo-400 focus:ring-1 focus:ring-indigo-100"
@@ -213,7 +228,16 @@ export function LoanScheduleWhatIf({ loanId, canEdit, outstanding, annualRatePct
                       </td>
                       <td className="px-2 py-1 text-slate-600">{formatINR(r.principal)}</td>
                       <td className="px-2 py-1 text-slate-400">{formatINR(r.interest)}</td>
-                      <td className="px-2 py-1 font-semibold text-emerald-700">{r.prepayment > 0 ? `＋${formatINR(r.prepayment)}` : <span className="text-slate-300">—</span>}</td>
+                      <td className="px-1 py-0.5">
+                        <input
+                          value={preDraft ?? (r.prepayment > 0 ? String(r.prepayment) : "")}
+                          onChange={(e) => setPreDrafts((d) => ({ ...d, [r.index]: e.target.value }))}
+                          inputMode="decimal"
+                          placeholder="0"
+                          aria-label={`Prepayment for month ${r.index}`}
+                          className="w-24 rounded border border-emerald-200 bg-emerald-50/40 px-1.5 py-1 text-right text-xs font-medium tabular-nums text-emerald-800 outline-none placeholder:font-normal placeholder:text-emerald-300 focus:border-emerald-400 focus:ring-1 focus:ring-emerald-100"
+                        />
+                      </td>
                       <td className="px-2 py-1 font-medium text-slate-800">{formatINR(r.balance)}</td>
                     </tr>
                   );
