@@ -64,7 +64,7 @@ export function DebtOverview({ current, planned, hasPlan, interestSaved }: { cur
         <Cockpit
           label="Interest remaining"
           value={d.totalInterestRemaining > 0 ? formatINR(d.totalInterestRemaining) : "—"}
-          hint={showSaving ? `saves ${formatINR(interestSaved)}` : "amortizing loans"}
+          hint={showSaving ? `saves ${formatINR(interestSaved)}` : "total until debt-free"}
           good={showSaving}
         />
       </div>
@@ -77,12 +77,10 @@ export function DebtOverview({ current, planned, hasPlan, interestSaved }: { cur
           <span className="text-[11px] text-slate-400">planning estimate</span>
         </div>
         <DebtBalanceTrend data={chartData} />
-        {d.hasInterestOnly && (
-          <p className="mt-1 text-[11px] text-slate-400">
-            The flat portion is interest-only (jewel) debt — it holds steady until you put extra principal
-            toward it. Use the payoff strategy below to shrink it.
-          </p>
-        )}
+        <p className="mt-1 text-[11px] text-slate-400">
+          Follows the payoff order — keep your current total monthly payment and redirect each loan&apos;s EMI
+          to the next as it clears.{d.hasInterestOnly ? " Interest-only (jewel) debt stays flat until the plan reaches it, then drops to zero." : ""}
+        </p>
       </div>
     </section>
   );

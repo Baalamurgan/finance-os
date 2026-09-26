@@ -10,6 +10,7 @@ import { withShareCount } from "@/lib/format";
 import { getCardDues, type MonthAmount } from "@/lib/personal/cash";
 import { projectLoan, type LoanProjection } from "@/lib/loan/project";
 import { round2, type EmiOverride, type Prepayment } from "@/lib/loan/amortize";
+import { compareDebtStrategies, type DebtPlan } from "@/lib/loan/strategy";
 
 // Keywords that drive the on-save category suggestion: the household's LEARNED words
 // (SpendKeyword) plus its head-curated shortcuts (SpendShortcut, weighted high since
@@ -584,44 +585,54 @@ function summarizeLoan(l: { id: number; name: string; outstanding: number; inter
   };
 }
 
-// Roll a set of per-loan summaries up into the cockpit view (totals + the combined balance curve). The
-// point-in-time figures (outstanding / blended rate / interest-per-day) are the same across views; the
-// forward figures (interest remaining, debt-free date, the curve) differ between current and planned.
-function aggregateDebt(perLoan: LoanSummary[], horizon: number) {
+// The point-in-time facts (same across both views — they describe today, not the future).
+function debtPointInTime(perLoan: LoanSummary[]) {
   const totalOutstanding = round2(perLoan.reduce((s, l) => s + l.outstanding, 0));
   const totalMonthlyInterest = round2(perLoan.reduce((s, l) => s + l.monthlyInterest, 0));
   const dailyInterest = round2((totalMonthlyInterest * 12) / 365);
   const rated = perLoan.filter((l) => l.rate > 0 && l.outstanding > 0);
   const weightBase = rated.reduce((s, l) => s + l.outstanding, 0);
   const blendedRate = weightBase > 0 ? round2(rated.reduce((s, l) => s + l.outstanding * l.rate, 0) / weightBase) : null;
-  const totalInterestRemaining = round2(perLoan.reduce((s, l) => s + (l.interestRemaining ?? 0), 0));
+  return { totalOutstanding, totalMonthlyInterest, dailyInterest, blendedRate, hasInterestOnly: perLoan.some((l) => l.interestOnly) };
+}
 
-  const openEnded = perLoan.filter((l) => l.outstanding > 0 && !l.closureDate);
-  const closureDates = perLoan.map((l) => l.closureDate).filter((d): d is string => d != null);
-  const debtFreeDate = openEnded.length === 0 && closureDates.length ? closureDates.slice().sort().at(-1)! : null;
+export type DebtView = ReturnType<typeof debtPointInTime> & {
+  debtFreeDate: string | null;
+  totalInterestRemaining: number;
+  cleared: boolean;
+  hasOpenEnded: boolean;
+  timeline: { monthIndex: number; balance: number }[];
+};
 
-  const timeline = [{ monthIndex: 0, balance: totalOutstanding }];
+// Build one cockpit view from the SAME rollover simulation the payoff plan uses (so the graph, the
+// debt-free date, and the interest remaining all agree with it): keep paying the current total monthly
+// outgo and redirect each loan's freed EMI to the next as it clears. `flatRemainder` is any balance we
+// can't project (a manual loan with no rate) — held flat and treated as "never self-clears".
+function buildDebtView(pit: ReturnType<typeof debtPointInTime>, plan: DebtPlan, horizon: number, flatRemainder: number): DebtView {
+  const timeline = [{ monthIndex: 0, balance: round2(pit.totalOutstanding) }];
   for (let m = 1; m <= horizon; m++) {
-    let bal = 0;
-    for (const l of perLoan) {
-      if (l.schedule.length && m - 1 < l.schedule.length) bal += l.schedule[m - 1].balance;
-      else if (l.remainingMonths > 0) bal += 0; // amortizing loan already closed by month m
-      else bal += l.outstanding; // interest-only / non-amortizable → flat until a plan hits it
-    }
-    timeline.push({ monthIndex: m, balance: round2(bal) });
+    const row = plan.timeline[m - 1];
+    timeline.push({ monthIndex: m, balance: round2((row ? row.balance : 0) + flatRemainder) });
   }
-  return { totalOutstanding, totalMonthlyInterest, dailyInterest, blendedRate, totalInterestRemaining, debtFreeDate, hasOpenEnded: openEnded.length > 0, hasInterestOnly: perLoan.some((l) => l.interestOnly), timeline };
+  const cleared = plan.cleared && flatRemainder <= 0;
+  return {
+    ...pit,
+    debtFreeDate: cleared ? plan.closureDate : null,
+    totalInterestRemaining: plan.totalInterest,
+    cleared,
+    hasOpenEnded: !cleared,
+    timeline,
+  };
 }
 
 // ── Debt overview (the /loans cockpit) ────────────────────────────────────────────────────────────
 // Aggregates every active loan into the whole-picture numbers you can't see on one loan alone: total
 // outstanding, blended rate, what interest is costing per day, the household debt-free date, and a
-// combined balance-over-time curve for the chart. Computed TWICE — once for the "current" trajectory
-// (each loan on its normal EMI, no plan) and once for the "planned" trajectory (each loan's saved
-// what-if plan + its unpaid linked Sheet prepayments) — so the page can toggle the whole cockpit and
-// graph between the two, exactly matching each loan's own Current/Planned columns. Read-only rollup.
+// combined balance-over-time curve. Computed TWICE — the "current" trajectory (each loan on its normal
+// EMI) and the "planned" trajectory (each loan's saved what-if plan folded in) — so the page can toggle
+// the whole cockpit and graph. Both are driven by the SAME debt-rollover simulation as the payoff plan,
+// so the graph declines to zero on the exact debt-free date the plan quotes. Read-only rollup.
 export type DebtOverview = Awaited<ReturnType<typeof getDebtOverview>>;
-export type DebtView = ReturnType<typeof aggregateDebt>;
 export async function getDebtOverview(householdId: number) {
   const loans = await prisma.loan.findMany({
     where: { householdId, kind: "loan", status: "active" },
@@ -670,16 +681,8 @@ export async function getDebtOverview(householdId: number) {
     plannedSummaries.push(summarizeLoan(l, planned));
   }
 
-  // Share one horizon across both curves so the x-axis lines up when you flip the toggle.
-  const horizons = [...currentSummaries, ...plannedSummaries].filter((l) => l.remainingMonths > 0).map((l) => l.remainingMonths);
-  const horizon = Math.min(240, Math.max(12, ...horizons, 0));
-
-  const current = aggregateDebt(currentSummaries, horizon);
-  const planned = aggregateDebt(plannedSummaries, horizon);
-  const interestSaved = round2(current.totalInterestRemaining - planned.totalInterestRemaining);
-
   // Loans the payoff planner reasons about (need a rate + a live balance), in two flavours so the plan
-  // card can toggle Estimated ↔ Planned exactly like the breakdown:
+  // card and the overview can toggle Estimated ↔ Planned:
   //   • current  — each loan on its normal EMI.
   //   • planned  — each loan at its PLANNED pace: the effective monthly outgo of its saved what-if
   //     schedule (EMI overrides + prepayments averaged into a monthly figure), so the avalanche extra
@@ -691,6 +694,21 @@ export async function getDebtOverview(householdId: number) {
     current: currentSummaries.filter(eligible).map((l) => toPlanLoan(l, l.emi)),
     planned: plannedSummaries.filter(eligible).map((l) => toPlanLoan(l, effectiveEmi(l))),
   };
+
+  // The overview graph + debt-free date come from the SAME rollover the payoff plan uses (redirect each
+  // freed EMI onto the next loan), so they can never contradict it. Pick the recommended (cheaper) order.
+  const pit = debtPointInTime(currentSummaries); // point-in-time facts are identical across views
+  const flatRemainder = round2(currentSummaries.filter((l) => !eligible(l)).reduce((s, l) => s + l.outstanding, 0));
+  const recPlan = (ll: typeof planLoans.current) => {
+    const c = compareDebtStrategies(ll, 0);
+    return c.recommended === "avalanche" ? c.avalanche : c.snowball;
+  };
+  const planCurrent = recPlan(planLoans.current);
+  const planPlanned = recPlan(planLoans.planned);
+  const horizon = Math.min(360, Math.max(12, planCurrent.months, planPlanned.months));
+  const current = buildDebtView(pit, planCurrent, horizon, flatRemainder);
+  const planned = buildDebtView(pit, planPlanned, horizon, flatRemainder);
+  const interestSaved = round2(current.totalInterestRemaining - planned.totalInterestRemaining);
 
   return { current, planned, hasPlan: anyPlan, interestSaved, horizon, planLoans };
 }
