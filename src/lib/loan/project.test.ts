@@ -58,4 +58,24 @@ describe("projectLoan", () => {
     expect(p.emi).toBeGreaterThan(59000);
     expect(p.emi).toBeLessThan(61000);
   });
+
+  it("honours an explicit interestOnly flag even when the EMI would amortize", () => {
+    // A jewel loan: ₹8.55L @ 10.47%, EMI ₹7,463. Rate/EMI could drift via an edit so the EMI slightly
+    // exceeds interest — the explicit flag must still keep it flat (never closes, no principal).
+    const jewel: LoanLike = { originalPrincipal: null, outstanding: 855000, interestRate: 9.15, originalTenureMonths: null, emiAmount: 7463, monthlyAmount: 7463, startDate: "2026-08-31", interestOnly: true };
+    const p = projectLoan(jewel, { asOf: new Date("2026-09-26") })!;
+    expect(p.interestOnly).toBe(true);
+    expect(p.remainingMonths).toBe(0); // doesn't close on its own
+    expect(p.closureDate).toBeNull();
+    // balance stays flat — the schedule payment is clamped to interest, so no principal comes off
+    expect(p.schedule[0].principal).toBe(0);
+    expect(p.schedule.at(-1)!.balance).toBeCloseTo(855000, 0);
+  });
+
+  it("without the flag, a payment above interest still amortizes (heuristic default)", () => {
+    const amortizing: LoanLike = { originalPrincipal: null, outstanding: 855000, interestRate: 9.15, originalTenureMonths: null, emiAmount: 12000, monthlyAmount: 12000, startDate: "2026-08-31", interestOnly: false };
+    const p = projectLoan(amortizing, { asOf: new Date("2026-09-26") })!;
+    expect(p.interestOnly).toBe(false);
+    expect(p.schedule[0].principal).toBeGreaterThan(0);
+  });
 });

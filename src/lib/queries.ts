@@ -678,12 +678,19 @@ export async function getDebtOverview(householdId: number) {
   const planned = aggregateDebt(plannedSummaries, horizon);
   const interestSaved = round2(current.totalInterestRemaining - planned.totalInterestRemaining);
 
-  // Loans the payoff planner reasons about (need a rate + a live balance). Carries the extra facts the
-  // plain-language recommendation needs: whether it's interest-only, its monthly interest cost, and when
-  // it closes on its own.
-  const planLoans = currentSummaries
-    .filter((l) => l.rate > 0 && l.outstanding > 0)
-    .map((l) => ({ id: l.id, name: l.name, outstanding: l.outstanding, annualRatePct: l.rate, emi: l.emi, interestOnly: l.interestOnly, monthlyInterest: l.monthlyInterest, closureDate: l.closureDate }));
+  // Loans the payoff planner reasons about (need a rate + a live balance), in two flavours so the plan
+  // card can toggle Estimated ↔ Planned exactly like the breakdown:
+  //   • current  — each loan on its normal EMI.
+  //   • planned  — each loan at its PLANNED pace: the effective monthly outgo of its saved what-if
+  //     schedule (EMI overrides + prepayments averaged into a monthly figure), so the avalanche extra
+  //     layers on top of what's already planned. Interest-only loans with no plan stay = their interest.
+  const eligible = (l: LoanSummary) => l.rate > 0 && l.outstanding > 0;
+  const effectiveEmi = (l: LoanSummary) => (l.schedule.length ? round2(l.schedule.reduce((a, r) => a + r.emi + r.prepayment, 0) / l.schedule.length) : l.emi);
+  const toPlanLoan = (l: LoanSummary, emi: number) => ({ id: l.id, name: l.name, outstanding: l.outstanding, annualRatePct: l.rate, emi, interestOnly: l.interestOnly, monthlyInterest: l.monthlyInterest, closureDate: l.closureDate });
+  const planLoans = {
+    current: currentSummaries.filter(eligible).map((l) => toPlanLoan(l, l.emi)),
+    planned: plannedSummaries.filter(eligible).map((l) => toPlanLoan(l, effectiveEmi(l))),
+  };
 
   return { current, planned, hasPlan: anyPlan, interestSaved, horizon, planLoans };
 }

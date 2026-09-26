@@ -64,7 +64,9 @@ export default async function LoansPage({
           </div>
         </div>
 
-        {debt && debt.planLoans.length >= 1 && <DebtPlan loans={debt.planLoans} />}
+        {debt && debt.planLoans.current.length >= 1 && (
+          <DebtPlan current={debt.planLoans.current} planned={debt.planLoans.planned} hasPlan={debt.hasPlan} />
+        )}
         {debt && (
           <details className="group rounded-xl border border-slate-200 bg-white">
             <summary className="flex cursor-pointer list-none items-center justify-between px-4 py-3 text-sm font-medium text-slate-600 hover:bg-slate-50">

@@ -17,13 +17,15 @@ const fmtDateShort = (iso: string | null) => (iso ? new Date(iso).toLocaleDateSt
 const fmtMonths = (m: number) => (m >= 12 ? `${Math.floor(m / 12)}y ${m % 12}m` : `${m} months`);
 const andList = (xs: string[]) => (xs.length <= 1 ? xs[0] ?? "" : `${xs.slice(0, -1).join(", ")} and ${xs[xs.length - 1]}`);
 
-export function DebtPlan({ loans }: { loans: PlanLoan[] }) {
+export function DebtPlan({ current, planned, hasPlan }: { current: PlanLoan[]; planned: PlanLoan[]; hasPlan: boolean }) {
   const [extra, setExtra] = useState(20000);
+  const [view, setView] = useState<"estimated" | "planned">("estimated");
+  const loans = view === "planned" ? planned : current;
 
   const order = useMemo(() => avalancheOrder(loans).map((id) => loans.find((l) => l.id === id)!).filter(Boolean), [loans]);
   const cmp = useMemo(() => compareDebtStrategies(loans, extra), [loans, extra]);
 
-  if (loans.length === 0) return null;
+  if (current.length === 0) return null;
 
   const top = order[0];
   const interestOnly = order.filter((l) => l.interestOnly);
@@ -36,7 +38,31 @@ export function DebtPlan({ loans }: { loans: PlanLoan[] }) {
   return (
     <section className="overflow-hidden rounded-2xl border border-indigo-200 bg-gradient-to-br from-indigo-50 to-white">
       <div className="p-5">
-        <div className="text-[11px] font-semibold uppercase tracking-wide text-indigo-500">Your payoff plan</div>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="text-[11px] font-semibold uppercase tracking-wide text-indigo-500">Your payoff plan</div>
+          <div className="flex items-center gap-2">
+            {view === "planned" && !hasPlan && <span className="text-[11px] text-slate-400">no saved plans yet</span>}
+            <div className="inline-flex rounded-lg border border-indigo-200 bg-white/70 p-0.5 text-xs font-medium">
+              <button
+                type="button"
+                onClick={() => setView("estimated")}
+                className={`rounded-md px-3 py-1 transition ${view === "estimated" ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 hover:text-slate-700"}`}
+              >
+                Estimated
+              </button>
+              <button
+                type="button"
+                onClick={() => setView("planned")}
+                className={`rounded-md px-3 py-1 transition ${view === "planned" ? "bg-white text-indigo-700 shadow-sm" : "text-slate-500 hover:text-slate-700"}`}
+              >
+                Planned
+              </button>
+            </div>
+          </div>
+        </div>
+        {view === "planned" && hasPlan && (
+          <p className="mt-1 text-[11px] text-slate-500">Starting from your saved loan plans, with the extra below on top.</p>
+        )}
 
         {/* The headline recommendation, in one sentence. */}
         <h2 className="mt-1 text-lg font-bold leading-snug text-slate-900">

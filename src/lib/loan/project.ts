@@ -64,6 +64,13 @@ export function projectLoan(l: LoanLike, opts?: { asOf?: Date; plannedPrepayment
   const elapsed = start ? monthsBetween(start, asOf) : 0;
   const forwardStart = start ? addMonthsLocal(start, elapsed) : null;
 
+  // Interest-only (gold/jewel) loans can be declared EXPLICITLY on the loan (interestOnly flag = the
+  // user's own "we only pay interest" intent) — we honour that over any heuristic, so an edit that nudges
+  // the rate/EMI can't silently turn a jewel loan into an amortizing one. When forced, we also clamp the
+  // schedule payment down to the monthly interest so the balance stays genuinely flat (principal 0).
+  const forcedInterestOnly = l.interestOnly === true;
+  const scheduleEmi = forcedInterestOnly ? Math.min(emi, round2(opening * (rate / 1200))) : emi;
+
   // Run out to a long detection cap (never throws). If it clears the balance, it's an amortizing loan and
   // we show the full run to closure. If it doesn't clear within the cap, the payment ≈ interest (gold/jewel
   // interest-only): mark it interest-only and show a shorter flat horizon in the SAME table format. The
@@ -73,15 +80,15 @@ export function projectLoan(l: LoanLike, opts?: { asOf?: Date; plannedPrepayment
   const forwardFull = amortize({
     principal: opening,
     annualRatePct: rate,
-    emi,
+    emi: scheduleEmi,
     startDate: forwardStart,
     startIndex: elapsed + 1,
     prepayments: opts?.plannedPrepayments ?? [],
     emiOverrides: opts?.emiOverrides ?? [],
     maxMonths: DETECT_CAP,
   });
-  const closes = forwardFull.rows.length > 0 && forwardFull.rows[forwardFull.rows.length - 1].balance <= 0.005;
-  const interestOnly = !closes;
+  const closes = !forcedInterestOnly && forwardFull.rows.length > 0 && forwardFull.rows[forwardFull.rows.length - 1].balance <= 0.005;
+  const interestOnly = forcedInterestOnly || !closes;
   const rows = interestOnly ? forwardFull.rows.slice(0, HORIZON) : forwardFull.rows;
   const totalInterestRemaining = interestOnly ? round2(rows.reduce((s, r) => s + r.interest, 0)) : forwardFull.totalInterest;
 
