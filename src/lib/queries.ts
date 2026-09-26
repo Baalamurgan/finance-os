@@ -8,6 +8,7 @@ import { planBillMonth, isLumpDue, monthsUntilNextDue, type FundingStyle } from 
 import { suggestCategoryName, normalizeItem, resolveCategoryId } from "@/lib/spendCategorize";
 import { withShareCount } from "@/lib/format";
 import { getCardDues, type MonthAmount } from "@/lib/personal/cash";
+import { currentCycle } from "@/lib/finance/cycle";
 
 // Keywords that drive the on-save category suggestion: the household's LEARNED words
 // (SpendKeyword) plus its head-curated shortcuts (SpendShortcut, weighted high since
@@ -1115,7 +1116,7 @@ export async function _getInHand(householdId: number, periodId: number, settleme
     // cardAccount.type + reimbursed tell us if a spend leaves family cash now. A credit-card spend (or any
     // card flagged "reimbursed", e.g. a Pluxee benefit wallet) doesn't — it settles at the next settlement,
     // so it must NOT reduce In-Hand at swipe (see settlesLater below).
-    prisma.spend.findMany({ where: { periodId }, include: { cardAccount: { select: { type: true, reimbursed: true } } } }),
+    prisma.spend.findMany({ where: { periodId }, include: { cardAccount: { select: { type: true, reimbursed: true, credit: { select: { statementDay: true, dueOffsetDays: true } } } } } }),
     // "bills" = tagged Sheet expense lines the person was handed money to pay: loans, chits,
     // interest, fixed bills, plain "pay someone" (cook, milk…), AND hand-added Misc lines — including
     // ones in the tracked "Personal/Misc" bucket (section Misc), so planned misc becomes plan steps.
@@ -1177,14 +1178,41 @@ export async function _getInHand(householdId: number, periodId: number, settleme
   // card's bill is paid. So it must NOT reduce In-Hand at swipe (it stays held until the bill). Cash/UPI
   // and debit spends DO leave immediately, so they reduce as before. The Sheet "Spent/₹budget" display
   // (getTrackedExpenses) still counts credit spends — only In-Hand's held-cash view excludes them.
-  // A spend "settles later" (not family cash now) when it's on a credit card OR on any card flagged
-  // reimbursed (e.g. a Pluxee benefit wallet whose balance isn't family money) — it's squared up at the
-  // next settlement, so it must NOT reduce In-Hand now. Plain cash/UPI/debit leaves hand immediately.
-  const settlesLater = (s: (typeof spends)[number]) => s.cardAccount?.type === "credit_card" || s.cardAccount?.reimbursed === true;
-  // Real cash a member has SPENT this month (for the holding-now ledger): everything that left hand now.
+  // A spend on a credit card, or any card flagged reimbursed (e.g. a Pluxee benefit wallet), doesn't take
+  // family cash at swipe — it's squared up later. Plain cash/UPI/debit leaves hand immediately.
+  const onDeferredCard = (s: (typeof spends)[number]) => s.cardAccount?.type === "credit_card" || s.cardAccount?.reimbursed === true;
+
+  // …with ONE exception: a credit-card spend whose bill was PAID EARLY (before the cycle's due month).
+  // The due-month "held → paid" logic already reduces In-Hand for bills paid in/after their due month; an
+  // early payment (e.g. swipe + pay in the same month, bill due next month) was never "held" in a viewed
+  // month, so it would otherwise never reduce In-Hand. Detect those and treat them as spent NOW, so paying
+  // a card bill drops the payer's holding in the month they actually pay. (Load the paid cycles once.)
+  const cycleKey = (cardId: number, end: Date) => `${cardId}:${new Date(end.getFullYear(), end.getMonth(), end.getDate()).getTime()}`;
+  const paidCycleAt = new Map<string, Date>();
+  const paidBills = await prisma.personalCardBill.findMany({
+    where: { cardAccount: { member: { householdId } } },
+    select: { cardAccountId: true, cycleEnd: true, paidAt: true },
+  });
+  for (const b of paidBills) paidCycleAt.set(cycleKey(b.cardAccountId, b.cycleEnd), b.paidAt);
+  const earlyPaidCardSpend = (s: (typeof spends)[number]): boolean => {
+    if (s.cardAccount?.type !== "credit_card" || s.cardAccountId == null) return false;
+    const sd = s.cardAccount.credit?.statementDay;
+    if (sd == null) return false;
+    const cyc = currentCycle(sd, s.createdAt, s.cardAccount.credit?.dueOffsetDays ?? null);
+    if (!cyc.dueDate) return false;
+    const paidAt = paidCycleAt.get(cycleKey(s.cardAccountId, cyc.end));
+    if (!paidAt) return false; // bill unpaid → still deferred
+    return paidAt.getTime() < new Date(cyc.dueDate.getFullYear(), cyc.dueDate.getMonth(), 1).getTime(); // paid before the due month
+  };
+
+  // Excluded from the budget/misc "held cash" math when it's deferred AND not early-paid.
+  const settlesLater = (s: (typeof spends)[number]) => onDeferredCard(s) && !earlyPaidCardSpend(s);
+  // Real CASH (non-card) a member has SPENT this month (for the holding-now ledger). Card spends are
+  // handled via the budget/misc math above, so keep this strictly to cash/UPI/debit (onDeferredCard) —
+  // an early-paid card spend already reduces holding through its envelope, not here.
   const cashSpentByMember = new Map<number, number>();
   for (const s of spends) {
-    if (settlesLater(s) || s.memberId == null) continue;
+    if (onDeferredCard(s) || s.memberId == null) continue;
     cashSpentByMember.set(s.memberId, (cashSpentByMember.get(s.memberId) ?? 0) + s.amount);
   }
   // Card/benefit spends that settle next month, per member — shown as an informational "on cards" note
