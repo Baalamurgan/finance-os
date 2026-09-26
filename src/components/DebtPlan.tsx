@@ -18,12 +18,13 @@ const fmtMonths = (m: number) => (m >= 12 ? `${Math.floor(m / 12)}y ${m % 12}m` 
 const andList = (xs: string[]) => (xs.length <= 1 ? xs[0] ?? "" : `${xs.slice(0, -1).join(", ")} and ${xs[xs.length - 1]}`);
 
 export function DebtPlan({ current, planned, hasPlan }: { current: PlanLoan[]; planned: PlanLoan[]; hasPlan: boolean }) {
-  const [extra, setExtra] = useState(20000);
   const [view, setView] = useState<"estimated" | "planned">("estimated");
   const loans = view === "planned" ? planned : current;
 
   const order = useMemo(() => avalancheOrder(loans).map((id) => loans.find((l) => l.id === id)!).filter(Boolean), [loans]);
-  const cmp = useMemo(() => compareDebtStrategies(loans, extra), [loans, extra]);
+  // No hypothetical extra: the debt-free date assumes you keep your current total monthly outgo and
+  // redirect each loan's freed EMI to the next as it clears (the standard debt-rollover method).
+  const cmp = useMemo(() => compareDebtStrategies(loans, 0), [loans]);
 
   if (current.length === 0) return null;
 
@@ -91,36 +92,20 @@ export function DebtPlan({ current, planned, hasPlan }: { current: PlanLoan[]; p
           </p>
         )}
 
-        {/* What a bit of spare cash buys — the interactive part, kept to one line of result. */}
+        {/* The outcome — when you'll be debt-free following this order. */}
         <div className="mt-4 rounded-xl border border-indigo-100 bg-white p-4">
-          <div className="flex flex-wrap items-center gap-2 text-sm text-slate-700">
-            <span>If I add</span>
-            <span className="inline-flex items-center rounded-lg border border-slate-200 px-2">
-              <span className="text-slate-400">₹</span>
-              <input
-                value={extra ? String(extra) : ""}
-                onChange={(e) => setExtra(Math.max(0, Math.round(Number(e.target.value.replace(/[^0-9]/g, "")) || 0)))}
-                inputMode="numeric"
-                className="w-24 bg-transparent px-1 py-1.5 text-right font-semibold tabular-nums outline-none"
-                aria-label="Extra per month"
-              />
-            </span>
-            <span>extra each month…</span>
+          <div className="flex flex-wrap items-end gap-x-6 gap-y-2">
+            <Result label="Debt-free by" value={rec.cleared ? fmtDateShort(rec.closureDate) : "—"} big />
+            <Result label="In" value={rec.cleared ? fmtMonths(rec.months) : "—"} />
+            <Result label="Total interest from here" value={formatINR(rec.totalInterest)} />
           </div>
-
-          {extra > 0 ? (
-            <div className="mt-3 flex flex-wrap items-end gap-x-6 gap-y-2">
-              <Result label="Debt-free by" value={rec.cleared ? fmtDateShort(rec.closureDate) : "—"} big />
-              <Result label="In" value={rec.cleared ? fmtMonths(rec.months) : "—"} />
-              <Result label="Total interest from here" value={formatINR(rec.totalInterest)} />
-              <div className="text-xs text-slate-500">
-                Order: <b className="text-slate-700">{rec.orderNames.join(" → ")}</b>
-                {avalancheEdge > 0 && cmp.recommended === "avalanche" && <> · saves {formatINR(avalancheEdge)} vs snowball</>}
-              </div>
-            </div>
-          ) : (
-            <p className="mt-2 text-xs text-slate-500">Add an amount to see how much sooner you&apos;d be debt-free.</p>
-          )}
+          <div className="mt-2 text-xs text-slate-500">
+            Order: <b className="text-slate-700">{rec.orderNames.join(" → ")}</b>
+            {avalancheEdge > 0 && cmp.recommended === "avalanche" && <> · avalanche saves {formatINR(avalancheEdge)} vs snowball</>}
+          </div>
+          <p className="mt-1 text-[11px] text-slate-400">
+            Assumes you keep your current total monthly payment and redirect each loan&apos;s EMI to the next as it clears.
+          </p>
         </div>
 
         {/* Everything else, folded away. */}
