@@ -2,6 +2,7 @@
 
 import { randomUUID } from "node:crypto";
 import { revalidatePath } from "next/cache";
+import { revalidateFamily } from "@/lib/revalidate";
 import { redirect } from "next/navigation";
 import { headers } from "next/headers";
 import { Prisma } from "@prisma/client";
@@ -706,6 +707,10 @@ export async function markCardBillPaid(formData: FormData) {
   });
   log.info("markCardBillPaid", "ok", { outcome: "ok", ...ctx, amount, cashback });
   rev();
+  // A card cycle can carry a FAMILY portion that sits in the family In-Hand as "held for the bill"
+  // (getInHand → pendingCardHeld). Marking it paid must bust the family cache too, or the family view
+  // keeps showing the bill as still-held and the In-Hand won't drop. Over-invalidation is safe.
+  revalidateFamily();
 }
 
 export async function unmarkCardBillPaid(formData: FormData) {
@@ -721,6 +726,7 @@ export async function unmarkCardBillPaid(formData: FormData) {
   ]);
   log.info("unmarkCardBillPaid", "ok", { outcome: "ok", memberId: member.id, id });
   rev();
+  revalidateFamily(); // family In-Hand holds the bill's family portion again → bust the family cache
 }
 
 // ── Savings pot (personal-mode Piggy) ────────────────────────────────────────
