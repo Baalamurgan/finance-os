@@ -58,8 +58,12 @@ export default async function SetupPage({
     installmentStartYear: it.installmentStartYear,
     installmentStartMonth: it.installmentStartMonth,
     dueDay: it.dueDay,
+    loanId: it.loanId,
+    loanPaymentType: it.loanPaymentType,
   }));
   const categoryOpts: CatOpt[] = c.categories.map((cat) => ({ id: cat.id, name: cat.name, section: cat.section }));
+  // Active loans/chits, so a recurring line can be linked to the loan it pays (the loan then tracks it).
+  const loanOpts = (await prisma.loan.findMany({ where: { householdId: c.household.id, status: "active" }, select: { id: true, name: true, kind: true }, orderBy: { name: "asc" } }));
   // Repeating misc spend cards — re-seed as a spend card every month (repeatMonthly) or in their
   // month each year (repeatYearly). Managed below.
   const repeatingMiscCards = c.categories.filter((cat) => cat.miscCard && (cat.repeatYearly || cat.repeatMonthly));
@@ -129,6 +133,7 @@ export default async function SetupPage({
           items={templateItems}
           categories={categoryOpts}
           members={c.members.map((m) => ({ id: m.id, name: m.name }))}
+          loans={loanOpts}
           householdId={c.household.id}
           readOnly={readOnly}
         />

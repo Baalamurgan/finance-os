@@ -5,14 +5,16 @@ import { formatINR } from "@/lib/format";
 import { scheduleSummary } from "@/lib/schedule";
 import { useToast } from "@/components/Toast";
 import { ConfirmForm } from "@/components/ConfirmForm";
-import { createRecurringItem, saveAllRecurringItems, deleteRecurringItem, toggleRecurringActive, type SaveRecurringState } from "@/app/actions";
+import { createRecurringItem, saveAllRecurringItems, deleteRecurringItem, toggleRecurringActive, linkRecurringToLoan, type SaveRecurringState } from "@/app/actions";
 
 export type RItem = {
   id: number; kind: "income" | "expense"; name: string; amount: number;
   categoryId: number | null; section: string; memberId: number | null; memberName: string | null; active: boolean;
   installmentsTotal: number | null; installmentCurrent: number | null;
   intervalMonths: number; installmentStartYear: number | null; installmentStartMonth: number | null; dueDay: number | null;
+  loanId: number | null; loanPaymentType: string | null;
 };
+export type LoanOpt = { id: number; name: string; kind: string };
 
 // ── Schedule editor (every month | installment N times) ─────────────────────────
 // Periodic "every N months" bills live on the Category now (Budgets & sinking funds →
@@ -106,9 +108,9 @@ const SECTIONS = ["Loans", "Chits", "Monthly", "Misc"] as const;
 const SECTION_LABEL: Record<string, string> = { Loans: "Loans", Chits: "Chits", Monthly: "Monthly", Misc: "Miscellaneous" };
 
 export function RecurringSetup({
-  items, categories, members, householdId, readOnly,
+  items, categories, members, loans, householdId, readOnly,
 }: {
-  items: RItem[]; categories: CatOpt[]; members: MemberOpt[]; householdId: number; readOnly: boolean;
+  items: RItem[]; categories: CatOpt[]; members: MemberOpt[]; loans: LoanOpt[]; householdId: number; readOnly: boolean;
 }) {
   const [byMember, setByMember] = useState(false);
   const toast = useToast();
@@ -136,7 +138,7 @@ export function RecurringSetup({
   const memberNames = Array.from(new Set(items.map((i) => i.memberName))).sort((a, b) => (a ?? "~").localeCompare(b ?? "~"));
 
   const row = (i: RItem) => (
-    <ItemRow key={i.id} item={i} members={members} categories={categories} readOnly={readOnly} draft={drafts[i.id] ?? toDraft(i)} patch={patch} />
+    <ItemRow key={i.id} item={i} members={members} categories={categories} loans={loans} readOnly={readOnly} draft={drafts[i.id] ?? toDraft(i)} patch={patch} />
   );
 
   return (
@@ -223,7 +225,7 @@ function Empty() {
   return <p className="px-2 py-3 text-xs text-slate-400">Nothing here yet — add below.</p>;
 }
 
-function ItemRow({ item, members, categories, readOnly, draft, patch }: { item: RItem; members: MemberOpt[]; categories: CatOpt[]; readOnly: boolean; draft: Draft; patch: (id: number, p: Partial<Draft>) => void }) {
+function ItemRow({ item, members, categories, loans, readOnly, draft, patch }: { item: RItem; members: MemberOpt[]; categories: CatOpt[]; loans: LoanOpt[]; readOnly: boolean; draft: Draft; patch: (id: number, p: Partial<Draft>) => void }) {
   const dirty = draftDirty(item, draft);
   const invalid = draftInvalid(draft);
 
@@ -235,6 +237,7 @@ function ItemRow({ item, members, categories, readOnly, draft, patch }: { item: 
           {item.installmentsTotal != null && item.installmentCurrent != null && item.intervalMonths <= 1 && <span className="ml-1.5 text-[11px] text-indigo-500">{item.installmentCurrent <= 0 ? "starts next mo" : `${item.installmentCurrent}/${item.installmentsTotal}`}</span>}
           {scheduleSummary(item) && <span className="ml-1.5 text-[11px] text-violet-600">· {scheduleSummary(item)}</span>}
           {item.memberName ? <span className="ml-1.5 text-[11px] text-slate-400">· {item.memberName}</span> : null}
+          {item.loanId != null && <span className="ml-1.5 text-[11px] text-emerald-600">· 🏦 loan-linked</span>}
         </span>
         <span className="tabular-nums text-slate-700">{formatINR(item.amount)}</span>
       </div>
@@ -265,6 +268,23 @@ function ItemRow({ item, members, categories, readOnly, draft, patch }: { item: 
             </optgroup>
           ))}
         </select>
+      )}
+      {item.kind === "expense" && loans.length > 0 && (
+        <form action={linkRecurringToLoan} className="contents">
+          <input type="hidden" name="id" value={item.id} />
+          <input type="hidden" name="loanPaymentType" value={item.loanPaymentType ?? "emi"} />
+          <select
+            key={`loan-${item.id}-${item.loanId ?? "none"}`}
+            name="loanId"
+            defaultValue={item.loanId != null ? String(item.loanId) : ""}
+            onChange={(e) => e.currentTarget.form?.requestSubmit()}
+            className={`input w-32 py-1 text-xs ${item.loanId != null ? "text-emerald-700" : "text-slate-400"}`}
+            title="Link to a loan — the loan then tracks this payment and drives its amount"
+          >
+            <option value="">🏦 no loan</option>
+            {loans.map((l) => <option key={l.id} value={String(l.id)}>{l.name}</option>)}
+          </select>
+        </form>
       )}
       <ScheduleEditor s={draft.sched} set={(sched) => patch(item.id, { sched })} kind={item.kind === "income" ? "income" : "expense"} />
       <div className="ml-auto flex items-center gap-1">

@@ -1858,13 +1858,35 @@ async function syncLoanFromEntry(
   if (!loan) return;
   const r2 = (n: number) => Math.round(n * 100) / 100;
   const existing = await prisma.loanPayment.findUnique({ where: { expenseEntryId: entry.id } });
+
+  // A CHIT-linked line just advances the chit's installment counter (no interest/principal math).
+  if (loan.kind === "chit") {
+    if (nowPaid) {
+      if (existing) return;
+      await prisma.$transaction([
+        prisma.loanPayment.create({ data: { loanId: loan.id, expenseEntryId: entry.id, periodId: entry.periodId, amount: entry.amount, principalPart: 0, interestPart: 0, type: "installment", paidOn: new Date() } }),
+        prisma.loan.update({ where: { id: loan.id }, data: { paidInstallments: loan.paidInstallments + 1 } }),
+      ]);
+    } else {
+      if (!existing) return;
+      await prisma.$transaction([
+        prisma.loanPayment.delete({ where: { id: existing.id } }),
+        prisma.loan.update({ where: { id: loan.id }, data: { paidInstallments: Math.max(0, loan.paidInstallments - 1) } }),
+      ]);
+    }
+    return;
+  }
+
   if (nowPaid) {
     if (existing) return; // already recorded
     const t = entry.loanPaymentType;
-    // interest-only payment (gold/jewel loans): the whole amount is interest, principal untouched.
+    // Split rules: a prepayment is all principal; an interest-only loan (or a line explicitly tagged
+    // "interest") is all interest with the balance held flat; otherwise a normal EMI split. The loan's
+    // OWN interestOnly flag governs, so a line tagged plain "emi" on a jewel loan still stays flat.
     let interest: number, principal: number, type: string;
-    if (t === "interest") { interest = r2(entry.amount); principal = 0; type = "interest"; }
-    else { const s = splitLoanPayment(loan.outstanding, loan.interestRate ?? 0, entry.amount, t === "prepayment"); interest = s.interest; principal = s.principal; type = t === "prepayment" ? "prepayment" : "emi"; }
+    if (t === "prepayment") { const s = splitLoanPayment(loan.outstanding, loan.interestRate ?? 0, entry.amount, true); interest = 0; principal = s.principal; type = "prepayment"; }
+    else if (t === "interest" || loan.interestOnly) { interest = r2(entry.amount); principal = 0; type = "interest"; }
+    else { const s = splitLoanPayment(loan.outstanding, loan.interestRate ?? 0, entry.amount, false); interest = s.interest; principal = s.principal; type = "emi"; }
     const newOut = Math.max(0, r2(loan.outstanding - principal));
     await prisma.$transaction([
       prisma.loanPayment.create({ data: { loanId: loan.id, expenseEntryId: entry.id, periodId: entry.periodId, amount: entry.amount, principalPart: principal, interestPart: interest, type, paidOn: new Date() } }),
@@ -2373,6 +2395,49 @@ function parseLoanMaster(formData: FormData) {
   return { originalPrincipal, originalTenureMonths, interestRate, startDate, emiAmount, prepaymentStrategy };
 }
 
+// The monthly amount a loan should charge through the Sheet ("loan drives the amount"): its EMI if set,
+// else the monthly interest for an interest-only loan, else the EMI implied by principal/rate/tenure,
+// else its stored monthlyAmount. Null when nothing is known yet (a bare placeholder).
+function loanMonthlyAmount(l: { emiAmount: number | null; interestRate: number | null; originalPrincipal: number | null; originalTenureMonths: number | null; outstanding: number; interestOnly: boolean; monthlyAmount: number }): number | null {
+  const r2 = (n: number) => Math.round(n * 100) / 100;
+  if (l.emiAmount && l.emiAmount > 0) return r2(l.emiAmount);
+  const r = l.interestRate ?? 0;
+  if (l.interestOnly && r > 0 && l.outstanding > 0) return r2(l.outstanding * (r / 1200));
+  if (l.originalPrincipal && r > 0 && l.originalTenureMonths) return emiFor(l.originalPrincipal, r, l.originalTenureMonths);
+  return l.monthlyAmount > 0 ? l.monthlyAmount : null;
+}
+
+// Push a loan's monthly amount onto its linked recurring Sheet lines (EMI / interest lines, not one-off
+// prepayments), so editing the loan updates what recurs in the Sheet — "loan drives the amount".
+async function syncLinkedRecurringAmount(loanId: number) {
+  const loan = await prisma.loan.findUnique({ where: { id: loanId } });
+  if (!loan) return;
+  const amt = loanMonthlyAmount(loan);
+  if (amt == null || amt <= 0) return;
+  await prisma.recurringItem.updateMany({ where: { loanId, NOT: { loanPaymentType: "prepayment" } }, data: { amount: amt } });
+}
+
+// Link (or unlink) a recurring Setup line to a loan. Sets loanId + payment type and, for EMI/interest
+// links, pulls the loan's monthly amount onto the line. Head-only. Used by the Setup "Link to loan" picker.
+export async function linkRecurringToLoan(formData: FormData) {
+  if (!(await isHead())) return;
+  const id = Number(formData.get("id"));
+  if (!id) return;
+  const loanRaw = String(formData.get("loanId") ?? "").trim();
+  const loanId = loanRaw === "" ? null : Number(loanRaw);
+  const typeRaw = String(formData.get("loanPaymentType") ?? "emi");
+  const item = await prisma.recurringItem.findUnique({ where: { id } });
+  if (!item) return;
+  const loanPaymentType = loanId ? (["emi", "prepayment", "interest"].includes(typeRaw) ? typeRaw : "emi") : null;
+  const data: { loanId: number | null; loanPaymentType: string | null; amount?: number } = { loanId, loanPaymentType };
+  if (loanId && loanPaymentType !== "prepayment") {
+    const loan = await prisma.loan.findUnique({ where: { id: loanId } });
+    if (loan) { const amt = loanMonthlyAmount(loan); if (amt && amt > 0) data.amount = amt; }
+  }
+  await prisma.recurringItem.update({ where: { id }, data });
+  revalidateFamily();
+}
+
 export async function createLoan(formData: FormData) {
   if (!(await isHead())) return;
   const householdId = Number(formData.get("householdId"));
@@ -2438,6 +2503,7 @@ export async function updateLoan(formData: FormData) {
   const paidRaw = String(formData.get("paidInstallments") ?? "").trim();
   if (paidRaw !== "") data.paidInstallments = Math.max(0, Number(paidRaw) || 0);
   await prisma.loan.update({ where: { id: loanId }, data });
+  await syncLinkedRecurringAmount(loanId); // loan drives the amount → refresh its linked Sheet lines
   await logActivity("loan", "updated", `Edited loan “${name}”`);
   revalidateFamily();
 }
