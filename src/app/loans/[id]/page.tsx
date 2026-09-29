@@ -6,8 +6,9 @@ import { getLoanDetail } from "@/lib/queries";
 import { NavHeader } from "@/components/NavHeader";
 import { ConfirmForm } from "@/components/ConfirmForm";
 import { ToastForm } from "@/components/ToastForm";
-import { recordLoanPayment, setChitWon, deleteLoanPayment, closeLoan, updateLoan } from "@/app/actions";
+import { recordLoanPayment, setChitWon, deleteLoanPayment, closeLoan } from "@/app/actions";
 import { LoanScheduleWhatIf } from "@/components/LoanScheduleWhatIf";
+import { LoanForm } from "@/components/LoanForm";
 
 export default async function LoanDetailPage({
   params,
@@ -26,6 +27,9 @@ export default async function LoanDetailPage({
   const { loan, memberName, totalPaid, totalDividend, potReceived, chitNet, interestPaid, prepaymentsMade, projection, savedOverrides, savedPrepayments, linkedEntries, plannedPrepayments } = detail;
   const isChit = loan.kind === "chit";
   const canEdit = c.isHead;
+  const needsDetails = isChit
+    ? loan.totalInstallments == null || loan.totalInstallments <= 0
+    : loan.interestRate == null || ((loan.originalPrincipal ?? 0) <= 0 && loan.outstanding <= 0);
   const fmtMonths = (m: number) => `${Math.floor(m / 12)}y ${m % 12}m`;
   const fmtDate = (iso: string | null) => (iso ? new Date(iso).toLocaleDateString("en-GB", { month: "short", year: "numeric" }) : "—");
 
@@ -176,35 +180,28 @@ export default async function LoanDetailPage({
           </section>
         )}
 
-        {/* edit loan master (amortization details) */}
-        {canEdit && !isChit && (
-          <details className="rounded-xl border border-slate-200 bg-white p-4">
-            <summary className="cursor-pointer text-sm font-semibold text-slate-900">Edit loan details</summary>
-            <ToastForm action={updateLoan} successMessage="Loan updated" className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3">
-              <input type="hidden" name="loanId" value={loan.id} />
-              <label className="text-xs text-slate-500">Name<input name="name" defaultValue={loan.name} className="input mt-0.5 block w-full" /></label>
-              <label className="text-xs text-slate-500">Original principal (₹)<input name="originalPrincipal" type="number" step="0.01" defaultValue={loan.originalPrincipal ?? ""} className="input mt-0.5 block w-full" /></label>
-              <label className="text-xs text-slate-500">Current outstanding (₹)<input name="outstanding" type="number" step="0.01" defaultValue={loan.outstanding} className="input mt-0.5 block w-full" /></label>
-              <label className="text-xs text-slate-500">Interest rate (% p.a.)<input name="interestRate" type="number" step="0.01" defaultValue={loan.interestRate ?? ""} className="input mt-0.5 block w-full" /></label>
-              <label className="text-xs text-slate-500">Tenure (months)<input name="originalTenureMonths" type="number" defaultValue={loan.originalTenureMonths ?? ""} className="input mt-0.5 block w-full" /></label>
-              <label className="text-xs text-slate-500">Start date<input name="startDate" type="date" defaultValue={loan.startDate ? new Date(loan.startDate).toISOString().slice(0, 10) : ""} className="input mt-0.5 block w-full" /></label>
-              <label className="text-xs text-slate-500">EMI (₹, blank = auto)<input name="emiAmount" type="number" step="0.01" defaultValue={loan.emiAmount ?? ""} className="input mt-0.5 block w-full" /></label>
-              <label className="text-xs text-slate-500">Prepayment strategy
-                <select name="prepaymentStrategy" defaultValue={loan.prepaymentStrategy} className="input mt-0.5 block w-full">
-                  <option value="reduce_tenure">Extra → reduce tenure</option>
-                  <option value="reduce_emi">Extra → reduce EMI</option>
-                </select>
-              </label>
-              <label className="text-xs text-slate-500">Responsible
-                <select name="memberId" defaultValue={loan.memberId ?? ""} className="input mt-0.5 block w-full">
-                  <option value="">Shared</option>
-                  {detail.members.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
-                </select>
-              </label>
-              <label className="text-xs text-slate-500">Note<input name="note" defaultValue={loan.note ?? ""} className="input mt-0.5 block w-full" /></label>
-              <div className="col-span-2 sm:col-span-3"><button className="rounded-md bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-indigo-700">Save details</button></div>
-            </ToastForm>
-            <p className="mt-2 text-[11px] text-slate-400">Set <b>Current outstanding</b> to your real remaining balance (for a mid-life loan it isn&apos;t the original principal). Once EMI payments are recorded, it also moves automatically.</p>
+        {/* edit master details — the loan "predictor" form (live preview). Opens by default for a
+            name-only placeholder so you can fill it in straight away. */}
+        {canEdit && (
+          <details className="rounded-xl border border-slate-200 bg-white p-4" open={needsDetails}>
+            <summary className="cursor-pointer text-sm font-semibold text-slate-900">
+              {needsDetails ? "➕ Add details" : "Edit details"}
+              {needsDetails && <span className="ml-2 rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-medium text-amber-700">needs details</span>}
+            </summary>
+            <div className="mt-3">
+              <LoanForm
+                mode="edit"
+                members={detail.members}
+                loan={{
+                  id: loan.id, name: loan.name, kind: loan.kind, outstanding: loan.outstanding, monthlyAmount: loan.monthlyAmount,
+                  memberId: loan.memberId, originalPrincipal: loan.originalPrincipal, interestRate: loan.interestRate,
+                  originalTenureMonths: loan.originalTenureMonths, startDate: loan.startDate ? new Date(loan.startDate).toISOString() : null,
+                  emiAmount: loan.emiAmount, prepaymentStrategy: loan.prepaymentStrategy,
+                  totalInstallments: loan.totalInstallments, paidInstallments: loan.paidInstallments, note: loan.note,
+                }}
+              />
+            </div>
+            {!isChit && <p className="mt-2 text-[11px] text-slate-400">Set <b>Current remaining</b> to your real balance (for a mid-life loan it isn&apos;t the original principal). Recorded payments move it automatically.</p>}
           </details>
         )}
 

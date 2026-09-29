@@ -4,11 +4,13 @@ import { loadCommon } from "@/lib/load";
 import { getLoans, getDebtOverview } from "@/lib/queries";
 import { NavHeader } from "@/components/NavHeader";
 import { ConfirmForm } from "@/components/ConfirmForm";
-import { ToastForm } from "@/components/ToastForm";
 import { LoanPaymentForm } from "@/components/LoanPaymentForm";
+import { LoanForm } from "@/components/LoanForm";
 import { DebtOverview } from "@/components/DebtOverview";
 import { DebtPlan } from "@/components/DebtPlan";
-import { createLoan, closeLoan, deleteLoan } from "../actions";
+import { closeLoan, deleteLoan } from "../actions";
+
+const fmtDate = (iso: string | null) => (iso ? new Date(iso).toLocaleDateString("en-GB", { month: "short", year: "numeric" }) : "—");
 
 export default async function LoansPage({
   searchParams,
@@ -116,7 +118,14 @@ export default async function LoansPage({
           </Section>
         )}
 
-        {c.isHead && <AddLoan householdId={c.household.id} members={c.members} />}
+        {c.isHead && (
+          <details className="rounded-xl border border-dashed border-slate-300 bg-white p-4">
+            <summary className="cursor-pointer text-sm font-medium text-indigo-600">+ Add a loan or chit</summary>
+            <div className="mt-3">
+              <LoanForm mode="create" householdId={c.household.id} members={c.members} />
+            </div>
+          </details>
+        )}
       </main>
     </>
   );
@@ -144,7 +153,11 @@ function LoanCard({
           </div>
         </div>
         <div className="text-right">
-          {l.kind === "chit" && l.totalInstallments ? (
+          {l.needsDetails ? (
+            <Link href={`/loans/${l.id}`} className="rounded-full bg-amber-50 px-2.5 py-1 text-[11px] font-medium text-amber-700 hover:bg-amber-100">
+              + Add details
+            </Link>
+          ) : l.kind === "chit" && l.totalInstallments ? (
             <>
               <div className="text-sm font-bold tabular-nums text-indigo-700">
                 {l.paidInstallments} / {l.totalInstallments}
@@ -157,9 +170,14 @@ function LoanCard({
               </div>
             </>
           ) : (
-            <div className="text-sm font-bold tabular-nums text-indigo-700">
-              {formatINR(l.outstanding)} <span className="text-xs font-normal text-slate-400">left</span>
-            </div>
+            <>
+              <div className="text-sm font-bold tabular-nums text-indigo-700">
+                {formatINR(l.outstanding)} <span className="text-xs font-normal text-slate-400">left</span>
+              </div>
+              <div className="text-[11px] text-slate-400">
+                {l.interestOnly ? "interest-only" : l.payoffISO ? `payoff ${fmtDate(l.payoffISO)}` : ""}
+              </div>
+            </>
           )}
         </div>
       </div>
@@ -197,85 +215,6 @@ function LoanCard({
         </ul>
       )}
     </div>
-  );
-}
-
-function AddLoan({
-  householdId,
-  members,
-}: {
-  householdId: number;
-  members: { id: number; name: string }[];
-}) {
-  return (
-    <details className="rounded-xl border border-dashed border-slate-300 bg-white p-4">
-      <summary className="cursor-pointer text-sm font-medium text-indigo-600">
-        + Add a loan or chit
-      </summary>
-      <ToastForm action={createLoan} successMessage="Loan added" className="mt-3 flex flex-wrap items-end gap-3">
-        <input type="hidden" name="householdId" value={householdId} />
-        <label className="text-xs text-slate-500">
-          Name
-          <input name="name" required placeholder="BOB loan" className="input mt-0.5 block w-40" />
-        </label>
-        <label className="text-xs text-slate-500">
-          Type
-          <select name="kind" className="input mt-0.5 block">
-            <option value="loan">Loan</option>
-            <option value="chit">Chit</option>
-          </select>
-        </label>
-        <label className="text-xs text-slate-500">
-          Outstanding (loan)
-          <input name="outstanding" type="number" step="0.01" placeholder="0" className="input mt-0.5 block w-32" />
-        </label>
-        <label className="text-xs text-slate-500">
-          Monthly amount
-          <input name="monthlyAmount" type="number" step="0.01" placeholder="0" className="input mt-0.5 block w-32" />
-        </label>
-        {/* Loan-master fields — fill these for a full EMI schedule + payoff projection (leave blank for chits). */}
-        <label className="text-xs text-slate-500">
-          Original principal (loan)
-          <input name="originalPrincipal" type="number" step="0.01" placeholder="4500000" className="input mt-0.5 block w-32" />
-        </label>
-        <label className="text-xs text-slate-500">
-          Interest rate (% p.a.)
-          <input name="interestRate" type="number" step="0.01" placeholder="8.5" className="input mt-0.5 block w-24" />
-        </label>
-        <label className="text-xs text-slate-500">
-          Tenure (months)
-          <input name="originalTenureMonths" type="number" placeholder="108" className="input mt-0.5 block w-24" />
-        </label>
-        <label className="text-xs text-slate-500">
-          Start date
-          <input name="startDate" type="date" className="input mt-0.5 block w-36" />
-        </label>
-        <label className="text-xs text-slate-500">
-          EMI (blank = auto)
-          <input name="emiAmount" type="number" step="0.01" placeholder="auto" className="input mt-0.5 block w-28" />
-        </label>
-        <label className="text-xs text-slate-500">
-          Total installments (chit)
-          <input name="totalInstallments" type="number" placeholder="20" className="input mt-0.5 block w-28" />
-        </label>
-        <label className="text-xs text-slate-500">
-          Paid so far (chit)
-          <input name="paidInstallments" type="number" defaultValue="0" className="input mt-0.5 block w-20" />
-        </label>
-        <label className="text-xs text-slate-500">
-          Responsible
-          <select name="memberId" className="input mt-0.5 block">
-            <option value="">Shared</option>
-            {members.map((m) => (
-              <option key={m.id} value={m.id}>
-                {m.name}
-              </option>
-            ))}
-          </select>
-        </label>
-        <button className="btn">Add</button>
-      </ToastForm>
-    </details>
   );
 }
 

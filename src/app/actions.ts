@@ -2432,6 +2432,11 @@ export async function updateLoan(formData: FormData) {
   // mid-life loan is NOT the original principal. Never auto-derive it here (that was the ₹8L→₹45L bug).
   const outRaw = String(formData.get("outstanding") ?? "").trim();
   if (outRaw !== "") data.outstanding = Math.max(0, Number(outRaw) || 0);
+  // Chit installment fields (only present when editing a chit).
+  const totalRaw = String(formData.get("totalInstallments") ?? "").trim();
+  if (totalRaw !== "") data.totalInstallments = Number(totalRaw) || null;
+  const paidRaw = String(formData.get("paidInstallments") ?? "").trim();
+  if (paidRaw !== "") data.paidInstallments = Math.max(0, Number(paidRaw) || 0);
   await prisma.loan.update({ where: { id: loanId }, data });
   await logActivity("loan", "updated", `Edited loan “${name}”`);
   revalidateFamily();

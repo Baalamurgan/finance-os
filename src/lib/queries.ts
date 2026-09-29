@@ -509,29 +509,42 @@ export async function getLoans(householdId: number) {
   const nameOf = (id: number | null) =>
     id == null ? null : members.find((m) => m.id === id)?.name ?? null;
 
-  const rows = loans.map((l) => ({
-    id: l.id,
-    name: l.name,
-    kind: l.kind,
-    outstanding: l.outstanding,
-    monthlyAmount: l.monthlyAmount,
-    memberId: l.memberId,
-    memberName: nameOf(l.memberId),
-    totalInstallments: l.totalInstallments,
-    paidInstallments: l.paidInstallments,
-    status: l.status,
-    progress:
-      l.kind === "chit" && l.totalInstallments
-        ? Math.min(1, l.paidInstallments / l.totalInstallments)
-        : null,
-    payments: l.payments.map((p) => ({
-      id: p.id,
-      amount: p.amount,
-      principalPart: p.principalPart,
-      note: p.note,
-      createdAt: p.createdAt,
-    })),
-  }));
+  const rows = loans.map((l) => {
+    // A loan card shows either "needs details" (a name-only placeholder to fill in) or its live payoff.
+    const proj = l.kind === "loan" ? projectLoan(l) : null;
+    const needsDetails =
+      l.kind === "chit"
+        ? l.totalInstallments == null || l.totalInstallments <= 0
+        : l.interestRate == null || ((l.originalPrincipal ?? 0) <= 0 && l.outstanding <= 0);
+    return {
+      id: l.id,
+      name: l.name,
+      kind: l.kind,
+      outstanding: l.outstanding,
+      monthlyAmount: l.monthlyAmount,
+      memberId: l.memberId,
+      memberName: nameOf(l.memberId),
+      totalInstallments: l.totalInstallments,
+      paidInstallments: l.paidInstallments,
+      status: l.status,
+      interestRate: l.interestRate,
+      needsDetails,
+      interestOnly: proj?.interestOnly ?? false,
+      payoffISO: proj && !proj.interestOnly ? proj.closureDate : null,
+      remainingMonths: proj?.remainingMonths ?? 0,
+      progress:
+        l.kind === "chit" && l.totalInstallments
+          ? Math.min(1, l.paidInstallments / l.totalInstallments)
+          : null,
+      payments: l.payments.map((p) => ({
+        id: p.id,
+        amount: p.amount,
+        principalPart: p.principalPart,
+        note: p.note,
+        createdAt: p.createdAt,
+      })),
+    };
+  });
 
   const activeLoans = rows.filter((r) => r.kind === "loan" && r.status === "active");
   const activeChits = rows.filter((r) => r.kind === "chit" && r.status === "active");
