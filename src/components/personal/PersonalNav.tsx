@@ -18,6 +18,7 @@ const TABS = [
   { key: "expenses", label: "Spends", href: "/personal/expenses", icon: "🧾" },
   { key: "sheet", label: "Sheet", href: "/personal/sheet", icon: "📋" },
   { key: "loans", label: "Lending", href: "/personal/loans", icon: "🤝" },
+  { key: "plan", label: "Money plan", href: "/personal/plan", icon: "💸" },
   { key: "cards", label: "Cards", href: "/personal/cards", icon: "💳" },
   { key: "finance", label: "Finance", href: "/personal/finance", icon: "📈" },
   { key: "analysis", label: "Analysis", href: "/personal/analysis", icon: "📊" },
@@ -25,7 +26,7 @@ const TABS = [
 ] as const;
 
 const PRIMARY = TABS.slice(0, 4); // Today · Spends · Sheet · Lending (bottom bar)
-const MORE = TABS.slice(4); // Cards · Finance · Analysis · Setup (overflow)
+const MORE = TABS.slice(4); // Money plan · Cards · Finance · Analysis · Setup (overflow)
 
 export function PersonalNav({
   active,
@@ -34,7 +35,7 @@ export function PersonalNav({
   selMonth,
   financeDue = false,
 }: {
-  active: "today" | "sheet" | "expenses" | "analysis" | "finance" | "setup" | "loans" | "cards";
+  active: "today" | "sheet" | "expenses" | "analysis" | "finance" | "setup" | "loans" | "cards" | "plan";
   name: string;
   selYear: number;
   selMonth: number;
