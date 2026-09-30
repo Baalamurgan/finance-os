@@ -132,7 +132,7 @@ function PersonalBottomNav({ active, q, financeDue }: { active: string; q: strin
   return (
     <>
       {open && (
-        <div className="fixed inset-0 z-40 bg-black/30 sm:hidden" onClick={() => setOpen(false)}>
+        <div className="fixed inset-0 z-50 bg-black/30 sm:hidden" onClick={() => setOpen(false)}>
           <div
             className="absolute inset-x-0 mx-2 overflow-hidden rounded-2xl border border-slate-200 bg-white py-1 shadow-xl"
             style={{ bottom: "calc(env(safe-area-inset-bottom) + 4rem)" }}
