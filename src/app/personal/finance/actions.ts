@@ -159,6 +159,107 @@ export async function transferBetweenAccounts(prev: TransferState, formData: For
   return { ok: true, n };
 }
 
+// ── Recurring money-plan items (the maintainable template behind the Money Plan) ────────────────
+export type PlanItemState = { ok: boolean; error?: string; n: number };
+
+// Validate + normalise the shared fields of a plan item. Returns either an error or the clean data.
+async function readPlanItem(memberId: number, formData: FormData) {
+  const kind = String(formData.get("kind") ?? "");
+  const label = String(formData.get("label") ?? "").trim();
+  const amount = num(formData.get("amount"));
+  const fromId = formData.get("fromAccountId") ? Number(formData.get("fromAccountId")) : null;
+  const toId = formData.get("toAccountId") ? Number(formData.get("toAccountId")) : null;
+  const dayRaw = num(formData.get("dayOfMonth"));
+  const dayOfMonth = dayRaw == null ? null : Math.min(28, Math.max(1, Math.round(dayRaw)));
+  if (kind !== "transfer" && kind !== "save") return { error: "Pick a type." as string };
+  if (!label) return { error: "Name the move." };
+  if (!amount || amount <= 0) return { error: "Enter an amount." };
+  if (kind === "transfer") {
+    if (!fromId || !toId) return { error: "Pick both accounts." };
+    if (fromId === toId) return { error: "Pick two different accounts." };
+  }
+  const ids = [fromId, toId].filter((x): x is number => x != null);
+  if (ids.length) {
+    const accts = await prisma.financeAccount.findMany({ where: { id: { in: ids }, memberId } });
+    if (accts.length !== new Set(ids).size) return { error: "Account not found." };
+    if (accts.some((a) => !BALANCE_ACCOUNT_TYPES.has(a.type))) return { error: "Accounts must be bank / debit / prepaid." };
+  }
+  return {
+    data: {
+      kind,
+      label: label.slice(0, 80),
+      amount: Math.round(amount * 100) / 100,
+      dayOfMonth,
+      fromAccountId: fromId,
+      toAccountId: kind === "transfer" ? toId : null,
+      note: String(formData.get("note") ?? "").trim().slice(0, 120) || null,
+    },
+  };
+}
+
+export async function addPlanItem(prev: PlanItemState, formData: FormData): Promise<PlanItemState> {
+  const n = (prev?.n ?? 0) + 1;
+  const member = await me();
+  if (!member) return { ok: false, error: "Signed out.", n };
+  const r = await readPlanItem(member.id, formData);
+  if (r.error) return { ok: false, error: r.error, n };
+  await prisma.personalPlanItem.create({ data: { memberId: member.id, ...r.data! } });
+  rev();
+  return { ok: true, n };
+}
+
+export async function updatePlanItem(prev: PlanItemState, formData: FormData): Promise<PlanItemState> {
+  const n = (prev?.n ?? 0) + 1;
+  const member = await me();
+  if (!member) return { ok: false, error: "Signed out.", n };
+  const id = Number(formData.get("id"));
+  const existing = await prisma.personalPlanItem.findFirst({ where: { id, memberId: member.id } });
+  if (!existing) return { ok: false, error: "Not found.", n };
+  const r = await readPlanItem(member.id, formData);
+  if (r.error) return { ok: false, error: r.error, n };
+  await prisma.personalPlanItem.update({ where: { id }, data: r.data! });
+  rev();
+  return { ok: true, n };
+}
+
+export async function deletePlanItem(formData: FormData) {
+  const member = await me();
+  if (!member) return;
+  const id = Number(formData.get("id"));
+  const item = await prisma.personalPlanItem.findFirst({ where: { id, memberId: member.id } });
+  if (!item) return;
+  await prisma.personalPlanItem.delete({ where: { id } });
+  rev();
+}
+
+// "Do it" for a recurring move: perform the move now (transfer legs, or a savings-pot deposit) so the
+// balances/pot update. Same ledger writes as an ad-hoc transfer / savings deposit — this month's plan
+// then reads it back as done.
+export async function runPlanItem(formData: FormData) {
+  const member = await me();
+  if (!member) return;
+  const id = Number(formData.get("id"));
+  const item = await prisma.personalPlanItem.findFirst({ where: { id, memberId: member.id } });
+  if (!item) return;
+  const amt = Math.round(item.amount * 100) / 100;
+  const date = new Date();
+  if (item.kind === "transfer") {
+    if (!item.fromAccountId || !item.toAccountId) return;
+    const [from, to] = await Promise.all([
+      prisma.financeAccount.findFirst({ where: { id: item.fromAccountId, memberId: member.id } }),
+      prisma.financeAccount.findFirst({ where: { id: item.toAccountId, memberId: member.id } }),
+    ]);
+    if (!from || !to) return;
+    await prisma.$transaction([
+      prisma.accountTransaction.create({ data: { memberId: member.id, accountId: from.id, date, merchant: item.label || `Transfer → ${to.name}`, amount: amt, type: "transfer_out", source: "manual" } }),
+      prisma.accountTransaction.create({ data: { memberId: member.id, accountId: to.id, date, merchant: item.label || `Transfer ← ${from.name}`, amount: amt, type: "transfer_in", source: "manual" } }),
+    ]);
+  } else if (item.kind === "save") {
+    await prisma.personalSavings.create({ data: { memberId: member.id, amount: amt, note: item.label || "Recurring saving" } });
+  }
+  rev();
+}
+
 // Credit-card config (limit + billing cycle). Upserts the 1:1 detail row.
 export async function setCreditConfig(formData: FormData) {
   const member = await me();

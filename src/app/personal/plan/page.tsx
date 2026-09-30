@@ -5,8 +5,10 @@ import { prisma } from "@/lib/prisma";
 import { getWalletAccounts } from "@/lib/finance/queries";
 import { getCardDues, getPersonalCash } from "@/lib/personal/cash";
 import { getPersonalSavings } from "@/lib/personal/savings";
+import { buildRecurringMoves } from "@/lib/personal/plan";
 import { PersonalNav } from "@/components/personal/PersonalNav";
 import { TransferModal } from "@/components/personal/TransferModal";
+import { RecurringMoves } from "@/components/personal/RecurringMoves";
 
 const fmtDate = (iso: string | null) =>
   iso ? new Date(iso).toLocaleDateString("en-IN", { day: "numeric", month: "short" }) : "—";
@@ -38,7 +40,11 @@ export default async function PersonalPlanPage({
     );
   }
 
-  const [wallet, dues, cash, savings, bills, owed, transfers] = await Promise.all([
+  // This month's calendar bounds — used to tell whether a repeating move has already been done.
+  const monthStart = new Date(Date.UTC(c.selected.year, c.selected.month - 1, 1));
+  const monthEnd = new Date(Date.UTC(c.selected.year, c.selected.month, 1));
+
+  const [wallet, dues, cash, savings, bills, owed, transfers, planItems, monthTransfersOut, monthSavings] = await Promise.all([
     getWalletAccounts(c.member.id),
     getCardDues(c.member.id),
     getPersonalCash({ id: c.selected.id, income: c.selected.income, carryForward: c.selected.carryForward }),
@@ -55,6 +61,18 @@ export default async function PersonalPlanPage({
       take: 6,
       include: { account: { select: { name: true, color: true } } },
     }),
+    prisma.personalPlanItem.findMany({
+      where: { memberId: c.member.id, active: true },
+      select: { id: true, kind: true, label: true, amount: true, dayOfMonth: true, fromAccountId: true, toAccountId: true, note: true, sortOrder: true },
+    }),
+    prisma.accountTransaction.findMany({
+      where: { memberId: c.member.id, type: "transfer_out", date: { gte: monthStart, lt: monthEnd } },
+      select: { accountId: true, amount: true },
+    }),
+    prisma.personalSavings.findMany({
+      where: { memberId: c.member.id, amount: { gt: 0 }, createdAt: { gte: monthStart, lt: monthEnd } },
+      select: { amount: true },
+    }),
   ]);
 
   // Money you HAVE: balance accounts (bank / debit / prepaid).
@@ -62,6 +80,15 @@ export default async function PersonalPlanPage({
     .filter((w) => w.balance != null)
     .map((w) => ({ id: w.account.id, name: w.account.name, color: w.account.color, balance: w.balance ?? 0 }));
   const totalInAccounts = balAccts.reduce((s, a) => s + a.balance, 0);
+
+  // Recurring moves (the maintainable template) → this month's steps with a done flag.
+  const accountNameById = new Map(wallet.map((w) => [w.account.id, w.account.name]));
+  const recurringMoves = buildRecurringMoves(
+    planItems,
+    monthTransfersOut,
+    monthSavings,
+    (id) => (id == null ? null : accountNameById.get(id) ?? null),
+  );
 
   // Card bills still to pay (your personal dues + any family/peer spends the card fronts), soonest first.
   const cardBills = dues
@@ -125,6 +152,9 @@ export default async function PersonalPlanPage({
             </p>
           )}
         </section>
+
+        {/* Repeating moves (the maintainable monthly plan) */}
+        <RecurringMoves moves={recurringMoves} accounts={balAccts} />
 
         {/* Still to pay this month (flow) */}
         <section className="rounded-2xl border border-slate-200 bg-white p-4">

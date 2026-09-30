@@ -176,6 +176,7 @@ model Member {
   netWorthItems      NetWorthItem[]
   personalCardBills  PersonalCardBill[]
   personalSavings    PersonalSavings[]
+  personalPlanItems  PersonalPlanItem[]
   integrations       Integration[]
 
   @@unique([householdId, code])
@@ -418,6 +419,8 @@ model FinanceAccount {
   familySpends   Spend[]           @relation("FamilySpendCard")
   peerLoans      PersonalLoan[]    @relation("PeerCardLoan")
   cardBills      PersonalCardBill[]
+  planItemsFrom  PersonalPlanItem[] @relation("PlanItemFrom")
+  planItemsTo    PersonalPlanItem[] @relation("PlanItemTo")
   createdAt   DateTime @default(now())
 
   @@index([memberId])
@@ -459,6 +462,33 @@ model PersonalSavings {
   amount    Float    // + into the pot, − out of the pot (brought into a month)
   note      String?
   createdAt DateTime @default(now())
+
+  @@index([memberId])
+}
+
+// A recurring "money move" the member makes every month — the maintainable template behind the
+// personal Money Plan (the personal parallel of the family RecurringItem). Each open month these
+// surface as plan steps; a step reads as "done this month" when a matching ledger entry exists that
+// month (a transfer_out on the source for a transfer, a PersonalSavings deposit for a save), so
+// there's no per-month done flag to keep in sync — same read-derived principle as the rest of the plan.
+model PersonalPlanItem {
+  id            Int      @id @default(autoincrement())
+  member        Member   @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  memberId      Int
+  kind          String   // transfer (A→B between own accounts) | save (→ savings pot)
+  label         String
+  amount        Float
+  dayOfMonth    Int?     // 1–28: when in the month it's due (null = anytime)
+  // transfer: fromAccount + toAccount set. save: fromAccount optional (the account it comes out of),
+  // toAccount null (it goes to the savings pot). SetNull so deleting an account leaves the item.
+  fromAccount   FinanceAccount? @relation("PlanItemFrom", fields: [fromAccountId], references: [id], onDelete: SetNull)
+  fromAccountId Int?
+  toAccount     FinanceAccount? @relation("PlanItemTo", fields: [toAccountId], references: [id], onDelete: SetNull)
+  toAccountId   Int?
+  note          String?
+  active        Boolean  @default(true)
+  sortOrder     Int      @default(0)
+  createdAt     DateTime @default(now())
 
   @@index([memberId])
 }
