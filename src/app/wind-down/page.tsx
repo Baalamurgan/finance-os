@@ -4,6 +4,9 @@ import { loadCommon } from "@/lib/load";
 import { getRollup, getTrackedExpenses } from "@/lib/queries";
 import { NavHeader } from "@/components/NavHeader";
 import { WindDownButton } from "@/components/WindDownButton";
+import { MoneyFlowDonut } from "@/components/Charts";
+
+const DONUT_COLORS = ["#6366f1", "#f59e0b", "#10b981", "#ef4444", "#8b5cf6", "#ec4899", "#14b8a6", "#f97316", "#3b82f6", "#84cc16", "#a855f7", "#64748b"];
 
 export default async function WindDownPage({
   searchParams,
@@ -95,6 +98,47 @@ export default async function WindDownPage({
   const ny = c.selected.month === 12 ? c.selected.year + 1 : c.selected.year;
   const nextLabel = `${new Date(ny, nm - 1, 1).toLocaleString("en-US", { month: "short" }).toUpperCase()} ${ny}`;
 
+  // "Where this month's money went" donut — ACTUAL money out this month, one slice per category,
+  // with Loans/EMI collapsed into a single slice and Misc taken from THIS month's real misc spends
+  // (tracked.miscSpent, the daily Spend rows) — NOT the carried-forward Misc lines that the sheet
+  // shows (those belong to last month and are why the dashboard donut looked wrong for a month).
+  const spendDonut = (() => {
+    // Per-category money out: tracked category → actual spent this month; non-tracked committed
+    // (fixed bills, chits, yearly set-asides) → their sheet amount. Misc + Loans are pulled out as
+    // their own slices below, so skip them here.
+    const byCat = new Map<string, number>();
+    const add = (name: string, v: number) => byCat.set(name, (byCat.get(name) ?? 0) + v);
+    for (const t of tracked.cards) if (t.section !== "Misc" && t.spent > 0) add(t.name, t.spent);
+    let loans = 0;
+    for (const e of rollup.expenses) {
+      if (e.category.tracked || e.amount <= 0 || e.category.section === "Misc") continue;
+      if (e.category.section === "Loans") loans += e.amount;
+      else add(e.category.name, e.amount);
+    }
+    const miscThisMonth = tracked.miscSpent; // real Spend rows — NOT last month's carried lines
+
+    // Keep the chart quick to read: show the biggest categories individually (≥2% of the month, up
+    // to 10) and roll the long tail into one "Other" slice. Loans/EMI and Misc always get their own.
+    const total = [...byCat.values()].reduce((s, v) => s + v, 0) + loans + miscThisMonth;
+    const ranked = [...byCat.entries()].map(([name, value]) => ({ name, value })).sort((a, b) => b.value - a.value);
+    let cut = ranked.findIndex((s) => s.value < total * 0.02);
+    if (cut === -1) cut = ranked.length;
+    cut = Math.min(cut, 10);
+    const kept = ranked.slice(0, cut);
+    const tail = ranked.slice(cut);
+    const tailTotal = tail.reduce((s, x) => s + x.value, 0);
+
+    const slices = [...kept];
+    if (tailTotal > 0) slices.push({ name: `Other · ${tail.length} categor${tail.length > 1 ? "ies" : "y"}`, value: tailTotal });
+    if (loans > 0) slices.push({ name: "🏦 Loans / EMI", value: loans });
+    if (miscThisMonth > 0) slices.push({ name: "🧩 Misc (this month)", value: miscThisMonth });
+
+    return slices
+      .sort((a, b) => b.value - a.value)
+      .map((s, i) => ({ ...s, color: DONUT_COLORS[i % DONUT_COLORS.length] }));
+  })();
+  const spendDonutTotal = spendDonut.reduce((s, x) => s + x.value, 0);
+
   return (
     <>
       {nav}
@@ -130,6 +174,17 @@ export default async function WindDownPage({
             </div>
           )}
         </section>
+
+        {spendDonutTotal > 0 && (
+          <section className="rounded-xl border border-slate-200 bg-white p-5">
+            <h2 className="mb-1 text-sm font-semibold text-slate-800">Where {c.selected.label}&apos;s money went</h2>
+            <p className="mb-4 text-xs text-slate-500">
+              Everything that went out this month — each category&apos;s actual spend, loans/EMIs, and
+              this month&apos;s misc.
+            </p>
+            <MoneyFlowDonut segments={spendDonut} centerLabel="Spent" centerValue={formatINR(spendDonutTotal)} />
+          </section>
+        )}
 
         {open ? (
             <section className="space-y-4 rounded-xl border border-slate-200 bg-white p-5">
