@@ -120,6 +120,45 @@ export async function topUpCard(formData: FormData) {
   rev();
 }
 
+// Move money between two of your own balance accounts (bank/debit/prepaid) — the Money Plan's core
+// "transfer" move. Records two ledger legs (out of `from`, into `to`) atomically so both balances
+// update and the pair reads as one transfer. Credit cards can't be a leg (they're a credit line).
+export type TransferState = { ok: boolean; error?: string; n: number };
+
+export async function transferBetweenAccounts(prev: TransferState, formData: FormData): Promise<TransferState> {
+  const n = (prev?.n ?? 0) + 1;
+  const member = await me();
+  if (!member) return { ok: false, error: "Signed out.", n };
+  const fromId = Number(formData.get("fromId"));
+  const toId = Number(formData.get("toId"));
+  const amount = num(formData.get("amount"));
+  if (!fromId || !toId) return { ok: false, error: "Pick both accounts.", n };
+  if (fromId === toId) return { ok: false, error: "Pick two different accounts.", n };
+  if (!amount || amount <= 0) return { ok: false, error: "Enter an amount.", n };
+  const [from, to] = await Promise.all([
+    prisma.financeAccount.findFirst({ where: { id: fromId, memberId: member.id } }),
+    prisma.financeAccount.findFirst({ where: { id: toId, memberId: member.id } }),
+  ]);
+  if (!from || !to || !BALANCE_ACCOUNT_TYPES.has(from.type) || !BALANCE_ACCOUNT_TYPES.has(to.type)) {
+    return { ok: false, error: "Both must be bank / debit / prepaid accounts.", n };
+  }
+  const rawDate = String(formData.get("date") ?? "");
+  const d = rawDate ? new Date(rawDate) : new Date();
+  const date = isNaN(d.getTime()) ? new Date() : d;
+  const amt = Math.round(amount * 100) / 100;
+  const note = String(formData.get("note") ?? "").trim().slice(0, 120);
+  await prisma.$transaction([
+    prisma.accountTransaction.create({
+      data: { memberId: member.id, accountId: fromId, date, merchant: note || `Transfer → ${to.name}`, amount: amt, type: "transfer_out", source: "manual" },
+    }),
+    prisma.accountTransaction.create({
+      data: { memberId: member.id, accountId: toId, date, merchant: note || `Transfer ← ${from.name}`, amount: amt, type: "transfer_in", source: "manual" },
+    }),
+  ]);
+  rev();
+  return { ok: true, n };
+}
+
 // Credit-card config (limit + billing cycle). Upserts the 1:1 detail row.
 export async function setCreditConfig(formData: FormData) {
   const member = await me();

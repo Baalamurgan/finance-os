@@ -2,16 +2,23 @@
 
 import { useActionState, useEffect, useRef, useState } from "react";
 import { addAccount, type AccountFormState } from "@/app/personal/finance/actions";
-import { CARD_NETWORKS } from "@/lib/finance/types";
+import { CARD_NETWORKS, type AccountType } from "@/lib/finance/types";
 import { CardColorPicker } from "@/components/CardColorPicker";
 import { useToast } from "@/components/Toast";
 
 const INIT: AccountFormState = { ok: false, n: 0 };
 
+const TYPE_LABEL: Record<AccountType, string> = {
+  credit_card: "Credit",
+  debit_card: "Debit",
+  prepaid_card: "Prepaid",
+  bank: "Bank",
+};
+
 export function AddAccountModal() {
   const toast = useToast();
   const [open, setOpen] = useState(false);
-  const [type, setType] = useState<"credit_card" | "debit_card" | "prepaid_card">("credit_card");
+  const [type, setType] = useState<AccountType>("credit_card");
   const formRef = useRef<HTMLFormElement>(null);
   const prevN = useRef(0);
   const [state, formAction] = useActionState(addAccount, INIT);
@@ -20,8 +27,9 @@ export function AddAccountModal() {
     if (state.n > prevN.current) {
       prevN.current = state.n;
       if (state.ok) {
-        toast("Card added", "success");
+        toast("Account added", "success");
         formRef.current?.reset();
+        // eslint-disable-next-line react-hooks/set-state-in-effect -- close the modal once the server action resolves
         setOpen(false);
       } else toast(state.error ?? "Couldn't add", "error");
     }
@@ -29,6 +37,7 @@ export function AddAccountModal() {
   }, [state.n]);
 
   const isCredit = type === "credit_card";
+  const isBank = type === "bank";
 
   return (
     <>
@@ -36,14 +45,14 @@ export function AddAccountModal() {
         onClick={() => setOpen(true)}
         className="rounded-lg bg-emerald-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-emerald-700"
       >
-        + Add card
+        + Add account
       </button>
 
       {open && (
         <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/40 p-4 sm:items-center" onClick={() => setOpen(false)}>
           <div className="my-auto flex w-full max-w-md flex-col rounded-2xl bg-white shadow-xl" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between border-b border-slate-100 px-5 py-3">
-              <h2 className="text-lg font-bold text-slate-900">Add card</h2>
+              <h2 className="text-lg font-bold text-slate-900">Add {isBank ? "account" : "card"}</h2>
               <button type="button" onClick={() => setOpen(false)} className="rounded-md px-2 text-slate-400 hover:bg-slate-100" aria-label="Close">✕</button>
             </div>
             <form ref={formRef} action={formAction} className="flex flex-col">
@@ -51,38 +60,42 @@ export function AddAccountModal() {
                 <input type="hidden" name="type" value={type} />
 
                 {/* type toggle */}
-                <div className="grid grid-cols-3 gap-2">
-                  {(["credit_card", "debit_card", "prepaid_card"] as const).map((t) => (
+                <div className="grid grid-cols-4 gap-2">
+                  {(["credit_card", "debit_card", "prepaid_card", "bank"] as const).map((t) => (
                     <button
                       key={t}
                       type="button"
                       onClick={() => setType(t)}
-                      className={`rounded-lg border-2 px-2 py-2 text-xs font-medium ${type === t ? "border-emerald-500 bg-emerald-50 text-emerald-700" : "border-slate-200 text-slate-500"}`}
+                      className={`rounded-lg border-2 px-1.5 py-2 text-xs font-medium ${type === t ? "border-emerald-500 bg-emerald-50 text-emerald-700" : "border-slate-200 text-slate-500"}`}
                     >
-                      {t === "credit_card" ? "Credit" : t === "debit_card" ? "Debit" : "Prepaid"}
+                      {TYPE_LABEL[t]}
                     </button>
                   ))}
                 </div>
 
-                <Field label="Card name *">
-                  <input name="name" required placeholder="e.g. SBI SimplyClick" className="input w-full" />
+                <Field label={isBank ? "Account name *" : "Card name *"}>
+                  <input name="name" required placeholder={isBank ? "e.g. HDFC Savings" : "e.g. SBI SimplyClick"} className="input w-full" />
                 </Field>
                 <div className="grid grid-cols-2 gap-3">
                   <Field label="Bank / issuer">
-                    <input name="institution" placeholder="SBI" className="input w-full" />
+                    <input name="institution" placeholder="HDFC" className="input w-full" />
                   </Field>
-                  <Field label="Last 4 digits">
-                    <input name="last4" inputMode="numeric" maxLength={4} placeholder="1234" className="input w-full" />
-                  </Field>
+                  {!isBank && (
+                    <Field label="Last 4 digits">
+                      <input name="last4" inputMode="numeric" maxLength={4} placeholder="1234" className="input w-full" />
+                    </Field>
+                  )}
                 </div>
-                <Field label="Network">
-                  <select name="network" className="input w-full">
-                    <option value="">—</option>
-                    {CARD_NETWORKS.map((nw) => (
-                      <option key={nw} value={nw}>{nw[0].toUpperCase() + nw.slice(1)}</option>
-                    ))}
-                  </select>
-                </Field>
+                {!isBank && (
+                  <Field label="Network">
+                    <select name="network" className="input w-full">
+                      <option value="">—</option>
+                      {CARD_NETWORKS.map((nw) => (
+                        <option key={nw} value={nw}>{nw[0].toUpperCase() + nw.slice(1)}</option>
+                      ))}
+                    </select>
+                  </Field>
+                )}
 
                 <Field label="Colour">
                   <CardColorPicker />
@@ -90,10 +103,12 @@ export function AddAccountModal() {
 
                 {!isCredit && (
                   <div className="rounded-lg bg-slate-50 p-3">
-                    <Field label={`Available balance now (₹)${type === "prepaid_card" ? "" : ""}`}>
+                    <Field label="Available balance now (₹)">
                       <input name="openingBalance" inputMode="numeric" placeholder="0" className="input w-full" />
                     </Field>
-                    <p className="mt-1 text-[11px] text-slate-400">Money on the card today. Top-ups and spends adjust it from here.</p>
+                    <p className="mt-1 text-[11px] text-slate-400">
+                      {isBank ? "Money in the account today. Transfers and payments adjust it from here." : "Money on the card today. Top-ups and spends adjust it from here."}
+                    </p>
                   </div>
                 )}
 

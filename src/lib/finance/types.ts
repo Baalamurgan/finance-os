@@ -1,12 +1,13 @@
 // Domain types for the Finance (Wallet) section. Kept dependency-free so both client
 // and server code can import them.
 
-export const ACCOUNT_TYPES = ["credit_card", "debit_card", "prepaid_card"] as const; // future: bank | loan | investment
+export const ACCOUNT_TYPES = ["credit_card", "debit_card", "prepaid_card", "bank"] as const; // future: loan | investment
 export type AccountType = (typeof ACCOUNT_TYPES)[number];
 
-// Cards that hold a spendable balance (money you have) rather than a credit line (money you owe).
-// Debit = bank card; prepaid = meal card / wallet / gift card / FASTag. Both derive a running balance.
-export const BALANCE_ACCOUNT_TYPES: ReadonlySet<string> = new Set(["debit_card", "prepaid_card"]);
+// Accounts that hold a spendable balance (money you have) rather than a credit line (money you owe).
+// Debit = bank card; prepaid = meal card / wallet / gift card / FASTag; bank = a plain savings/current
+// account (the accounts the Money Plan moves money between). All derive a running balance the same way.
+export const BALANCE_ACCOUNT_TYPES: ReadonlySet<string> = new Set(["debit_card", "prepaid_card", "bank"]);
 
 export const CARD_NETWORKS = ["visa", "mastercard", "rupay", "amex", "diners"] as const;
 export type CardNetwork = (typeof CARD_NETWORKS)[number];
@@ -24,6 +25,8 @@ export const TXN_TYPES = [
   "interest",
   "charge",
   "adjustment",
+  "transfer_in", // money moved IN from another of your accounts (Money Plan transfer)
+  "transfer_out", // money moved OUT to another of your accounts
 ] as const;
 export type TxnType = (typeof TXN_TYPES)[number];
 
@@ -33,8 +36,8 @@ export const OWED_DOWN: ReadonlySet<string> = new Set(["payment", "refund", "cas
 
 // Balance cards (debit/prepaid) — types that raise vs lower the available balance. A top-up/refund/
 // cashback loads money; a spend/fee/charge draws it down. (adjustment raises — reconcile down with a fee.)
-export const BALANCE_UP: ReadonlySet<string> = new Set(["topup", "refund", "cashback", "adjustment"]);
-export const BALANCE_DOWN: ReadonlySet<string> = new Set(["spend", "fee", "interest", "charge"]);
+export const BALANCE_UP: ReadonlySet<string> = new Set(["topup", "refund", "cashback", "adjustment", "transfer_in"]);
+export const BALANCE_DOWN: ReadonlySet<string> = new Set(["spend", "fee", "interest", "charge", "transfer_out"]);
 
 export type LedgerTxn = {
   date: Date;

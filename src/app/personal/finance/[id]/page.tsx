@@ -31,7 +31,7 @@ export default async function CreditCardDetail({
   const { account, txns, dashboard: d, balance } = detail;
   const isCredit = account.type === "credit_card";
   const isBalance = BALANCE_ACCOUNT_TYPES.has(account.type);
-  const typeLabel = isCredit ? "credit card" : account.type === "prepaid_card" ? "prepaid card / wallet" : "debit card";
+  const typeLabel = isCredit ? "credit card" : account.type === "prepaid_card" ? "prepaid card / wallet" : account.type === "bank" ? "bank account" : "debit card";
   const cfg = account.credit;
   // The in-app spends/fixed lines tagged to THIS card that are still deferred from cash
   // (grouped into bill cycles), so you can view exactly what's riding on this card. Credit-only.
