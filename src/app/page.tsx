@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 import { formatINR, withShareCount } from "@/lib/format";
 import { categoryEmoji } from "@/lib/categoryEmoji";
 import { loadCommon } from "@/lib/load";
+import { istYearMonth } from "@/lib/time";
 import { getRollup, getWindDownPreview, getSkippedSetAsides, getProjectedPiggy, getInHand, getNewSheetLineIds } from "@/lib/queries";
 import { NavHeader } from "@/components/NavHeader";
 import { RowActions } from "@/components/RowActions";
@@ -371,9 +372,9 @@ export default async function SheetPage({
   // Safeguard: if the current calendar month has no period yet (e.g. the monthly
   // auto-create didn't run), nudge the head to start it so the family always has
   // an open month to log into.
-  const now = new Date();
-  const curY = now.getFullYear();
-  const curM = now.getMonth() + 1;
+  // Current month in IST (the family's timezone / device time) — NOT the server's UTC clock, which
+  // lags 5.5h and would treat a just-started IST month as still "next month" until ~5:30am.
+  const { year: curY, month: curM } = istYearMonth();
   const currentMonthMissing = !c.periods.some((p) => p.year === curY && p.month === curM);
 
   // A draft that IS the current calendar month (e.g. Aug's preview being viewed on/after

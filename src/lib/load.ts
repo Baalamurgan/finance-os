@@ -3,6 +3,7 @@ import { cookies } from "next/headers";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
 import { isUnlocked } from "@/lib/applock";
+import { istYearMonth } from "@/lib/time";
 import {
   getCategories,
   getHousehold,
@@ -75,9 +76,10 @@ export async function loadCommon(params?: { y?: string; m?: string }) {
       null;
   }
 
-  const now = new Date();
-  const selYear = y ?? selected?.year ?? now.getFullYear();
-  const selMonth = m ?? selected?.month ?? now.getMonth() + 1;
+  // Default the shown month to the current IST month (family/device time), not the server's UTC clock.
+  const { year: nowY, month: nowM } = istYearMonth();
+  const selYear = y ?? selected?.year ?? nowY;
+  const selMonth = m ?? selected?.month ?? nowM;
   const noData = !selected;
 
   // Settlement lock: once ANY transfer for this month is marked paid, money has started

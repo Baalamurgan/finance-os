@@ -57,8 +57,9 @@ export async function autoCloseElapsedMonths(now = new Date()) {
 // cloned from the latest period (income≥0 + expenses skipping onHold + budgets).
 // Does NOT close any prior month. Shared by the local script and the Vercel cron route.
 export async function ensureCurrentMonth(now = new Date()) {
-  const year = now.getFullYear();
-  const month = now.getMonth() + 1;
+  // IST, not the server's UTC clock — otherwise "the current month" lags 5.5h and the new month
+  // isn't created/promoted until ~5:30am IST on the 1st (matches autoCloseElapsedMonths above).
+  const { year, month } = istParts(now);
   const label = `${MONTHS[month - 1]} ${year}`;
   const households = await prisma.household.findMany({ select: { id: true } });
   const created: string[] = [];

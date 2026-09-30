@@ -1,6 +1,7 @@
 import { prisma } from "@/lib/prisma";
 import { CATEGORY_KINDS } from "@/lib/misc";
 import { getPersonalCash } from "@/lib/personal/cash";
+import { istNow } from "@/lib/time";
 
 const MONTHS = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"];
 
@@ -15,9 +16,11 @@ export function personalMonthLabel(month: number, year: number) {
  */
 export function personalAnchor(now: Date, windDownDay?: number | null): { year: number; month: number } {
   const d = windDownDay && windDownDay >= 2 && windDownDay <= 28 ? windDownDay : 1;
-  let year = now.getFullYear();
-  let month = now.getMonth() + 1;
-  if (d > 1 && now.getDate() < d) {
+  // Anchor on IST (family/device time), not the server's UTC clock — else the cycle rolls over 5.5h late.
+  const ist = istNow(now);
+  let year = ist.getUTCFullYear();
+  let month = ist.getUTCMonth() + 1;
+  if (d > 1 && ist.getUTCDate() < d) {
     month -= 1;
     if (month < 1) { month = 12; year -= 1; }
   }
