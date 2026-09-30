@@ -4,6 +4,10 @@
     {
       "path": "/api/cron/ensure-month",
       "schedule": "0 9 1 * *"
+    },
+    {
+      "path": "/api/cron/wind-down",
+      "schedule": "59 18 28-31 * *"
     }
   ]
 }

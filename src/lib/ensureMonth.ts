@@ -5,21 +5,38 @@ import { windDownPeriod } from "@/lib/windDown";
 const MONTHS = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"];
 
 // The family's month boundary is IST (UTC+5:30), not the server's UTC — a spend at 11pm IST
-// on the 31st is still that month. Same helper as actions.ts::istYearMonth.
-function istYearMonth(now: Date) {
+// on the 31st is still that month. Same basis as actions.ts::istYearMonth.
+function istParts(now: Date) {
   const ist = new Date(now.getTime() + 330 * 60000);
-  return { year: ist.getUTCFullYear(), month: ist.getUTCMonth() + 1 };
+  return {
+    year: ist.getUTCFullYear(),
+    month: ist.getUTCMonth() + 1,
+    day: ist.getUTCDate(),
+    hour: ist.getUTCHours(),
+    minute: ist.getUTCMinutes(),
+  };
+}
+
+// Last calendar day of a 1-based IST month (28–31). Day 0 of the next month = last day of this one.
+function lastDayOfMonth(year: number, month: number) {
+  return new Date(Date.UTC(year, month, 0)).getUTCDate();
 }
 
 // Auto month-end CLOSE: wind down any month still OPEN whose IST calendar month has fully
-// elapsed (on Aug 1 IST, close July). This automates the manual "press Wind Down" step — the
-// head still gets a countdown reminder and can close early via the button. Oldest-first so
-// carry-forward chains correctly if several months were left open. leftoversToIncome = false
-// parks under-budget leftovers in Piggy (the household default; no human ticks the box here).
+// elapsed (on Aug 1 IST, close July) AND — the "wind down at 11:59pm" rule — the current month
+// once it reaches 23:59 IST on its last calendar day (so July closes at 11:59pm July 31, not at
+// 2:30pm Aug 1). If a run lands a minute late (already past midnight), the month is simply elapsed
+// and closes anyway, so the boundary is covered either way. This automates the manual "press Wind
+// Down" step — the head still gets a countdown reminder and can close early via the button.
+// Oldest-first so carry-forward chains correctly if several months were left open. leftoversToIncome
+// = false parks under-budget leftovers in Piggy (the household default; no human ticks the box here).
 // windDownPeriod is idempotent (bails unless status === "open"), so re-runs are safe.
 export async function autoCloseElapsedMonths(now = new Date()) {
-  const { year, month } = istYearMonth(now);
-  const cutoff = year * 12 + month; // periods strictly before this are elapsed
+  const { year, month, day, hour, minute } = istParts(now);
+  // At/after 23:59 IST on the last day, the current month is due to close too — pull the cutoff
+  // forward one month so it's included alongside any already-elapsed months.
+  const atMonthEnd = day === lastDayOfMonth(year, month) && (hour > 23 || (hour === 23 && minute >= 59));
+  const cutoff = atMonthEnd ? year * 12 + month + 1 : year * 12 + month; // periods strictly before this are elapsed
   const openPeriods = await prisma.period.findMany({
     where: { status: "open" },
     select: { id: true, year: true, month: true, label: true },
