@@ -1,7 +1,7 @@
 import { formatINR } from "@/lib/format";
 import { loadCommon } from "@/lib/load";
 import { getInHand, getMoneyPlan, getMoneyPlanActivity, type InHand } from "@/lib/queries";
-import { pendingCashMoveByMember, doneCashMoveByMember } from "@/lib/moneyPlan";
+import { pendingCashMoveByMember, doneCashMoveByMember, doneCashMoveDetailByMember } from "@/lib/moneyPlan";
 import { MoneyPlanActivity } from "@/components/MoneyPlanActivity";
 import { NavHeader } from "@/components/NavHeader";
 import { MoneyPlan } from "@/components/MoneyPlan";
@@ -73,6 +73,8 @@ export default async function InHandPage({
   // bills paid). The component adds each member's standing balances (Piggy/sinking/pending hand-overs)
   // and subtracts their cash spent, so holding-now = actual bank cash, not a projection.
   const doneByMember = doneCashMoveByMember(plan.steps);
+  // Per-member list of this month's completed moves — drives the "how this adds up" breakdown on the card.
+  const doneDetailByMember = doneCashMoveDetailByMember(plan.steps);
   const visibleGroups = c.isHead
     ? inHand.byPerson
     : inHand.byPerson.filter((g) => g.memberId === currentMemberId);
@@ -114,7 +116,7 @@ export default async function InHandPage({
 
         {showInHand && isPreview && (
           <div className="rounded-xl border border-violet-200 bg-violet-50 px-3 py-2 text-xs text-violet-700">
-            🔮 <b>Preview month</b> — these are <b>projected</b>, not your current cash (that's this month&apos;s). They firm up once the current month winds down. The number to plan by here is <b>Expected by month-end</b>.
+            🔮 <b>Preview month</b> — these are <b>projected</b>, not your current cash (that&apos;s this month&apos;s). They firm up once the current month winds down. The number to plan by here is <b>Expected by month-end</b>.
           </div>
         )}
         {showInHand ? (
@@ -126,6 +128,7 @@ export default async function InHandPage({
                 isPreview={isPreview}
                 pendingCashMove={g.memberId != null ? pendingByMember[g.memberId] ?? 0 : 0}
                 doneCashMove={g.memberId != null ? doneByMember[g.memberId] ?? 0 : 0}
+                doneMoves={g.memberId != null ? doneDetailByMember[g.memberId] ?? [] : []}
                 isTreasurer={g.memberId === inHand.treasurerId}
                 pool={inHand.treasurerPool}
                 sharedNet={inHand.shared.net}

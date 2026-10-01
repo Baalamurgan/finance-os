@@ -736,3 +736,25 @@ export function doneCashMoveByMember(steps: PlanStep[]): Record<number, number> 
   }
   return Object.fromEntries(out);
 }
+
+// Same as doneCashMoveByMember, but per member a LIST of the individual done moves (label + signed
+// direction) — so the In-Hand card can show "how this adds up": carried + each move − spent = holding.
+// The sum of a member's moves (in − out) equals their doneCashMoveByMember figure, by construction.
+export type DoneMove = { label: string; amount: number; dir: "in" | "out" };
+export function doneCashMoveDetailByMember(steps: PlanStep[]): Record<number, DoneMove[]> {
+  const out: Record<number, DoneMove[]> = {};
+  const push = (id: number | null | undefined, mv: DoneMove) => {
+    if (id == null) return;
+    (out[id] ??= []).push(mv);
+  };
+  for (const s of steps) {
+    if (!s.done || s.hidden) continue;
+    if (s.kind === "income") { push(s.toId, { label: s.source || "Income received", amount: s.amount, dir: "in" }); continue; }
+    if (s.kind === "bill") { if (!s.fund) push(s.payerId, { label: `Paid ${s.vendor || "bill"}`, amount: s.amount, dir: "out" }); continue; }
+    if (s.kind === "piggy") continue;
+    // transfer-in / transfer-out / allowance / advance / manual / pool-handover
+    push(s.fromId, { label: s.toName ? `Sent to ${s.toName}` : "Sent out", amount: s.amount, dir: "out" });
+    push(s.toId, { label: s.fromName ? `From ${s.fromName}` : "Received", amount: s.amount, dir: "in" });
+  }
+  return out;
+}

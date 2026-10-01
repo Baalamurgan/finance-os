@@ -12,6 +12,7 @@ export function InHandPersonGroup({
   isPreview = false,
   pendingCashMove,
   doneCashMove,
+  doneMoves = [],
   isTreasurer,
   pool,
   sharedNet,
@@ -35,6 +36,7 @@ export function InHandPersonGroup({
   isPreview?: boolean;
   pendingCashMove: number;
   doneCashMove: number;
+  doneMoves?: { label: string; amount: number; dir: "in" | "out" }[];
   isTreasurer: boolean;
   pool: number;
   sharedNet: number;
@@ -54,7 +56,7 @@ export function InHandPersonGroup({
   poolDisbursements?: { recipientId: number; recipientName: string; label: string; amount: number }[];
   treasurerOwnLeftover?: number;
 }) {
-  const { name, cats, unpaidBills, paidBills, earmarked, earmarkedTotal, sinkingFunds, sinkingHeld, unpaidPeriodic, paidPeriodic, carried, carriedDue, miscSpent, net, pendingPiggyHeld, pendingCardBills, cashSpent, cardSpent, yetToReceive, selfFundsBills } = group;
+  const { name, cats, unpaidBills, paidBills, earmarked, earmarkedTotal, sinkingFunds, sinkingHeld, unpaidPeriodic, paidPeriodic, carried, carriedDue, miscSpent, net, budgetRemaining, pendingPiggyHeld, pendingCardBills, cashSpent, cardSpent, yetToReceive, selfFundsBills } = group;
   const handovers = group.handovers ?? []; // tolerate a stale cached shape (pre-feature) until it refreshes
   // Per-card toggle: include or exclude this member's own misc/out-of-pocket in their total.
   // Default = include (the true position). Excluding shows "budget + bills + savings" only, so
@@ -98,6 +100,27 @@ export function InHandPersonGroup({
   // pool) is excluded here too, so "holding now" and "by month-end" are the same kind of number, and this
   // lines up with next month's openingCarry (also personal).
   const expected = Math.round((sinkingHeld + earmarkedTotal + pendingPiggyHeld - expectedMisc - periodicBillsDue) * 100) / 100;
+
+  // "How this adds up" rows — an explicit, always-shown derivation of the headline so the number is never
+  // a mystery. Live month: opening + each completed move − cash spent. Closed/first month: the personal
+  // components (budget + sinking − misc, with a catch-all so it always reconciles to the shown figure).
+  const openCarryMode = group.openingCarry != null && !isPreview;
+  const shownFigure = isPreview ? expected : holdingNow;
+  const calcRows: { label: string; amount: number }[] = openCarryMode
+    ? [
+        { label: "Carried from last month", amount: group.openingCarry ?? 0 },
+        ...doneMoves.map((d) => ({ label: d.label, amount: d.dir === "in" ? d.amount : -d.amount })),
+        ...((cashSpent ?? 0) > 0.005 ? [{ label: "Cash spent this month", amount: -(cashSpent ?? 0) }] : []),
+      ]
+    : (() => {
+        const base: { label: string; amount: number }[] = [{ label: "Budget left to spend", amount: budgetRemaining }];
+        if (sinkingHeld > 0.005) base.push({ label: "Set-asides / sinking held", amount: sinkingHeld });
+        if (miscSpent > 0.005) base.push({ label: "Misc / out-of-pocket", amount: -miscSpent });
+        const other = Math.round((shownFigure - base.reduce((s, r) => s + r.amount, 0)) * 100) / 100;
+        if (Math.abs(other) > 0.005) base.push({ label: "Other cash held", amount: other });
+        return base;
+      })();
+
   const paidCount = paidBills.length + paidPeriodic.length;
   // Bills whose Money-Plan step the head hid drop out of the pay list into a muted "Hidden" section,
   // so the card and the plan stay in sync. Hiding is view-only — the bill (and the total) is untouched.
@@ -145,20 +168,31 @@ export function InHandPersonGroup({
       )}
       {expanded && (
       <>
-      <div className="mt-1 flex items-baseline justify-between gap-2 border-b border-dashed border-slate-100 pb-1 text-[10px] text-slate-400">
-        {isPreview ? (
-          <>
-            <span>Holding now <span className="text-slate-300">· projected</span></span>
-            <span className="tabular-nums text-slate-400">{formatINR(holdingNow)}</span>
-          </>
-        ) : (
-          <>
-            <span>Expected by month-end</span>
-            <span className="tabular-nums">{formatINR(expected)}{Math.abs(expected - holdingNow) > 0.005 && <span className="ml-1 text-slate-300">({formatINR(expected - holdingNow)} still to move)</span>}</span>
-          </>
+      {/* How the headline is calculated — always first, so the number is never a mystery. */}
+      <div className="mt-2 rounded-lg bg-slate-50 p-2.5">
+        <div className="mb-1 text-[10px] font-medium uppercase tracking-wide text-slate-400">
+          How this adds up{isPreview ? " (projected)" : ""}
+        </div>
+        <ul className="space-y-0.5 text-xs">
+          {calcRows.map((r, i) => (
+            <li key={i} className="flex items-baseline justify-between gap-2">
+              <span className="truncate text-slate-500">{i === 0 ? r.label : `${r.amount < 0 ? "−" : "+"} ${r.label}`}</span>
+              <span className={`shrink-0 tabular-nums ${r.amount < 0 ? "text-red-600" : "text-slate-600"}`}>
+                {i === 0 ? formatINR(r.amount) : formatINR(Math.abs(r.amount))}
+              </span>
+            </li>
+          ))}
+          <li className="flex items-baseline justify-between gap-2 border-t border-slate-200 pt-1 font-semibold text-slate-800">
+            <span>{isPreview ? "Expected by month-end" : "Holding now"}</span>
+            <span className={`tabular-nums ${shownFigure < 0 ? "text-red-600" : "text-emerald-700"}`}>{formatINR(shownFigure)}</span>
+          </li>
+        </ul>
+        {!isPreview && Math.abs(expected - holdingNow) > 0.005 && (
+          <div className="mt-1 text-[10px] text-slate-400">→ {formatINR(expected)} expected by month-end (after budgets are spent / set aside)</div>
         )}
       </div>
-      <ul className="mt-2 space-y-1">
+      <div className="mb-1 mt-3 text-[10px] font-medium uppercase tracking-wide text-slate-400">Where it&apos;s allocated</div>
+      <ul className="mt-1 space-y-1">
         {/* Pinned to the TOP: things owed from an earlier month that were never paid. A pure
             nag — already settled in their own month, so greyed and NOT part of this month's total.
             Regular bills just toggle ✓ paid; a periodic fund-bill can be paid now (drawn from its
