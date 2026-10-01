@@ -666,7 +666,10 @@ export async function getMoneyPlan(householdId: number, periodId: number, inhand
     for (const b of g.pendingCardBills ?? []) {
       const day = new Date(b.dueISO).getDate();
       const st = dayStatus(day);
-      bills.push({ key: `cardbill-${b.cardId}-${b.cycleEndISO}`, payerId: g.memberId, payerName: g.name, vendor: `${b.cardName} bill`, amount: b.familyAmount, done: b.done, day, status: st?.status ?? null, days: st?.days ?? null, cardBill: true, cardId: b.cardId, cycleEndISO: b.cycleEndISO, dueISO: b.dueISO, cardPersonal: b.personalAmount, cardAnnualFee: b.annualFee, cardColor: b.color, cardFamilyBudgeted: b.familyBudgeted, cardFamilyBudgetedByMonth: b.familyBudgetedByMonth, cardFamilyMisc: b.familyMisc });
+      bills.push({ key: `cardbill-${b.cardId}-${b.cycleEndISO}`, payerId: g.memberId, payerName: g.name, vendor: `${b.cardName} bill`, amount: b.familyAmount, done: b.done, day, status: st?.status ?? null, days: st?.days ?? null, cardBill: true, cardId: b.cardId, cycleEndISO: b.cycleEndISO, dueISO: b.dueISO, cardPersonal: b.personalAmount, cardAnnualFee: b.annualFee, cardColor: b.color, cardFamilyBudgeted: b.familyBudgeted, cardFamilyBudgetedByMonth: b.familyBudgetedByMonth, cardFamilyMisc: b.familyMisc,
+        // Paid in a DIFFERENT month than this plan's → its cash already left then (and is in that month's
+        // close / openingCarry), so the realized ledger must NOT subtract it again here. (The "0-bug" double-count.)
+        paidPriorMonth: b.paidPriorMonth });
     }
   }
   // Shared (no-payer) bills — e.g. an expense added from the plan with payer "Shared" — are paid from
@@ -1017,6 +1020,7 @@ export type PendingCardBill = {
   personalAmount: number; // the owner's personal portion of the same bill (paid from their Can-spend)
   annualFee: number; // the card's annual fee IF this cycle's statement month is its fee month, else 0
   done: boolean; // already settled (a PersonalCardBill exists) — shown as a "✓ paid · undo" pill this month
+  paidPriorMonth: boolean; // settled, but the payment happened in a DIFFERENT (earlier) month than this bill's due month — its cash left then, so this month's realized ledger must not subtract it again
 };
 
 /**
@@ -1067,6 +1071,7 @@ export async function getPendingCardBills(householdId: number, period: { year: n
           personalAmount: Math.round(cyc.total * 100) / 100,
           annualFee,
           done: false,
+          paidPriorMonth: false,
         });
       }
       // Settled FAMILY cycles due THIS plan month → a "✓ paid · undo" pill (kept to the due month so it
@@ -1075,6 +1080,10 @@ export async function getPendingCardBills(householdId: number, period: { year: n
         if (p.familyTotal <= 0.005 || !p.dueISO) continue;
         const due = new Date(p.dueISO);
         if (due.getFullYear() !== period.year || due.getMonth() + 1 !== period.month) continue;
+        // Was the payment actually made in a month OTHER than this (due) month? If so its cash left then
+        // — it's already in that month's close — so the realized ledger must not re-subtract it here.
+        const paidIst = new Date(new Date(p.paidAtISO).getTime() + 330 * 60000); // IST
+        const paidPriorMonth = paidIst.getUTCFullYear() !== period.year || paidIst.getUTCMonth() + 1 !== period.month;
         const feeMonth = card.credit?.annualFeeMonth ?? null;
         const annualFee = feeMonth != null && new Date(p.cycleEndISO).getMonth() + 1 === feeMonth ? Math.round((card.credit?.annualFee ?? 0) * 100) / 100 : 0;
         out.push({
@@ -1087,6 +1096,7 @@ export async function getPendingCardBills(householdId: number, period: { year: n
           personalAmount: Math.round(p.total * 100) / 100,
           annualFee,
           done: true,
+          paidPriorMonth,
         });
       }
     }

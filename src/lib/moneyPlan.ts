@@ -13,6 +13,7 @@ export type PlanBill = {
   miscCard?: boolean; // a planned-misc spend card: an ordinary dated bill whose Pay button logs a spend
   deferred?: boolean; // a wind-down-overhang expense: paid by its assignee at wind-down, out of the settlement
   cardBill?: boolean; cardId?: number; cycleEndISO?: string; dueISO?: string; // a family credit-card bill (paid from held cash; net-neutral like a fund bill)
+  paidPriorMonth?: boolean; // card bill paid in a different (earlier) month than due — cash already left then
   cardPersonal?: number; cardAnnualFee?: number; cardColor?: string; // the owner's personal slice + annual fee (fee-month only) + the card's colour — for the Pay modal
   cardFamilyBudgeted?: number; cardFamilyMisc?: number; // family portion split: from held budget vs from in-hand
   cardFamilyBudgetedByMonth?: { monthISO: string; amount: number }[]; // budgeted portion split by budget month (cycle straddles two)
@@ -70,6 +71,7 @@ export type PlanStep = {
   cardPersonal?: number; cardAnnualFee?: number; cardColor?: string; // the owner's personal slice + annual fee (fee-month only) + the card's colour — for the Pay modal
   cardFamilyBudgeted?: number; cardFamilyMisc?: number; // family portion split: from held budget vs from in-hand
   cardFamilyBudgetedByMonth?: { monthISO: string; amount: number }[]; // budgeted portion split by budget month (cycle straddles two)
+  paidPriorMonth?: boolean; // a card bill paid in a DIFFERENT month than this plan — its cash already left then (excluded from this month's realized ledger to avoid double-counting)
   status?: "overdue" | "soon" | "normal" | null;
   days?: number | null; // days until due (negative = overdue), for the urgency tag
   short?: number; // hub is short this much when this step runs (funds not in yet)
@@ -171,7 +173,7 @@ export function buildMoneyPlan(input: {
     steps.push({
       id: b.key, kind: "bill", day: b.day, amount: b.amount, done: b.done,
       payerId: b.payerId, payerName: b.payerName, vendor: b.vendor, billId: b.billId, categoryId: b.categoryId, fund: b.fund, fundAvail: b.fundAvail, misc: b.misc, miscCard: b.miscCard, status: b.status, days: b.days ?? null, deferred: b.deferred,
-      cardBill: b.cardBill, cardId: b.cardId, cycleEndISO: b.cycleEndISO, dueISO: b.dueISO, cardPersonal: b.cardPersonal, cardAnnualFee: b.cardAnnualFee, cardColor: b.cardColor, cardFamilyBudgeted: b.cardFamilyBudgeted, cardFamilyMisc: b.cardFamilyMisc, cardFamilyBudgetedByMonth: b.cardFamilyBudgetedByMonth,
+      cardBill: b.cardBill, cardId: b.cardId, cycleEndISO: b.cycleEndISO, dueISO: b.dueISO, paidPriorMonth: b.paidPriorMonth, cardPersonal: b.cardPersonal, cardAnnualFee: b.cardAnnualFee, cardColor: b.cardColor, cardFamilyBudgeted: b.cardFamilyBudgeted, cardFamilyMisc: b.cardFamilyMisc, cardFamilyBudgetedByMonth: b.cardFamilyBudgetedByMonth,
     });
   }
   // Allowances: the treasurer disburses these AFTER collection (like a payout), never dated/overdue.
@@ -727,6 +729,7 @@ export function doneCashMoveByMember(steps: PlanStep[]): Record<number, number> 
   };
   for (const s of steps) {
     if (!s.done || s.hidden) continue;
+    if (s.paidPriorMonth) continue; // cash left in a prior month (already in that month's close) → not this month's move
     if (s.kind === "income") { bump(s.toId, s.amount); continue; }
     if (s.kind === "bill") { if (!s.fund) bump(s.payerId, -s.amount); continue; } // cash/card bill paid → out; fund bill from the fund
     if (s.kind === "piggy") continue; // informational — the Piggy balance is carried as a standing figure
@@ -749,6 +752,7 @@ export function doneCashMoveDetailByMember(steps: PlanStep[]): Record<number, Do
   };
   for (const s of steps) {
     if (!s.done || s.hidden) continue;
+    if (s.paidPriorMonth) continue; // paid in a prior month — not part of this month's additions
     if (s.kind === "income") { push(s.toId, { label: s.source || "Income received", amount: s.amount, dir: "in" }); continue; }
     if (s.kind === "bill") { if (!s.fund) push(s.payerId, { label: `Paid ${s.vendor || "bill"}`, amount: s.amount, dir: "out" }); continue; }
     if (s.kind === "piggy") continue;
