@@ -66,28 +66,38 @@ export function InHandPersonGroup({
   // for an open month — not a reduced view. `canToggle` already covers head/manager on any group.
   const selfPayer = !canToggle && open && group.memberId === currentMemberId;
   const canPay = canToggle || selfPayer;
-  const poolAmt = isTreasurer ? pool : 0;
   // The holder has RECEIVED the general Piggy minus whatever's still pending hand-over from the
   // owners (that lump sits in the owners' `net` until they hand it over). `net` already includes
   // this person's own pendingPiggyHeld, so it isn't re-added here.
   const piggyAmt = isPiggyHolder ? piggy - pendingPiggyLump : 0;
-  const total = shownNet + poolAmt + piggyAmt + sinkingHeld;
-  // "Holding now" = the projected total minus the cash-moves still pending (from the Money Plan). As
-  // steps get ticked, `pendingCashMove` shrinks to 0 and holding-now rises to `total`.
-  const holdingNow = Math.round((total - pendingCashMove) * 100) / 100;
+  // Headline = this member's OWN cash (personal): budget left + set-asides + sinking − misc. Role money
+  // (the general Piggy for the holder, the family pool for the treasurer) is NOT in the headline — it's
+  // shown on its own "General Piggy held" / "Family pool held" line below. (This is what makes the
+  // piggy-holder's headline read ₹5,505, not ₹5,505 + the ₹12,936 Piggy.)
+  const total = Math.round((shownNet + sinkingHeld) * 100) / 100;
+  // Continuous "holding now": the LIVE month OPENS at last month's close (openingCarry) and moves only
+  // with REALISED cash — income received + transfers done − bills paid (doneCashMove) − cash actually
+  // spent this month (cashSpent). No cash moves at the month boundary, so at the start of the month this
+  // equals last month's close; it then evolves as the plan is worked. A CLOSED month (openingCarry null)
+  // shows its own settled personal figure. This replaces the old "total − pending projection" that made
+  // a fresh month read as a huge negative (the 0-bug).
+  const holdingNow =
+    group.openingCarry != null && !isPreview
+      ? Math.round((group.openingCarry + doneCashMove - (cashSpent ?? 0)) * 100) / 100
+      : total;
   // "Expected by month-end" = the CARRY-FORWARD: what genuinely remains as this member's own money once
   // budgets are spent (or leftover→Piggy) and bills/card-bills are paid — i.e. pool + Piggy + sinking +
   // set-asides + pending hand-overs − misc/out-of-pocket fronted. Budgets, bills & card-bills are EXCLUDED
   // (consumed within the month). This equals next month's OPENING balance, so the ledger is continuous.
   const expectedMisc = inclMisc ? miscSpent : 0;
-  // The treasurer's pool includes cash he'll DISBURSE to members for their bills (billsHeldForMembers) —
-  // that leaves his hand by month-end, so his Expected is the RESIDUAL pool, not the peak. (In the live
-  // month those disbursements are already done, so billsHeldForMembers ≈ 0 and this is a no-op there.)
-  const poolForExpected = isTreasurer ? poolAmt - billsHeldForMembers : 0;
   // A set-aside / sinking fund with a bill DUE this month gets spent on that bill by month-end — so
-  // subtract those periodic fund-bills (they're paid FROM the set-aside/fund, which is added above).
+  // subtract those periodic fund-bills (they're paid FROM the set-aside/fund).
   const periodicBillsDue = unpaidPeriodic.reduce((s, b) => s + b.bill, 0);
-  const expected = Math.round((poolForExpected + piggyAmt + sinkingHeld + earmarkedTotal + pendingPiggyHeld - expectedMisc - periodicBillsDue) * 100) / 100;
+  // Expected = this member's projected OWN money by month-end (personal, like the headline): sinking +
+  // set-asides + pending hand-overs − misc − periodic fund-bills due. Role money (general Piggy / family
+  // pool) is excluded here too, so "holding now" and "by month-end" are the same kind of number, and this
+  // lines up with next month's openingCarry (also personal).
+  const expected = Math.round((sinkingHeld + earmarkedTotal + pendingPiggyHeld - expectedMisc - periodicBillsDue) * 100) / 100;
   const paidCount = paidBills.length + paidPeriodic.length;
   // Bills whose Money-Plan step the head hid drop out of the pay list into a muted "Hidden" section,
   // so the card and the plan stay in sync. Hiding is view-only — the bill (and the total) is untouched.

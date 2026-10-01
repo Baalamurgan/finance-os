@@ -1107,7 +1107,7 @@ export async function getPendingCardBills(householdId: number, period: { year: n
  * expense balance); the piggy-holder's row carries the Piggy bank. Both roles
  * default to the head and always appear even with no personal in-hand.
  */
-export async function _getInHand(householdId: number, periodId: number, settlementArg?: Awaited<ReturnType<typeof _getSettlement>>) {
+export async function _getInHand(householdId: number, periodId: number, settlementArg?: Awaited<ReturnType<typeof _getSettlement>>, computeOpening = true) {
   const [household, period, categories, budgets, spends, billLines, fundLines, fundCats, sinkBal, billPayments, members, piggy, incomeAgg, expenseAgg, carriedRaw, closedPeriods, allPays, allowanceLines, sinkCats] = await Promise.all([
     prisma.household.findUnique({ where: { id: householdId }, select: { treasurerMemberId: true, piggyHolderMemberId: true } }),
     prisma.period.findUnique({ where: { id: periodId }, select: { treasurerMemberId: true, status: true, month: true, year: true } }),
@@ -1430,6 +1430,17 @@ export async function _getInHand(householdId: number, periodId: number, settleme
     const selfFunds = key != null && key !== treasurerId && (netByMember.get(key) ?? 0) >= -0.005;
     const heldBills = selfFunds || key == null ? unpaidTotal : 0;
     const yetToReceive = selfFunds ? 0 : unpaidTotal;
+    // Set-asides accrue INTO the sinking fund at wind-down (a piggyEntry kind "sinking"). So for a
+    // CLOSED month the "(saving)" Sheet line (earmarkedTotal) AND the accrued sinking balance
+    // (sinkingHeld) are the SAME cash — counting both double-counts it. Count it once: drop earmarked
+    // from `net` for closed months (it lives in sinkingHeld there); keep it for open/draft months where
+    // it hasn't accrued yet. (This is the ₹769 bug.)
+    const earmarkedNet = period?.status === "closed" ? 0 : earmarkedTotal;
+    const netHeld = budgetRemaining + earmarkedNet - miscSpent + pendingPiggyHeld + heldBills + pendingCardHeld;
+    // `personal` = this member's OWN in-hand (what their headline should read): budget left + set-asides
+    // + sinking they hold − their out-of-pocket. Excludes role money (general Piggy / treasurer pool),
+    // which is shown on its own line. This is the figure that must be CONTINUOUS month→month.
+    const personal = Math.round((netHeld + sinkingHeld) * 100) / 100;
     return {
       memberId: key, name, cats, unpaidBills, paidBills, earmarked, unpaidPeriodic, paidPeriodic, carried, carriedDue,
       sinkingFunds, sinkingHeld, pendingPiggyHeld, pendingCardBills: pendingCards,
@@ -1444,7 +1455,8 @@ export async function _getInHand(householdId: number, periodId: number, settleme
       // + last month's Piggy leftover they still hold − their own out-of-pocket + any unpaid bills they
       // SELF-FUND (held until paid). Pool-funded bills are excluded (→ "yet to receive"); carried bills
       // aren't here either (settled in their month).
-      net: budgetRemaining + earmarkedTotal - miscSpent + pendingPiggyHeld + heldBills + pendingCardHeld,
+      net: netHeld,
+      personal,
     };
   };
 
@@ -1518,6 +1530,21 @@ export async function _getInHand(householdId: number, periodId: number, settleme
     pendingCardBillsByOwner.set(b.ownerId, arr);
   }
 
+  // Continuity (the "0-bug" fix): each member's OPENING personal in-hand for THIS month = their PERSONAL
+  // in-hand at the close of the immediately-preceding month. No cash physically moves at the boundary,
+  // so a month must open where the last one closed — not from a fresh ₹0 baseline. Only the live/preview
+  // month needs it (a closed month shows its own settled figure); computeOpening=false on the recursive
+  // call stops it after looking back exactly one month.
+  const openingByMember = new Map<number, number>();
+  if (computeOpening && priorPeriod && period?.status !== "closed") {
+    // Pass the prior month's settlement explicitly (uncached _getSettlement) so the recursion never
+    // calls the cached getSettlement — the per-member net is independent of who the treasurer is, so
+    // reusing this month's treasurerId is exact.
+    const priorSettle = await _getSettlement(householdId, priorPeriod.id, treasurerId);
+    const prior = await _getInHand(householdId, priorPeriod.id, priorSettle, false);
+    for (const r of prior.byPerson) if (r.memberId != null) openingByMember.set(r.memberId, r.personal);
+  }
+
   // Show EVERY member's In-Hand card — even at ₹0 — so the family sees a complete picture (the
   // total is "what they hold right now", and 0 is a real, meaningful answer).
   const byPerson = members.map((m) => {
@@ -1526,7 +1553,9 @@ export async function _getInHand(householdId: number, periodId: number, settleme
       .filter((p) => p.fromMemberId === m.id && p.handedOverAt == null)
       .map((p) => ({ id: p.id, kind: p.kind as "leftover" | "piggy", amount: p.amount, detail: p.detail }));
     const ph = poolHeldByMember.get(m.id);
-    return { ...g, handovers, poolHeld: ph?.amount ?? 0, poolHeldVendors: ph?.vendors ?? [] };
+    // openingCarry = last month's close (null when there's no prior closed month — the first tracked
+    // month opens at its own computed figure, i.e. effectively ₹0 baseline + this month's flows).
+    return { ...g, handovers, poolHeld: ph?.amount ?? 0, poolHeldVendors: ph?.vendors ?? [], openingCarry: openingByMember.get(m.id) ?? null };
   });
   const shared = build(null, "Shared / pool");
   const piggyTotal = piggy.generalTotal + piggy.sinking.reduce((s, x) => s + x.hold, 0);
