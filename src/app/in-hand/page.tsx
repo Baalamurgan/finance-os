@@ -75,6 +75,19 @@ export default async function InHandPage({
   const doneByMember = doneCashMoveByMember(plan.steps);
   // Per-member list of this month's completed moves — drives the "how this adds up" breakdown on the card.
   const doneDetailByMember = doneCashMoveDetailByMember(plan.steps);
+  // Reconciling "Where it's allocated" inputs: a member's salary-funded lines (budgets / set-asides /
+  // held bills / to-treasurer / last-month misc) appear only once their income has ARRIVED — before
+  // that their card shows just the carry. `toTreasurerPending` is their still-unpaid settlement
+  // hand-over to the treasurer (a line that drops off once they pay it, so the breakdown reconciles
+  // in both states).
+  const incomeReceivedByMember: Record<number, boolean> = {};
+  const toTreasurerPendingByMember: Record<number, number> = {};
+  for (const s of plan.steps) {
+    if (s.kind === "income" && s.done && s.toId != null) incomeReceivedByMember[s.toId] = true;
+    if (!s.done && s.fromId != null && s.toId === inHand.treasurerId && (s.kind === "transfer-in" || s.kind === "transfer-out" || s.kind === "pool-handover")) {
+      toTreasurerPendingByMember[s.fromId] = Math.round(((toTreasurerPendingByMember[s.fromId] ?? 0) + s.amount) * 100) / 100;
+    }
+  }
   const visibleGroups = c.isHead
     ? inHand.byPerson
     : inHand.byPerson.filter((g) => g.memberId === currentMemberId);
@@ -129,6 +142,8 @@ export default async function InHandPage({
                 pendingCashMove={g.memberId != null ? pendingByMember[g.memberId] ?? 0 : 0}
                 doneCashMove={g.memberId != null ? doneByMember[g.memberId] ?? 0 : 0}
                 doneMoves={g.memberId != null ? doneDetailByMember[g.memberId] ?? [] : []}
+                incomeReceived={g.memberId != null ? incomeReceivedByMember[g.memberId] ?? false : false}
+                toTreasurerPending={g.memberId != null ? toTreasurerPendingByMember[g.memberId] ?? 0 : 0}
                 isTreasurer={g.memberId === inHand.treasurerId}
                 pool={inHand.treasurerPool}
                 sharedNet={inHand.shared.net}

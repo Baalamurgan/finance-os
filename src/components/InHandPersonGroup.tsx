@@ -12,6 +12,8 @@ export function InHandPersonGroup({
   isPreview = false,
   pendingCashMove,
   doneCashMove,
+  incomeReceived = false,
+  toTreasurerPending = 0,
   isTreasurer,
   pool,
   sharedNet,
@@ -36,6 +38,8 @@ export function InHandPersonGroup({
   pendingCashMove: number;
   doneCashMove: number;
   doneMoves?: { label: string; amount: number; dir: "in" | "out" }[];
+  incomeReceived?: boolean;
+  toTreasurerPending?: number;
   isTreasurer: boolean;
   pool: number;
   sharedNet: number;
@@ -109,6 +113,19 @@ export function InHandPersonGroup({
   const hiddenPeriodic = unpaidPeriodic.filter((b) => b.hidden);
   const hiddenCount = hiddenBills.length + hiddenPeriodic.length;
   const toPayCount = shownBills.length + shownPeriodic.length;
+  // Reconciling "Where it's allocated" (non-treasurer cards): these lines sum EXACTLY to holdingNow,
+  // with no leftover "spare". Salary-funded lines (budgets / set-asides / held bills / to-treasurer /
+  // last-month misc) appear only once this member's income has ARRIVED — before that the card shows
+  // just the carry. The treasurer keeps the pool-aware list below instead.
+  const carryLeftover = Math.round(((group.openingCarry ?? 0) - sinkingHeld) * 100) / 100;
+  const heldCardTotal = (pendingCardBills ?? []).filter((b) => !b.done).reduce((s, b) => s + b.familyAmount, 0);
+  const heldBillsTotal = selfFundsBills ? Math.round((shownBills.reduce((s, b) => s + b.amount, 0) + heldCardTotal) * 100) / 100 : 0;
+  // Last month's misc the settlement credits now = holding-now minus every other known allocation
+  // (validated to equal each member's prior-month settlement spends).
+  const lastMonthMisc = incomeReceived
+    ? Math.round((holdingNow - sinkingHeld - carryLeftover - cats.reduce((s, c) => s + c.remaining, 0) - earmarkedTotal - heldBillsTotal - toTreasurerPending) * 100) / 100
+    : 0;
+  const money = (n: number) => (n < 0 ? "−" : "") + formatINR(Math.abs(n));
   // Live headline, projected + full breakdown on tap. Default collapsed to keep the wall of cards
   // scannable; expanding reveals where the money will land and the bills still to pay.
   const [expanded, setExpanded] = useState(false);
@@ -149,6 +166,43 @@ export function InHandPersonGroup({
       <>
       <div className="mb-1 mt-2 text-[10px] font-medium uppercase tracking-wide text-slate-400">Where it&apos;s allocated</div>
       <ul className="mt-1 space-y-1">
+        {/* NON-TREASURER reconciling breakdown: every line below sums EXACTLY to "Holding now".
+            Salary-funded lines show only once income has arrived; before that it's just the carry. */}
+        {!isTreasurer && (
+          <>
+            {sinkingHeld > 0.005 && (
+              <li className="flex items-center justify-between gap-2 text-xs"><span className="truncate text-indigo-600">🏦 Sinking held</span><span className="shrink-0 tabular-nums text-indigo-700">{money(sinkingHeld)}</span></li>
+            )}
+            {Math.abs(carryLeftover) > 0.005 && (
+              <li className="flex items-center justify-between gap-2 text-xs"><span className="truncate text-slate-500">Carried {incomeReceived ? "(category remaining)" : "from last month"}</span><span className="shrink-0 tabular-nums text-slate-600">{money(carryLeftover)}</span></li>
+            )}
+            {incomeReceived ? (
+              <>
+                {cats.map((cat) => (
+                  <li key={`ac${cat.id}`} className="flex items-center justify-between gap-2 text-xs"><span className="truncate text-slate-500">{cat.name} <span className="text-[10px] text-slate-400">budget</span></span><span className="shrink-0 tabular-nums text-slate-600">{money(cat.remaining)}</span></li>
+                ))}
+                {earmarked.map((e) => (
+                  <li key={`ae${e.id}`} className="flex items-center justify-between gap-2 text-xs"><span className="truncate text-teal-600">Set aside · {e.name}</span><span className="shrink-0 tabular-nums text-teal-700">{money(e.amount)}</span></li>
+                ))}
+                {selfFundsBills && shownBills.map((b) => (
+                  <li key={`ab${b.id}`} className="flex items-center justify-between gap-2 text-xs"><span className="truncate text-slate-500">Held for {b.name}</span><span className="shrink-0 tabular-nums text-slate-600">{money(b.amount)}</span></li>
+                ))}
+                {selfFundsBills && (pendingCardBills ?? []).filter((b) => !b.done).map((b) => (
+                  <li key={`acb${b.cardId}-${b.cycleEndISO}`} className="flex items-center justify-between gap-2 text-xs"><span className="truncate" style={{ color: b.color }}>💳 Held for {b.cardName} bill</span><span className="shrink-0 tabular-nums" style={{ color: b.color }}>{money(b.familyAmount)}</span></li>
+                ))}
+                {toTreasurerPending > 0.005 && (
+                  <li className="flex items-center justify-between gap-2 text-xs"><span className="truncate text-violet-600">➡️ To treasurer <span className="text-[10px] text-slate-400">settle up</span></span><span className="shrink-0 tabular-nums font-medium text-violet-700">{money(toTreasurerPending)}</span></li>
+                )}
+                {lastMonthMisc > 0.005 && (
+                  <li className="flex items-center justify-between gap-2 text-xs"><span className="truncate text-slate-500">Last month&apos;s misc <span className="text-[10px] text-slate-400">settling now</span></span><span className="shrink-0 tabular-nums text-slate-600">{money(lastMonthMisc)}</span></li>
+                )}
+              </>
+            ) : (
+              <li className="pt-0.5 text-[10px] italic leading-tight text-slate-400">Your budgets, bills &amp; treasurer hand-over appear here once your income arrives.</li>
+            )}
+            <li className="mt-0.5 flex items-center justify-between gap-2 border-t border-slate-200 pt-1 text-xs font-semibold text-slate-800"><span>= {holdingNow < 0 ? "To reclaim" : "Holding now"}</span><span className={`tabular-nums ${holdingNow < 0 ? "text-red-600" : "text-emerald-700"}`}>{money(holdingNow)}</span></li>
+          </>
+        )}
         {/* Pinned to the TOP: things owed from an earlier month that were never paid. A pure
             nag — already settled in their own month, so greyed and NOT part of this month's total.
             Regular bills just toggle ✓ paid; a periodic fund-bill can be paid now (drawn from its
@@ -191,6 +245,8 @@ export function InHandPersonGroup({
             <li className="pb-0.5"><div className="border-b border-dashed border-rose-100" /></li>
           </>
         )}
+        {isTreasurer && (
+        <>
         {cats.map((cat) => (
           <li key={cat.id} className="flex items-center justify-between gap-2 text-xs">
             <span className="truncate text-slate-500">{cat.name}</span>
@@ -246,6 +302,8 @@ export function InHandPersonGroup({
             </span>
             <span className={`shrink-0 tabular-nums ${inclMisc ? "text-red-600" : "text-slate-300 line-through"}`}>− {formatINR(miscSpent)}</span>
           </li>
+        )}
+        </>
         )}
         {/* Credit-card spends: shown for context but NOT in the in-hand total — the cash hasn't left; it's
             squared up at next month's settlement. Display-only, never affects the number above. */}
