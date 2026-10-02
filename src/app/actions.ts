@@ -3005,7 +3005,11 @@ export async function syncMonthFromSetup(
   for (const it of items) {
     if (it.kind === "income") {
       const cands = incomes.filter((e) => !usedInc.has(e.id) && e.ownerId === it.memberId);
-      const match = cands.length === 1 ? cands[0] : cands.find((e) => stripInstNumber(e.source) === stripInstNumber(it.name));
+      // Match by NAME only (stripped of any instalment #). A "single remaining candidate" shortcut here
+      // mis-fired: as earlier owner-incomes got matched and removed from the pool, a Setup income with no
+      // line this month (e.g. a rent whose income row was removed) would grab whichever owner-income was
+      // left — it overwrote KA Salary (₹60,000) with the G704-Rent Setup amount (₹16,000).
+      const match = cands.find((e) => stripInstNumber(e.source) === stripInstNumber(it.name));
       if (!match) continue;
       usedInc.add(match.id);
       if (match.pinned) continue; // month-pinned (edited on the Sheet) — don't revert to the Setup value
