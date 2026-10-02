@@ -406,6 +406,12 @@ export default async function SheetPage({
     });
   const fixedSubtotal = fixedGroups.reduce((s, g) => s + g.subtotal, 0);
   const miscSubtotal = miscRows.reduce((s, e) => s + e.amount, 0);
+  // Split misc into THIS month's planned/added lines vs the PREVIOUS month's carried spends
+  // (CARRY_NOTE) — each gets its own collapsible bar so the two don't blur together.
+  const thisMonthMisc = miscRows.filter((e) => e.note !== CARRY_NOTE);
+  const prevMonthMisc = miscRows.filter((e) => e.note === CARRY_NOTE);
+  const thisMonthMiscTotal = thisMonthMisc.reduce((s, e) => s + e.amount, 0);
+  const prevMonthMiscTotal = prevMonthMisc.reduce((s, e) => s + e.amount, 0);
   const fixedCats = c.categories.filter((cat) => FIXED_SECTIONS.includes(cat.section));
   const yearlyCats = c.categories.filter((cat) => cat.section === "Yearly" || (cat.billEveryMonths != null && cat.billEveryMonths > 1));
   const miscCats = c.categories.filter((cat) => cat.section === "Misc");
@@ -733,38 +739,76 @@ export default async function SheetPage({
                   </span>
                 </summary>
                 <div className="pl-3">
-                  <div className="divide-y divide-slate-100 px-2 pb-1">
-                    {miscRows.length === 0 ? (
-                      <p className="py-2 text-xs text-slate-400">No extra expenses this month.</p>
-                    ) : (
-                      miscRows.map((e) => (
-                        <ExpenseRow
-                          key={e.id}
-                          e={e}
-                          canEditHere={canEditHere}
-                          categories={c.categories}
+                  {/* THIS month's planned / added misc */}
+                  <details open data-persist="misc-this" className="group/mscT">
+                    <summary className="flex cursor-pointer list-none items-center justify-between rounded-lg px-2 py-1.5 hover:bg-slate-50 [&::-webkit-details-marker]:hidden">
+                      <span className="flex items-center gap-1.5">
+                        <svg width="12" height="12" viewBox="0 0 20 20" className="text-slate-400 transition-transform group-open/mscT:rotate-90"><path fill="currentColor" d="M7 5l6 5-6 5z" /></svg>
+                        <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">This month · planned</span>
+                        <span className="text-[10px] text-slate-400">({thisMonthMisc.length})</span>
+                      </span>
+                      <span className="text-xs font-semibold tabular-nums text-slate-600">{formatINR(thisMonthMiscTotal)}</span>
+                    </summary>
+                    <div className="divide-y divide-slate-100 px-2 pb-1">
+                      {thisMonthMisc.length === 0 ? (
+                        <p className="py-2 text-xs text-slate-400">No extra expenses planned this month.</p>
+                      ) : (
+                        thisMonthMisc.map((e) => (
+                          <ExpenseRow
+                            key={e.id}
+                            e={e}
+                            canEditHere={canEditHere}
+                            categories={c.categories}
+                            members={c.members}
+                            periodId={c.selected!.id}
+                            periodMonth={c.selected!.month}
+                            previewMonth={previewMonth}
+                          />
+                        ))
+                      )}
+                    </div>
+                    {canEditHere && (
+                      <div className="px-2 py-2">
+                        <ExpenseModal
+                          categories={miscCats}
                           members={c.members}
                           periodId={c.selected!.id}
-                          periodMonth={c.selected!.month}
-                          previewMonth={previewMonth}
+                          trigger="sheet"
+                          balance={rollup.balance}
+                          sheetLabel="+ Add misc expense"
+                          newCategoryDefaultSection="Misc"
+                          showDueDay
+                          defaultRepeat={false}
                         />
-                      ))
+                      </div>
                     )}
-                  </div>
-                  {canEditHere && (
-                    <div className="px-2 py-2">
-                      <ExpenseModal
-                        categories={miscCats}
-                        members={c.members}
-                        periodId={c.selected!.id}
-                        trigger="sheet"
-                        balance={rollup.balance}
-                        sheetLabel="+ Add misc expense"
-                        newCategoryDefaultSection="Misc"
-                        showDueDay
-                        defaultRepeat={false}
-                      />
-                    </div>
+                  </details>
+                  {/* PREVIOUS month's misc carried in (settling this month) */}
+                  {prevMonthMisc.length > 0 && (
+                    <details data-persist="misc-prev" className="group/mscP mt-1 border-t border-slate-100 pt-1">
+                      <summary className="flex cursor-pointer list-none items-center justify-between rounded-lg px-2 py-1.5 hover:bg-slate-50 [&::-webkit-details-marker]:hidden">
+                        <span className="flex items-center gap-1.5">
+                          <svg width="12" height="12" viewBox="0 0 20 20" className="text-slate-400 transition-transform group-open/mscP:rotate-90"><path fill="currentColor" d="M7 5l6 5-6 5z" /></svg>
+                          <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Previous month · carried</span>
+                          <span className="text-[10px] text-slate-400">({prevMonthMisc.length})</span>
+                        </span>
+                        <span className="text-xs font-semibold tabular-nums text-slate-500">{formatINR(prevMonthMiscTotal)}</span>
+                      </summary>
+                      <div className="divide-y divide-slate-100 px-2 pb-1">
+                        {prevMonthMisc.map((e) => (
+                          <ExpenseRow
+                            key={e.id}
+                            e={e}
+                            canEditHere={canEditHere}
+                            categories={c.categories}
+                            members={c.members}
+                            periodId={c.selected!.id}
+                            periodMonth={c.selected!.month}
+                            previewMonth={previewMonth}
+                          />
+                        ))}
+                      </div>
+                    </details>
                   )}
                 </div>
               </details>
