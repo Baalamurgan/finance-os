@@ -46,13 +46,20 @@ export async function applyBudgetShortfall(
   }
   const surplus = source.carryForward + (inc._sum.amount ?? 0) - (exp._sum.amount ?? 0);
   const { reductionByCat } = budgetShortfallReductions({ surplus, overspendByCat });
+  // A month-PINNED envelope is the user's explicit amount for the month (hand-edited on the Sheet) —
+  // the trim must not overwrite it (both its Budget.planned and envelope amount are left as-is).
+  const pinnedCat = new Set(
+    (await tx.expenseEntry.findMany({ where: { periodId: targetId, oneOff: false, pinned: true }, select: { categoryId: true } }))
+      .map((e) => e.categoryId)
+      .filter((id): id is number => id != null),
+  );
   // Reset every tracked non-sinking target budget to template − reduction (0 for most). Resetting
   // all — not just the overspent ones — clears any stale reduction from a prior run. We update BOTH
   // the Budget.planned row (used by roll-up/in-hand) AND the generated envelope ExpenseEntry
   // (oneOff:false — the editable "Budgeted · leftover → Piggy" line the SHEET actually renders), so
   // the displayed amount drops too. Hand-added one-off lines (oneOff:true) are left untouched.
   for (const cat of trackedCats) {
-    if (cat.monthlyBudget == null) continue;
+    if (cat.monthlyBudget == null || pinnedCat.has(cat.id)) continue;
     const reduced = Math.max(0, Math.round((cat.monthlyBudget - (reductionByCat[cat.id] ?? 0)) * 100) / 100);
     await tx.budget.updateMany({ where: { periodId: targetId, categoryId: cat.id }, data: { planned: reduced } });
     await tx.expenseEntry.updateMany({ where: { periodId: targetId, categoryId: cat.id, oneOff: false }, data: { amount: reduced } });

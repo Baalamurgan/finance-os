@@ -3038,22 +3038,28 @@ export async function syncMonthFromSetup(
 
   if (updates.length) await prisma.$transaction(updates);
 
-  // 3. preview/provisional month → recompute the carried surplus/estimate + over-budget cut from the
-  //    latest OPEN month strictly earlier than this one (a plain working month has none, so skip).
-  const source = await prisma.period.findFirst({
-    where: { householdId, status: "open", OR: [{ year: { lt: period.year } }, { year: period.year, month: { lt: period.month } }] },
+  // 3. Re-apply the month-opening adjustments from the immediately-prior month, so a Setup sync never
+  //    UN-TRIMS a budget that was shrunk for last month's overspend (pass 2 reset it to the full Setup
+  //    amount; this puts the trim back on top). A CLOSED prior (the normal case — a working open month
+  //    whose predecessor wound down) just needs the budget trim re-applied; a still-OPEN prior (a
+  //    preview/provisional month) also needs its carried surplus/estimate, which would double-count real
+  //    carry once the prior is closed, so those run only while it's open.
+  const prior = await prisma.period.findFirst({
+    where: { householdId, OR: [{ year: { lt: period.year } }, { year: period.year, month: { lt: period.month } }] },
     orderBy: [{ year: "desc" }, { month: "desc" }],
-    select: { id: true, label: true, carryForward: true },
+    select: { id: true, label: true, status: true, carryForward: true },
   });
-  if (source) {
+  if (prior) {
     await prisma.$transaction(async (tx) => {
-      await addEstimatedCarry(tx, { id: source.id, label: source.label, householdId }, periodId);
-      await addEstimatedSurplus(tx, { ...source, householdId }, periodId);
-      await applyBudgetShortfall(tx, { id: source.id, householdId, carryForward: source.carryForward }, periodId);
+      if (prior.status === "open") {
+        await addEstimatedCarry(tx, { id: prior.id, label: prior.label, householdId }, periodId);
+        await addEstimatedSurplus(tx, { id: prior.id, label: prior.label, carryForward: prior.carryForward, householdId }, periodId);
+      }
+      await applyBudgetShortfall(tx, { id: prior.id, householdId, carryForward: prior.carryForward }, periodId);
     });
   }
 
-  log.info("syncMonthFromSetup", "ok", { householdId, periodId, updated: updates.length, hadSource: !!source });
+  log.info("syncMonthFromSetup", "ok", { householdId, periodId, updated: updates.length, hadSource: !!prior });
   revalidateFamily();
   return { ok: true, updated: updates.length };
 }
