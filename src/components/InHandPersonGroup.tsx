@@ -122,9 +122,10 @@ export function InHandPersonGroup({
   const carryLeftover = Math.round(((group.openingCarry ?? 0) - sinkingHeld) * 100) / 100;
   const heldCardTotal = (pendingCardBills ?? []).filter((b) => !b.done).reduce((s, b) => s + b.familyAmount, 0);
   const heldBillsTotal = selfFundsBills ? Math.round((shownBills.reduce((s, b) => s + b.amount, 0) + heldCardTotal) * 100) / 100 : 0;
-  // Last month's misc the settlement credits now = holding-now minus every other known allocation
-  // (validated to equal each member's prior-month settlement spends).
-  const lastMonthMisc = incomeReceived
+  // What's left of holding-now after every known allocation (budgets, set-asides, held bills, to-treasurer,
+  // sinking, piggy, carry) — i.e. the unallocated remainder of this month's income. Shown as its own line
+  // so the breakdown still sums exactly to holding-now.
+  const remainingFromSalary = incomeReceived
     ? Math.round((holdingNow - sinkingHeld - carryLeftover - cats.reduce((s, c) => s + c.remaining, 0) - earmarkedTotal - heldBillsTotal - toTreasurerPending - piggyAmt) * 100) / 100
     : 0;
   const money = (n: number) => (n < 0 ? "−" : "") + formatINR(Math.abs(n));
@@ -198,8 +199,8 @@ export function InHandPersonGroup({
                 {toTreasurerPending > 0.005 && (
                   <li className="flex items-center justify-between gap-2 text-xs"><span className="truncate text-violet-600">➡️ To treasurer <span className="text-[10px] text-slate-400">settle up</span></span><span className="shrink-0 tabular-nums font-medium text-violet-700">{money(toTreasurerPending)}</span></li>
                 )}
-                {lastMonthMisc > 0.005 && (
-                  <li className="flex items-center justify-between gap-2 text-xs"><span className="truncate text-slate-500">Last month&apos;s misc <span className="text-[10px] text-slate-400">settling now</span></span><span className="shrink-0 tabular-nums text-slate-600">{money(lastMonthMisc)}</span></li>
+                {remainingFromSalary > 0.005 && (
+                  <li className="flex items-center justify-between gap-2 text-xs"><span className="truncate text-slate-500">Remaining from salary <span className="text-[10px] text-slate-400">spare</span></span><span className="shrink-0 tabular-nums text-slate-600">{money(remainingFromSalary)}</span></li>
                 )}
               </>
             ) : (
