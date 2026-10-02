@@ -100,10 +100,11 @@ export function buildMoneyPlan(input: {
   piggyHandover?: { toId: number; toName: string; handoverPeriodId: number; owners: { fromId: number; fromName: string; amount: number; day: number; status?: "overdue" | "soon" | "normal" | null; days?: number | null }[] }; // prior wound-down month's leftover — one tickable step per owner who hands their slice to the Piggy holder
   manualSteps?: { id: number; fromId: number; toId: number; fromName?: string; toName?: string; amount: number; day?: number | null; done: boolean; afterStepKey?: string | null }[]; // head-added ad-hoc moves
   poolHandovers?: { fromId: number; fromName: string; toId: number; toName: string; amount: number; detail: string; recordIds: number[]; done: boolean; day: number | null; status?: "overdue" | "soon" | "normal" | null; days?: number | null }[]; // prior-month cash (leftover→income and/or Piggy→income) a holder hands to the treasurer
+  openingByMember?: Record<number, number>; // each member's carry (prior-month closing personal) — the cash they actually START the month holding, so the walk opens from reality instead of 0
   hiddenKeys?: string[]; // step ids the head has hidden from the plan view
   orderOverrides?: Record<string, number>; // head "move up/down": step id → manual sort index (overrides day/rank order)
 }): MoneyPlan {
-  const { treasurerId, treasurerName, transfers, bills, allowances = [], piggyReturns = [], advances = [], incomeDayByMember, incomeByMember = {}, incomeArrivals, reimburseByMember = {}, reimburseDay, piggyHandover, manualSteps = [], poolHandovers = [], hiddenKeys = [], orderOverrides = {} } = input;
+  const { treasurerId, treasurerName, transfers, bills, allowances = [], piggyReturns = [], advances = [], incomeDayByMember, incomeByMember = {}, incomeArrivals, reimburseByMember = {}, reimburseDay, piggyHandover, manualSteps = [], poolHandovers = [], openingByMember = {}, hiddenKeys = [], orderOverrides = {} } = input;
 
   const inbound = transfers.filter((t) => t.toId === treasurerId);
   const outbound = transfers.filter((t) => t.toId !== treasurerId && t.fromId === treasurerId); // hub → creditor
@@ -595,15 +596,18 @@ export function buildMoneyPlan(input: {
     if (id == null) return;
     bal.set(id, Math.round(((bal.get(id) ?? 0) + delta) * 100) / 100);
   };
+  // Open the walk from REALITY: each member starts holding their carry (last month's closing personal),
+  // not 0 — so step 1 begins at e.g. ₹5,505, and the running balance stays continuous month to month.
+  for (const [id, amt] of Object.entries(openingByMember)) shift(Number(id), amt);
   // Seed each pool-handover holder with the prior-month cash they physically START holding (their
   // leftover / Piggy that became this month's pool income). This lets the hand-over move real balance
   // to the hub — crediting the pool income so the hub can disburse — WITHOUT flagging the holder short.
   for (const p of poolHandovers) shift(p.fromId, p.amount);
   // Seed each card-bill payer with the carried cash they've HELD since the swipe (a credit spend never
-  // left their hand — it's been sitting there since a prior month). This is the cash the card bill draws
-  // from, so paying it visibly REDUCES their balance without the walk ever flagging them short. Seed both
-  // done and unpaid (a done one's seed + its −amount shift cancel, keeping the walk's flow balance intact).
-  for (const b of bills) if (b.cardBill) shift(b.payerId, b.amount);
+  // left their hand). A card bill PAID in a prior month already left then (and isn't a payment step in
+  // this walk), so don't seed it — its stale cash would otherwise inflate the opening balance (e.g. the
+  // ₹6,417 RBL that made Baala's step 1 start at 6,417 instead of his real ₹5,505 carry).
+  for (const b of bills) if (b.cardBill && !b.paidPriorMonth) shift(b.payerId, b.amount);
   const senderOf = (s: PlanStep): number | null => (s.kind === "bill" ? s.payerId ?? null : s.fromId ?? null);
   const touchesHub = (s: PlanStep): boolean =>
     treasurerId != null &&

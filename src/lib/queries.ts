@@ -823,8 +823,13 @@ export async function getMoneyPlan(householdId: number, periodId: number, inhand
     };
   });
 
+  // Each member's carry (last month's closing personal) — so the balance walk OPENS from what they
+  // actually hold, not 0. Role money (piggy/pool) is excluded here: it's a standing figure, not a step.
+  const openingByMember: Record<number, number> = {};
+  for (const g of inhand.byPerson) if (g.memberId != null && g.openingCarry != null) openingByMember[g.memberId] = g.openingCarry;
+
   const { buildMoneyPlan } = await import("./moneyPlan");
-  const plan = buildMoneyPlan({ treasurerId: inhand.treasurerId, treasurerName: settlement.treasurer?.name, transfers, bills, allowances, piggyReturns, advances, incomeDayByMember, incomeByMember, incomeArrivals, reimburseByMember, reimburseDay, piggyHandover, manualSteps, poolHandovers, hiddenKeys, orderOverrides });
+  const plan = buildMoneyPlan({ treasurerId: inhand.treasurerId, treasurerName: settlement.treasurer?.name, transfers, bills, allowances, piggyReturns, advances, incomeDayByMember, incomeByMember, incomeArrivals, reimburseByMember, reimburseDay, piggyHandover, manualSteps, poolHandovers, openingByMember, hiddenKeys, orderOverrides });
 
   // Enrich done steps with the day they were ACTUALLY marked paid (IST), so the plan can show
   // "paid <day>" when it differs from the scheduled/due day. Timestamps live on the underlying record:
