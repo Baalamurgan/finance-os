@@ -86,9 +86,11 @@ export function InHandPersonGroup({
   // equals last month's close; it then evolves as the plan is worked. A CLOSED month (openingCarry null)
   // shows its own settled personal figure. This replaces the old "total − pending projection" that made
   // a fresh month read as a huge negative (the 0-bug).
+  // The piggy HOLDER physically holds the general Piggy (minus what owners still owe it), so it IS part
+  // of their holding-now — on its own line, never folded into the carry. (piggyAmt is 0 for non-holders.)
   const holdingNow =
     group.openingCarry != null && !isPreview
-      ? Math.round((group.openingCarry + doneCashMove - (cashSpent ?? 0)) * 100) / 100
+      ? Math.round((group.openingCarry + doneCashMove - (cashSpent ?? 0) + piggyAmt) * 100) / 100
       : total;
   // "Expected by month-end" = the CARRY-FORWARD: what genuinely remains as this member's own money once
   // budgets are spent (or leftover→Piggy) and bills/card-bills are paid — i.e. pool + Piggy + sinking +
@@ -123,7 +125,7 @@ export function InHandPersonGroup({
   // Last month's misc the settlement credits now = holding-now minus every other known allocation
   // (validated to equal each member's prior-month settlement spends).
   const lastMonthMisc = incomeReceived
-    ? Math.round((holdingNow - sinkingHeld - carryLeftover - cats.reduce((s, c) => s + c.remaining, 0) - earmarkedTotal - heldBillsTotal - toTreasurerPending) * 100) / 100
+    ? Math.round((holdingNow - sinkingHeld - carryLeftover - cats.reduce((s, c) => s + c.remaining, 0) - earmarkedTotal - heldBillsTotal - toTreasurerPending - piggyAmt) * 100) / 100
     : 0;
   const money = (n: number) => (n < 0 ? "−" : "") + formatINR(Math.abs(n));
   // Live headline, projected + full breakdown on tap. Default collapsed to keep the wall of cards
@@ -176,10 +178,13 @@ export function InHandPersonGroup({
             {Math.abs(carryLeftover) > 0.005 && (
               <li className="flex items-center justify-between gap-2 text-xs"><span className="truncate text-slate-500">Carried {incomeReceived ? "(category remaining)" : "from last month"}</span><span className="shrink-0 tabular-nums text-slate-600">{money(carryLeftover)}</span></li>
             )}
+            {isPiggyHolder && Math.abs(piggyAmt) > 0.005 && (
+              <li className="flex items-center justify-between gap-2 text-xs"><span className="truncate text-pink-600">🐷 General Piggy held <span className="text-[10px] text-slate-400">excl. sinking</span></span><span className="shrink-0 tabular-nums font-medium text-pink-700">{money(piggyAmt)}</span></li>
+            )}
             {incomeReceived ? (
               <>
                 {cats.map((cat) => (
-                  <li key={`ac${cat.id}`} className="flex items-center justify-between gap-2 text-xs"><span className="truncate text-slate-500">{cat.name} <span className="text-[10px] text-slate-400">budget</span></span><span className="shrink-0 tabular-nums text-slate-600">{money(cat.remaining)}</span></li>
+                  <li key={`ac${cat.id}`} className="flex items-center justify-between gap-2 text-xs"><span className="truncate text-slate-500">{cat.name}</span><span className="shrink-0 tabular-nums text-slate-400">spent {formatINR(cat.spent)}/{formatINR(cat.allocation)} · <b className={cat.remaining < 0 ? "text-red-600" : "text-slate-600"}>{formatINR(cat.remaining)}</b></span></li>
                 ))}
                 {earmarked.map((e) => (
                   <li key={`ae${e.id}`} className="flex items-center justify-between gap-2 text-xs"><span className="truncate text-teal-600">Set aside · {e.name}</span><span className="shrink-0 tabular-nums text-teal-700">{money(e.amount)}</span></li>
@@ -359,7 +364,7 @@ export function InHandPersonGroup({
             ))}
           </>
         )}
-        {isPiggyHolder && piggyAmt !== 0 && (
+        {isTreasurer && isPiggyHolder && piggyAmt !== 0 && (
           <li className="flex items-center justify-between gap-2 text-xs">
             <span className="truncate text-pink-600">🐷 General Piggy held <span className="text-[10px] text-slate-400">excl. sinking</span></span>
             <span className="shrink-0 tabular-nums font-medium text-pink-700">{formatINR(piggyAmt)}</span>
