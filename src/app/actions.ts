@@ -2004,9 +2004,10 @@ export async function addManualStep(formData: FormData) {
   const afterStepKey = String(formData.get("afterStepKey") ?? "").trim() || null;
   const dayRaw = formData.get("day");
   const day = dayRaw ? Number(dayRaw) : null;
+  const note = String(formData.get("note") ?? "").trim().slice(0, 140) || null;
   if (!periodId || !fromMemberId || !toMemberId || amount <= 0 || fromMemberId === toMemberId) return;
   if (!(await isHead()) && !(await periodOpen(periodId))) return;
-  await prisma.manualPlanStep.create({ data: { periodId, fromMemberId, toMemberId, amount, afterStepKey, day } });
+  await prisma.manualPlanStep.create({ data: { periodId, fromMemberId, toMemberId, amount, afterStepKey, day, note } });
   log.info("addManualStep", "ok", { outcome: "ok", memberId, periodId, amount });
   await logActivity("settlement", "created", `Added a manual move ${formatINR(amount)}`, periodId);
   revalidateFamily();

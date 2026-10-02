@@ -38,6 +38,7 @@ export type PlanStep = {
   kind: "transfer-in" | "transfer-out" | "bill" | "allowance" | "piggy" | "advance" | "income" | "manual" | "pool-handover";
   recordIds?: number[]; // pool-handover: the PoolHandover row ids this combined step ticks handed-over
   manualId?: number; // this step is a head-added manual move (write-through to the ManualPlanStep record)
+  note?: string | null; // a manual move's optional note — why the sender is paying
   afterStepKey?: string; // a manual step: the step id it's anchored right after (for stable positioning)
   hidden?: boolean; // a head-hidden derived step — kept for the "un-hide" list but out of the walk/progress
   day: number | null; // effective day-of-month for ordering/display (null = undated)
@@ -98,7 +99,7 @@ export function buildMoneyPlan(input: {
   reimburseByMember?: Record<number, number>; // prior-month out-of-pocket spend each member is owed back
   reimburseDay?: number; // target day to hand back those reimbursements (e.g. the day after wind-down)
   piggyHandover?: { toId: number; toName: string; handoverPeriodId: number; owners: { fromId: number; fromName: string; amount: number; day: number; status?: "overdue" | "soon" | "normal" | null; days?: number | null }[] }; // prior wound-down month's leftover — one tickable step per owner who hands their slice to the Piggy holder
-  manualSteps?: { id: number; fromId: number; toId: number; fromName?: string; toName?: string; amount: number; day?: number | null; done: boolean; afterStepKey?: string | null }[]; // head-added ad-hoc moves
+  manualSteps?: { id: number; fromId: number; toId: number; fromName?: string; toName?: string; amount: number; day?: number | null; done: boolean; afterStepKey?: string | null; note?: string | null }[]; // head-added ad-hoc moves
   poolHandovers?: { fromId: number; fromName: string; toId: number; toName: string; amount: number; detail: string; recordIds: number[]; done: boolean; day: number | null; status?: "overdue" | "soon" | "normal" | null; days?: number | null }[]; // prior-month cash (leftover→income and/or Piggy→income) a holder hands to the treasurer
   openingByMember?: Record<number, number>; // each member's carry (prior-month closing personal) — the cash they actually START the month holding, so the walk opens from reality instead of 0
   hiddenKeys?: string[]; // step ids the head has hidden from the plan view
@@ -537,7 +538,7 @@ export function buildMoneyPlan(input: {
   // gone (its bill was removed, say) fall back to the manual's own day. afterStepKey null → top.
   const manualObjs: PlanStep[] = manualSteps.map((m) => ({
     id: `manual-${m.id}`, kind: "manual", day: m.day ?? null, amount: Math.round(m.amount * 100) / 100, done: m.done,
-    fromId: m.fromId, toId: m.toId, fromName: m.fromName, toName: m.toName, manualId: m.id, afterStepKey: m.afterStepKey ?? undefined, status: null, days: null,
+    fromId: m.fromId, toId: m.toId, fromName: m.fromName, toName: m.toName, manualId: m.id, note: m.note ?? null, afterStepKey: m.afterStepKey ?? undefined, status: null, days: null,
   }));
   const pendingManual = manualObjs.slice();
   let manualGuard = 0;

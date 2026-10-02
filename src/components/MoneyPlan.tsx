@@ -166,7 +166,7 @@ export function MoneyPlan({
 
       {plan.shortBills > 0 && who == null && (
         <div className="mb-3 rounded-lg bg-red-50 px-3 py-2 text-xs text-red-700">
-          ⚠️ <b>{plan.shortBills}</b> {plan.shortBills === 1 ? "bill can't" : "bills can't"} be paid on time — each shows who's short and the day it becomes payable below. Aim for zero: shift a due date later, or bring income in sooner.
+          ⚠️ <b>{plan.shortBills}</b> {plan.shortBills === 1 ? "bill can't" : "bills can't"} be paid on time — each shows who&apos;s short and the day it becomes payable below. Aim for zero: shift a due date later, or bring income in sooner.
         </div>
       )}
 
@@ -321,6 +321,9 @@ export function MoneyPlan({
                         );
                       })}
                     </div>
+                  )}
+                  {isManual && s.note && (
+                    <div className="mt-0.5 text-[10px] italic text-slate-500">📝 {s.note}</div>
                   )}
                   {!s.done && isHandover && (
                     <div className="mt-0.5 text-[10px] text-amber-600">
@@ -577,6 +580,9 @@ export function MoneyPlan({
                   <input name="day" type="number" min="1" max="31" placeholder="of month" className="mt-1 w-full rounded-md border border-slate-200 px-2 py-1.5 text-sm" />
                 </label>
               </div>
+              <label className="block text-[11px] font-medium text-slate-500">Note
+                <input name="note" type="text" maxLength={140} placeholder="why this move — e.g. advance for school fees" className="mt-1 w-full rounded-md border border-slate-200 px-2 py-1.5 text-sm" />
+              </label>
               <div className="flex justify-end gap-2 pt-1">
                 <button type="button" onClick={() => setInsert(null)} className="rounded-md px-3 py-1.5 text-sm text-slate-500">Cancel</button>
                 <button className="rounded-md bg-emerald-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-emerald-700">Add step</button>

@@ -793,7 +793,7 @@ export async function getMoneyPlan(householdId: number, periodId: number, inhand
   // Head edits to the plan (persisted, so a refresh keeps them): ad-hoc manual moves + hidden steps.
   const manualSteps = manualStepRows.map((m) => ({
     id: m.id, fromId: m.fromMemberId, toId: m.toMemberId, fromName: nameById.get(m.fromMemberId), toName: nameById.get(m.toMemberId),
-    amount: m.amount, day: m.day, done: m.done, afterStepKey: m.afterStepKey,
+    amount: m.amount, day: m.day, done: m.done, afterStepKey: m.afterStepKey, note: m.note,
   }));
   const hiddenKeys = hiddenRows.map((r) => r.stepKey);
   const orderOverrides = Object.fromEntries(orderRows.map((r) => [r.stepKey, r.sortIndex]));
