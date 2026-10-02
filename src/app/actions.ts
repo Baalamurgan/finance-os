@@ -2973,6 +2973,14 @@ export async function syncMonthFromSetup(
   if (period.status !== "open") return { ok: false, updated: 0, error: "This month is closed." };
   const householdId = period.householdId;
 
+  // Add any Setup lines missing from this month FIRST — a newly-added category/bill (e.g. a yearly
+  // insurance whose bill month is this month) has no line until it's generated. generateMonth only ADDS
+  // what's missing now (it skips every existing line), so it never duplicates; the passes below then
+  // re-pull amounts/due-days for all lines, the new ones included.
+  await prisma.$transaction(async (tx) => {
+    await generateMonth(tx, periodId, householdId);
+  });
+
   const [items, cats, incomes, expenses, budgets] = await Promise.all([
     prisma.recurringItem.findMany({ where: { householdId, active: true } }),
     prisma.category.findMany({ where: { householdId }, select: { id: true, name: true, onHold: true, monthlyBudget: true, fundingStyle: true, billEveryMonths: true, billDay: true, billAmount: true } }),

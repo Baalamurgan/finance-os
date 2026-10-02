@@ -91,11 +91,12 @@ type ExpRow = Awaited<ReturnType<typeof getRollup>>["expenses"][number];
 type CatLite = { id: number; name: string; section?: string };
 type MemLite = { id: number; name: string };
 
-// On a preview/provisional month, a generated budgeted envelope whose amount sits below its Setup
-// template was trimmed by applyBudgetShortfall (last month's overspend ate into it). Flag it so the
-// reduction is visible rather than looking like a random smaller number.
-function shortfallTrim(e: ExpRow, previewMonth: boolean): number | null {
-  if (!previewMonth || e.oneOff) return null;
+// A generated budgeted envelope whose amount sits below its Setup template was trimmed by
+// applyBudgetShortfall (last month's overspend ate into it). Flag it on ANY month (open or preview)
+// so the reduction is visible rather than looking like a random smaller number. A PINNED line is a
+// hand-edit (it shows "📌 kept" instead), never a shortfall trim.
+function shortfallTrim(e: ExpRow): number | null {
+  if (e.oneOff || e.pinned) return null;
   const c = e.category;
   if (!c.tracked || c.sinking || c.onHold || c.fundingStyle != null || c.monthlyBudget == null) return null;
   const reducedBy = Math.round((c.monthlyBudget - e.amount) * 100) / 100;
@@ -109,7 +110,6 @@ function ExpenseRow({
   members,
   periodId,
   periodMonth,
-  previewMonth = false,
   isNew,
 }: {
   e: ExpRow;
@@ -162,7 +162,7 @@ function ExpenseRow({
         ? `The remaining months' share rises to about ${formatINR(newShare)} to keep the fund on track for the due month.`
         : `This was the last set-aside before the bill — the shortfall will be paid out-of-pocket on the due month.`) +
       `\n\nIt won't come back on a rebuild; Setup stays the template.`;
-  const trimmedBy = shortfallTrim(e, previewMonth);
+  const trimmedBy = shortfallTrim(e);
   return (
     <Row
       label={withShareCount(e.label, e.category.billEveryMonths)}
