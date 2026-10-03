@@ -69,15 +69,19 @@ function isPiggyBudget(cat: ExpRow["category"]): boolean {
 // sits together under Yearly / periodic bills; tracked leftover→Piggy budgets get their own
 // section; everything else follows its category's section.
 function sheetSection(e: ExpRow): string {
-  // Planned-misc spend cards follow their category's real section like anything else — a tracked
-  // "Monthly" card sits with the Budgeted (Veg/Fuel/…) categories, a genuinely Misc-section one stays
-  // under Misc. (Its money-plan step still opens the add-spend modal on pay — that's a step property,
-  // independent of where it displays on the Sheet.)
-  // Any bill-with-a-fund (EB, WiFi, insurance…) — its share, due-month bill and fund credit — sits
-  // under Yearly / periodic bills, so a periodic bill is never buried in "Monthly" (even a monthly
+  // Any bill-with-a-fund (EB, YouTube, Brio insurance…) — its share, due-month bill and fund credit —
+  // sits under Yearly / periodic bills, so a periodic bill is never buried in "Monthly" (even a monthly
   // one, billEveryMonths 1). Plain multi-month bills (no fund) go there too.
   if (e.category.fundingStyle != null) return "Yearly";
   if (e.category.billEveryMonths != null && e.category.billEveryMonths > 1) return "Yearly";
+  // Planned-for-THIS-month items live under Misc, so Fixed Monthly stays the stable recurring set
+  // (same entries every month unless added to Setup / "repeats monthly"). Two kinds qualify: a misc
+  // spend card (a dated, dynamic budget like G704 advance / Ayudha Pooja), and ANY one-off line (a
+  // hand-added reward, a pool-funded tax, last month's carried misc). Its money-plan step still opens
+  // the add-spend modal on pay — that's a step property, independent of where it shows on the Sheet.
+  if (e.category.miscCard) return "Misc";
+  if (e.oneOff) return "Misc";
+  // Recurring tracked budgets (Veg/Fuel/Non-Veg/LPG/Provision) get their own Budgeted section.
   if (isPiggyBudget(e.category)) return "PiggyBudget";
   return e.category.section;
 }
