@@ -2,7 +2,7 @@ import { unstable_cache } from "next/cache";
 import { prisma } from "@/lib/prisma";
 import { FAMILY_TAG } from "@/lib/revalidate";
 import { MISC_SUBCATEGORIES } from "@/lib/misc";
-import { LEFTOVER_NOTE, POOL_NOTE, POOL_BILL_NOTE, REMOVED_NOTE, isPoolNote } from "@/lib/notes";
+import { SURPLUS_NOTE, LEFTOVER_NOTE, CARRY_NOTE, PIGGY_INCOME_NOTE, POOL_NOTE, POOL_BILL_NOTE, REMOVED_NOTE, isPoolNote } from "@/lib/notes";
 import { computeSettlement, type SettleTagged } from "@/lib/settlement-core";
 import { planBillMonth, isLumpDue, monthsUntilNextDue, type FundingStyle } from "@/lib/schedule";
 import { suggestCategoryName, normalizeItem, resolveCategoryId } from "@/lib/spendCategorize";
@@ -1898,12 +1898,16 @@ function diffKey(label: string): string {
 }
 
 /**
- * IDs of this month's expense/income lines that are NEW — a recurring line whose (category + label, with
- * the installment counter and set-aside variant folded via diffKey) didn't exist last month. Powers the
- * "NEW" badge so a first-time EMI / bill / income source stands out; a continuing installment (2/6 after
- * 1/6) is NOT new. One-offs (misc/carry/surplus, oneOff:true) are excluded — they're inherently one-month,
- * so badging them all would be noise. No prior month → empty (don't badge a first month wholesale).
+ * IDs of this month's expense/income lines that are NEW — a line whose (category + label, with the
+ * installment counter and set-aside variant folded via diffKey) didn't exist last month. Powers the
+ * "NEW" badge so a first-time EMI / bill / income source — AND anything the family planned/added this
+ * month (a pinned planned spend, a pool bill, a hand-added one-off) — stands out. A continuing
+ * installment (2/6 after 1/6) is NOT new. Only CARRIED / brought-forward / tombstone one-offs are
+ * excluded (last month's misc carried in, surplus/leftover income, a from-Piggy line, a removed
+ * tombstone) — badging those would be noise since they're auto-rolled, not freshly added. No prior
+ * month → empty (don't badge a first month wholesale). Mirror NOT_NEW_NOTES in the Sheet's kept-tag.
  */
+const NOT_NEW_NOTES = new Set<string>([SURPLUS_NOTE, LEFTOVER_NOTE, CARRY_NOTE, PIGGY_INCOME_NOTE, REMOVED_NOTE]);
 export async function getNewSheetLineIds(householdId: number, periodId: number) {
   const empty = { expenses: new Set<number>(), incomes: new Set<number>() };
   try {
@@ -1914,17 +1918,18 @@ export async function getNewSheetLineIds(householdId: number, periodId: number) 
     const prev = await prisma.period.findUnique({ where: { householdId_year_month: { householdId, year: prevYear, month: prevMonth } }, select: { id: true } });
     if (!prev) return empty;
     const [curExp, prevExp, curInc, prevInc] = await Promise.all([
-      prisma.expenseEntry.findMany({ where: { periodId }, select: { id: true, categoryId: true, label: true, oneOff: true } }),
+      prisma.expenseEntry.findMany({ where: { periodId }, select: { id: true, categoryId: true, label: true, note: true } }),
       prisma.expenseEntry.findMany({ where: { periodId: prev.id }, select: { categoryId: true, label: true } }),
-      prisma.incomeEntry.findMany({ where: { periodId }, select: { id: true, source: true, oneOff: true } }),
+      prisma.incomeEntry.findMany({ where: { periodId }, select: { id: true, source: true, note: true } }),
       prisma.incomeEntry.findMany({ where: { periodId: prev.id }, select: { source: true } }),
     ]);
     const eKey = (categoryId: number | null, label: string) => `${categoryId ?? "x"}|${diffKey(label)}`;
+    const carried = (note: string | null) => note != null && NOT_NEW_NOTES.has(note);
     const prevExpKeys = new Set(prevExp.map((e) => eKey(e.categoryId, e.label)));
     const prevIncKeys = new Set(prevInc.map((i) => diffKey(i.source)));
     return {
-      expenses: new Set(curExp.filter((e) => !e.oneOff && !prevExpKeys.has(eKey(e.categoryId, e.label))).map((e) => e.id)),
-      incomes: new Set(curInc.filter((i) => !i.oneOff && !prevIncKeys.has(diffKey(i.source))).map((i) => i.id)),
+      expenses: new Set(curExp.filter((e) => !carried(e.note) && !prevExpKeys.has(eKey(e.categoryId, e.label))).map((e) => e.id)),
+      incomes: new Set(curInc.filter((i) => !carried(i.note) && !prevIncKeys.has(diffKey(i.source))).map((i) => i.id)),
     };
   } catch {
     return empty;

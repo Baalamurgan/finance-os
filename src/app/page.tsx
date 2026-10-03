@@ -21,7 +21,7 @@ import { RebuildDraftButton } from "@/components/RebuildDraftButton";
 import { SheetRefreshButton } from "@/components/SheetRefreshButton";
 import { PreviewNextMonthButton } from "@/components/PreviewNextMonthButton";
 import { monthsUntilNextDue } from "@/lib/schedule";
-import { SURPLUS_NOTE, LEFTOVER_NOTE, PIGGY_INCOME_NOTE, CARRY_NOTE, REMOVED_NOTE } from "@/lib/notes";
+import { SURPLUS_NOTE, LEFTOVER_NOTE, PIGGY_INCOME_NOTE, CARRY_NOTE, DEFERRED_NOTE, REMOVED_NOTE, isPoolNote } from "@/lib/notes";
 
 // Auto brought-forward income (last month's surplus / leftovers, Piggy → income) and this-month's
 // planned/added misc are KEPT through a Sheet refresh — sync only touches oneOff:false, note:null
@@ -104,6 +104,15 @@ function shortfallTrim(e: ExpRow): number | null {
   return reducedBy > 0.005 ? reducedBy : null;
 }
 
+// A line the family planned/added for THIS month that persists through a Sheet sync/refresh, so it
+// earns the "📌 kept" tag in ANY section (not just Misc): a hand-added one-off (note null), a pool-
+// funded misc bill, or a deferred expense. Recurring/template lines (oneOff:false) are regenerated —
+// not "kept" — and carried/brought-forward one-offs (CARRY etc.) are noise. Mirrors NOT_NEW_NOTES so
+// the same user-added lines that get the "New" badge also read as "kept" (the user wants both).
+function isKeptLine(e: ExpRow): boolean {
+  return e.oneOff && (e.note == null || isPoolNote(e.note) || e.note === DEFERRED_NOTE);
+}
+
 function ExpenseRow({
   e,
   canEditHere,
@@ -180,7 +189,7 @@ function ExpenseRow({
           ✂️ Trimmed
         </span>
       ) : undefined}
-      pinnedControl={e.pinned ? <PinnedBadge kind="expense" id={e.id} canEdit={canEditHere} /> : sheetSection(e) === "Misc" && e.note !== CARRY_NOTE ? <KeptTag title="Planned / added this month — kept through a Sheet refresh" /> : null}
+      pinnedControl={e.pinned ? <PinnedBadge kind="expense" id={e.id} canEdit={canEditHere} /> : isKeptLine(e) ? <KeptTag title="Planned / added this month — kept through a Sheet refresh" /> : null}
     >
       {canEditHere && isSetAside && (
         <ConfirmForm action={skipSetAside} message={removeMsg}>
