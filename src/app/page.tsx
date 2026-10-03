@@ -130,6 +130,19 @@ function taxPhase(e: ExpRow, periodMonth: number): "incentive" | "bill" | null {
   return isDueMonth && c.earlyAmount != null ? "incentive" : "bill";
 }
 
+// Confirm text for skipping a tax bill (💰 window / 🧾 deadline). Spells out the consequence: lose the
+// discount, spread over the months left (rising if skipped again), full by the deadline, +1%/mo after.
+function taxSkipMsg(e: ExpRow): string {
+  const full = e.category.billAmount ?? 0;
+  const disc = e.category.earlyAmount != null ? Math.round((full - e.category.earlyAmount) * 100) / 100 : 0;
+  return (
+    `Skip paying “${e.category.name}” now?\n\n` +
+    (disc > 0 ? `You give up the ${formatINR(disc)} early-payment discount. ` : "") +
+    `It spreads over the remaining months as monthly shares (each rises if you skip it too), and the full ${formatINR(full)} is due by the deadline — then +1%/month late.\n\n` +
+    `Reversible — you can restore it.`
+  );
+}
+
 function monthLabel(month: number, year: number) {
   return `${new Date(year, month - 1, 1)
     .toLocaleString("en-US", { month: "short" })
@@ -256,6 +269,15 @@ function ExpenseRow({
           <input type="hidden" name="periodId" value={periodId} />
           <button className="rounded-md px-2 py-1 text-[11px] font-medium text-amber-600 hover:bg-amber-50" title={isFlatMonthly ? "Skip this month's payment — next month is unchanged" : "Remove this month's set-aside — frees the money now; the remaining months' share rises"}>
             {isFlatMonthly ? "skip this month" : "remove"}
+          </button>
+        </ConfirmForm>
+      )}
+      {canEditHere && tPhase != null && (
+        <ConfirmForm action={skipSetAside} message={taxSkipMsg(e)}>
+          <input type="hidden" name="categoryId" value={e.categoryId} />
+          <input type="hidden" name="periodId" value={periodId} />
+          <button className="rounded-md px-2 py-1 text-[11px] font-medium text-emerald-700 hover:bg-emerald-50" title="Skip — give up the discount; it spreads over the remaining months and is due (full, then +1%/mo) by the deadline">
+            skip
           </button>
         </ConfirmForm>
       )}

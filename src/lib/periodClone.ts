@@ -213,9 +213,10 @@ export async function generateMonth(
     // TAX with an early-payment incentive / late penalty (property / water): the half-yearly "Both" cycle —
     // window month = pay the whole bill early at earlyAmount; skipped → a monthly share that re-spreads over
     // the months left; deadline = the whole remaining; past deadline = remaining + 1%/mo. `saved` = the
-    // accrued pot (fund). A window/deadline/overdue month is a payable BILL (+ a fund credit); a share month
-    // is a set-aside. Gated on earlyAmount/latePenaltyPct so plain fund bills (EB/YouTube/Brio) are untouched.
+    // accrued pot (fund). A window/deadline/overdue month is a payable BILL; a share month is a set-aside.
+    // Gated on earlyAmount/latePenaltyPct so plain fund bills (EB/YouTube/Brio) are untouched.
     if (cat.earlyAmount != null || cat.latePenaltyPct != null) {
+      if (skippedSetAside.has(cat.id)) continue; // this month's incentive/share was skipped → no line (it re-spreads next month)
       const { monthsIntoCycle } = billCyclePhase(cat.billMonth, cat.billEveryMonths, period!.month);
       const saved = Math.max(0, fundByCat.get(cat.id) ?? 0);
       const t = taxCycleMonth({ billAmount: cat.billAmount, earlyAmount: cat.earlyAmount, latePenaltyPct: cat.latePenaltyPct, everyMonths: cat.billEveryMonths, monthsIntoCycle, saved });

@@ -16,7 +16,7 @@ import { isLearnable, validateSpendLabel } from "@/lib/spendCategorize";
 import { getSpendShortcuts, getMatcherKeywords, getFrequentSpendItems, getFrequentSpendCombos, getMoneyPlan, getMiscSubCategories, getFamilyCards } from "@/lib/queries";
 import { getCardDues } from "@/lib/personal/cash";
 import { ensurePersonalMonth } from "@/lib/personal";
-import { planBillMonth, type FundingStyle } from "@/lib/schedule";
+import { planBillMonth, billCyclePhase, taxCycleMonth, type FundingStyle } from "@/lib/schedule";
 import { getBillReminders } from "@/lib/billReminders";
 import { applyBudgetShortfall, windDownPeriod } from "@/lib/windDown";
 import { SURPLUS_NOTE, CARRY_NOTE, DEFERRED_NOTE, PIGGY_INCOME_NOTE, POOL_NOTE, POOL_BILL_NOTE, REMOVED_NOTE, isPoolNote } from "@/lib/notes";
@@ -1485,13 +1485,16 @@ export async function skipSetAside(formData: FormData) {
   if (!cat || cat.fundingStyle == null) return;
   const period = await prisma.period.findUnique({ where: { id: periodId }, select: { householdId: true } });
   if (!period) return;
+  // A TAX (early-incentive/penalty) shows its window/deadline bill as a plain `cat.name` line, not a
+  // "(monthly share)" — so skipping it must remove that bill line too (the skip re-spreads it next month).
+  const isTax = cat.earlyAmount != null || cat.latePenaltyPct != null;
   await prisma.$transaction(async (tx) => {
     await tx.setAsideSkip.upsert({
       where: { categoryId_periodId: { categoryId, periodId } },
       create: { householdId: period.householdId, categoryId, periodId },
       update: {},
     });
-    await tx.expenseEntry.deleteMany({ where: { periodId, categoryId, OR: [{ label: { endsWith: "(saving)" } }, { label: { endsWith: "(monthly share)" } }] } });
+    await tx.expenseEntry.deleteMany({ where: { periodId, categoryId, OR: [{ label: { endsWith: "(saving)" } }, { label: { endsWith: "(monthly share)" } }, ...(isTax ? [{ label: cat.name }] : [])] } });
   });
   await logActivity("expense", "updated", `Skipped this month's set-aside for “${cat.name}”`, periodId);
   revalidateFamily();
@@ -1509,14 +1512,26 @@ export async function restoreSetAside(formData: FormData) {
     prisma.piggyEntry.aggregate({ where: { categoryId, kind: "sinking" }, _sum: { amount: true } }),
   ]);
   if (!cat || cat.fundingStyle == null || !period || cat.billAmount == null || cat.billMonth == null || cat.billEveryMonths == null) return;
+  const fund = fundAgg._sum.amount ?? 0;
+  const isTax = cat.earlyAmount != null || cat.latePenaltyPct != null;
+  // TAX: restore the cycle line via taxCycleMonth (window/deadline/overdue → plain bill; share → share).
+  const tax = isTax
+    ? (() => {
+        const { monthsIntoCycle } = billCyclePhase(cat.billMonth!, cat.billEveryMonths!, period.month);
+        const t = taxCycleMonth({ billAmount: cat.billAmount!, earlyAmount: cat.earlyAmount, latePenaltyPct: cat.latePenaltyPct, everyMonths: cat.billEveryMonths!, monthsIntoCycle, saved: Math.max(0, fund) });
+        return { label: t.phase === "share" ? `${cat.name} (monthly share)` : cat.name, amount: t.amount };
+      })()
+    : null;
   const plan = planBillMonth({
     billAmount: cat.billAmount, billMonth: cat.billMonth, everyMonths: cat.billEveryMonths,
-    fund: fundAgg._sum.amount ?? 0, fundingStyle: cat.fundingStyle as FundingStyle, fixedShare: cat.monthlyBudget, saveEveryMonths: cat.saveEveryMonths, month: period.month,
+    fund, fundingStyle: cat.fundingStyle as FundingStyle, fixedShare: cat.monthlyBudget, saveEveryMonths: cat.saveEveryMonths, month: period.month,
   });
   await prisma.$transaction(async (tx) => {
     await tx.setAsideSkip.deleteMany({ where: { categoryId, periodId } });
-    await tx.expenseEntry.deleteMany({ where: { periodId, categoryId, OR: [{ label: { endsWith: "(saving)" } }, { label: { endsWith: "(monthly share)" } }] } });
-    if (plan.kind === "save" && plan.contribution > 0) {
+    await tx.expenseEntry.deleteMany({ where: { periodId, categoryId, OR: [{ label: { endsWith: "(saving)" } }, { label: { endsWith: "(monthly share)" } }, ...(isTax ? [{ label: cat.name }] : [])] } });
+    if (tax) {
+      if (tax.amount > 0.005) await tx.expenseEntry.create({ data: { periodId, label: tax.label, amount: tax.amount, categoryId, memberId: cat.payerMemberId ?? cat.responsibleMemberId, necessary: cat.necessary ?? true, oneOff: false } });
+    } else if (plan.kind === "save" && plan.contribution > 0) {
       await tx.expenseEntry.create({ data: { periodId, label: `${cat.name} (monthly share)`, amount: plan.contribution, categoryId, memberId: cat.responsibleMemberId, necessary: cat.necessary ?? true, oneOff: false } });
     }
   });
