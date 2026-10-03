@@ -90,7 +90,9 @@ function sheetSection(e: ExpRow): string {
   // hand-added reward, a pool-funded tax, last month's carried misc). Its money-plan step still opens
   // the add-spend modal on pay — that's a step property, independent of where it shows on the Sheet.
   if (e.category.miscCard) return "Misc";
-  if (e.oneOff) return "Misc";
+  // A "removed" tombstone (struck-through) stays in its category's HOME section — a removed Monthly
+  // expense shows under Monthly, not pulled into Misc by the one-off rule below.
+  if (e.oneOff && e.note !== REMOVED_NOTE) return "Misc";
   // Recurring tracked budgets (Veg/Fuel/Non-Veg/LPG/Provision) get their own Budgeted section.
   if (isPiggyBudget(e.category)) return "PiggyBudget";
   return e.category.section;
