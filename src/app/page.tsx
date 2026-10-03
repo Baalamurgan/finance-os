@@ -20,7 +20,7 @@ import { SheetLockNotice } from "@/components/SheetLockNotice";
 import { RebuildDraftButton } from "@/components/RebuildDraftButton";
 import { SheetRefreshButton } from "@/components/SheetRefreshButton";
 import { PreviewNextMonthButton } from "@/components/PreviewNextMonthButton";
-import { monthsUntilNextDue } from "@/lib/schedule";
+import { monthsUntilNextDue, isLumpDue } from "@/lib/schedule";
 import { SURPLUS_NOTE, LEFTOVER_NOTE, PIGGY_INCOME_NOTE, CARRY_NOTE, DEFERRED_NOTE, REMOVED_NOTE, isPoolNote } from "@/lib/notes";
 
 // Auto brought-forward income (last month's surplus / leftovers, Piggy → income) and this-month's
@@ -29,6 +29,16 @@ import { SURPLUS_NOTE, LEFTOVER_NOTE, PIGGY_INCOME_NOTE, CARRY_NOTE, DEFERRED_NO
 const KEPT_INCOME_NOTES = new Set<string>([SURPLUS_NOTE, LEFTOVER_NOTE, PIGGY_INCOME_NOTE]);
 function KeptTag({ title }: { title: string }) {
   return <span title={title} className="shrink-0 rounded-full bg-amber-50 px-1.5 py-0.5 text-[9px] font-medium text-amber-600">📌 kept</span>;
+}
+function BillTag() {
+  return (
+    <span
+      title="Bill due this month — the full amount is due now (the fund covers it). It's not a monthly saving this month, so don't skip it unless you mean to."
+      className="shrink-0 rounded-full bg-rose-100 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-rose-700"
+    >
+      🧾 Bill
+    </span>
+  );
 }
 import { createPeriod, deleteIncome, discardDraft, skipSetAside, restoreSetAside } from "./actions";
 
@@ -84,6 +94,16 @@ function sheetSection(e: ExpRow): string {
   // Recurring tracked budgets (Veg/Fuel/Non-Veg/LPG/Provision) get their own Budgeted section.
   if (isPiggyBudget(e.category)) return "PiggyBudget";
   return e.category.section;
+}
+
+// True when this fund-bill line falls on its DUE (bill) month — the full bill is due now, not a
+// saving. Drives the 🧾 Bill tag + the plain label (strip "(monthly share)") so the bill month reads
+// as a bill, while saving months keep "(monthly share)". The "— from fund" credit line is never tagged.
+function isFundBillMonth(e: ExpRow, periodMonth: number): boolean {
+  const c = e.category;
+  if (c.fundingStyle == null || c.billMonth == null || c.billEveryMonths == null) return false;
+  if (e.label.endsWith("— from fund")) return false;
+  return isLumpDue(c.billMonth, c.billEveryMonths, { month: periodMonth });
 }
 
 function monthLabel(month: number, year: number) {
@@ -177,15 +197,22 @@ function ExpenseRow({
         : `This was the last set-aside before the bill — the shortfall will be paid out-of-pocket on the due month.`) +
       `\n\nIt won't come back on a rebuild; Setup stays the template.`;
   const trimmedBy = shortfallTrim(e);
+  // On a fund bill's DUE month, show it as the bill (plain label + 🧾 Bill tag), not "(monthly share)".
+  const billMonthDue = isFundBillMonth(e, periodMonth);
+  const displayLabel = billMonthDue
+    ? e.label.replace(/\s*\(monthly share\)$/, "")
+    : withShareCount(e.label, e.category.billEveryMonths);
   return (
     <Row
-      label={withShareCount(e.label, e.category.billEveryMonths)}
+      label={displayLabel}
       sub={e.category.name}
       emoji={categoryEmoji(e.category.name)}
       tag={e.member?.name}
       amount={e.amount}
       isNew={isNew}
-      extraTag={trimmedBy != null ? (
+      extraTag={billMonthDue ? (
+        <BillTag />
+      ) : trimmedBy != null ? (
         <span
           className="shrink-0 rounded-full bg-amber-100 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-amber-700"
           title={`Trimmed by ${formatINR(trimmedBy)} — last month went over budget, so this is less than the usual ${formatINR(e.category.monthlyBudget ?? 0)}.`}
