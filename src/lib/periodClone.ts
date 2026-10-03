@@ -223,9 +223,9 @@ export async function generateMonth(
       if (t.phase === "share") {
         await mkLine(cat, `${cat.name} (monthly share)`, t.amount, saver);
       } else {
-        await mkLine(cat, cat.name, t.amount, payer); // window / deadline / overdue → payable bill
-        const credit = Math.min(saved, t.amount);
-        if (credit > 0.005) await mkLine(cat, `${cat.name} — from fund`, -credit, payer);
+        // window / deadline / overdue → one payable bill at its price. No separate "from fund" credit
+        // line (clutter) — the accrued pot is applied when the bill is actually paid (payPeriodicBill).
+        await mkLine(cat, cat.name, t.amount, payer);
       }
       continue;
     }
