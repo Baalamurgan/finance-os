@@ -934,7 +934,7 @@ export async function getMiscCardSteps(householdId: number, periodId: number): P
     prisma.budget.findMany({ where: { periodId, categoryId: { in: ids } }, select: { categoryId: true, planned: true } }),
     // The card's envelope line carries its DUE DAY and IS the row edited on the Sheet — the step is dated
     // by it and its id rides along so the plan's date editor writes straight back to that same envelope.
-    prisma.expenseEntry.findMany({ where: { periodId, note: null, categoryId: { in: ids } }, select: { id: true, categoryId: true, dueDay: true } }),
+    prisma.expenseEntry.findMany({ where: { periodId, note: null, categoryId: { in: ids } }, select: { id: true, categoryId: true, dueDay: true, amount: true } }),
     prisma.spend.groupBy({ by: ["categoryId"], where: { periodId, categoryId: { in: ids } }, _count: { _all: true } }),
     prisma.member.findMany({ where: { householdId }, select: { id: true, name: true } }),
   ]);
@@ -943,8 +943,15 @@ export async function getMiscCardSteps(householdId: number, periodId: number): P
   const spentCount = new Map(spendGroups.map((g) => [g.categoryId, g._count._all]));
   const nameOf = (id: number | null) => members.find((m) => m.id === id)?.name ?? "Shared";
   return cats
-    .filter((c) => (planned.get(c.id) ?? 0) > 0) // only cards materialised (budgeted) this month
-    .map((c) => ({ categoryId: c.id, envelopeId: envOf.get(c.id)?.id ?? null, name: c.name, amount: Math.round((planned.get(c.id) ?? 0) * 100) / 100, payerId: c.responsibleMemberId, payerName: nameOf(c.responsibleMemberId), done: (spentCount.get(c.id) ?? 0) > 0, day: envOf.get(c.id)?.dueDay ?? null }));
+    .map((c) => {
+      const env = envOf.get(c.id);
+      // A card materialises with EITHER a budget (the usual tracked card) OR a one-off envelope line that
+      // carries its own amount + due day. Prefer the envelope's amount so a one-off DATED planned expense
+      // (a wedding gift, an advance settlement) also becomes a money-plan bill on its due day.
+      const amount = Math.round(((env?.amount ?? planned.get(c.id)) ?? 0) * 100) / 100;
+      return { categoryId: c.id, envelopeId: env?.id ?? null, name: c.name, amount, payerId: c.responsibleMemberId, payerName: nameOf(c.responsibleMemberId), done: (spentCount.get(c.id) ?? 0) > 0, day: env?.dueDay ?? null };
+    })
+    .filter((s) => s.amount > 0); // only cards materialised this month (a budget or a dated envelope line)
 }
 
 /**
