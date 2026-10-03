@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { scheduleOccurrence, scheduleLabel, isLumpDue, planBillMonth, monthsUntilNextDue, billCyclePhase, billDueAmount } from "@/lib/schedule";
+import { scheduleOccurrence, scheduleLabel, isLumpDue, planBillMonth, monthsUntilNextDue, billCyclePhase, billDueAmount, taxCycleMonth } from "@/lib/schedule";
 
 const P = (year: number, month: number) => ({ year, month });
 
@@ -200,5 +200,32 @@ describe("billDueAmount (incentive + late penalty)", () => {
   it("overdue beats incentive; no penalty rate → full", () => {
     expect(billDueAmount({ billAmount: 1000, earlyAmount: 983, latePenaltyPct: 1, monthsLate: 2, inIncentiveWindow: true }).phase).toBe("overdue");
     expect(billDueAmount({ billAmount: 1000, latePenaltyPct: null, monthsLate: 5 })).toEqual({ amount: 1000, phase: "normal" });
+  });
+});
+
+describe("taxCycleMonth (property/water 'Both' model — ₹1000 bill, early ₹990, 1%/mo, every 6)", () => {
+  const base = { billAmount: 1000, earlyAmount: 990, latePenaltyPct: 1, everyMonths: 6 };
+  it("window month → whole bill at the early price", () => {
+    expect(taxCycleMonth({ ...base, monthsIntoCycle: 0, saved: 0 })).toEqual({ phase: "window", amount: 990 });
+  });
+  it("skipped window → spread over the months left; skipping re-spreads higher", () => {
+    expect(taxCycleMonth({ ...base, monthsIntoCycle: 1, saved: 0 })).toEqual({ phase: "share", amount: 200 });  // Nov 1000/5
+    expect(taxCycleMonth({ ...base, monthsIntoCycle: 2, saved: 0 })).toEqual({ phase: "share", amount: 250 });  // Dec 1000/4 (Nov skipped)
+    expect(taxCycleMonth({ ...base, monthsIntoCycle: 3, saved: 0 })).toEqual({ phase: "share", amount: 333.33 }); // Jan 1000/3 → round2
+  });
+  it("saving reduces the remaining share", () => {
+    expect(taxCycleMonth({ ...base, monthsIntoCycle: 2, saved: 200 })).toEqual({ phase: "share", amount: 200 }); // (1000−200)/4
+  });
+  it("deadline month → the whole remaining (BILL)", () => {
+    expect(taxCycleMonth({ ...base, monthsIntoCycle: 5, saved: 0 })).toEqual({ phase: "deadline", amount: 1000 });
+    expect(taxCycleMonth({ ...base, monthsIntoCycle: 5, saved: 800 })).toEqual({ phase: "deadline", amount: 200 });
+  });
+  it("overdue → remaining + 1%/month simple (April = 1 month late)", () => {
+    expect(taxCycleMonth({ ...base, monthsIntoCycle: 6, saved: 0 })).toEqual({ phase: "overdue", amount: 1010 });   // 1000×1.01
+    expect(taxCycleMonth({ ...base, monthsIntoCycle: 7, saved: 0 })).toEqual({ phase: "overdue", amount: 1020 });   // 1000×1.02
+    expect(taxCycleMonth({ ...base, monthsIntoCycle: 6, saved: 600 })).toEqual({ phase: "overdue", amount: 404 }); // 400×1.01
+  });
+  it("no earlyAmount → window shows the full bill", () => {
+    expect(taxCycleMonth({ billAmount: 1000, everyMonths: 6, monthsIntoCycle: 0 })).toEqual({ phase: "window", amount: 1000 });
   });
 });

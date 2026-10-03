@@ -163,6 +163,46 @@ export function planBillMonth(input: {
   return { kind: "save", contribution: Math.round((remaining / savesLeft) * 100) / 100 };
 }
 
+export type TaxCyclePhase = "window" | "share" | "deadline" | "overdue";
+/**
+ * One month of a tax bill's half-yearly cycle, the "Both" model (see property/water tax):
+ *  • WINDOW month (cycle start, monthsIntoCycle 0): pay the WHOLE bill early at `earlyAmount` (💰), or skip.
+ *  • SHARE months (1 … everyMonths−2): if the window was skipped, the bill spreads over the months LEFT —
+ *    `(billAmount − saved) ÷ (everyMonths − monthsIntoCycle)`. Skipping a share re-spreads over fewer months,
+ *    so the next share RISES (₹1000/5→200 at Nov, →1000/4=250 at Dec if Nov skipped).
+ *  • DEADLINE month (everyMonths−1): the last share = the whole remaining (🧾 BILL).
+ *  • OVERDUE (≥ everyMonths, carried into the next cycle): remaining × (1 + latePenaltyPct%·monthsLate), SIMPLE.
+ * `saved` is what's already been set aside into this cycle's pot (paid shares). Returns the amount to show/pay
+ * THIS month and its phase; amount 0 ⇒ nothing left to pay (already fully funded).
+ */
+export function taxCycleMonth(input: {
+  billAmount: number;
+  earlyAmount?: number | null;
+  latePenaltyPct?: number | null;
+  everyMonths: number;
+  monthsIntoCycle: number; // 0 = window … everyMonths−1 = deadline … ≥ everyMonths = overdue
+  saved?: number;          // already set aside into this cycle's pot
+}): { phase: TaxCyclePhase; amount: number } {
+  const { billAmount, earlyAmount, latePenaltyPct, everyMonths, monthsIntoCycle } = input;
+  const E = Math.max(1, Math.round(everyMonths));
+  const saved = Math.max(0, input.saved ?? 0);
+  const remaining = Math.max(0, round2(billAmount - saved));
+  if (monthsIntoCycle <= 0) {
+    // Window: pay the whole bill early at the incentive price (discount off the FULL bill).
+    return { phase: "window", amount: round2(earlyAmount ?? billAmount) };
+  }
+  if (monthsIntoCycle >= E) {
+    // Overdue — simple penalty on what's still owed, per month past the deadline.
+    const monthsLate = monthsIntoCycle - (E - 1);
+    const pct = latePenaltyPct ?? 0;
+    return { phase: "overdue", amount: round2(remaining * (1 + (pct / 100) * monthsLate)) };
+  }
+  // Share months (incl. the deadline month, where monthsLeft = 1 ⇒ the whole remaining).
+  const monthsLeft = E - monthsIntoCycle; // Nov=5 … Mar=1
+  const share = round2(remaining / monthsLeft);
+  return { phase: monthsIntoCycle === E - 1 ? "deadline" : "share", amount: share };
+}
+
 const MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
 /** Short human summary of a PERIODIC schedule (interval>1), else null. Installments are
