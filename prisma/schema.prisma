@@ -699,6 +699,14 @@ model Category {
   responsibleMemberId Int?     // budget: over-budget excess owner; bill-with-a-fund: the SAVER who sets aside the share & holds it (bears the cost)
   payerMemberId       Int?     // bill-with-a-fund: who physically PAYS the bill on its due month (null → same as the saver). Bill + fund credit tag to them → net ~0.
   onUnpaid    String         @default("carry") // bill-with-a-fund overdue behaviour: "carry" (unpaid share stays in the fund; nag in next month's In-Hand) | "skip" (subscription: release the held share back to general Piggy at wind-down)
+  // Early-payment incentive + late penalty for a periodic bill (e.g. property / water tax). Paid within
+  // the first 30 days of its due month (billMonth) → costs `earlyAmount` instead of billAmount; after the
+  // cycle deadline (billMonth + billEveryMonths − 1, derived) → billAmount accrues `latePenaltyPct`%
+  // SIMPLE interest per month late. Both null = a plain bill, no incentive/penalty. Window + deadline are
+  // DERIVED from billMonth/billEveryMonths, so there are no extra date fields to keep in sync. See
+  // src/lib/schedule.ts (billAmountForMonth). Editable in Setup like every other bill field.
+  earlyAmount    Float?      // discounted price if paid in the incentive window (null = no early discount)
+  latePenaltyPct Float?      // simple % per month on billAmount after the deadline (null = no penalty)
   expenses     ExpenseEntry[]
   budgets      Budget[]
   spends       Spend[]

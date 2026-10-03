@@ -57,6 +57,51 @@ export function monthsUntilNextDue(billMonth: number, everyMonths: number, month
   return k === 0 ? c : k; // in a saving month k∈[1,c-1]; guard 0 → a full cycle away
 }
 
+const round2 = (x: number) => Math.round(x * 100) / 100;
+
+/**
+ * Where `month` sits inside a periodic bill's half-yearly (or N-monthly) cycle anchored at `billMonth`.
+ * `monthsIntoCycle` is 0 on the due month (the cycle START — the early-payment window) and `everyMonths−1`
+ * on the DEADLINE month (the last month to pay before it rolls / goes overdue). E.g. property every-6,
+ * billMonth Oct: Oct→0 (window), Nov→1, …, Mar→5 (deadline). Year-agnostic, like isLumpDue.
+ */
+export function billCyclePhase(billMonth: number, everyMonths: number, month: number): {
+  monthsIntoCycle: number;
+  isDueMonth: boolean;      // the cycle's start = the early-payment window month
+  isDeadlineMonth: boolean; // the cycle's last month = pay-by deadline
+} {
+  const c = Math.max(1, Math.round(everyMonths));
+  const monthsIntoCycle = (((month - billMonth) % c) + c) % c;
+  return { monthsIntoCycle, isDueMonth: monthsIntoCycle === 0, isDeadlineMonth: monthsIntoCycle === c - 1 };
+}
+
+export type BillDuePhase = "incentive" | "normal" | "overdue";
+/**
+ * Amount actually due for a periodic bill, honouring an early-payment incentive and a late penalty —
+ * the property/water-tax model. Both knobs are optional (null ⇒ a plain bill, always `billAmount`):
+ *   • `inIncentiveWindow` + `earlyAmount` set ⇒ the discounted `earlyAmount` (phase "incentive").
+ *   • `monthsLate > 0` + `latePenaltyPct` set ⇒ `billAmount` + SIMPLE `latePenaltyPct`%/month on the FULL
+ *     amount (non-compounding), i.e. billAmount·(1 + pct/100·monthsLate) (phase "overdue").
+ *   • otherwise the full `billAmount` (phase "normal").
+ * `earlyAmount` is stored explicitly (the real incentive isn't a clean % of the bill), so no % guesswork.
+ */
+export function billDueAmount(input: {
+  billAmount: number;
+  earlyAmount?: number | null;
+  latePenaltyPct?: number | null;
+  monthsLate?: number;         // months past the cycle deadline (0 ⇒ on time / still within the cycle)
+  inIncentiveWindow?: boolean; // paying within the early-payment window (first 30 days of the due month)
+}): { amount: number; phase: BillDuePhase } {
+  const { billAmount, earlyAmount, latePenaltyPct, monthsLate = 0, inIncentiveWindow = false } = input;
+  if (monthsLate > 0 && latePenaltyPct != null && latePenaltyPct > 0) {
+    return { amount: round2(billAmount * (1 + (latePenaltyPct / 100) * monthsLate)), phase: "overdue" };
+  }
+  if (inIncentiveWindow && earlyAmount != null) {
+    return { amount: round2(earlyAmount), phase: "incentive" };
+  }
+  return { amount: round2(billAmount), phase: "normal" };
+}
+
 export type FundingStyle = "auto" | "fixed" | "none";
 
 // What a "bill with a fund" category does in a given month (pure — no side effects).

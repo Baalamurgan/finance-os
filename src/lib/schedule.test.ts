@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { scheduleOccurrence, scheduleLabel, isLumpDue, planBillMonth, monthsUntilNextDue } from "@/lib/schedule";
+import { scheduleOccurrence, scheduleLabel, isLumpDue, planBillMonth, monthsUntilNextDue, billCyclePhase, billDueAmount } from "@/lib/schedule";
 
 const P = (year: number, month: number) => ({ year, month });
 
@@ -170,5 +170,35 @@ describe("scheduleLabel", () => {
     expect(scheduleLabel("Chimney EMI", 6, 3)).toBe("Chimney EMI 3/6");
     expect(scheduleLabel("Health insurance", null, null)).toBe("Health insurance");
     expect(scheduleLabel("Health insurance", null, 2)).toBe("Health insurance"); // periodic forever
+  });
+});
+
+describe("billCyclePhase (half-yearly tax cycles)", () => {
+  it("property every-6 anchored Oct: Oct=due/window, Mar=deadline", () => {
+    expect(billCyclePhase(10, 6, 10)).toEqual({ monthsIntoCycle: 0, isDueMonth: true, isDeadlineMonth: false });
+    expect(billCyclePhase(10, 6, 1)).toEqual({ monthsIntoCycle: 3, isDueMonth: false, isDeadlineMonth: false }); // Jan
+    expect(billCyclePhase(10, 6, 3)).toEqual({ monthsIntoCycle: 5, isDueMonth: false, isDeadlineMonth: true }); // Mar = deadline
+    expect(billCyclePhase(10, 6, 4)).toEqual({ monthsIntoCycle: 0, isDueMonth: true, isDeadlineMonth: false }); // Apr = next cycle window
+    expect(billCyclePhase(10, 6, 9)).toEqual({ monthsIntoCycle: 5, isDueMonth: false, isDeadlineMonth: true }); // Sep = deadline
+  });
+});
+
+describe("billDueAmount (incentive + late penalty)", () => {
+  it("early window → the stored early amount; normal → full", () => {
+    expect(billDueAmount({ billAmount: 1185, earlyAmount: 1142, inIncentiveWindow: true })).toEqual({ amount: 1142, phase: "incentive" });
+    expect(billDueAmount({ billAmount: 1185, earlyAmount: 1142, inIncentiveWindow: false })).toEqual({ amount: 1185, phase: "normal" });
+    expect(billDueAmount({ billAmount: 1000, earlyAmount: 983, inIncentiveWindow: true })).toEqual({ amount: 983, phase: "incentive" });
+  });
+  it("no earlyAmount → full even inside the window", () => {
+    expect(billDueAmount({ billAmount: 1185, earlyAmount: null, inIncentiveWindow: true })).toEqual({ amount: 1185, phase: "normal" });
+  });
+  it("late → full + 1%/month SIMPLE on the full amount (user's ₹1470 example)", () => {
+    expect(billDueAmount({ billAmount: 1470, latePenaltyPct: 1, monthsLate: 1 })).toEqual({ amount: 1484.7, phase: "overdue" });
+    expect(billDueAmount({ billAmount: 1470, latePenaltyPct: 1, monthsLate: 2 })).toEqual({ amount: 1499.4, phase: "overdue" });
+    expect(billDueAmount({ billAmount: 1470, latePenaltyPct: 1, monthsLate: 3 })).toEqual({ amount: 1514.1, phase: "overdue" });
+  });
+  it("overdue beats incentive; no penalty rate → full", () => {
+    expect(billDueAmount({ billAmount: 1000, earlyAmount: 983, latePenaltyPct: 1, monthsLate: 2, inIncentiveWindow: true }).phase).toBe("overdue");
+    expect(billDueAmount({ billAmount: 1000, latePenaltyPct: null, monthsLate: 5 })).toEqual({ amount: 1000, phase: "normal" });
   });
 });
