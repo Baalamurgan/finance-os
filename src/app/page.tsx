@@ -20,7 +20,7 @@ import { SheetLockNotice } from "@/components/SheetLockNotice";
 import { RebuildDraftButton } from "@/components/RebuildDraftButton";
 import { SheetRefreshButton } from "@/components/SheetRefreshButton";
 import { PreviewNextMonthButton } from "@/components/PreviewNextMonthButton";
-import { monthsUntilNextDue, isLumpDue } from "@/lib/schedule";
+import { monthsUntilNextDue, isLumpDue, billCyclePhase } from "@/lib/schedule";
 import { SURPLUS_NOTE, LEFTOVER_NOTE, PIGGY_INCOME_NOTE, CARRY_NOTE, DEFERRED_NOTE, REMOVED_NOTE, isPoolNote } from "@/lib/notes";
 
 // Auto brought-forward income (last month's surplus / leftovers, Piggy → income) and this-month's
@@ -37,6 +37,16 @@ function BillTag() {
       className="shrink-0 rounded-full bg-rose-100 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-rose-700"
     >
       🧾 Bill
+    </span>
+  );
+}
+function IncentiveTag() {
+  return (
+    <span
+      title="Early-payment window — pay now for the discounted amount. Skip it and it spreads over the remaining months (and the price rises to the full amount by the deadline, +1%/mo after)."
+      className="shrink-0 rounded-full bg-emerald-100 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-emerald-700"
+    >
+      💰 Incentive bill
     </span>
   );
 }
@@ -106,6 +116,18 @@ function isFundBillMonth(e: ExpRow, periodMonth: number): boolean {
   if (c.fundingStyle == null || c.billMonth == null || c.billEveryMonths == null) return false;
   if (e.label.endsWith("— from fund")) return false;
   return isLumpDue(c.billMonth, c.billEveryMonths, { month: periodMonth });
+}
+
+// Phase of a TAX line (property/water — earlyAmount/latePenaltyPct set) this month: "incentive" in the
+// early-payment window (cycle start, discounted), "bill" on the deadline or when overdue, null for a
+// saving-share month (keeps "(monthly share)") and for the "— from fund" credit line. Drives 💰 vs 🧾.
+function taxPhase(e: ExpRow, periodMonth: number): "incentive" | "bill" | null {
+  const c = e.category;
+  if (c.earlyAmount == null && c.latePenaltyPct == null) return null; // not a tax
+  if (c.billMonth == null || c.billEveryMonths == null) return null;
+  if (e.label.endsWith("— from fund") || e.label.endsWith("(monthly share)")) return null;
+  const { isDueMonth } = billCyclePhase(c.billMonth, c.billEveryMonths, periodMonth);
+  return isDueMonth && c.earlyAmount != null ? "incentive" : "bill";
 }
 
 function monthLabel(month: number, year: number) {
@@ -199,8 +221,10 @@ function ExpenseRow({
         : `This was the last set-aside before the bill — the shortfall will be paid out-of-pocket on the due month.`) +
       `\n\nIt won't come back on a rebuild; Setup stays the template.`;
   const trimmedBy = shortfallTrim(e);
-  // On a fund bill's DUE month, show it as the bill (plain label + 🧾 Bill tag), not "(monthly share)".
-  const billMonthDue = isFundBillMonth(e, periodMonth);
+  // A tax's early-payment window shows 💰 Incentive; a fund bill's due month (or a tax deadline/overdue)
+  // shows 🧾 Bill — both drop the "(monthly share)" suffix. Saving-share months keep it.
+  const tPhase = taxPhase(e, periodMonth);
+  const billMonthDue = tPhase != null || isFundBillMonth(e, periodMonth);
   const displayLabel = billMonthDue
     ? e.label.replace(/\s*\(monthly share\)$/, "")
     : withShareCount(e.label, e.category.billEveryMonths);
@@ -212,7 +236,9 @@ function ExpenseRow({
       tag={e.member?.name}
       amount={e.amount}
       isNew={isNew}
-      extraTag={billMonthDue ? (
+      extraTag={tPhase === "incentive" ? (
+        <IncentiveTag />
+      ) : billMonthDue ? (
         <BillTag />
       ) : trimmedBy != null ? (
         <span

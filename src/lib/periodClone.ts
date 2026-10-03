@@ -1,5 +1,5 @@
 import type { Prisma } from "@prisma/client";
-import { scheduleOccurrence, scheduleLabel, isLumpDue, planBillMonth, type FundingStyle } from "@/lib/schedule";
+import { scheduleOccurrence, scheduleLabel, isLumpDue, planBillMonth, billCyclePhase, taxCycleMonth, type FundingStyle } from "@/lib/schedule";
 
 // Normalise an installment label ("Jewel loan 3/12" → "Jewel loan") so an override recorded on one
 // month's line matches the regenerated source. Mirrors actions.ts::stripInstNumber.
@@ -30,7 +30,7 @@ export async function generateMonth(
   const [period, items, cats, funds, pending, _skips, openPeriods] = await Promise.all([
     tx.period.findUnique({ where: { id: targetId }, select: { year: true, month: true } }),
     tx.recurringItem.findMany({ where: { householdId, active: true }, orderBy: { sortOrder: "asc" } }),
-    tx.category.findMany({ where: { householdId }, select: { id: true, name: true, tracked: true, sinking: true, onHold: true, necessary: true, monthlyBudget: true, responsibleMemberId: true, payerMemberId: true, billEveryMonths: true, billMonth: true, billAmount: true, fundingStyle: true, saveEveryMonths: true, miscCard: true, repeatYearly: true, repeatMonthly: true } }),
+    tx.category.findMany({ where: { householdId }, select: { id: true, name: true, tracked: true, sinking: true, onHold: true, necessary: true, monthlyBudget: true, responsibleMemberId: true, payerMemberId: true, billEveryMonths: true, billMonth: true, billAmount: true, fundingStyle: true, saveEveryMonths: true, earlyAmount: true, latePenaltyPct: true, miscCard: true, repeatYearly: true, repeatMonthly: true } }),
     tx.piggyEntry.groupBy({ by: ["categoryId"], where: { householdId, kind: "sinking" }, _sum: { amount: true } }),
     // set-asides in the CURRENT open month(s) that haven't accrued to the fund yet (accrual is at
     // wind-down) — count them so a draft's shares reflect what the fund WILL hold, not what it holds now.
@@ -209,6 +209,27 @@ export async function generateMonth(
     if (cat.billAmount == null || cat.billAmount <= 0 || cat.billMonth == null || cat.billEveryMonths == null) continue;
     const saver = cat.responsibleMemberId;
     const payer = cat.payerMemberId ?? cat.responsibleMemberId;
+
+    // TAX with an early-payment incentive / late penalty (property / water): the half-yearly "Both" cycle —
+    // window month = pay the whole bill early at earlyAmount; skipped → a monthly share that re-spreads over
+    // the months left; deadline = the whole remaining; past deadline = remaining + 1%/mo. `saved` = the
+    // accrued pot (fund). A window/deadline/overdue month is a payable BILL (+ a fund credit); a share month
+    // is a set-aside. Gated on earlyAmount/latePenaltyPct so plain fund bills (EB/YouTube/Brio) are untouched.
+    if (cat.earlyAmount != null || cat.latePenaltyPct != null) {
+      const { monthsIntoCycle } = billCyclePhase(cat.billMonth, cat.billEveryMonths, period!.month);
+      const saved = Math.max(0, fundByCat.get(cat.id) ?? 0);
+      const t = taxCycleMonth({ billAmount: cat.billAmount, earlyAmount: cat.earlyAmount, latePenaltyPct: cat.latePenaltyPct, everyMonths: cat.billEveryMonths, monthsIntoCycle, saved });
+      if (t.amount <= 0.005) continue;
+      if (t.phase === "share") {
+        await mkLine(cat, `${cat.name} (monthly share)`, t.amount, saver);
+      } else {
+        await mkLine(cat, cat.name, t.amount, payer); // window / deadline / overdue → payable bill
+        const credit = Math.min(saved, t.amount);
+        if (credit > 0.005) await mkLine(cat, `${cat.name} — from fund`, -credit, payer);
+      }
+      continue;
+    }
+
     const plan = planBillMonth({
       billAmount: cat.billAmount,
       billMonth: cat.billMonth,
