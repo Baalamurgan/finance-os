@@ -40,13 +40,14 @@ function BillTag() {
     </span>
   );
 }
-function IncentiveTag() {
+function IncentiveTag({ save, full }: { save?: number; full?: number }) {
+  const saveTxt = save != null && save > 0.005 ? ` · save ${formatINR(save)}` : "";
   return (
     <span
-      title="Early-payment window — pay now for the discounted amount. Skip it and it spreads over the remaining months (and the price rises to the full amount by the deadline, +1%/mo after)."
+      title={`Early-payment window — pay now for the discounted price${full != null ? ` (full is ${formatINR(full)})` : ""}. Skip it and it spreads over the remaining months; the price rises to the full amount by the deadline, +1%/mo after.`}
       className="shrink-0 rounded-full bg-emerald-100 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-emerald-700"
     >
-      💰 Incentive bill
+      💰 Incentive{saveTxt}
     </span>
   );
 }
@@ -249,8 +250,9 @@ function ExpenseRow({
       tag={e.member?.name}
       amount={e.amount}
       isNew={isNew}
+      locked={e.paid}
       extraTag={tPhase === "incentive" ? (
-        <IncentiveTag />
+        <IncentiveTag full={e.category.billAmount ?? undefined} save={e.category.billAmount != null && e.category.earlyAmount != null ? Math.round((e.category.billAmount - e.category.earlyAmount) * 100) / 100 : undefined} />
       ) : billMonthDue ? (
         <BillTag />
       ) : trimmedBy != null ? (
@@ -680,7 +682,7 @@ export default async function SheetPage({
                     </div>
                   </div>
                 ) : (
-                  <Row key={i.id} label={i.source} tag={i.owner?.name} amount={i.amount} isNew={newIncomeIds.has(i.id)} pinnedControl={i.pinned ? <PinnedBadge kind="income" id={i.id} canEdit={canEditHere} /> : i.note != null && KEPT_INCOME_NOTES.has(i.note) ? <KeptTag title="Brought forward from last month — kept through a Sheet refresh" /> : null}>
+                  <Row key={i.id} label={i.source} tag={i.owner?.name} amount={i.amount} isNew={newIncomeIds.has(i.id)} locked={i.receivedAt != null} pinnedControl={i.pinned ? <PinnedBadge kind="income" id={i.id} canEdit={canEditHere} /> : i.note != null && KEPT_INCOME_NOTES.has(i.note) ? <KeptTag title="Brought forward from last month — kept through a Sheet refresh" /> : null}>
                     {c.isHead ? (
                       <IncomeRowActions
                         members={c.members}
@@ -1020,6 +1022,7 @@ function Row({
   pinnedControl,
   extraTag,
   isNew,
+  locked = false,
   children,
 }: {
   label: string;
@@ -1030,12 +1033,23 @@ function Row({
   pinnedControl?: React.ReactNode;
   extraTag?: React.ReactNode; // small status pill after the label (e.g. shortfall-trimmed)
   isNew?: boolean; // first appeared this month (not on last month's sheet)
+  locked?: boolean; // paid/received (done in the Money Plan) → controls inert + not-allowed cursor
   children?: React.ReactNode;
 }) {
   // pull a trailing installment marker ("Chimney EMI 2/6") out into a tag
   const instMatch = label.match(/^(.*?)\s+(\d+\/\d+)$/);
   const baseLabel = instMatch ? instMatch[1] : label;
   const installment = instMatch ? instMatch[2] : null;
+  // A done line is locked: controls stay VISIBLE but inert, with a not-allowed cursor on hover (the outer
+  // span takes the hover/cursor; the inner blocks clicks). Reverse it by unmarking in the Money Plan.
+  const lock = (node: React.ReactNode) =>
+    locked && node ? (
+      <span className="cursor-not-allowed" title="Paid / received — done in the Money Plan. Unmark it there to edit.">
+        <span className="pointer-events-none inline-flex items-center gap-1.5 opacity-40">{node}</span>
+      </span>
+    ) : (
+      node
+    );
   return (
     <div className="flex items-center justify-between py-2.5 text-[15px]">
       <div className="min-w-0">
@@ -1053,7 +1067,7 @@ function Row({
             </span>
           )}
           {extraTag}
-          {pinnedControl}
+          {lock(pinnedControl)}
         </div>
         {(sub || tag) && (
           <div className="text-xs text-slate-400">
@@ -1065,7 +1079,7 @@ function Row({
       </div>
       <div className="flex items-center gap-2 pl-2">
         <span className="tabular-nums text-slate-700">{formatINR(amount)}</span>
-        {children}
+        {lock(children)}
       </div>
     </div>
   );
