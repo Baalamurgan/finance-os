@@ -975,11 +975,18 @@ export async function getTrackedExpenses(householdId: number, periodId: number) 
 
   const plannedByCat = new Map<number, number>();
   for (const b of budgets) plannedByCat.set(b.categoryId, b.planned);
+  // A one-off planned-misc card has an envelope line but no Budget row — use that envelope's amount as
+  // its allocation so it still surfaces (with its budget) in the Spends tab, like a budgeted card.
+  const miscEnvByCat = new Map<number, number>();
+  for (const e of await prisma.expenseEntry.findMany({ where: { periodId, note: null, category: { householdId, tracked: true, miscCard: true } }, select: { categoryId: true, amount: true } })) {
+    if (e.categoryId != null) miscEnvByCat.set(e.categoryId, e.amount);
+  }
 
   const cards = categories.map((cat) => {
     const rows = spends.filter((s) => s.categoryId === cat.id);
     const spent = rows.reduce((sum, s) => sum + s.amount, 0);
-    const allocation = plannedByCat.get(cat.id) ?? 0;
+    let allocation = plannedByCat.get(cat.id) ?? 0;
+    if (allocation === 0 && cat.miscCard) allocation = miscEnvByCat.get(cat.id) ?? 0;
     return {
       id: cat.id,
       name: cat.name,
