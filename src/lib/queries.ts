@@ -1764,6 +1764,11 @@ async function _getRollup(periodId: number) {
   const spendByCat = new Map<number, number>();
   for (const s of spends) spendByCat.set(s.categoryId, (spendByCat.get(s.categoryId) ?? 0) + s.amount);
 
+  // Categories with ≥1 Spend logged this period. A budgeted / planned-misc Sheet row reads "done"
+  // (✓) once ANY spend hits its category — mirrors the Money-Plan step (done = ≥1 spend), so the
+  // two tabs never disagree. Presence, not sum, so even a ₹1 spend marks it done.
+  const spentCatIds = [...new Set(spends.map((s) => s.categoryId))];
+
   // The Personal/Misc bucket (tracked, section "Misc") is expanded into its spend
   // sub-categories (Food, Travel…) so the breakdown shows where misc money actually
   // went. Totals are unchanged — the single "Personal/Misc" row is just split out.
@@ -1819,6 +1824,7 @@ async function _getRollup(periodId: number) {
     ],
     incomes,
     expenses,
+    spentCatIds,
   };
 }
 

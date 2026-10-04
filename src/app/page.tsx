@@ -148,6 +148,16 @@ function isPiggyBudget(cat: ExpRow["category"]): boolean {
   );
 }
 
+// A tracked monthly budget (Veg/Fuel/Non-Veg/LPG/Provision/Milk) or a planned-misc spend card
+// (G704, Ayudha Pooja, a wedding gift): its money goes out as daily Spends, not a single "mark paid".
+// So the Sheet row reads "done" (✓) the instant ANY spend is logged against its category — mirroring
+// the Money-Plan step (done = ≥1 spend), by anyone, even ₹1. Unlike a one-off bill, the HEAD keeps the
+// ⋯ to adjust the amount even after it's done (the budget may still need tuning); everyone else loses
+// the controls, exactly like a paid bill.
+function isBudgetLikeCard(cat: ExpRow["category"]): boolean {
+  return cat.tracked && !cat.sinking && !cat.onHold && cat.fundingStyle == null && (cat.miscCard || isPiggyBudget(cat));
+}
+
 // Which Sheet section an expense line DISPLAYS under (independent of its category's tab):
 // every line of a periodic bill — its set-aside/share, the due-month bill, the fund credit —
 // sits together under Yearly / periodic bills; tracked leftover→Piggy budgets get their own
@@ -252,6 +262,8 @@ function ExpenseRow({
   periodMonth,
   isNew,
   paidCard,
+  spentCats,
+  isHead = false,
 }: {
   e: ExpRow;
   isNew?: boolean;
@@ -263,6 +275,9 @@ function ExpenseRow({
   previewMonth?: boolean;
   // The credit card this bill was paid on (if any) → 💳 badge on the paid row.
   paidCard?: { name: string; last4: string | null; color: string } | null;
+  // Categories with ≥1 spend this period → a budgeted / planned-misc row reads "done".
+  spentCats?: Set<number>;
+  isHead?: boolean;
 }) {
   // A "removed" tombstone: the head deleted this Setup line for the month. Show it struck-through with a
   // Restore control instead of a live row (amount is 0, so it's already out of every total).
@@ -339,6 +354,11 @@ function ExpenseRow({
   if (isNew) tags.push({ key: "new", priority: "high", node: <NewBadge />, label: "✨ New this month" });
   if (e.pinned) tags.push({ key: "pin", priority: "high", node: <PinnedBadge kind="expense" id={e.id} canEdit={canEditHere} />, label: "📌 Pinned (hand-edited)" });
   else if (isKeptLine(e)) tags.push({ key: "kept", priority: "high", node: <KeptTag title="Planned / added this month — kept through a Sheet refresh" />, label: "📌 Kept this month" });
+  // A budgeted / planned-misc card is "done" the moment ≥1 spend is logged against it (mirrors the
+  // Money-Plan step). Fixed bills stay on the explicit paid flag. When done, a budget card lets the
+  // HEAD keep the ⋯ to adjust the amount; every other kind removes its controls like a paid bill.
+  const budgetLike = isBudgetLikeCard(e.category);
+  const done = e.paid || (budgetLike && (spentCats?.has(e.categoryId) ?? false));
   return (
     <Row
       label={displayLabel}
@@ -346,7 +366,8 @@ function ExpenseRow({
       emoji={categoryEmoji(e.category.name)}
       tag={e.member?.name}
       amount={e.amount}
-      locked={e.paid}
+      locked={done}
+      keepActionsWhenDone={budgetLike && isHead}
       tags={tags}
       details={periodic ? billDetailRows(e, paidCard) : undefined}
       detailName={e.category.name}
@@ -399,6 +420,8 @@ function ExpenseSection({
   periodId,
   periodMonth,
   previewMonth = false,
+  spentCats,
+  isHead = false,
 }: {
   g: { section: string; rows: ExpRow[]; subtotal: number };
   canEditHere: boolean;
@@ -408,6 +431,8 @@ function ExpenseSection({
   periodMonth: number;
   previewMonth?: boolean;
   newIds?: Set<number>;
+  spentCats?: Set<number>;
+  isHead?: boolean;
 }) {
   return (
     <details data-persist={`sec-${g.section}`} className="group border-b border-slate-100 last:border-0">
@@ -435,6 +460,8 @@ function ExpenseSection({
             periodMonth={periodMonth}
             previewMonth={previewMonth}
             isNew={newIds?.has(e.id)}
+            spentCats={spentCats}
+            isHead={isHead}
           />
         ))}
       </div>
@@ -536,6 +563,9 @@ export default async function SheetPage({
   ]);
   const newExpenseIds = newLines.expenses;
   const newIncomeIds = newLines.incomes;
+  // Categories that have ≥1 spend this month → their budgeted / planned-misc Sheet rows read "done" (✓),
+  // matching the Money-Plan step (done = ≥1 spend). The head keeps the ⋯ on these; everyone else loses it.
+  const spentCats = new Set(rollup.spentCatIds);
   // Number the "From Piggy" income rows (2), (3)… so multiple withdrawals in a month are distinguishable
   // (the 1st stays unnumbered). Each withdrawal is its own row; its hand-over to the treasurer locks it.
   const piggyIncomeNo = new Map<number, number>();
@@ -840,6 +870,8 @@ export default async function SheetPage({
                       periodMonth={c.selected!.month}
                       previewMonth={previewMonth}
                       newIds={newExpenseIds}
+                      spentCats={spentCats}
+                      isHead={c.isHead}
                     />
                   ))}
                   {canEditHere && (
@@ -892,6 +924,8 @@ export default async function SheetPage({
                           previewMonth={previewMonth}
                           isNew={newExpenseIds.has(e.id)}
                           paidCard={paidCardByCat.get(e.categoryId)}
+                          spentCats={spentCats}
+                          isHead={c.isHead}
                         />
                       ))
                     )}
@@ -954,6 +988,8 @@ export default async function SheetPage({
                             periodMonth={c.selected!.month}
                             previewMonth={previewMonth}
                             isNew={newExpenseIds.has(e.id)}
+                            spentCats={spentCats}
+                            isHead={c.isHead}
                           />
                         ))
                       )}
@@ -1121,6 +1157,7 @@ function Row({
   details,
   detailName,
   locked = false,
+  keepActionsWhenDone = false,
   children,
 }: {
   label: string;
@@ -1132,6 +1169,9 @@ function Row({
   details?: { label: string; value: string }[]; // bill breakdown for the ⓘ popover (periodic bills)
   detailName?: string; // heading for the ⓘ popover (defaults to the row name)
   locked?: boolean; // paid/received (done in the Money Plan) → ✓, not-allowed cursor, controls removed
+  // A budgeted / planned-misc card the HEAD may still adjust after it's done: keep the ⋯ (edit amount)
+  // and don't dim it to "not-allowed", while still showing the ✓. Everyone else loses the controls.
+  keepActionsWhenDone?: boolean;
   children?: React.ReactNode;
 }) {
   // pull a trailing installment marker ("Chimney EMI 2/6") out into a tag
@@ -1145,8 +1185,8 @@ function Row({
   const anyModalContent = tags.length > 0 || (details?.length ?? 0) > 0;
   return (
     <div
-      className={`flex items-center justify-between py-2.5 text-[15px]${locked ? " cursor-not-allowed" : ""}`}
-      title={locked ? "Paid / received — done in the Money Plan. Unmark it there to edit." : undefined}
+      className={`flex items-center justify-between py-2.5 text-[15px]${locked && !keepActionsWhenDone ? " cursor-not-allowed" : ""}`}
+      title={locked ? (keepActionsWhenDone ? "Done — a spend is logged. As head you can still adjust the amount via ⋯." : "Paid / received — done in the Money Plan. Unmark it there to edit.") : undefined}
     >
       <div className="min-w-0">
         <div className="flex items-center gap-1.5">
@@ -1192,8 +1232,9 @@ function Row({
       <div className="flex items-center gap-2 pl-2">
         <span className="tabular-nums text-slate-700">{formatINR(amount)}</span>
         {/* A done row's edit controls (⋯ / skip / remove) are removed entirely — useless once paid and
-            they only crowd the row; unmark it in the Money Plan to edit again. */}
-        {!locked && children}
+            they only crowd the row; unmark it in the Money Plan to edit again. A budgeted / planned-misc
+            card keeps them for the HEAD (keepActionsWhenDone) so the amount stays tunable after a spend. */}
+        {(!locked || keepActionsWhenDone) && children}
       </div>
     </div>
   );
