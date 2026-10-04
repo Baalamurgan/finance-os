@@ -1056,7 +1056,15 @@ function Row({
     >
       <div className="min-w-0">
         <div className="flex items-center gap-1.5">
-          {locked && <span className="shrink-0 font-bold text-emerald-600" aria-label="done" title="Paid / received">✓</span>}
+          {locked && (
+            <span
+              className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-emerald-500 text-[10px] font-bold leading-none text-white"
+              aria-label="done"
+              title="Paid / received"
+            >
+              ✓
+            </span>
+          )}
           {emoji && <span className="shrink-0" aria-hidden>{emoji}</span>}
           <span className={`truncate font-medium ${locked ? "text-slate-500" : "text-slate-800"}`}>{baseLabel}</span>
           {installment && (
