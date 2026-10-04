@@ -3,11 +3,14 @@ import { suggestCategoryName, isLearnable, normalizeItem, resolveCategoryId, sug
 
 describe("suggestCategoryName", () => {
   it("maps the household's staples to the right category", () => {
-    expect(suggestCategoryName("Milk")).toBe("Veg & Fruits");
-    expect(suggestCategoryName("paal")).toBe("Veg & Fruits");
-    expect(suggestCategoryName("Maavu")).toBe("Veg & Fruits");
+    expect(suggestCategoryName("Milk")).toBe("Milk & Maavu");
+    expect(suggestCategoryName("paal")).toBe("Milk & Maavu");
+    expect(suggestCategoryName("Maavu")).toBe("Milk & Maavu");
+    expect(suggestCategoryName("flour")).toBe("Milk & Maavu");
     expect(suggestCategoryName("Coconut")).toBe("Veg & Fruits");
     expect(suggestCategoryName("tomato")).toBe("Veg & Fruits");
+    expect(suggestCategoryName("pazham")).toBe("Veg & Fruits");
+    expect(suggestCategoryName("kaai")).toBe("Veg & Fruits");
     expect(suggestCategoryName("Ration")).toBe("Provision");
     expect(suggestCategoryName("rice")).toBe("Provision");
     expect(suggestCategoryName("Chicken")).toBe("Non-Veg");
@@ -16,7 +19,7 @@ describe("suggestCategoryName", () => {
   });
 
   it("matches a keyword inside a longer label", () => {
-    expect(suggestCategoryName("2 packets milk")).toBe("Veg & Fruits");
+    expect(suggestCategoryName("2 packets milk")).toBe("Milk & Maavu");
     expect(suggestCategoryName("petrol for the car")).toBe("Petrol");
   });
 
@@ -35,7 +38,7 @@ describe("suggestCategoryName", () => {
 
   it("a single learned hit cannot override a seed", () => {
     const learned = [{ keyword: "milk", category: "Non-Veg", hits: 1 }];
-    expect(suggestCategoryName("milk", learned)).toBe("Veg & Fruits");
+    expect(suggestCategoryName("milk", learned)).toBe("Milk & Maavu");
   });
 });
 
@@ -112,10 +115,10 @@ describe("validateSpendLabel", () => {
     expect(validateSpendLabel("", "Provision")).not.toBeNull();
   });
   it("allows a note that names a concrete item", () => {
-    expect(validateSpendLabel("milk", "Veg & Fruits")).toBeNull();
-    expect(validateSpendLabel("paal", "Veg & Fruits")).toBeNull();
-    expect(validateSpendLabel("maavu", "Veg & Fruits")).toBeNull();
-    expect(validateSpendLabel("flour", "Veg & Fruits")).toBeNull();
+    expect(validateSpendLabel("milk", "Milk & Maavu")).toBeNull();
+    expect(validateSpendLabel("paal", "Milk & Maavu")).toBeNull();
+    expect(validateSpendLabel("maavu", "Milk & Maavu")).toBeNull();
+    expect(validateSpendLabel("flour", "Milk & Maavu")).toBeNull();
     expect(validateSpendLabel("vinayagar idol", "Vinayagar chaturthi")).toBeNull();
     expect(validateSpendLabel("krishnar idol", "Krishna jayanthi")).toBeNull();
     expect(validateSpendLabel("doll", "Krishna jayanthi")).toBeNull();

@@ -9,17 +9,25 @@
 // this module keeps only the seed keyword knowledge that powers the on-save suggestion.
 
 /** Seed word → category map that powers the "did you mean {Category}?" nudge. Per the
- *  household's own rules: milk & maavu (flour) live with veg/fruits; rice/dal/oil/etc are
+ *  household's own rules: fruits & veggies are the budgeted (capped) "Veg & Fruits"; milk & maavu
+ *  (flour) have their OWN uncapped category so they don't eat into that cap; rice/dal/oil/etc are
  *  Provision. Keywords must NOT overlap across categories (a word maps to one place). */
 export const SEED_KEYWORDS: { category: string; keywords: string[] }[] = [
   {
+    // Fruits + veggies ONLY — the budgeted (capped) category. Milk & maavu were split out (below).
     category: "Veg & Fruits",
     keywords: [
-      "milk", "paal", "maavu", "flour", "atta", "coconut", "thengai", "tomato", "thakkali",
-      "onion", "vengayam", "greens", "keerai", "vegetable", "vegetables", "veg", "veggies",
-      "fruit", "fruits", "banana", "apple", "carrot", "potato", "urulai", "beans", "brinjal",
-      "kathrikai", "curry leaves", "coriander", "kothamalli", "chilli", "milagai", "lemon",
+      "coconut", "thengai", "tomato", "thakkali", "onion", "vengayam", "greens", "keerai",
+      "vegetable", "vegetables", "veg", "vegg", "veggies", "kai", "kaai", "kaaikari", "kaaigari", "kaigari",
+      "fruit", "fruits", "pazham", "palam", "palangal", "pazhangal", "banana", "apple", "carrot", "potato",
+      "urulai", "beans", "brinjal", "kathrikai", "curry leaves", "coriander", "kothamalli", "chilli", "milagai", "lemon",
     ],
+  },
+  {
+    // Milk & flour (maavu) — intentionally UNCAPPED (its own no-budget category), so daily milk/maavu
+    // doesn't count against the Veg & Fruits cap.
+    category: "Milk & Maavu",
+    keywords: ["milk", "paal", "pal", "maavu", "mavu", "flour", "atta"],
   },
   {
     category: "Provision",
@@ -178,6 +186,12 @@ const UMBRELLA_WORDS = new Set([
   "groceries", "ration", "petrol", "diesel", "fuel", "bunk", "gas",
 ]);
 const FUEL_WORDS = ["petrol", "diesel", "fuel", "bunk"];
+// Concrete seed ITEMS (milk, maavu, tomato, rice…) — specific products, never umbrellas. A note that IS
+// one of these is always meaningful even when it echoes its category's name (e.g. "milk" under the new
+// "Milk & Maavu" category), so it's allowed through rather than flagged "too generic".
+const CONCRETE_SEED = new Set(
+  SEED_KEYWORDS.flatMap((m) => m.keywords).filter((k) => !k.includes(" ") && !UMBRELLA_WORDS.has(k)),
+);
 
 // A note word "is just the category name" when it equals a category-name token or shares a 4+ char prefix
 // with one ("provisions"↔"provision", "krishnar"↔"krishna"). Short tokens (<3) are ignored to stay safe.
@@ -203,7 +217,7 @@ export function validateSpendLabel(label: string, categoryName = ""): string | n
   const catTokens = normalizeItem(categoryName).split(" ").filter(Boolean);
   const words = note.split(" ").filter(Boolean);
   const hasItem = words.some(
-    (w) => !FILLER_WORDS.has(w) && !UMBRELLA_WORDS.has(w) && !echoesCategory(w, catTokens),
+    (w) => CONCRETE_SEED.has(w) || (!FILLER_WORDS.has(w) && !UMBRELLA_WORDS.has(w) && !echoesCategory(w, catTokens)),
   );
   if (hasItem) return null;
   if (words.some((w) => FUEL_WORDS.includes(w))) {
