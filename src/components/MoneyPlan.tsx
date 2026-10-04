@@ -75,6 +75,8 @@ export function MoneyPlan({
   // Keep each step's REAL number (its position in the full plan); when a member is picked, show
   // every step they're part of — done ones too, so the filter is a full picture, not just to-dos.
   const rows = plan.steps.map((s, i) => ({ s, n: i + 1 }));
+  // Vendor of each bill step, so a funding move (funder → payer, tagged to a bill) can name what it funds.
+  const billVendorByKey = new Map(plan.steps.filter((s) => s.kind === "bill" && s.vendor).map((s) => [s.id, s.vendor as string]));
   const shown = who == null
     ? rows
     : rows.filter(({ s }) => s.fromId === who || s.toId === who || s.payerId === who);
@@ -304,6 +306,7 @@ export function MoneyPlan({
                     )}
                     {s.feedsBills && !s.done && <span className="shrink-0 rounded-full bg-indigo-50 px-1.5 py-0.5 text-[9px] font-medium text-indigo-500">funds bills ↓</span>}
                     {s.fundsMember && !s.done && !s.reimbursement && !s.budgetLoan && <span className="shrink-0 rounded-full bg-emerald-50 px-1.5 py-0.5 text-[9px] font-medium text-emerald-600">funds {s.toName} ↓</span>}
+                    {s.fundsBillKey && <span className="shrink-0 rounded-full bg-emerald-100 px-1.5 py-0.5 text-[9px] font-medium text-emerald-700" title={`${s.fromName} covers ${billVendorByKey.get(s.fundsBillKey) ?? `${s.toName}'s bill`} from pool cash they're holding — paid straight to ${s.toName}, no repayment`}>💰 funds {billVendorByKey.get(s.fundsBillKey) ?? s.toName}</span>}
                     {s.reimbursement && <span className="shrink-0 rounded-full bg-emerald-50 px-1.5 py-0.5 text-[9px] font-medium text-emerald-600" title={`${s.toName} is paid back early for what they spent out of pocket last month`}>reimbursement · last month’s spends</span>}
                     {s.budgetLoan && !s.done && <span className="shrink-0 rounded-full bg-violet-50 px-1.5 py-0.5 text-[9px] font-medium text-violet-600" title={`${s.fromName} lends their own budget so ${s.toName}'s bill is paid on time — the hub returns it${s.returnBy != null ? ` by the ${ordinal(s.returnBy)}` : " once income lands"}`}>💜 lends budget{s.returnBy != null ? ` · back by ${ordinal(s.returnBy)}` : ""}</span>}
                     {s.budgetPayback && !s.done && <span className="shrink-0 rounded-full bg-violet-50 px-1.5 py-0.5 text-[9px] font-medium text-violet-600" title={`The hub returns the budget ${s.toName} lent earlier to fund a bill on time`}>↩️ budget returned → {s.toName}</span>}
@@ -329,7 +332,7 @@ export function MoneyPlan({
                       })}
                     </div>
                   )}
-                  {isManual && s.note && (
+                  {isManual && s.note && !s.fundsBillKey && (
                     <div className="mt-0.5 text-[10px] italic text-slate-500">📝 {s.note}</div>
                   )}
                   {/* What a disbursement is FOR — the expense label (e.g. "Harish Urbanrise cleaning reward"),

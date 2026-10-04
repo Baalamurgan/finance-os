@@ -240,6 +240,7 @@ async function promoteToTemplate(
 async function checkAddExpenseFeasible(
   periodId: number,
   hyp: { amount: number; dueDay: number | null; payerId: number | null; label: string; isMisc?: boolean },
+  funders?: { memberId: number; amount: number }[],
 ): Promise<{ ok: true } | { ok: false; reason: string; shortfall?: SaveShortfall; sources?: FundSource[] }> {
   if (hyp.dueDay == null) return { ok: true };
   const period = await prisma.period.findUnique({ where: { id: periodId }, select: { householdId: true, treasurerMemberId: true } });
@@ -263,59 +264,71 @@ async function checkAddExpenseFeasible(
     !hyp.isMisc && hyp.payerId != null
       ? [{ memberId: hyp.payerId, amount: hyp.amount, label: hyp.label, category: { name: hyp.label, section: "Monthly" } }]
       : undefined;
-  const [base, withHyp] = await Promise.all([getMoneyPlan(hh, periodId), getMoneyPlan(hh, periodId, undefined, [hypBill], hypExpense)]);
+  // The chosen funders, folded in as hypothetical tagged funding (funder → payer, no payback) so the
+  // simulation shows what's STILL short after funding — and any knock-on the funding itself creates.
+  const fundingSteps = (funders ?? [])
+    .filter((f) => f.memberId !== hyp.payerId && f.amount > 0.005)
+    .map((f, i) => ({ id: -1 - i, fromId: f.memberId, toId: hyp.payerId!, amount: f.amount, day: hyp.dueDay, done: false, fundsBillKey: "__hyp__" }));
+  const [base, withHyp] = await Promise.all([getMoneyPlan(hh, periodId), getMoneyPlan(hh, periodId, undefined, [hypBill], hypExpense, undefined, fundingSteps)]);
   const inr = (n: number) => formatINR(Math.round(n));
-  // 1. the expense's own payer can't cover it by its due day → offer to fund it from whoever holds
-  //    spare cash right before that step (the dropdown of sources the user picks from).
   const hypStep = withHyp.steps.find((s) => s.id === "__hyp__");
-  if (hypStep?.senderShort != null && hypStep.senderShort > 0.5) {
-    // A member's own (non-misc) bill is pool-funded — the pool now owes them for it (folded in above),
-    // so a remaining shortfall means the pool can't COLLECT the cash by the due day. Block and ask for a
-    // later date rather than offering a peer advance (the treasurer funds it once collected).
-    if (!hyp.isMisc) {
-      return { ok: false, reason: `The pool can't gather ${inr(hypStep.senderShort)} for ${payerName} by day ${hyp.dueDay} — the money isn't collected by then. Try a later due date.` };
-    }
-    // Peer funders = anyone (NOT the payer, NOT the treasurer) holding spare cash right before the step;
-    // each fronts part of the gap as an advance. The treasurer is handled separately as the pool option.
-    const peers: FundSource[] =
-      hyp.payerId == null
-        ? []
-        : members
-            .filter((m) => m.id !== hyp.payerId && m.id !== treasurerId)
-            .map((m) => ({ memberId: m.id, name: m.name, spare: Math.round(hypStep.balancesBefore?.[m.id] ?? 0) }))
-            .filter((s) => s.spare > 0.5)
-            .sort((a, b) => b.spare - a.spare);
-    // For a MISC line under a member, offer the treasurer FIRST as the pool option — pay the full amount
-    // from the pool (no payback), independent of the treasurer's own spare cash. Picking it pool-funds
-    // the whole expense (the modal flips it to poolFund), not a partial advance of the gap.
-    const poolOption: FundSource[] =
-      hyp.isMisc && hyp.payerId != null && treasurerId != null && treasurerId !== hyp.payerId
-        ? [{ memberId: treasurerId, name: treasurerName, spare: Math.round(hyp.amount), isTreasurer: true }]
-        : [];
-    const sources: FundSource[] = [...poolOption, ...peers];
+
+  // 1. A chosen funder doesn't actually hold what they committed → offer someone else for that slice.
+  const shortFunder = withHyp.steps.find((s) => s.fundsBillKey && (s.senderShort ?? 0) > 0.5);
+  if (shortFunder) {
+    const amt = Math.round(shortFunder.senderShort!);
+    const who = members.find((m) => m.id === shortFunder.fromId)?.name ?? "That funder";
+    const peers: FundSource[] = members
+      .filter((m) => m.id !== shortFunder.fromId && m.id !== treasurerId)
+      .map((m) => ({ memberId: m.id, name: m.name, spare: Math.round(shortFunder.balancesBefore?.[m.id] ?? 0) }))
+      .filter((s) => s.spare > 0.5)
+      .sort((a, b) => b.spare - a.spare);
     return {
       ok: false,
-      reason: `${payerName} would be short ${inr(hypStep.senderShort)} on day ${hyp.dueDay}.`,
-      shortfall: hyp.payerId == null ? undefined : { toMemberId: hyp.payerId, toName: payerName, amount: Math.round(hypStep.senderShort), day: hyp.dueDay },
-      sources,
+      reason: `${who} doesn't have ${inr(amt)} spare to fund this — lower their amount or pick someone else.`,
+      shortfall: shortFunder.fromId == null ? undefined : { toMemberId: shortFunder.fromId, toName: who, amount: amt, day: shortFunder.day ?? hyp.dueDay },
+      sources: peers,
     };
   }
-  // 2. it makes some OTHER bill unpayable in time — a knock-on shortfall the plan didn't have before.
-  //    The hyp bill's OWN shortfall is handled in step 1; hub disbursements are now capped to collected
-  //    cash (never over-emitted), so the old hub-short / infeasible-disbursement signals are replaced by
-  //    the per-bill short count: block if adding this expense pushes any other bill into shortfall.
-  if (withHyp.shortBills > base.shortBills) {
-    const baseShort = new Set(base.steps.filter((s) => s.kind === "bill" && (s.senderShort ?? 0) > 0.005).map((s) => s.id));
-    const hit = withHyp.steps.find((s) => s.kind === "bill" && (s.senderShort ?? 0) > 0.005 && s.id !== "__hyp__" && !baseShort.has(s.id));
-    const who = hit?.payerName ?? "another payment";
-    return {
-      ok: false,
-      reason: hit?.infeasibleFrom != null
-        ? `This would leave ${who} short on "${hit.vendor ?? "a bill"}" — payable only from day ${hit.infeasibleFrom}. Try a later due date.`
-        : `This would leave ${who} short on a bill this month. Try a later due date.`,
-    };
-  }
-  return { ok: true };
+
+  // 2. Did adding this expense (net of any funding so far) break the plan? A member's own bill is
+  //    POOL-FUNDED, so the strain usually lands on the TREASURER (over-drawn disbursing to the payer)
+  //    and/or OTHER bills going short — rarely on the new bill itself. Signals: the new bill short, a
+  //    NEW knock-on bill short, or the hub driven further negative than before. None → it's feasible.
+  const baseShortIds = new Set(base.steps.filter((s) => s.kind === "bill" && (s.senderShort ?? 0) > 0.005).map((s) => s.id));
+  const knockOn = withHyp.steps.find((s) => s.kind === "bill" && (s.senderShort ?? 0) > 0.5 && s.id !== "__hyp__" && !baseShortIds.has(s.id));
+  const hubDeficit = (plan: typeof base) => (treasurerId == null ? 0 : Math.max(0, -Math.min(0, ...plan.steps.map((s) => s.balancesAfter?.[treasurerId] ?? 0))));
+  const hubDeepest = Math.max(0, Math.round(hubDeficit(withHyp) - hubDeficit(base))); // the ADDED hub strain
+  const hypShort = Math.round(hypStep?.senderShort ?? 0);
+  if (!knockOn && hubDeepest < 0.5 && hypShort < 0.5) return { ok: true };
+
+  // The family HAS the cash (sheet income ≥ expense) — it's just held by members, not the hub. Offer the
+  // spare-cash holders (never the payer or the treasurer) to cover the gap DIRECTLY (funder → payer, no
+  // payback), suggesting how much is still needed to keep every bill payable on time. For a MISC line the
+  // treasurer stays the "pool pays it" option.
+  const needAmt = Math.max(hypShort, hubDeepest, Math.round(knockOn?.senderShort ?? 0));
+  const peers: FundSource[] = members
+    .filter((m) => m.id !== hyp.payerId && m.id !== treasurerId)
+    .map((m) => ({ memberId: m.id, name: m.name, spare: Math.round(hypStep?.balancesBefore?.[m.id] ?? 0) }))
+    .filter((s) => s.spare > 0.5)
+    .sort((a, b) => b.spare - a.spare);
+  const poolOption: FundSource[] =
+    hyp.isMisc && hyp.payerId != null && treasurerId != null && treasurerId !== hyp.payerId
+      ? [{ memberId: treasurerId, name: treasurerName, spare: Math.round(hyp.amount), isTreasurer: true }]
+      : [];
+  const afterFunding = (funders?.length ?? 0) > 0 ? " even after the funding so far" : "";
+  const reason =
+    hypShort >= 0.5
+      ? `${payerName} would be short ${inr(needAmt)} on day ${hyp.dueDay}${afterFunding} — pick who covers it from cash they're holding.`
+      : knockOn
+        ? `Paying ${payerName}'s ${inr(hyp.amount)} would leave ${knockOn.payerName ?? "another bill"} short ${inr(needAmt)}${afterFunding} — pick who funds ${payerName} directly from held cash.`
+        : `Paying ${payerName}'s ${inr(hyp.amount)} would leave the treasurer short ${inr(needAmt)} for later bills${afterFunding} — pick who funds ${payerName} directly from held cash.`;
+  return {
+    ok: false,
+    reason,
+    shortfall: hyp.payerId == null ? undefined : { toMemberId: hyp.payerId, toName: payerName, amount: needAmt, day: hyp.dueDay },
+    sources: [...poolOption, ...peers],
+  };
 }
 
 // Create (no id) or update (id present). Head/Manager; head may edit closed months.
@@ -432,28 +445,37 @@ async function doSaveExpense(formData: FormData): Promise<{ ok: boolean; error?:
     const pbRaw = String(formData.get("paybackDayOverride") ?? "").trim();
     const pbNum = pbRaw === "" ? null : Number(pbRaw);
     const paybackOverride = pbNum != null && Number.isFinite(pbNum) && pbNum >= 1 && pbNum <= 31 ? Math.round(pbNum) : null;
-    // Timing gate: a DATED expense that can't be paid in order is blocked — UNLESS the user is funding
-    // it. Deferred lines skip the gate (they always settle at wind-down, not against a due date).
-    if (!deferred && !funding && !poolFund) {
-      const feas = await checkAddExpenseFeasible(periodId, { amount, dueDay, payerId: finalMemberId, label, isMisc: category?.section === "Misc" });
+    // Timing gate. Misc lines keep the legacy flow (gate only when NOT funding; funders → advances). A
+    // real (non-misc) bill runs the gate WITH the chosen funders folded in — so it blocks only if
+    // something is STILL short after funding, and returns the next sources (drives the recursive pick).
+    const isMiscLine = category?.section === "Misc";
+    if (!deferred && !poolFund && (isMiscLine ? !funding : true)) {
+      const feas = await checkAddExpenseFeasible(periodId, { amount, dueDay, payerId: finalMemberId, label, isMisc: isMiscLine }, isMiscLine ? undefined : funders);
       if (!feas.ok) return { ok: false, error: feas.reason, shortfall: feas.shortfall, sources: feas.sources };
     }
     // "Repeat every month" (checkbox) → also add to the recurring template so it's generated every
     // month; unchecked → one-off (this month only). A deferred line is always one-off.
     const oneOff = deferred || formData.get("repeat") !== "on";
-    await prisma.expenseEntry.create({
+    const createdExpense = await prisma.expenseEntry.create({
       data: { periodId, categoryId, amount, label, memberId: finalMemberId, necessary, oneOff, dueDay, ...(deferred ? { note: DEFERRED_NOTE } : poolBill ? { note: POOL_BILL_NOTE } : poolFund ? { note: POOL_NOTE } : {}) },
+      select: { id: true },
     });
     if (!oneOff) await promoteToTemplate(periodId, "expense", label, amount, categoryId, finalMemberId);
-    // Record the funding advances (one per funder) so each front + payback appears in the plan.
+    // Funding, one per funder. A MISC line → a round-trip ADVANCE (funder fronts, the hub repays). A real
+    // (non-misc) bill → a TAGGED funding step: the funder deploys pool cash they hold straight to the
+    // payer, earmarked for THIS bill, NO payback (settlement nets unchanged) — placed just above the bill.
     if (funding && !poolFund && finalMemberId != null) {
       let total = 0;
       for (const f of funders) {
         if (f.memberId === finalMemberId) continue; // a member can't fund themselves
-        await prisma.advance.create({ data: { periodId, fromMemberId: f.memberId, toMemberId: finalMemberId, amount: f.amount, day: dueDay, paybackDay: paybackOverride, note: `Funds ${label}` } });
+        if (isMiscLine) {
+          await prisma.advance.create({ data: { periodId, fromMemberId: f.memberId, toMemberId: finalMemberId, amount: f.amount, day: dueDay, paybackDay: paybackOverride, note: `Funds ${label}` } });
+        } else {
+          await prisma.manualPlanStep.create({ data: { periodId, fromMemberId: f.memberId, toMemberId: finalMemberId, amount: f.amount, day: dueDay, fundsExpenseId: createdExpense.id, note: `Funds ${label}` } });
+        }
         total += f.amount;
       }
-      if (total > 0) await logActivity("settlement", "created", `Advance${funders.length > 1 ? "s" : ""} to cover “${label}” (${formatINR(total)})`, periodId);
+      if (total > 0) await logActivity("settlement", "created", `Funding to cover “${label}” (${formatINR(total)})`, periodId);
     }
     await logActivity("expense", "created", `Added ${deferred ? "deferred " : ""}expense “${label}” ${formatINR(amount)}`, periodId);
   }

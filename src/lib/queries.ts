@@ -603,7 +603,7 @@ export async function _getSettlement(
 // executable checklist. Pure ordering/feasibility lives in buildMoneyPlan (unit-tested); this
 // just gathers the inputs from the existing In-Hand + settlement computations (one source of truth).
 export type MoneyPlanResult = Awaited<ReturnType<typeof getMoneyPlan>>;
-export async function getMoneyPlan(householdId: number, periodId: number, inhandArg?: InHand, extraBills?: import("./moneyPlan").PlanBill[], extraExpenses?: SettleTagged[], settlementArg?: Awaited<ReturnType<typeof _getSettlement>>) {
+export async function getMoneyPlan(householdId: number, periodId: number, inhandArg?: InHand, extraBills?: import("./moneyPlan").PlanBill[], extraExpenses?: SettleTagged[], settlementArg?: Awaited<ReturnType<typeof _getSettlement>>, extraManualSteps?: NonNullable<Parameters<typeof import("./moneyPlan").buildMoneyPlan>[0]["manualSteps"]>) {
   const inhand = inhandArg ?? (await getInHand(householdId, periodId));
   const [settlement, incomes, period, household, dayOverrideRows, manualStepRows, hiddenRows, orderRows] = await Promise.all([
     // Preview gate passes extraExpenses → uncached fresh settlement WITH the hypothetical expense
@@ -791,10 +791,17 @@ export async function getMoneyPlan(householdId: number, periodId: number, inhand
       : undefined;
 
   // Head edits to the plan (persisted, so a refresh keeps them): ad-hoc manual moves + hidden steps.
-  const manualSteps = manualStepRows.map((m) => ({
-    id: m.id, fromId: m.fromMemberId, toId: m.toMemberId, fromName: nameById.get(m.fromMemberId), toName: nameById.get(m.toMemberId),
-    amount: m.amount, day: m.day, done: m.done, afterStepKey: m.afterStepKey, note: m.note,
-  }));
+  const manualSteps = [
+    ...manualStepRows.map((m) => ({
+      id: m.id, fromId: m.fromMemberId, toId: m.toMemberId, fromName: nameById.get(m.fromMemberId), toName: nameById.get(m.toMemberId),
+      amount: m.amount, day: m.day, done: m.done, afterStepKey: m.afterStepKey, note: m.note,
+      // A funder→payer move earmarked for an ExpenseEntry bill → the plan-step key the engine funds.
+      fundsBillKey: m.fundsExpenseId != null ? `bill-${m.fundsExpenseId}` : null,
+    })),
+    // Hypothetical funding injected by the add-expense preview (not persisted) — lets the gate simulate
+    // the chosen funders (funder → payer, tagged to the hypothetical bill) and report what's still short.
+    ...(extraManualSteps ?? []),
+  ];
   const hiddenKeys = hiddenRows.map((r) => r.stepKey);
   const orderOverrides = Object.fromEntries(orderRows.map((r) => [r.stepKey, r.sortIndex]));
 

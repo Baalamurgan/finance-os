@@ -41,6 +41,7 @@ export type PlanStep = {
   manualId?: number; // this step is a head-added manual move (write-through to the ManualPlanStep record)
   note?: string | null; // a manual move's optional note — why the sender is paying
   afterStepKey?: string; // a manual step: the step id it's anchored right after (for stable positioning)
+  fundsBillKey?: string | null; // a funder→payer move earmarked to FUND this bill (its plan-step key): shrinks the hub's disbursement to the payer, placed just above the bill
   hidden?: boolean; // a head-hidden derived step — kept for the "un-hide" list but out of the walk/progress
   day: number | null; // effective day-of-month for ordering/display (null = undated)
   paidDay?: number | null; // day-of-month it was ACTUALLY marked paid (done steps only), for a "paid <day>" tag
@@ -100,7 +101,7 @@ export function buildMoneyPlan(input: {
   reimburseByMember?: Record<number, number>; // prior-month out-of-pocket spend each member is owed back
   reimburseDay?: number; // target day to hand back those reimbursements (e.g. the day after wind-down)
   piggyHandover?: { toId: number; toName: string; handoverPeriodId: number; owners: { fromId: number; fromName: string; amount: number; day: number; status?: "overdue" | "soon" | "normal" | null; days?: number | null }[] }; // prior wound-down month's leftover — one tickable step per owner who hands their slice to the Piggy holder
-  manualSteps?: { id: number; fromId: number; toId: number; fromName?: string; toName?: string; amount: number; day?: number | null; done: boolean; afterStepKey?: string | null; note?: string | null }[]; // head-added ad-hoc moves
+  manualSteps?: { id: number; fromId: number; toId: number; fromName?: string; toName?: string; amount: number; day?: number | null; done: boolean; afterStepKey?: string | null; note?: string | null; fundsBillKey?: string | null }[]; // head-added ad-hoc moves (fundsBillKey → a funder→payer move earmarked for that bill)
   poolHandovers?: { key?: string; fromId: number; fromName: string; toId: number; toName: string; amount: number; detail: string; recordIds: number[]; piggyIncomeIds?: number[]; done: boolean; day: number | null; status?: "overdue" | "soon" | "normal" | null; days?: number | null }[]; // prior-month cash (leftover→income and/or Piggy→income) a holder hands to the treasurer. `key` overrides the step id (distinct per piggy batch); `piggyIncomeIds` = a piggy-income batch (ticks via togglePiggyHandover, locking those rows)
   openingByMember?: Record<number, number>; // each member's carry (prior-month closing personal) — the cash they actually START the month holding, so the walk opens from reality instead of 0
   hiddenKeys?: string[]; // step ids the head has hidden from the plan view
@@ -123,6 +124,27 @@ export function buildMoneyPlan(input: {
   // is later. Undated bills contribute 0 here — a bill with no due date shouldn't push the payout later.
   const lastDay = Math.max(1, ...inbound.map((t) => incomeDayByMember[t.fromId] ?? 1), ...bills.map((b) => b.day ?? 0));
   const hasHubBills = bills.some((b) => b.payerId === treasurerId && !b.done);
+
+  // ── Tagged funding (funder → payer, earmarked for a specific bill) ──────────────────────────────
+  // A head-chosen funding move: a member HOLDING pool cash pays part/all of another member's bill
+  // DIRECTLY (funder → payer), placed just above that bill. It reduces the pool's disbursement to the
+  // payer by its amount (the funder covers it, so the hub doesn't ALSO pay it — no double-fund) and
+  // feeds the payer's liquidity right before the bill. Net pool-cash choreography, no payback leg: the
+  // settlement NETS are unchanged (who ultimately owes whom is reconciled at wind-down, like any manual
+  // move). Keyed by the bill's plan-step key (b.key). Per payer: the funding events (dated at the bill)
+  // and the running total that trims the hub's disbursement.
+  const fundingEventsByPayer = new Map<number, { day: number; amount: number }[]>();
+  const fundingTotalByPayer = new Map<number, number>();
+  for (const m of manualSteps) {
+    if (!m.fundsBillKey) continue;
+    const b = bills.find((x) => x.key === m.fundsBillKey);
+    if (!b || b.payerId == null) continue; // dangling tag → treated as a plain manual move
+    const amt = Math.round(m.amount * 100) / 100;
+    const list = fundingEventsByPayer.get(b.payerId) ?? [];
+    list.push({ day: b.day ?? lastDay, amount: amt });
+    fundingEventsByPayer.set(b.payerId, list);
+    fundingTotalByPayer.set(b.payerId, Math.round(((fundingTotalByPayer.get(b.payerId) ?? 0) + amt) * 100) / 100);
+  }
   // Each income event with the day it lands (undated → up front). Shared by the scheduler AND the walk.
   const arrivalList: { memberId: number; day: number | null; amount: number; source?: string; name?: string; id?: number; received?: boolean }[] =
     incomeArrivals ?? Object.entries(incomeByMember).map(([k, v]) => ({ memberId: Number(k), day: null, amount: v }));
@@ -286,6 +308,8 @@ export function buildMoneyPlan(input: {
   const needsOf = (creditorId: number): { day: number; amount: number }[] => {
     const evs = [
       ...incomeOf(creditorId).map((e) => ({ ...e, in: true, done: false })),
+      // Tagged funding lands as an inflow to the payer right before the funded bill, shrinking its need.
+      ...(fundingEventsByPayer.get(creditorId) ?? []).map((e) => ({ day: e.day, amount: e.amount, in: true, done: false })),
       ...cashBillsOf(creditorId).map((e) => ({ ...e, in: false })),
     ].sort((a, b) => a.day - b.day || (a.in === b.in ? 0 : a.in ? -1 : 1)); // income lands before you pay, same day
     let self = 0;
@@ -353,6 +377,11 @@ export function buildMoneyPlan(input: {
   let hubReserved = 0; // hub cash reserved for budget paybacks, so two paybacks never claim the same rupee
 
   const owed = new Map<number, number>(unsettledOut.map((o) => [o.toId!, o.amount]));
+  // Tagged funding pre-covers part of what the pool owes the payer, so the hub disburses that much less
+  // (the remaining need is funded by the funder→payer step). Mirrors how a reroute shrinks a disbursement.
+  for (const [payerId, total] of fundingTotalByPayer) {
+    if (owed.has(payerId)) owed.set(payerId, Math.max(0, Math.round((owed.get(payerId)! - total) * 100) / 100));
+  }
   const recOf = new Map<number, { name: string; recordId: number | null }>(unsettledOut.map((o) => [o.toId!, { name: o.to, recordId: o.recordId }]));
   // Dated needs are bill-driven. Then — for each net-receiver — their prior-month spend reimbursement is
   // injected as a need on `reimburseDay` (e.g. the day after wind-down): pay people back for what they
@@ -539,9 +568,19 @@ export function buildMoneyPlan(input: {
   // gone (its bill was removed, say) fall back to the manual's own day. afterStepKey null → top.
   const manualObjs: PlanStep[] = manualSteps.map((m) => ({
     id: `manual-${m.id}`, kind: "manual", day: m.day ?? null, amount: Math.round(m.amount * 100) / 100, done: m.done,
-    fromId: m.fromId, toId: m.toId, fromName: m.fromName, toName: m.toName, manualId: m.id, note: m.note ?? null, afterStepKey: m.afterStepKey ?? undefined, status: null, days: null,
+    fromId: m.fromId, toId: m.toId, fromName: m.fromName, toName: m.toName, manualId: m.id, note: m.note ?? null, afterStepKey: m.afterStepKey ?? undefined, fundsBillKey: m.fundsBillKey ?? null, status: null, days: null,
   }));
-  const pendingManual = manualObjs.slice();
+  // Tagged funding steps anchor to the BILL they fund: spliced in just ABOVE that bill (same day) so the
+  // walk credits the payer right before they pay. Done first so they skip the afterStepKey chain below;
+  // if the bill isn't in the plan, they fall through to the normal manual placement.
+  const pendingManual: PlanStep[] = [];
+  for (const m of manualObjs) {
+    if (m.fundsBillKey) {
+      const bi = steps.findIndex((s) => s.id === m.fundsBillKey);
+      if (bi >= 0) { m.day = steps[bi].day ?? m.day; steps.splice(bi, 0, m); continue; }
+    }
+    pendingManual.push(m);
+  }
   let manualGuard = 0;
   while (pendingManual.length && manualGuard++ < 2000) {
     let moved = false;
@@ -634,6 +673,7 @@ export function buildMoneyPlan(input: {
         // they don't hold, so any gap surfaces on the bill it was meant to fund, not on the transfer.
         // (hubShortfall is kept as an internal safety signal only; it's not rendered on transfers.)
         if (s.kind === "bill") s.senderShort = short;
+        else if (s.fundsBillKey) s.senderShort = short; // a funder who can't cover the funding they committed
         else if (senderId === treasurerId) hubShortfall = Math.max(hubShortfall, short);
       }
     }

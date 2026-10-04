@@ -900,3 +900,68 @@ describe("doneCashMoveByMember", () => {
     expect(d[5]).toBeUndefined(); // hidden step ignored
   });
 });
+
+describe("buildMoneyPlan — tagged funding (funder → payer for a specific bill)", () => {
+  it("funder covers the payer's bill directly, shrinking the hub disbursement (no double-fund)", () => {
+    const plan = buildMoneyPlan({
+      treasurerId: T,
+      treasurerName: "A",
+      transfers: [
+        xfer({ fromId: 3, toId: T, amount: 100, settled: false }), // hub collects 100 on day 1
+        xfer({ fromId: T, from: "A", toId: 2, to: "P", amount: 100 }), // pool owes payer 2 their 100
+      ],
+      bills: [bill({ key: "bill-X", payerId: 2, payerName: "P", vendor: "BOB", amount: 100, day: 5 })],
+      incomeDayByMember: { 3: 1 },
+      openingByMember: { 4: 100 }, // funder 4 is holding 100 of pool cash
+      manualSteps: [{ id: 1, fromId: 4, toId: 2, fromName: "F", toName: "P", amount: 100, day: 5, done: false, fundsBillKey: "bill-X" }],
+    });
+    const iFund = plan.steps.findIndex((s) => s.fundsBillKey === "bill-X");
+    const iBill = plan.steps.findIndex((s) => s.id === "bill-X");
+    expect(iFund).toBeGreaterThanOrEqual(0);
+    expect(iFund).toBe(iBill - 1); // the funder sits immediately ABOVE the bill it funds
+    // The hub does NOT also disburse to the payer — no double-fund.
+    const hubToPayer = plan.steps.filter((s) => s.kind === "transfer-out" && s.fromId === T && s.toId === 2).reduce((a, s) => a + s.amount, 0);
+    expect(hubToPayer).toBe(0);
+    expect(plan.steps[iBill].senderShort ?? 0).toBe(0);
+    expect(plan.shortBills).toBe(0);
+    expect(plan.steps[iFund].balancesAfter?.[4]).toBe(0); // funder paid out their 100
+    expect(plan.steps[iBill].balancesAfter?.[2] ?? 0).toBe(0); // payer got 100, paid the 100 bill
+  });
+
+  it("splits one bill across multiple funders with chosen amounts", () => {
+    const plan = buildMoneyPlan({
+      treasurerId: T,
+      treasurerName: "A",
+      transfers: [xfer({ fromId: T, from: "A", toId: 2, to: "P", amount: 100 })],
+      bills: [bill({ key: "bill-X", payerId: 2, payerName: "P", vendor: "BOB", amount: 100, day: 5 })],
+      incomeDayByMember: {},
+      openingByMember: { 4: 60, 5: 40 },
+      manualSteps: [
+        { id: 1, fromId: 4, toId: 2, amount: 60, day: 5, done: false, fundsBillKey: "bill-X" },
+        { id: 2, fromId: 5, toId: 2, amount: 40, day: 5, done: false, fundsBillKey: "bill-X" },
+      ],
+    });
+    const iBill = plan.steps.findIndex((s) => s.id === "bill-X");
+    const funders = plan.steps.filter((s) => s.fundsBillKey === "bill-X");
+    expect(funders.length).toBe(2);
+    expect(funders.every((s) => plan.steps.indexOf(s) < iBill)).toBe(true); // both above the bill
+    const hubToPayer = plan.steps.filter((s) => s.kind === "transfer-out" && s.fromId === T && s.toId === 2).reduce((a, s) => a + s.amount, 0);
+    expect(hubToPayer).toBe(0); // fully funded by the two members
+    expect(plan.steps[iBill].senderShort ?? 0).toBe(0);
+    expect(plan.steps[iBill].balancesAfter?.[2] ?? 0).toBe(0);
+  });
+
+  it("flags a funder who doesn't hold enough cash to cover what they committed", () => {
+    const plan = buildMoneyPlan({
+      treasurerId: T,
+      treasurerName: "A",
+      transfers: [xfer({ fromId: T, from: "A", toId: 2, to: "P", amount: 100 })],
+      bills: [bill({ key: "bill-X", payerId: 2, payerName: "P", vendor: "BOB", amount: 100, day: 5 })],
+      incomeDayByMember: {},
+      openingByMember: { 4: 30 }, // only 30 in hand, but commits 100
+      manualSteps: [{ id: 1, fromId: 4, toId: 2, amount: 100, day: 5, done: false, fundsBillKey: "bill-X" }],
+    });
+    const fund = plan.steps.find((s) => s.fundsBillKey === "bill-X")!;
+    expect(fund.senderShort ?? 0).toBeCloseTo(70, 2); // short by 100 − 30 in hand
+  });
+});

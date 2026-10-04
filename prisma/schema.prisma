@@ -804,6 +804,9 @@ model ManualPlanStep {
   fromMemberId Int // sender (a member; the hub = the treasurer's member id)
   toMemberId   Int // receiver
   amount       Float
+  // When set, this is a FUNDING move earmarked for that ExpenseEntry bill (funder → payer): the plan
+  // shrinks the hub's disbursement to the payer by this amount and places the move just above the bill.
+  fundsExpenseId Int?
   afterStepKey String? // the plan-step id this was inserted AFTER (null = top of the list)
   day          Int? // fallback ordering / display if the anchor step is gone
   note         String?
