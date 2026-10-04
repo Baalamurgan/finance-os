@@ -15,6 +15,7 @@ import { PinnedBadge } from "@/components/PinnedBadge";
 import { RemovedBadge } from "@/components/RemovedBadge";
 import { BalancePiggyCard } from "@/components/BalancePiggyCard";
 import { TruncatedName } from "@/components/TruncatedName";
+import { BillDetails } from "@/components/BillDetails";
 import { MoneyFlowDonut } from "@/components/Charts";
 import { ConfirmForm } from "@/components/ConfirmForm";
 import { SheetLockNotice } from "@/components/SheetLockNotice";
@@ -29,13 +30,18 @@ import { SURPLUS_NOTE, LEFTOVER_NOTE, PIGGY_INCOME_NOTE, CARRY_NOTE, DEFERRED_NO
 // template lines, so these are never re-pulled from Setup. A small tag makes that reassurance visible.
 const KEPT_INCOME_NOTES = new Set<string>([SURPLUS_NOTE, LEFTOVER_NOTE, PIGGY_INCOME_NOTE]);
 function KeptTag({ title }: { title: string }) {
-  return <span title={title} className="shrink-0 rounded-full bg-amber-50 px-1.5 py-0.5 text-[9px] font-medium text-amber-600">📌 kept</span>;
+  return <span title={title} className="shrink-0 whitespace-nowrap rounded-full bg-amber-50 px-1.5 py-0.5 text-[9px] font-medium text-amber-600">📌 kept</span>;
+}
+// How often a periodic bill recurs — a muted metadata pill (not an alert), so "yearly / half-yearly"
+// reads at a glance without competing with the actionable 💰/🧾 pills.
+function CadencePill({ label }: { label: string }) {
+  return <span title={`Recurs ${label.toLowerCase()}`} className="shrink-0 whitespace-nowrap rounded-full bg-slate-100 px-1.5 py-0.5 text-[9px] font-medium text-slate-500">🔁 {label}</span>;
 }
 function BillTag() {
   return (
     <span
       title="Bill due this month — the full amount is due now (the fund covers it). It's not a monthly saving this month, so don't skip it unless you mean to."
-      className="shrink-0 rounded-full bg-rose-100 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-rose-700"
+      className="shrink-0 whitespace-nowrap rounded-full bg-rose-100 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-rose-700"
     >
       🧾 Bill
     </span>
@@ -46,11 +52,46 @@ function IncentiveTag({ save, full }: { save?: number; full?: number }) {
   return (
     <span
       title={`Early-payment window — pay now for the discounted price${full != null ? ` (full is ${formatINR(full)})` : ""}. Skip it and it spreads over the remaining months; the price rises to the full amount by the deadline, +1%/mo after.`}
-      className="shrink-0 rounded-full bg-emerald-100 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-emerald-700"
+      className="shrink-0 whitespace-nowrap rounded-full bg-emerald-100 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-emerald-700"
     >
       💰 Incentive{saveTxt}
     </span>
   );
+}
+// A periodic / fund bill (recurs on a due month, or has a sinking fund). Gets the bill-identity
+// treatment on the Sheet: a 🔁 cadence pill, a due-date sub-line, and a tap-for-details ⓘ popover.
+function isPeriodicBill(cat: ExpRow["category"]): boolean {
+  return (cat.billMonth != null && cat.billEveryMonths != null) || cat.fundingStyle != null;
+}
+// How often the bill recurs, in words (null = not recurring).
+function cadenceLabel(everyMonths: number | null | undefined): string | null {
+  if (everyMonths == null) return null;
+  const map: Record<number, string> = { 1: "Monthly", 2: "Every 2 months", 3: "Quarterly", 6: "Half-yearly", 12: "Yearly" };
+  return map[everyMonths] ?? `Every ${everyMonths} months`;
+}
+// The bill's configured due date as "5 Oct" (or just "Oct" if no day is set). null = no due month.
+function dueDateLabel(cat: ExpRow["category"]): string | null {
+  if (cat.billMonth == null) return null;
+  const mon = new Date(2000, cat.billMonth - 1, 1).toLocaleString("en-US", { month: "short" });
+  return cat.billDay != null ? `${cat.billDay} ${mon}` : mon;
+}
+// Full detail set for the ⓘ popover — everything about the bill, so the row itself stays uncluttered.
+function billDetailRows(e: ExpRow, paidCard?: { name: string; last4: string | null; color: string } | null): { label: string; value: string }[] {
+  const c = e.category;
+  const rows: { label: string; value: string }[] = [];
+  const cad = cadenceLabel(c.billEveryMonths);
+  if (cad) rows.push({ label: "Recurs", value: c.billEveryMonths != null && c.billEveryMonths > 1 ? `${cad} (every ${c.billEveryMonths} mo)` : cad });
+  const due = dueDateLabel(c);
+  if (due) rows.push({ label: "Due", value: due });
+  if (c.fundingStyle === "auto") rows.push({ label: "Funded by", value: "Sinking fund — set aside monthly" });
+  else if (c.fundingStyle === "fixed") rows.push({ label: "Funded by", value: "Sinking fund — fixed monthly" });
+  else if (c.fundingStyle === "none") rows.push({ label: "Funded by", value: "Paid in full on the due month" });
+  rows.push({ label: "This month", value: formatINR(e.amount) });
+  if (c.billAmount != null && Math.abs(c.billAmount - e.amount) > 0.005) rows.push({ label: "Full bill", value: formatINR(c.billAmount) });
+  if (c.earlyAmount != null && c.billAmount != null) rows.push({ label: "Early incentive", value: `Save ${formatINR(Math.round((c.billAmount - c.earlyAmount) * 100) / 100)} if paid early` });
+  rows.push({ label: "Late penalty", value: c.latePenaltyPct != null ? `${c.latePenaltyPct}%/mo after the deadline` : "None" });
+  if (e.paid) rows.push({ label: "Status", value: paidCard ? `Paid · 💳 ${paidCard.name}${paidCard.last4 ? ` ••${paidCard.last4}` : ""}` : "Paid" });
+  return rows;
 }
 // 💳 Paid-on-card badge for a fund bill settled on a credit card. Tinted with the card's own colour.
 // The fund still covered the bill — this only says the cash rode that card's statement.
@@ -262,29 +303,42 @@ function ExpenseRow({
   const displayLabel = billMonthDue
     ? e.label.replace(/\s*\(monthly share\)$/, "")
     : withShareCount(e.label, e.category.billEveryMonths);
+  // Periodic / fund bills carry a cadence pill + a due-date sub-line + a tap-for-details ⓘ, so one row
+  // reads as a complete bill without clutter (the full breakdown lives in the popover).
+  const periodic = isPeriodicBill(e.category);
+  const cad = cadenceLabel(e.category.billEveryMonths);
+  const due = dueDateLabel(e.category);
+  // The one status pill: 💰 incentive / 🧾 bill (due now) / ✂️ trimmed / 💳 paid-on-card (null = none).
+  const phaseTag = tPhase === "incentive" ? (
+    <IncentiveTag full={e.category.billAmount ?? undefined} save={e.category.billAmount != null && e.category.earlyAmount != null ? Math.round((e.category.billAmount - e.category.earlyAmount) * 100) / 100 : undefined} />
+  ) : billMonthDue ? (
+    <BillTag />
+  ) : trimmedBy != null ? (
+    <span
+      className="shrink-0 whitespace-nowrap rounded-full bg-amber-100 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-amber-700"
+      title={`Trimmed by ${formatINR(trimmedBy)} — last month went over budget, so this is less than the usual ${formatINR(e.category.monthlyBudget ?? 0)}.`}
+    >
+      ✂️ Trimmed
+    </span>
+  ) : paidCard ? (
+    <CardTag name={paidCard.name} last4={paidCard.last4} color={paidCard.color} />
+  ) : null;
   return (
     <Row
       label={displayLabel}
-      sub={e.category.name}
+      sub={periodic && due ? `Due ${due}` : e.category.name}
       emoji={categoryEmoji(e.category.name)}
       tag={e.member?.name}
       amount={e.amount}
       isNew={isNew}
       locked={e.paid}
-      extraTag={tPhase === "incentive" ? (
-        <IncentiveTag full={e.category.billAmount ?? undefined} save={e.category.billAmount != null && e.category.earlyAmount != null ? Math.round((e.category.billAmount - e.category.earlyAmount) * 100) / 100 : undefined} />
-      ) : billMonthDue ? (
-        <BillTag />
-      ) : trimmedBy != null ? (
-        <span
-          className="shrink-0 rounded-full bg-amber-100 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-amber-700"
-          title={`Trimmed by ${formatINR(trimmedBy)} — last month went over budget, so this is less than the usual ${formatINR(e.category.monthlyBudget ?? 0)}.`}
-        >
-          ✂️ Trimmed
-        </span>
-      ) : paidCard ? (
-        <CardTag name={paidCard.name} last4={paidCard.last4} color={paidCard.color} />
-      ) : undefined}
+      extraTag={periodic ? (
+        <>
+          {phaseTag}
+          {cad && <CadencePill label={cad} />}
+          <BillDetails name={e.category.name} rows={billDetailRows(e, paidCard)} />
+        </>
+      ) : (phaseTag ?? undefined)}
       pinnedControl={e.pinned ? <PinnedBadge kind="expense" id={e.id} canEdit={canEditHere} /> : isKeptLine(e) ? <KeptTag title="Planned / added this month — kept through a Sheet refresh" /> : null}
     >
       {canEditHere && isSetAside && (
