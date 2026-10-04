@@ -562,11 +562,8 @@ export async function deleteIncome(formData: FormData) {
     await prisma.incomeEntry.update({ where: { id }, data: { note: REMOVED_NOTE, amount: 0, pinned: true, oneOff: true } });
   } else {
     await prisma.incomeEntry.delete({ where: { id } });
-    // Removing a general-Piggy income line shrinks (or clears) the holder's hand-over to the treasurer.
-    if (i.note === PIGGY_INCOME_NOTE) {
-      const period = await prisma.period.findUnique({ where: { id: i.periodId }, select: { householdId: true } });
-      if (period) await syncPiggyHandover(period.householdId, i.periodId);
-    }
+    // A general-Piggy income line's hand-over step is derived from the remaining piggy income (by
+    // receivedAt), so deleting the line just removes it from its batch — nothing else to sync.
   }
   await logActivity("income", "deleted", `Removed income “${i.source}” ${formatINR(i.amount)}`, i.periodId);
   revalidateFamily();
@@ -1378,40 +1375,37 @@ export async function withdrawPiggy(formData: FormData) {
       data: { periodId, source: `From Piggy: ${note}`, amount, oneOff: true, note: sinkingCatId ? null : PIGGY_INCOME_NOTE },
     });
   });
-  if (!sinkingCatId) await syncPiggyHandover(household.id, periodId);
   await logActivity("piggy", "updated", `Used Piggy ${formatINR(amount)} — ${note}`, periodId);
   revalidateFamily();
 }
 
-// Keep the "general Piggy taken as income" hand-over (PoolHandover kind "piggy") in sync with the
-// marked income lines: the Piggy holder physically holds that cash until they hand it to the treasurer.
-// Re-derived from the marked lines so it self-corrects when one is added OR deleted. A no-op amount, or
-// a Piggy holder who IS the treasurer, clears the row (cash already at the hub).
-async function syncPiggyHandover(householdId: number, periodId: number) {
-  const [household, period, head] = await Promise.all([
-    prisma.household.findUnique({ where: { id: householdId }, select: { treasurerMemberId: true, piggyHolderMemberId: true } }),
-    prisma.period.findUnique({ where: { id: periodId }, select: { treasurerMemberId: true } }),
-    prisma.member.findFirst({ where: { householdId, role: "head" }, select: { id: true } }),
-  ]);
-  const treasurerId = period?.treasurerMemberId ?? household?.treasurerMemberId ?? head?.id ?? null;
-  const holderId = household?.piggyHolderMemberId ?? head?.id ?? null;
-  // Only UNHANDED (receivedAt null) piggy income is still pending to the treasurer — a batch already
-  // handed over keeps its ✓ lock and drops out, so a later withdrawal re-opens a step for just the new
-  // amount (not the running total).
-  const agg = await prisma.incomeEntry.aggregate({ where: { periodId, note: PIGGY_INCOME_NOTE, receivedAt: null }, _sum: { amount: true } });
-  const total = Math.round((agg._sum.amount ?? 0) * 100) / 100;
-  if (holderId == null || holderId === treasurerId || total <= 0.005) {
-    if (holderId != null) await prisma.poolHandover.deleteMany({ where: { periodId, fromMemberId: holderId, kind: "piggy" } });
-    return;
-  }
-  await prisma.poolHandover.upsert({
-    where: { periodId_fromMemberId_kind: { periodId, fromMemberId: holderId, kind: "piggy" } },
-    create: { periodId, householdId, fromMemberId: holderId, kind: "piggy", amount: total, detail: null },
-    // Re-open on any change: a NEW withdrawal after an earlier hand-over means fresh cash to hand to the
-    // treasurer, so the step becomes tickable again (already-handed rows keep their ✓ lock).
-    update: { amount: total, handedOverAt: null },
-  });
+// Hand a batch of "general Piggy taken as income" to the treasurer (or undo). `ids` = the IncomeEntry ids
+// in the batch. Setting their receivedAt both marks the Money-Plan batch step done AND locks those Sheet
+// income rows (✓). The batch step is DERIVED from income.receivedAt (see getMoneyPlan) — no PoolHandover
+// row — so a later withdrawal naturally forms a fresh open batch. receivedAt on these ownerId-null lines
+// is inert in the In-Hand/liquidity walk (incomeArrivals skips ownerId-null); the cash move is modelled by
+// the batch's pool-handover step. Holder or head/manager may tick it (the two parties to the hand-over).
+export async function togglePiggyHandover(formData: FormData) {
+  const session = await auth();
+  const memberId = session?.user?.memberId ?? null;
+  if (!(await unlocked())) await relock("togglePiggyHandover");
+  const ids = String(formData.get("ids") ?? "").split(",").map((s) => Number(s.trim())).filter((n) => n > 0);
+  if (ids.length === 0) return;
+  const incs = await prisma.incomeEntry.findMany({ where: { id: { in: ids }, note: PIGGY_INCOME_NOTE }, select: { id: true, periodId: true, receivedAt: true, period: { select: { householdId: true } } } });
+  if (incs.length === 0) return;
+  const periodId = incs[0].periodId;
+  if (!incs.every((i) => i.periodId === periodId)) return;
+  const householdId = incs[0].period.householdId;
+  const hh = await prisma.household.findUnique({ where: { id: householdId }, select: { piggyHolderMemberId: true } });
+  const isHolder = memberId != null && hh?.piggyHolderMemberId != null && memberId === hh.piggyHolderMemberId;
+  if (!(await canEdit()) && !isHolder) { log.warn("togglePiggyHandover", "blocked", { outcome: "blocked", reason: "not-allowed", memberId, periodId }); return; }
+  if (!(await canEdit()) && !(await periodOpen(periodId))) { log.warn("togglePiggyHandover", "blocked", { outcome: "blocked", reason: "period-locked", memberId, periodId }); return; }
+  const allDone = incs.every((i) => i.receivedAt != null);
+  await prisma.incomeEntry.updateMany({ where: { id: { in: ids } }, data: { receivedAt: allDone ? null : new Date() } });
+  await logActivity("piggy", "updated", allDone ? "Undid a Piggy hand-over to the treasurer" : "Handed Piggy money to the treasurer", periodId);
+  revalidateFamily();
 }
+
 
 // Head adjusts the general Piggy or a sinking fund (e.g. a manual top-up). Head-only, so a
 // NEGATIVE amount is allowed too — a manual deduction/correction (records as a withdrawal entry).
@@ -2088,14 +2082,7 @@ export async function togglePoolHandover(formData: FormData) {
   if (!canActOnStep({ kind: "pool-handover", fromId: holderId }, actor)) return;
   if (!actor.isHead && !(await periodOpen(periodId))) return;
   const allDone = rows.every((r) => r.handedOverAt != null);
-  const at = allDone ? null : new Date();
-  await prisma.poolHandover.updateMany({ where: { id: { in: ids } }, data: { handedOverAt: at } });
-  // Piggy taken as income: lock/unlock its Sheet income rows (✓, controls removed) in lockstep with the
-  // hand-over to the treasurer. receivedAt on these ownerId-null lines ONLY drives the Sheet lock — it's
-  // inert in the In-Hand / liquidity walk (incomeArrivals skips ownerId-null) — so this is display-only.
-  if (rows.some((r) => r.kind === "piggy")) {
-    await prisma.incomeEntry.updateMany({ where: { periodId, note: PIGGY_INCOME_NOTE }, data: { receivedAt: at } });
-  }
+  await prisma.poolHandover.updateMany({ where: { id: { in: ids } }, data: { handedOverAt: allDone ? null : new Date() } });
   await logActivity("settlement", "updated", allDone ? "Undid a pool hand-over to the treasurer" : "Marked a pool hand-over received by the treasurer", periodId);
   revalidateFamily();
 }

@@ -4,7 +4,7 @@ import { Fragment, useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { formatINR } from "@/lib/format";
-import { markSettled, unsettle, toggleBillPaid, markAdvanceSettled, unsettleAdvance, markPiggyHandedOver, toggleIncomeReceived, addManualStep, deleteManualStep, toggleManualStepDone, hideStep, unhideStep, unpayMiscBill, togglePoolHandover, moveStep, unpayFamilyCardBill } from "@/app/actions";
+import { markSettled, unsettle, toggleBillPaid, markAdvanceSettled, unsettleAdvance, markPiggyHandedOver, toggleIncomeReceived, addManualStep, deleteManualStep, toggleManualStepDone, hideStep, unhideStep, unpayMiscBill, togglePoolHandover, togglePiggyHandover, moveStep, unpayFamilyCardBill } from "@/app/actions";
 import { PayBillModal } from "@/components/PayBillModal";
 import { PayCardBillModal } from "@/components/PayCardBillModal";
 import { MiscPayModal } from "@/components/MiscPayModal";
@@ -193,6 +193,11 @@ export function MoneyPlan({
             const isIncome = s.kind === "income";
             const isManual = s.kind === "manual";
             const isPoolHandover = s.kind === "pool-handover";
+            // A piggy-income batch ticks via togglePiggyHandover on its income ids (locks those rows); a
+            // leftover hand-over ticks via togglePoolHandover on its PoolHandover row ids.
+            const piggyBatch = isPoolHandover && (s.piggyIncomeIds?.length ?? 0) > 0;
+            const hoIds = piggyBatch ? s.piggyIncomeIds! : (s.recordIds ?? []);
+            const hoAction = piggyBatch ? togglePiggyHandover : togglePoolHandover;
             // Actor permission comes from the SHARED canActOnStep (src/lib/planAuth) that the server
             // actions also call — so the button we show can never disagree with what the server accepts.
             // The month gate is layered on here per kind (a manual peer-move is net-zero, so the HEAD may
@@ -355,17 +360,17 @@ export function MoneyPlan({
                   {isPoolHandover && s.done && (
                     <div className="mt-1 flex items-center gap-2">
                       <span className="inline-flex items-center rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-medium text-emerald-700 no-underline">✓ handed to {s.toName}</span>
-                      {(canEdit || currentMemberId === s.fromId) && s.recordIds && s.recordIds.length > 0 && (
-                        <form action={withToast(togglePoolHandover, { success: "Hand-over undone" })}>
-                          <input type="hidden" name="ids" value={s.recordIds.join(",")} />
+                      {(canEdit || currentMemberId === s.fromId) && hoIds.length > 0 && (
+                        <form action={withToast(hoAction, { success: "Hand-over undone" })}>
+                          <input type="hidden" name="ids" value={hoIds.join(",")} />
                           <button className="text-[10px] font-medium text-slate-400 underline hover:text-slate-600">undo</button>
                         </form>
                       )}
                     </div>
                   )}
-                  {isPoolHandover && !s.done && (canEdit || currentMemberId === s.fromId) && s.recordIds && s.recordIds.length > 0 && (
-                    <form action={withToast(togglePoolHandover, { success: "Marked handed over" })} className="mt-1">
-                      <input type="hidden" name="ids" value={s.recordIds.join(",")} />
+                  {isPoolHandover && !s.done && (canEdit || currentMemberId === s.fromId) && hoIds.length > 0 && (
+                    <form action={withToast(hoAction, { success: "Marked handed over" })} className="mt-1">
+                      <input type="hidden" name="ids" value={hoIds.join(",")} />
                       <MiniBtn primary>✓ mark handed over</MiniBtn>
                     </form>
                   )}

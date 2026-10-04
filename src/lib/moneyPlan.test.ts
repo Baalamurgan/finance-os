@@ -34,6 +34,32 @@ describe("buildMoneyPlan", () => {
     expect(step.balancesAfter?.[2] ?? 0).toBe(0); // paying the bill draws it back down — the visible drop
   });
 
+  it("piggy taken as income: a separate step per batch (done + open), each walk-correct", () => {
+    // Holder 2 brought ₹5,500 into the month and already handed it over (done batch), then withdrew
+    // ₹7,436 more (open batch). Two separate pool-handover steps, each with its own income ids.
+    const plan = buildMoneyPlan({
+      treasurerId: T,
+      transfers: [],
+      bills: [],
+      incomeDayByMember: {},
+      poolHandovers: [
+        { key: "piggyincome-1", fromId: 2, fromName: "Baala", toId: T, toName: "A", amount: 5500, detail: "from Piggy · batch 1", recordIds: [], piggyIncomeIds: [1529], done: true, day: 2 },
+        { key: "piggyincome-open", fromId: 2, fromName: "Baala", toId: T, toName: "A", amount: 7436, detail: "from Piggy · batch 2", recordIds: [], piggyIncomeIds: [9999], done: false, day: 4 },
+      ],
+    });
+    const steps = plan.steps.filter((s) => s.kind === "pool-handover");
+    expect(steps.map((s) => s.id).sort()).toEqual(["piggyincome-1", "piggyincome-open"]);
+    expect(steps.find((s) => s.id === "piggyincome-1")!.done).toBe(true);
+    const open = steps.find((s) => s.id === "piggyincome-open")!;
+    expect(open.done).toBe(false);
+    expect(open.piggyIncomeIds).toEqual([9999]);
+    // Holder seeded with BOTH batches (12,936); the done batch already moved to the treasurer, the open
+    // one still sits with the holder until ticked, then lands at the treasurer.
+    expect(open.balancesBefore?.[2] ?? 0).toBe(7436);
+    expect(open.balancesAfter?.[2] ?? 0).toBe(0);
+    expect(open.balancesAfter?.[T] ?? 0).toBe(12936);
+  });
+
   it("inserts a manual step right after its anchor, moves the balances, and counts it", () => {
     const plan = buildMoneyPlan({
       treasurerId: T,

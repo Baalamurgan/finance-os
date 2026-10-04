@@ -614,7 +614,7 @@ export async function getMoneyPlan(householdId: number, periodId: number, inhand
       : extraExpenses?.length
         ? _getSettlement(householdId, periodId, inhand.treasurerId, extraExpenses)
         : getSettlement(householdId, periodId, inhand.treasurerId),
-    prisma.incomeEntry.findMany({ where: { periodId }, select: { id: true, ownerId: true, dueDay: true, amount: true, source: true, receivedAt: true } }),
+    prisma.incomeEntry.findMany({ where: { periodId }, select: { id: true, ownerId: true, dueDay: true, amount: true, source: true, receivedAt: true, note: true, createdAt: true } }),
     prisma.period.findUnique({ where: { id: periodId }, select: { year: true, month: true, status: true } }),
     prisma.household.findUnique({ where: { id: householdId }, select: { windDownDay: true } }),
     prisma.stepDayOverride.findMany({ where: { periodId }, select: { stepKey: true, day: true } }),
@@ -804,6 +804,7 @@ export async function getMoneyPlan(householdId: number, periodId: number, inhand
   const inr = (n: number) => "₹" + Math.round(n).toLocaleString("en-IN");
   const handoverByHolder = new Map<number, { amount: number; parts: string[]; ids: number[]; done: boolean }>();
   for (const p of inhand.poolHandovers ?? []) {
+    if (p.kind === "piggy") continue; // piggy taken as income is handled per-batch below (from income.receivedAt), not here
     if (p.fromMemberId === inhand.treasurerId) continue; // already at the hub
     const g = handoverByHolder.get(p.fromMemberId) ?? { amount: 0, parts: [], ids: [], done: true };
     g.amount = Math.round((g.amount + p.amount) * 100) / 100;
@@ -823,13 +824,49 @@ export async function getMoneyPlan(householdId: number, periodId: number, inhand
     };
   });
 
+  // Piggy taken as income → the holder hands it to the treasurer, in BATCHES keyed by the income's
+  // receivedAt: the UNHANDED withdrawals (receivedAt null) combine into ONE open step; each already-handed
+  // set (same receivedAt) is its own done step. So a withdrawal AFTER a hand-over gets a fresh step, and
+  // ticking a batch locks exactly its rows. Derived from income.receivedAt — no extra table.
+  const piggyHolderId = inhand.piggyHolderId;
+  const piggyBatchHandovers: { key?: string; fromId: number; fromName: string; toId: number; toName: string; amount: number; detail: string; recordIds: number[]; piggyIncomeIds?: number[]; done: boolean; day: number | null; status?: "overdue" | "soon" | "normal" | null; days?: number | null }[] = [];
+  if (piggyHolderId != null && inhand.treasurerId != null && piggyHolderId !== inhand.treasurerId) {
+    const istDay = (d: Date) => Math.min(28, Math.max(1, new Date(d.getTime() + 330 * 60000).getUTCDate())); // IST day-of-month, clamped
+    const batches = new Map<string, { at: Date | null; ids: number[]; amount: number; earliest: Date }>();
+    for (const i of incomes) {
+      if (i.note !== PIGGY_INCOME_NOTE) continue;
+      const key = i.receivedAt ? i.receivedAt.toISOString() : "open";
+      const g = batches.get(key) ?? { at: i.receivedAt, ids: [], amount: 0, earliest: i.createdAt };
+      g.ids.push(i.id);
+      g.amount = Math.round((g.amount + i.amount) * 100) / 100;
+      if (i.createdAt < g.earliest) g.earliest = i.createdAt;
+      batches.set(key, g);
+    }
+    const ordered = [...batches.values()].sort((a, b) => a.earliest.getTime() - b.earliest.getTime());
+    const holderName = nameById.get(piggyHolderId) ?? "Piggy holder";
+    const treasName = nameById.get(inhand.treasurerId) ?? "treasurer";
+    ordered.forEach((g, idx) => {
+      if (g.amount <= 0.005) return;
+      const refDate = g.at ?? g.earliest; // done batch dated when handed over; open batch dated its earliest withdrawal
+      const day = istDay(refDate);
+      const st = dayStatus(day);
+      piggyBatchHandovers.push({
+        key: `piggyincome-${g.at ? g.at.getTime() : "open"}`,
+        fromId: piggyHolderId, fromName: holderName, toId: inhand.treasurerId as number, toName: treasName,
+        amount: g.amount, detail: `from Piggy${ordered.length > 1 ? ` · batch ${idx + 1}` : ""}`,
+        recordIds: [], piggyIncomeIds: g.ids, done: g.at != null,
+        day, status: st?.status ?? null, days: st?.days ?? null,
+      });
+    });
+  }
+
   // Each member's carry (last month's closing personal) — so the balance walk OPENS from what they
   // actually hold, not 0. Role money (piggy/pool) is excluded here: it's a standing figure, not a step.
   const openingByMember: Record<number, number> = {};
   for (const g of inhand.byPerson) if (g.memberId != null && g.openingCarry != null) openingByMember[g.memberId] = g.openingCarry;
 
   const { buildMoneyPlan } = await import("./moneyPlan");
-  const plan = buildMoneyPlan({ treasurerId: inhand.treasurerId, treasurerName: settlement.treasurer?.name, transfers, bills, allowances, piggyReturns, advances, incomeDayByMember, incomeByMember, incomeArrivals, reimburseByMember, reimburseDay, piggyHandover, manualSteps, poolHandovers, openingByMember, hiddenKeys, orderOverrides });
+  const plan = buildMoneyPlan({ treasurerId: inhand.treasurerId, treasurerName: settlement.treasurer?.name, transfers, bills, allowances, piggyReturns, advances, incomeDayByMember, incomeByMember, incomeArrivals, reimburseByMember, reimburseDay, piggyHandover, manualSteps, poolHandovers: [...poolHandovers, ...piggyBatchHandovers], openingByMember, hiddenKeys, orderOverrides });
 
   // Enrich done steps with the day they were ACTUALLY marked paid (IST), so the plan can show
   // "paid <day>" when it differs from the scheduled/due day. Timestamps live on the underlying record:
