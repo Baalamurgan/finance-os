@@ -1,3 +1,4 @@
+import { Fragment } from "react";
 import { redirect } from "next/navigation";
 import { formatINR, withShareCount } from "@/lib/format";
 import { categoryEmoji } from "@/lib/categoryEmoji";
@@ -37,6 +38,13 @@ function KeptTag({ title }: { title: string }) {
 function CadencePill({ label }: { label: string }) {
   return <span title={`Recurs ${label.toLowerCase()}`} className="shrink-0 whitespace-nowrap rounded-full bg-slate-100 px-1.5 py-0.5 text-[9px] font-medium text-slate-500">🔁 {label}</span>;
 }
+function NewBadge() {
+  return <span title="New this month — wasn't on last month's sheet" className="shrink-0 whitespace-nowrap rounded-full bg-emerald-100 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-emerald-700">New</span>;
+}
+// A tag shown on a Sheet row. `node` is the inline badge (rendered inline only on wide screens for
+// high-priority tags); `label` is the text shown in the ⓘ popover. priority "high" = New / kept (inline
+// on laptop, popover on mobile); "low" = phase / cadence / card / trimmed (popover only, both sizes).
+type RowTag = { key: string; node: React.ReactNode; label: string; priority: "high" | "low" };
 function BillTag() {
   return (
     <span
@@ -310,27 +318,26 @@ function ExpenseRow({
   const periodic = isPeriodicBill(e.category);
   const cad = cadenceLabel(e.category.billEveryMonths);
   const due = dueDateLabel(e.category);
-  // The one status pill: 💰 incentive / 🧾 bill (due now) / ✂️ trimmed / 💳 paid-on-card (null = none).
-  const phaseTag = tPhase === "incentive" ? (
-    <IncentiveTag full={e.category.billAmount ?? undefined} save={e.category.billAmount != null && e.category.earlyAmount != null ? Math.round((e.category.billAmount - e.category.earlyAmount) * 100) / 100 : undefined} />
-  ) : billMonthDue ? (
-    <BillTag />
-  ) : trimmedBy != null ? (
-    <span
-      className="shrink-0 whitespace-nowrap rounded-full bg-amber-100 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-amber-700"
-      title={`Trimmed by ${formatINR(trimmedBy)} — last month went over budget, so this is less than the usual ${formatINR(e.category.monthlyBudget ?? 0)}.`}
-    >
-      ✂️ Trimmed
-    </span>
-  ) : paidCard ? (
-    <CardTag name={paidCard.name} last4={paidCard.last4} color={paidCard.color} />
-  ) : null;
-  // Keep at most 2 tags inline (+ the ⓘ): the 🔁 cadence pill is lowest priority, so it shows inline
-  // only when there's room (< 2 other tags: phase, New, kept/pinned). Otherwise it lives only in the ⓘ
-  // popover's "Recurs" row — the "more than 2 tags → into the details popover" rule, kept uncluttered.
-  const keptOrPinned = e.pinned || isKeptLine(e);
-  const inlineOtherTags = (phaseTag ? 1 : 0) + (isNew ? 1 : 0) + (keptOrPinned ? 1 : 0);
-  const showCadenceInline = cad != null && inlineOtherTags < 2;
+  // Build the row's tags. LOW priority (phase / cadence / card / trimmed) live in the ⓘ popover on every
+  // screen; HIGH priority (New, kept/pinned) sit inline on wide screens and move into the ⓘ on a phone,
+  // so the name is never squeezed out. Mobile row = ✓ · name · ⓘ.
+  const tags: RowTag[] = [];
+  if (tPhase === "incentive") {
+    const save = e.category.billAmount != null && e.category.earlyAmount != null ? Math.round((e.category.billAmount - e.category.earlyAmount) * 100) / 100 : undefined;
+    tags.push({ key: "phase", priority: "low", node: <IncentiveTag full={e.category.billAmount ?? undefined} save={save} />, label: `💰 Incentive${save != null && save > 0.005 ? ` · save ${formatINR(save)}` : ""}` });
+  } else if (billMonthDue) {
+    tags.push({ key: "phase", priority: "low", node: <BillTag />, label: "🧾 Bill due now" });
+  } else if (trimmedBy != null) {
+    tags.push({ key: "phase", priority: "low", label: `✂️ Trimmed −${formatINR(trimmedBy)}`, node: (
+      <span className="shrink-0 whitespace-nowrap rounded-full bg-amber-100 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-amber-700" title={`Trimmed by ${formatINR(trimmedBy)} — last month went over budget, so this is less than the usual ${formatINR(e.category.monthlyBudget ?? 0)}.`}>✂️ Trimmed</span>
+    ) });
+  } else if (paidCard) {
+    tags.push({ key: "phase", priority: "low", node: <CardTag name={paidCard.name} last4={paidCard.last4} color={paidCard.color} />, label: `💳 ${paidCard.name}${paidCard.last4 ? ` ••${paidCard.last4}` : ""}` });
+  }
+  if (periodic && cad) tags.push({ key: "cadence", priority: "low", node: <CadencePill label={cad} />, label: `🔁 ${cad}` });
+  if (isNew) tags.push({ key: "new", priority: "high", node: <NewBadge />, label: "✨ New this month" });
+  if (e.pinned) tags.push({ key: "pin", priority: "high", node: <PinnedBadge kind="expense" id={e.id} canEdit={canEditHere} />, label: "📌 Pinned (hand-edited)" });
+  else if (isKeptLine(e)) tags.push({ key: "kept", priority: "high", node: <KeptTag title="Planned / added this month — kept through a Sheet refresh" />, label: "📌 Kept this month" });
   return (
     <Row
       label={displayLabel}
@@ -338,16 +345,10 @@ function ExpenseRow({
       emoji={categoryEmoji(e.category.name)}
       tag={e.member?.name}
       amount={e.amount}
-      isNew={isNew}
       locked={e.paid}
-      extraTag={periodic ? (
-        <>
-          {phaseTag}
-          {showCadenceInline && <CadencePill label={cad!} />}
-          <BillDetails name={e.category.name} rows={billDetailRows(e, paidCard)} />
-        </>
-      ) : (phaseTag ?? undefined)}
-      pinnedControl={e.pinned ? <PinnedBadge kind="expense" id={e.id} canEdit={canEditHere} /> : isKeptLine(e) ? <KeptTag title="Planned / added this month — kept through a Sheet refresh" /> : null}
+      tags={tags}
+      details={periodic ? billDetailRows(e, paidCard) : undefined}
+      detailName={e.category.name}
     >
       {canEditHere && isSetAside && (
         <ConfirmForm action={skipSetAside} message={removeMsg}>
@@ -759,8 +760,12 @@ export default async function SheetPage({
               </span>
             </summary>
             <div className="divide-y divide-slate-100 px-4 py-1">
-              {rollup.incomes.map((i) =>
-                i.note === REMOVED_NOTE ? (
+              {rollup.incomes.map((i) => {
+                const incomeTags: RowTag[] = [];
+                if (newIncomeIds.has(i.id)) incomeTags.push({ key: "new", priority: "high", node: <NewBadge />, label: "✨ New this month" });
+                if (i.pinned) incomeTags.push({ key: "pin", priority: "high", node: <PinnedBadge kind="income" id={i.id} canEdit={canEditHere} />, label: "📌 Pinned (hand-edited)" });
+                else if (i.note != null && KEPT_INCOME_NOTES.has(i.note)) incomeTags.push({ key: "kept", priority: "high", node: <KeptTag title="Brought forward from last month — kept through a Sheet refresh" />, label: "📌 Kept this month" });
+                return i.note === REMOVED_NOTE ? (
                   <div key={i.id} className="flex items-center justify-between py-2.5 text-[15px]">
                     <div className="flex min-w-0 items-center gap-1.5">
                       <span className="truncate font-medium text-slate-400 line-through">{i.source}</span>
@@ -768,7 +773,7 @@ export default async function SheetPage({
                     </div>
                   </div>
                 ) : (
-                  <Row key={i.id} label={i.source} tag={i.owner?.name} amount={i.amount} isNew={newIncomeIds.has(i.id)} locked={i.receivedAt != null} pinnedControl={i.pinned ? <PinnedBadge kind="income" id={i.id} canEdit={canEditHere} /> : i.note != null && KEPT_INCOME_NOTES.has(i.note) ? <KeptTag title="Brought forward from last month — kept through a Sheet refresh" /> : null}>
+                  <Row key={i.id} label={i.source} tag={i.owner?.name} amount={i.amount} locked={i.receivedAt != null} tags={incomeTags}>
                     {c.isHead ? (
                       <IncomeRowActions
                         members={c.members}
@@ -779,8 +784,8 @@ export default async function SheetPage({
                       canEditHere && <RowActions id={i.id} deleteAction={deleteIncome} />
                     )}
                   </Row>
-                )
-              )}
+                );
+              })}
               {canEditHere && (
                 <div className="py-2">
                   <IncomeModal members={c.members} periodId={c.selected.id} />
@@ -1107,9 +1112,9 @@ function Row({
   tag,
   amount,
   emoji,
-  pinnedControl,
-  extraTag,
-  isNew,
+  tags = [],
+  details,
+  detailName,
   locked = false,
   children,
 }: {
@@ -1118,21 +1123,21 @@ function Row({
   tag?: string | null;
   amount: number;
   emoji?: string | null;
-  pinnedControl?: React.ReactNode;
-  extraTag?: React.ReactNode; // small status pill after the label (e.g. shortfall-trimmed)
-  isNew?: boolean; // first appeared this month (not on last month's sheet)
-  locked?: boolean; // paid/received (done in the Money Plan) → controls inert + not-allowed cursor
+  tags?: RowTag[]; // status pills; high-priority show inline on wide screens, the rest live in the ⓘ
+  details?: { label: string; value: string }[]; // bill breakdown for the ⓘ popover (periodic bills)
+  detailName?: string; // heading for the ⓘ popover (defaults to the row name)
+  locked?: boolean; // paid/received (done in the Money Plan) → ✓, not-allowed cursor, controls removed
   children?: React.ReactNode;
 }) {
   // pull a trailing installment marker ("Chimney EMI 2/6") out into a tag
   const instMatch = label.match(/^(.*?)\s+(\d+\/\d+)$/);
   const baseLabel = instMatch ? instMatch[1] : label;
   const installment = instMatch ? instMatch[2] : null;
-  // A done line is LOCKED: the whole row shows a not-allowed cursor on hover, a ✓ leads the row, and the
-  // edit controls are inert (pointer-events-none) — the ⋯/edit dimmed to read as disabled, but TAGS keep
-  // full opacity. Reverse it by unmarking in the Money Plan.
-  const inert = (node: React.ReactNode, dim: boolean) =>
-    locked && node ? <span className={`pointer-events-none${dim ? " opacity-40" : ""}`}>{node}</span> : node;
+  const highTags = tags.filter((t) => t.priority === "high");
+  // The ⓘ popover has content on a WIDE screen only when there are low-priority tags or detail rows
+  // (high tags are already inline there); on a phone every tag lives in the popover.
+  const laptopModalHasContent = tags.some((t) => t.priority === "low") || (details?.length ?? 0) > 0;
+  const anyModalContent = tags.length > 0 || (details?.length ?? 0) > 0;
   return (
     <div
       className={`flex items-center justify-between py-2.5 text-[15px]${locked ? " cursor-not-allowed" : ""}`}
@@ -1156,13 +1161,20 @@ function Row({
               {installment}
             </span>
           )}
-          {isNew && (
-            <span className="shrink-0 rounded-full bg-emerald-100 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-emerald-700" title="New this month — wasn't on last month's sheet">
-              New
+          {/* High-priority tags (New, kept/pinned) inline — WIDE screens only; on a phone they move into
+              the ⓘ so the name is never squeezed out by tags. */}
+          {highTags.length > 0 && (
+            <span className="hidden items-center gap-1.5 sm:flex">
+              {highTags.map((t) => <Fragment key={t.key}>{t.node}</Fragment>)}
             </span>
           )}
-          {extraTag}
-          {inert(pinnedControl, false)}
+          {/* ⓘ: shown when the popover has anything to say. When the row has ONLY high tags, it's phone-only
+              (they're already inline on wide screens, so the popover would be empty there). */}
+          {anyModalContent && (
+            <span className={laptopModalHasContent ? "shrink-0" : "shrink-0 sm:hidden"}>
+              <BillDetails name={detailName ?? baseLabel} rows={details ?? []} tags={tags} />
+            </span>
+          )}
         </div>
         {(sub || tag) && (
           <div className="text-xs text-slate-400">
@@ -1174,7 +1186,9 @@ function Row({
       </div>
       <div className="flex items-center gap-2 pl-2">
         <span className="tabular-nums text-slate-700">{formatINR(amount)}</span>
-        {inert(children, true)}
+        {/* A done row's edit controls (⋯ / skip / remove) are removed entirely — useless once paid and
+            they only crowd the row; unmark it in the Money Plan to edit again. */}
+        {!locked && children}
       </div>
     </div>
   );
