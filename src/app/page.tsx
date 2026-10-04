@@ -857,6 +857,7 @@ export default async function SheetPage({
                             periodId={c.selected!.id}
                             periodMonth={c.selected!.month}
                             previewMonth={previewMonth}
+                            isNew={newExpenseIds.has(e.id)}
                           />
                         ))
                       )}
@@ -1041,22 +1042,21 @@ function Row({
   const instMatch = label.match(/^(.*?)\s+(\d+\/\d+)$/);
   const baseLabel = instMatch ? instMatch[1] : label;
   const installment = instMatch ? instMatch[2] : null;
-  // A done line is locked: controls stay VISIBLE but inert, with a not-allowed cursor on hover (the outer
-  // span takes the hover/cursor; the inner blocks clicks). Reverse it by unmarking in the Money Plan.
-  const lock = (node: React.ReactNode) =>
-    locked && node ? (
-      <span className="cursor-not-allowed" title="Paid / received — done in the Money Plan. Unmark it there to edit.">
-        <span className="pointer-events-none inline-flex items-center gap-1.5 opacity-40">{node}</span>
-      </span>
-    ) : (
-      node
-    );
+  // A done line is LOCKED: the whole row shows a not-allowed cursor on hover, a ✓ leads the row, and the
+  // edit controls are inert (pointer-events-none) — the ⋯/edit dimmed to read as disabled, but TAGS keep
+  // full opacity. Reverse it by unmarking in the Money Plan.
+  const inert = (node: React.ReactNode, dim: boolean) =>
+    locked && node ? <span className={`pointer-events-none${dim ? " opacity-40" : ""}`}>{node}</span> : node;
   return (
-    <div className="flex items-center justify-between py-2.5 text-[15px]">
+    <div
+      className={`flex items-center justify-between py-2.5 text-[15px]${locked ? " cursor-not-allowed" : ""}`}
+      title={locked ? "Paid / received — done in the Money Plan. Unmark it there to edit." : undefined}
+    >
       <div className="min-w-0">
         <div className="flex items-center gap-1.5">
+          {locked && <span className="shrink-0 font-bold text-emerald-600" aria-label="done" title="Paid / received">✓</span>}
           {emoji && <span className="shrink-0" aria-hidden>{emoji}</span>}
-          <span className="truncate font-medium text-slate-800">{baseLabel}</span>
+          <span className={`truncate font-medium ${locked ? "text-slate-500" : "text-slate-800"}`}>{baseLabel}</span>
           {installment && (
             <span className="shrink-0 rounded-full bg-indigo-50 px-1.5 py-0.5 text-[10px] font-semibold text-indigo-500" title="installment (this payment / total)">
               {installment}
@@ -1068,7 +1068,7 @@ function Row({
             </span>
           )}
           {extraTag}
-          {lock(pinnedControl)}
+          {inert(pinnedControl, false)}
         </div>
         {(sub || tag) && (
           <div className="text-xs text-slate-400">
@@ -1080,7 +1080,7 @@ function Row({
       </div>
       <div className="flex items-center gap-2 pl-2">
         <span className="tabular-nums text-slate-700">{formatINR(amount)}</span>
-        {lock(children)}
+        {inert(children, true)}
       </div>
     </div>
   );
