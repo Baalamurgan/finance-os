@@ -14,6 +14,7 @@ import { IncomeRowActions } from "@/components/IncomeRowActions";
 import { PinnedBadge } from "@/components/PinnedBadge";
 import { RemovedBadge } from "@/components/RemovedBadge";
 import { BalancePiggyCard } from "@/components/BalancePiggyCard";
+import { TruncatedName } from "@/components/TruncatedName";
 import { MoneyFlowDonut } from "@/components/Charts";
 import { ConfirmForm } from "@/components/ConfirmForm";
 import { SheetLockNotice } from "@/components/SheetLockNotice";
@@ -1066,7 +1067,7 @@ function Row({
             </span>
           )}
           {emoji && <span className="shrink-0" aria-hidden>{emoji}</span>}
-          <span className={`truncate font-medium ${locked ? "text-slate-500" : "text-slate-800"}`}>{baseLabel}</span>
+          <TruncatedName text={baseLabel} className={`font-medium ${locked ? "text-slate-500" : "text-slate-800"}`} />
           {installment && (
             <span className="shrink-0 rounded-full bg-indigo-50 px-1.5 py-0.5 text-[10px] font-semibold text-indigo-500" title="installment (this payment / total)">
               {installment}
