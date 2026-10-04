@@ -1264,7 +1264,9 @@ function Row({
     >
       <div className="min-w-0">
         <div className="flex items-center gap-1.5">
-          {locked && (
+          {/* ✓ sits beside the name ONLY when the ⋯ stays (head's editable budgeted/planned card). When
+              the ⋯ is removed, the ✓ moves into the ⋯'s slot on the right (below) so the row stays aligned. */}
+          {locked && keepActionsWhenDone && (
             <span
               className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-emerald-500 text-[10px] font-bold leading-none text-white"
               aria-label="done"
@@ -1305,10 +1307,17 @@ function Row({
       </div>
       <div className="flex items-center gap-2 pl-2">
         <span className="tabular-nums text-slate-700">{formatINR(amount)}</span>
-        {/* A done row's edit controls (⋯ / skip / remove) are removed entirely — useless once paid and
-            they only crowd the row; unmark it in the Money Plan to edit again. A budgeted / planned-misc
-            card keeps them for the HEAD (keepActionsWhenDone) so the amount stays tunable after a spend. */}
-        {(!locked || keepActionsWhenDone) && children}
+        {/* A done row's edit controls (⋯ / skip / remove) are removed — useless once paid. Rather than let
+            the right edge collapse, the ✓ takes the ⋯'s exact slot (h-9 w-9) so every row's amount stays
+            aligned, done or not. A budgeted / planned-misc card keeps the ⋯ for the HEAD
+            (keepActionsWhenDone) and shows its ✓ beside the name instead. */}
+        {!locked || keepActionsWhenDone ? (
+          children
+        ) : (
+          <span className="flex h-9 w-9 shrink-0 items-center justify-center" aria-label="done" title="Paid / received">
+            <span className="flex h-5 w-5 items-center justify-center rounded-full bg-emerald-500 text-[11px] font-bold leading-none text-white">✓</span>
+          </span>
+        )}
       </div>
     </div>
   );
