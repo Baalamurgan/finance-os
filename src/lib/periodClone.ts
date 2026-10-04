@@ -47,6 +47,27 @@ export async function generateMonth(
     ? await tx.billPayment.findMany({ where: { periodId: { in: openIds } }, select: { categoryId: true, fromSetAside: true } })
     : [];
   const skippedSetAside = new Set(_skips.map((s) => s.categoryId)); // bills whose set-aside is skipped this month
+
+  // A TAX (earlyAmount/latePenaltyPct) whose CURRENT cycle is already PAID must not generate another line
+  // (window/share/deadline) — "paid" = a BillPayment for the category in a period whose month falls in this
+  // cycle (cycleStart … the target month). Distinct from a skip: a skip re-spreads into shares, a payment
+  // settles the whole cycle until the next one. (BillPayment has only a scalar periodId, so map via periods.)
+  const taxCyclePaid = new Set<number>();
+  const taxCatIds = cats.filter((c) => (c.earlyAmount != null || c.latePenaltyPct != null) && c.billMonth != null && c.billEveryMonths != null).map((c) => c.id);
+  if (taxCatIds.length && period) {
+    const bps = await tx.billPayment.findMany({ where: { categoryId: { in: taxCatIds } }, select: { categoryId: true, periodId: true } });
+    const pids = [...new Set(bps.map((b) => b.periodId))];
+    const prds = pids.length ? await tx.period.findMany({ where: { id: { in: pids } }, select: { id: true, year: true, month: true } }) : [];
+    const totalOf = new Map(prds.map((p) => [p.id, p.year * 12 + (p.month - 1)]));
+    const curTotal = period.year * 12 + (period.month - 1);
+    for (const c of cats) {
+      if (!taxCatIds.includes(c.id)) continue;
+      const E = Math.max(1, c.billEveryMonths!);
+      const k = (((period.month - c.billMonth!) % E) + E) % E; // monthsIntoCycle
+      const cycleStartTotal = curTotal - k;
+      if (bps.some((b) => b.categoryId === c.id && (totalOf.get(b.periodId) ?? -1) >= cycleStartTotal && (totalOf.get(b.periodId) ?? -1) <= curTotal)) taxCyclePaid.add(c.id);
+    }
+  }
   const catById = new Map(cats.map((c) => [c.id, c]));
 
   // Skip regenerating any Setup source that ALREADY has a line in this month — so a (re)generate only
@@ -217,6 +238,7 @@ export async function generateMonth(
     // Gated on earlyAmount/latePenaltyPct so plain fund bills (EB/YouTube/Brio) are untouched.
     if (cat.earlyAmount != null || cat.latePenaltyPct != null) {
       if (skippedSetAside.has(cat.id)) continue; // this month's incentive/share was skipped → no line (it re-spreads next month)
+      if (taxCyclePaid.has(cat.id)) continue; // this cycle is already paid → nothing more this cycle
       const { monthsIntoCycle } = billCyclePhase(cat.billMonth, cat.billEveryMonths, period!.month);
       const saved = Math.max(0, fundByCat.get(cat.id) ?? 0);
       const t = taxCycleMonth({ billAmount: cat.billAmount, earlyAmount: cat.earlyAmount, latePenaltyPct: cat.latePenaltyPct, everyMonths: cat.billEveryMonths, monthsIntoCycle, saved });
