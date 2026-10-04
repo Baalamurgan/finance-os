@@ -2202,6 +2202,9 @@ export async function payPeriodicBill(prev: PayBillState, formData: FormData): P
     if (fromPiggy > 0) await tx.piggyEntry.create({ data: { householdId: cat.householdId, periodId: spendPeriodId, kind: "piggy", amount: -fromPiggy, note: `${cat.name} bill paid${carried ? " (carried)" : ""}` } });
     if (outOfPocket > 0 && miscCat) await tx.spend.create({ data: { periodId: spendPeriodId, categoryId: miscCat.id, memberId: payer, label: `${cat.name} bill (out-of-pocket)`, amount: outOfPocket, subCategory: null } });
     await tx.billPayment.create({ data: { householdId: cat.householdId, categoryId, periodId, spendPeriodId, memberId: payer, fromFund, fromSetAside, fromPiggy, outOfPocket } });
+    // Mark this period's BILL line (label = cat.name — a tax window/deadline or a pay-in-full bill; NOT a
+    // "(monthly share)" set-aside) paid, so the Sheet row locks (not-allowed cursor) & drops from "to pay".
+    await tx.expenseEntry.updateMany({ where: { periodId: spendPeriodId, categoryId, label: cat.name }, data: { paid: true, paidAt: new Date() } });
   });
   await logActivity("expense", "created", `Paid ${cat.name} bill ${formatINR(actual)}${carried ? " (carried)" : ""}`, spendPeriodId);
   log.info("payPeriodicBill", "ok", { outcome: "ok", ...ctx, mode: source, amount: actual, fromFund, fromPiggy, outOfPocket });
@@ -2231,6 +2234,8 @@ export async function unpayPeriodicBill(formData: FormData) {
     if (bp.fromPiggy > 0) await tx.piggyEntry.create({ data: { householdId: bp.householdId, periodId: sp, kind: "piggy", amount: bp.fromPiggy, note: `${cat?.name ?? "bill"} payment undone` } });
     if (bp.outOfPocket > 0) await tx.spend.deleteMany({ where: { periodId: sp, memberId: bp.memberId, amount: bp.outOfPocket, label: { endsWith: "(out-of-pocket)" } } });
     await tx.billPayment.delete({ where: { id: bp.id } });
+    // reverse the Sheet bill line's paid flag (set in payPeriodicBill) so it unlocks & shows to-pay again
+    if (cat) await tx.expenseEntry.updateMany({ where: { periodId: sp, categoryId, label: cat.name }, data: { paid: false, paidAt: null } });
   });
   log.info("unpayPeriodicBill", "ok", { outcome: "ok", memberId, categoryId, periodId });
   revalidateFamily();
