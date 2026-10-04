@@ -1,6 +1,6 @@
 import { formatINR } from "@/lib/format";
 import { loadCommon } from "@/lib/load";
-import { getInHand, getMoneyPlan, getMoneyPlanActivity, type InHand } from "@/lib/queries";
+import { getInHand, getMoneyPlan, getMoneyPlanActivity, getFamilyCreditCards, type InHand } from "@/lib/queries";
 import { pendingCashMoveByMember, doneCashMoveByMember, doneCashMoveDetailByMember } from "@/lib/moneyPlan";
 import { MoneyPlanActivity } from "@/components/MoneyPlanActivity";
 import { NavHeader } from "@/components/NavHeader";
@@ -60,9 +60,11 @@ export default async function InHandPage({
   const periodId = c.selected.id;
   // Real cash each person holds: budget left + bills to pay + savings held − misc spent.
   const inHand = await getInHand(c.household.id, periodId);
-  const [plan, activity] = await Promise.all([
+  const [plan, activity, cardsByMember] = await Promise.all([
     getMoneyPlan(c.household.id, periodId, inHand),
     getMoneyPlanActivity(periodId),
+    // The payer's own credit cards power the "Paid with" picker on each bill's Pay modal.
+    getFamilyCreditCards(c.household.id),
   ]);
   const currentMemberId = c.currentMember?.id ?? null;
   // "Holding now" per member = their projected In-Hand total MINUS the cash-moves not yet completed
@@ -125,6 +127,7 @@ export default async function InHandPage({
             .map((cat) => ({ id: cat.id, name: cat.name, section: cat.section }))}
           members={c.members.map((m) => ({ id: m.id, name: m.name }))}
           monthBalance={inHand.monthBalance}
+          cardsByMember={cardsByMember}
         />
 
         {showInHand && isPreview && (
@@ -138,6 +141,7 @@ export default async function InHandPage({
               <InHandPersonGroup
                 key={g.memberId}
                 group={g}
+                cards={g.memberId != null ? cardsByMember[g.memberId] ?? [] : []}
                 isPreview={isPreview}
                 pendingCashMove={g.memberId != null ? pendingByMember[g.memberId] ?? 0 : 0}
                 doneCashMove={g.memberId != null ? doneByMember[g.memberId] ?? 0 : 0}

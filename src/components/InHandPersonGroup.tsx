@@ -9,6 +9,7 @@ import { MiscPayModal } from "@/components/MiscPayModal";
 
 export function InHandPersonGroup({
   group,
+  cards = [],
   isPreview = false,
   pendingCashMove,
   doneCashMove,
@@ -34,6 +35,8 @@ export function InHandPersonGroup({
   treasurerOwnLeftover = 0,
 }: {
   group: InHand["byPerson"][number];
+  // This person's OWN credit cards → the "Paid with" picker on their bills' Pay modals.
+  cards?: { id: number; name: string; last4: string | null; color: string }[];
   isPreview?: boolean;
   pendingCashMove: number;
   doneCashMove: number;
@@ -241,7 +244,7 @@ export function InHandPersonGroup({
                 <span className="flex shrink-0 items-center gap-1.5">
                   <span className="tabular-nums text-slate-400">{formatINR(b.bill)}</span>
                   {canPay ? (
-                    <PayBillModal categoryId={b.categoryId} periodId={b.periodId} spendPeriodId={periodId} carriedFrom={b.fromMonth} name={b.name} bill={b.bill} fund={b.fund} generalPiggy={generalPiggy} />
+                    <PayBillModal categoryId={b.categoryId} periodId={b.periodId} spendPeriodId={periodId} carriedFrom={b.fromMonth} name={b.name} bill={b.bill} fund={b.fund} generalPiggy={generalPiggy} cards={cards} />
                   ) : (
                     <span className="rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-400">to pay</span>
                   )}
@@ -503,7 +506,7 @@ export function InHandPersonGroup({
                 <span className="flex shrink-0 items-center gap-1.5">
                   <span className="tabular-nums text-slate-500">{formatINR(b.bill)}</span>
                   {canPay ? (
-                    <PayBillModal categoryId={b.categoryId} periodId={periodId} name={b.name} bill={b.bill} fund={b.fund} generalPiggy={generalPiggy} />
+                    <PayBillModal categoryId={b.categoryId} periodId={periodId} name={b.name} bill={b.bill} fund={b.fund} generalPiggy={generalPiggy} cards={cards} />
                   ) : (
                     <span className="rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-400">to pay</span>
                   )}

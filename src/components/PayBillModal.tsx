@@ -18,6 +18,7 @@ export function PayBillModal({
   generalPiggy,
   spendPeriodId,
   carriedFrom,
+  cards = [],
 }: {
   categoryId: number;
   periodId: number;
@@ -29,6 +30,9 @@ export function PayBillModal({
   // current open month the money moves in. `carriedFrom` is that closed month's label.
   spendPeriodId?: number;
   carriedFrom?: string;
+  // The payer's OWN credit cards. If one is picked, the charge is mirrored onto that card's statement
+  // (the fund still covers the bill — settlement is unchanged). Empty = no picker (cash/UPI only).
+  cards?: { id: number; name: string; last4: string | null; color: string }[];
 }) {
   const [open, setOpen] = useState(false);
   const toast = useToast();
@@ -38,9 +42,13 @@ export function PayBillModal({
   // The ACTUAL amount to pay — bills like EB/WiFi vary month to month; defaults to the
   // configured amount. Whatever the fund doesn't need is simply left in the fund.
   const [amountStr, setAmountStr] = useState(String(bill));
+  // Which card it was swiped on (null = cash/UPI). Reset each open so a card never carries over to a
+  // different bill — the default is always "no card".
+  const [cardId, setCardId] = useState<number | null>(null);
   useEffect(() => {
     if (!open) return;
     setAmountStr(String(bill));
+    setCardId(null);
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -67,6 +75,7 @@ export function PayBillModal({
       {spendPeriodId != null && <input type="hidden" name="spendPeriodId" value={spendPeriodId} />}
       <input type="hidden" name="source" value={source} />
       <input type="hidden" name="amount" value={actual} />
+      {cardId != null && <input type="hidden" name="cardAccountId" value={cardId} />}
     </>
   );
 
@@ -116,6 +125,27 @@ export function PayBillModal({
                   )}
                 </div>
               </div>
+
+              {cards.length > 0 && (
+                <label className="block text-xs font-medium text-slate-500">
+                  Paid with
+                  <select
+                    value={cardId ?? ""}
+                    onChange={(e) => setCardId(e.target.value ? Number(e.target.value) : null)}
+                    className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-800 focus:border-teal-400 focus:outline-none"
+                  >
+                    <option value="">Cash / UPI / other</option>
+                    {cards.map((c) => (
+                      <option key={c.id} value={c.id}>💳 {c.name}{c.last4 ? ` ••${c.last4}` : ""}</option>
+                    ))}
+                  </select>
+                  {cardId != null && (
+                    <span className="mt-1 block text-[10px] font-normal text-slate-400">
+                      Adds {formatINR(actual)} to this card&apos;s statement. The fund still covers the bill — settlement is unchanged.
+                    </span>
+                  )}
+                </label>
+              )}
 
               {fundCovers ? (
                 <div className="space-y-3">

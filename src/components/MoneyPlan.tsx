@@ -22,7 +22,7 @@ import { canActOnStep, canActInMonth } from "@/lib/planAuth";
 // Refresh re-pulls due dates + amounts from Setup into this month, then re-orders the plan.
 export function MoneyPlan({
   plan, householdId, periodId, isHead, currentMemberId, canEdit, open, datesEditable = false, generalPiggy,
-  billCategories, members, monthBalance,
+  billCategories, members, monthBalance, cardsByMember = {},
 }: {
   plan: MoneyPlanResult;
   householdId: number;
@@ -38,6 +38,8 @@ export function MoneyPlan({
   billCategories: { id: number; name: string; section?: string }[];
   members: { id: number; name: string }[];
   monthBalance: number;
+  // Each member's own credit cards → the "Paid with" picker on their bills' Pay modals.
+  cardsByMember?: Record<number, { id: number; name: string; last4: string | null; color: string }[]>;
 }) {
   const router = useRouter();
   const toast = useToast();
@@ -477,7 +479,7 @@ export function MoneyPlan({
                     !canActBill ? (
                       s.done ? null : <span className="text-[9px] text-slate-300">to be paid</span>
                     ) : s.fund && !s.done ? (
-                      <PayBillModal categoryId={s.categoryId!} periodId={periodId} name={s.vendor!} bill={s.amount} fund={s.fundAvail ?? 0} generalPiggy={generalPiggy} />
+                      <PayBillModal categoryId={s.categoryId!} periodId={periodId} name={s.vendor!} bill={s.amount} fund={s.fundAvail ?? 0} generalPiggy={generalPiggy} cards={s.payerId != null ? cardsByMember[s.payerId] ?? [] : []} />
                     ) : s.misc && s.billId != null ? (
                       // Planned misc = estimate → actual-amount + Piggy-reconcile popup (undo reverses it).
                       s.done ? (

@@ -536,6 +536,12 @@ model AccountTransaction {
   // card balance in sync when the personal spend is removed. Null = not a personal-spend mirror.
   personalSpend   PersonalSpend? @relation("PersonalSpendLedger", fields: [personalSpendId], references: [id], onDelete: Cascade)
   personalSpendId Int?           @unique
+  // When this line mirrors a FUND/periodic BILL paid on a credit card (1:1). The bill is covered by its
+  // sinking fund (settlement already nets it), but the cash physically rode the owner's card — so this
+  // line puts it on that card's statement WITHOUT creating a reimbursable family spend (no double-pay).
+  // Cascade delete reverses it when the bill payment is undone. Null = not a bill-payment mirror.
+  billPayment   BillPayment? @relation("BillPaymentMirror", fields: [billPaymentId], references: [id], onDelete: Cascade)
+  billPaymentId Int?         @unique
   createdAt    DateTime @default(now())
 
   @@index([memberId, date])
@@ -648,6 +654,11 @@ model BillPayment {
   fromPiggy   Float    @default(0) // drawn from the general Piggy
   outOfPocket Float    @default(0) // paid out-of-pocket (also logged as a Misc Spend on the payer)
   spendPeriodId Int?   // where the money actually moved: = periodId normally; the OPEN month for a carried (late) payment of a prior closed month's bill
+  // Paid physically on a credit card (a FinanceAccount owned by the payer) instead of cash/UPI. The bill
+  // is still covered by its fund (settlement already nets it), but the cash rode this card — so a mirror
+  // AccountTransaction (mirrorTxn) is put on that card's statement. Null = cash/UPI, no card charge.
+  cardAccountId Int?
+  mirrorTxn     AccountTransaction? @relation("BillPaymentMirror")
   paidAt      DateTime @default(now())
 
   @@unique([categoryId, periodId])

@@ -1042,6 +1042,39 @@ export type PendingCardBill = {
   paidPriorMonth: boolean; // settled, but the payment happened in a DIFFERENT (earlier) month than this bill's due month — its cash left then, so this month's realized ledger must not subtract it again
 };
 
+// The family's active credit cards, grouped by owner — fed to the "Paid with" picker when marking a
+// fund/periodic bill paid (a bill can be swiped on the payer's OWN card; see payPeriodicBill). Null = cash.
+export async function getFamilyCreditCards(householdId: number): Promise<Record<number, { id: number; name: string; last4: string | null; color: string }[]>> {
+  const cards = await prisma.financeAccount.findMany({
+    where: { type: "credit_card", active: true, member: { householdId } },
+    select: { id: true, name: true, last4: true, color: true, memberId: true },
+    orderBy: [{ sortOrder: "asc" }, { id: "asc" }],
+  });
+  const byMember: Record<number, { id: number; name: string; last4: string | null; color: string }[]> = {};
+  for (const c of cards) (byMember[c.memberId] ??= []).push({ id: c.id, name: c.name, last4: c.last4, color: c.color });
+  return byMember;
+}
+
+// Which card each fund/periodic bill was PAID on this period (BillPayment.cardAccountId) — powers the
+// 💳 badge on the paid Sheet bill line. Keyed by categoryId (one bill payment per category per period).
+// Manual join (cardAccountId is a plain scalar, not a Prisma relation) so no extra FK/migration.
+export async function getBillPaymentCards(periodId: number): Promise<Map<number, { name: string; last4: string | null; color: string }>> {
+  const rows = await prisma.billPayment.findMany({
+    where: { periodId, cardAccountId: { not: null } },
+    select: { categoryId: true, cardAccountId: true },
+  });
+  const cardIds = [...new Set(rows.map((r) => r.cardAccountId).filter((x): x is number => x != null))];
+  const m = new Map<number, { name: string; last4: string | null; color: string }>();
+  if (cardIds.length === 0) return m;
+  const cards = await prisma.financeAccount.findMany({ where: { id: { in: cardIds } }, select: { id: true, name: true, last4: true, color: true } });
+  const cardById = new Map(cards.map((c) => [c.id, c]));
+  for (const r of rows) {
+    const card = r.cardAccountId != null ? cardById.get(r.cardAccountId) : null;
+    if (card) m.set(r.categoryId, { name: card.name, last4: card.last4, color: card.color });
+  }
+  return m;
+}
+
 /**
  * Unpaid FAMILY credit-card bills that have come DUE by this plan month. A family credit-card spend
  * keeps its cash in the owner's hand until the card's bill is paid (see the credit exclusion in

@@ -2150,14 +2150,41 @@ export async function payPeriodicBill(prev: PayBillState, formData: FormData): P
   const isPayer = memberId != null && memberId === payer;
   if (!isEditor && !isPayer) return fail("Only the bill's payer or a manager can mark this paid.", "not-allowed", { payer });
 
+  const round = (x: number) => Math.round(x * 100) / 100;
+  // The ACTUAL amount to pay (varies per bill); defaults to the configured bill. Anything the
+  // fund doesn't need is simply left in the fund (we only draw what's paid).
+  const actualRaw = parseAmount(formData.get("amount"));
+  const actual = actualRaw && actualRaw > 0 ? round(actualRaw) : bill;
+
+  // Optional: physically paid on a credit card (the payer's OWN). The bill is still covered by its fund
+  // (settlement already nets it) — we just mirror the charge onto that card's statement, creating NO
+  // reimbursable spend, so it isn't paid back twice. Ignore anything that isn't the payer's own credit card.
+  const cardAccountIdRaw = Number(formData.get("cardAccountId")) || 0;
+  let cardAccountId: number | null = null;
+  if (cardAccountIdRaw && payer != null) {
+    const card = await prisma.financeAccount.findUnique({ where: { id: cardAccountIdRaw }, select: { memberId: true, type: true } });
+    if (card && card.type === "credit_card" && card.memberId === payer) cardAccountId = cardAccountIdRaw;
+  }
+  // The 1:1 card-statement mirror for a bill payment (linked via billPaymentId). source:"family" makes it
+  // ride the card's cycle as a reimbursed/display line (never the owner's personal spendable), exactly like
+  // a family card spend — but with no Spend behind it, so settlement never credits it a second time.
+  const mirrorData = (billPaymentId: number) => ({
+    memberId: payer as number, accountId: cardAccountId as number, date: new Date(),
+    merchant: cat.name, amount: actual, type: "spend", category: cat.name, source: "family", billPaymentId,
+  });
+
   const already = await prisma.billPayment.findUnique({ where: { categoryId_periodId: { categoryId, periodId } } });
   if (already) return fail("This bill is already marked paid for the month.", "already-paid");
 
-  // "Already paid" — pure record, no money moves (fund/Piggy untouched, no misc spend).
+  // "Already paid" — pure record, no family money moves (fund/Piggy untouched, no misc spend). A card may
+  // still be named (it was paid on the card, outside the app) → mirror it onto the card's statement.
   if (source === "already") {
-    await prisma.billPayment.create({ data: { householdId: cat.householdId, categoryId, periodId, spendPeriodId, memberId: payer, fromFund: 0, fromPiggy: 0, outOfPocket: 0 } });
-    await logActivity("expense", "created", `Marked ${cat.name} bill already paid (outside)`, spendPeriodId);
-    log.info("payPeriodicBill", "ok", { outcome: "ok", ...ctx, mode: "already", amount: 0 });
+    await prisma.$transaction(async (tx) => {
+      const bp = await tx.billPayment.create({ data: { householdId: cat.householdId, categoryId, periodId, spendPeriodId, memberId: payer, fromFund: 0, fromPiggy: 0, outOfPocket: 0, cardAccountId } });
+      if (cardAccountId != null) await tx.accountTransaction.create({ data: mirrorData(bp.id) });
+    });
+    await logActivity("expense", "created", `Marked ${cat.name} bill already paid (outside)${cardAccountId != null ? " · on card" : ""}`, spendPeriodId);
+    log.info("payPeriodicBill", "ok", { outcome: "ok", ...ctx, mode: "already", amount: 0, card: cardAccountId });
     revalidateFamily();
     return { ok: true, n: prev.n + 1 };
   }
@@ -2168,17 +2195,11 @@ export async function payPeriodicBill(prev: PayBillState, formData: FormData): P
     // this month's own set-aside — allowed toward the bill (not yet accrued; wind-down reconciles)
     prisma.expenseEntry.aggregate({ where: { periodId, categoryId, OR: [{ label: { endsWith: "(saving)" } }, { label: { endsWith: "(monthly share)" } }] }, _sum: { amount: true } }),
   ]);
-  const round = (x: number) => Math.round(x * 100) / 100;
   const accrued = Math.max(0, round(fundAgg._sum.amount ?? 0)); // real, already-in-the-fund money
   // this month's own share (not yet accrued). A carried pay's closed month already accrued its
   // share into the fund at wind-down, so it's part of `accrued` — don't count it again here.
   const setAside = carried ? 0 : Math.max(0, round(setAsideAgg._sum.amount ?? 0));
   const piggyAvail = Math.max(0, piggyAgg._sum.amount ?? 0);
-
-  // The actual amount to pay (varies per bill); defaults to the configured bill. Anything the
-  // fund doesn't need is simply left in the fund (we only draw what's paid).
-  const actualRaw = parseAmount(formData.get("amount"));
-  const actual = actualRaw && actualRaw > 0 ? round(actualRaw) : bill;
 
   // Offset model — the fund never goes negative:
   //  1. draw from the ACCRUED fund only (a real ledger draw, ≤ accrued),
@@ -2201,7 +2222,10 @@ export async function payPeriodicBill(prev: PayBillState, formData: FormData): P
     if (fromFund > 0) await tx.piggyEntry.create({ data: { householdId: cat.householdId, periodId: spendPeriodId, categoryId, kind: "sinking", amount: -fromFund, note: `${cat.name} bill paid${carried ? " (carried)" : ""}` } });
     if (fromPiggy > 0) await tx.piggyEntry.create({ data: { householdId: cat.householdId, periodId: spendPeriodId, kind: "piggy", amount: -fromPiggy, note: `${cat.name} bill paid${carried ? " (carried)" : ""}` } });
     if (outOfPocket > 0 && miscCat) await tx.spend.create({ data: { periodId: spendPeriodId, categoryId: miscCat.id, memberId: payer, label: `${cat.name} bill (out-of-pocket)`, amount: outOfPocket, subCategory: null } });
-    await tx.billPayment.create({ data: { householdId: cat.householdId, categoryId, periodId, spendPeriodId, memberId: payer, fromFund, fromSetAside, fromPiggy, outOfPocket } });
+    const bp = await tx.billPayment.create({ data: { householdId: cat.householdId, categoryId, periodId, spendPeriodId, memberId: payer, fromFund, fromSetAside, fromPiggy, outOfPocket, cardAccountId } });
+    // Paid on a card → mirror the full amount onto the card's statement (settlement unaffected; the fund
+    // still covers the bill). It rides the card cycle like a family card spend, but without a new spend.
+    if (cardAccountId != null) await tx.accountTransaction.create({ data: mirrorData(bp.id) });
     // Mark this period's BILL line (label = cat.name — a tax window/deadline or a pay-in-full bill; NOT a
     // "(monthly share)" set-aside) paid, so the Sheet row locks (not-allowed cursor) & drops from "to pay".
     await tx.expenseEntry.updateMany({ where: { periodId: spendPeriodId, categoryId, label: cat.name }, data: { paid: true, paidAt: new Date() } });
@@ -2233,6 +2257,8 @@ export async function unpayPeriodicBill(formData: FormData) {
     if (bp.fromFund > 0) await tx.piggyEntry.create({ data: { householdId: bp.householdId, periodId: sp, categoryId, kind: "sinking", amount: bp.fromFund, note: `${cat?.name ?? "bill"} payment undone` } });
     if (bp.fromPiggy > 0) await tx.piggyEntry.create({ data: { householdId: bp.householdId, periodId: sp, kind: "piggy", amount: bp.fromPiggy, note: `${cat?.name ?? "bill"} payment undone` } });
     if (bp.outOfPocket > 0) await tx.spend.deleteMany({ where: { periodId: sp, memberId: bp.memberId, amount: bp.outOfPocket, label: { endsWith: "(out-of-pocket)" } } });
+    // Drop the card-statement mirror, if this bill was paid on a card (also cascades on the delete below).
+    await tx.accountTransaction.deleteMany({ where: { billPaymentId: bp.id } });
     await tx.billPayment.delete({ where: { id: bp.id } });
     // reverse the Sheet bill line's paid flag (set in payPeriodicBill) so it unlocks & shows to-pay again
     if (cat) await tx.expenseEntry.updateMany({ where: { periodId: sp, categoryId, label: cat.name }, data: { paid: false, paidAt: null } });

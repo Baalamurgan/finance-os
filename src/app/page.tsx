@@ -3,7 +3,7 @@ import { formatINR, withShareCount } from "@/lib/format";
 import { categoryEmoji } from "@/lib/categoryEmoji";
 import { loadCommon } from "@/lib/load";
 import { istYearMonth } from "@/lib/time";
-import { getRollup, getWindDownPreview, getSkippedSetAsides, getProjectedPiggy, getInHand, getNewSheetLineIds } from "@/lib/queries";
+import { getRollup, getWindDownPreview, getSkippedSetAsides, getProjectedPiggy, getInHand, getNewSheetLineIds, getBillPaymentCards } from "@/lib/queries";
 import { NavHeader } from "@/components/NavHeader";
 import { RowActions } from "@/components/RowActions";
 import { ExpenseRowActions } from "@/components/ExpenseRowActions";
@@ -49,6 +49,19 @@ function IncentiveTag({ save, full }: { save?: number; full?: number }) {
       className="shrink-0 rounded-full bg-emerald-100 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-emerald-700"
     >
       💰 Incentive{saveTxt}
+    </span>
+  );
+}
+// 💳 Paid-on-card badge for a fund bill settled on a credit card. Tinted with the card's own colour.
+// The fund still covered the bill — this only says the cash rode that card's statement.
+function CardTag({ name, last4, color }: { name: string; last4: string | null; color: string }) {
+  return (
+    <span
+      title={`Paid on ${name}${last4 ? ` ••${last4}` : ""} — it's on that card's statement; the fund still covered the bill, so your settlement is unchanged.`}
+      className="shrink-0 whitespace-nowrap rounded-full px-1.5 py-0.5 text-[9px] font-medium"
+      style={{ backgroundColor: `${color}1a`, color }}
+    >
+      💳 {name}{last4 ? ` ••${last4}` : ""}
     </span>
   );
 }
@@ -187,6 +200,7 @@ function ExpenseRow({
   periodId,
   periodMonth,
   isNew,
+  paidCard,
 }: {
   e: ExpRow;
   isNew?: boolean;
@@ -196,6 +210,8 @@ function ExpenseRow({
   periodId: number;
   periodMonth: number;
   previewMonth?: boolean;
+  // The credit card this bill was paid on (if any) → 💳 badge on the paid row.
+  paidCard?: { name: string; last4: string | null; color: string } | null;
 }) {
   // A "removed" tombstone: the head deleted this Setup line for the month. Show it struck-through with a
   // Restore control instead of a live row (amount is 0, so it's already out of every total).
@@ -266,6 +282,8 @@ function ExpenseRow({
         >
           ✂️ Trimmed
         </span>
+      ) : paidCard ? (
+        <CardTag name={paidCard.name} last4={paidCard.last4} color={paidCard.color} />
       ) : undefined}
       pinnedControl={e.pinned ? <PinnedBadge kind="expense" id={e.id} canEdit={canEditHere} /> : isKeptLine(e) ? <KeptTag title="Planned / added this month — kept through a Sheet refresh" /> : null}
     >
@@ -439,7 +457,7 @@ export default async function SheetPage({
 
   // These reads are independent — fetch them in ONE round-trip instead of a six-deep await waterfall
   // against the (remote) DB pooler, which dominated the sheet's time-to-first-byte on mobile.
-  const [rollup, skipped, preview, projectedPiggy, inHand, newLines] = await Promise.all([
+  const [rollup, skipped, preview, projectedPiggy, inHand, newLines, paidCardByCat] = await Promise.all([
     getRollup(c.selected.id),
     getSkippedSetAsides(c.household.id, c.selected.id),
     draftSource ? getWindDownPreview(c.household.id, draftSource.id) : Promise.resolve(null),
@@ -449,6 +467,8 @@ export default async function SheetPage({
     open || isDraft ? getInHand(c.household.id, c.selected.id) : Promise.resolve(null),
     // Lines new this month (first-time EMI / bill / income) → the "NEW" badge.
     getNewSheetLineIds(c.household.id, c.selected.id),
+    // Which fund bills were paid on a credit card → the 💳 badge on the paid row.
+    getBillPaymentCards(c.selected.id),
   ]);
   const newExpenseIds = newLines.expenses;
   const newIncomeIds = newLines.incomes;
@@ -799,6 +819,7 @@ export default async function SheetPage({
                           periodMonth={c.selected!.month}
                           previewMonth={previewMonth}
                           isNew={newExpenseIds.has(e.id)}
+                          paidCard={paidCardByCat.get(e.categoryId)}
                         />
                       ))
                     )}
