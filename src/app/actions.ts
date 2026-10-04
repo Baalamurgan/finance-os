@@ -2226,9 +2226,11 @@ export async function payPeriodicBill(prev: PayBillState, formData: FormData): P
     // Paid on a card → mirror the full amount onto the card's statement (settlement unaffected; the fund
     // still covers the bill). It rides the card cycle like a family card spend, but without a new spend.
     if (cardAccountId != null) await tx.accountTransaction.create({ data: mirrorData(bp.id) });
-    // Mark this period's BILL line (label = cat.name — a tax window/deadline or a pay-in-full bill; NOT a
-    // "(monthly share)" set-aside) paid, so the Sheet row locks (not-allowed cursor) & drops from "to pay".
-    await tx.expenseEntry.updateMany({ where: { periodId: spendPeriodId, categoryId, label: cat.name }, data: { paid: true, paidAt: new Date() } });
+    // Mark this period's bill/share line paid so the Sheet row locks (✓, not-allowed cursor) & drops
+    // from "to pay". The line may be the plain name (tax window/deadline, or pay-in-full) OR the
+    // "(monthly share)"/"(saving)" set-aside — for a MONTHLY fund bill (e.g. YouTube) the share IS the
+    // bill, so match all three; otherwise a monthly bill's Sheet row never locks when paid.
+    await tx.expenseEntry.updateMany({ where: { periodId: spendPeriodId, categoryId, OR: [{ label: cat.name }, { label: `${cat.name} (monthly share)` }, { label: `${cat.name} (saving)` }] }, data: { paid: true, paidAt: new Date() } });
   });
   await logActivity("expense", "created", `Paid ${cat.name} bill ${formatINR(actual)}${carried ? " (carried)" : ""}`, spendPeriodId);
   log.info("payPeriodicBill", "ok", { outcome: "ok", ...ctx, mode: source, amount: actual, fromFund, fromPiggy, outOfPocket });
@@ -2261,7 +2263,7 @@ export async function unpayPeriodicBill(formData: FormData) {
     await tx.accountTransaction.deleteMany({ where: { billPaymentId: bp.id } });
     await tx.billPayment.delete({ where: { id: bp.id } });
     // reverse the Sheet bill line's paid flag (set in payPeriodicBill) so it unlocks & shows to-pay again
-    if (cat) await tx.expenseEntry.updateMany({ where: { periodId: sp, categoryId, label: cat.name }, data: { paid: false, paidAt: null } });
+    if (cat) await tx.expenseEntry.updateMany({ where: { periodId: sp, categoryId, OR: [{ label: cat.name }, { label: `${cat.name} (monthly share)` }, { label: `${cat.name} (saving)` }] }, data: { paid: false, paidAt: null } });
   });
   log.info("unpayPeriodicBill", "ok", { outcome: "ok", memberId, categoryId, periodId });
   revalidateFamily();
@@ -3493,9 +3495,21 @@ export async function windDownMonth(formData: FormData) {
 // Piggy holder (the tickable hand-over step in the next month's Money Plan). `undo` clears it back
 // to pending. Head/manager only. Flips whether that lump sits in the owners' In-Hand vs the holder's.
 export async function markPiggyHandedOver(formData: FormData) {
-  if (!(await canEdit())) return;
+  const session = await auth();
+  const memberId = session?.user?.memberId ?? null;
   const periodId = Number(formData.get("periodId"));
   if (!periodId) return;
+  // Head/manager may always confirm; so may the two PARTIES to the hand-over — the Piggy holder
+  // (receiver) and any budget owner (a potential leftover sender). Both sides, like the pool hand-over;
+  // it's a reversible display flag, so stakeholder confirmation is enough (fixes: sender couldn't tick it).
+  if (!(await canEdit())) {
+    const period = await prisma.period.findUnique({ where: { id: periodId }, select: { householdId: true } });
+    if (!period || memberId == null) return;
+    const hh = await prisma.household.findUnique({ where: { id: period.householdId }, select: { piggyHolderMemberId: true } });
+    const isHolder = memberId === hh?.piggyHolderMemberId;
+    const ownsBudget = (await prisma.category.findFirst({ where: { householdId: period.householdId, tracked: true, responsibleMemberId: memberId }, select: { id: true } })) != null;
+    if (!isHolder && !ownsBudget) { log.warn("markPiggyHandedOver", "blocked", { outcome: "blocked", reason: "not-stakeholder", memberId, periodId }); return; }
+  }
   const undo = formData.get("undo") === "1";
   await prisma.period.update({ where: { id: periodId }, data: { piggyHandedOverAt: undo ? null : new Date() } });
   await logActivity("piggy", "updated", `${undo ? "Reverted" : "Confirmed"} last month's Piggy hand-over`, periodId);

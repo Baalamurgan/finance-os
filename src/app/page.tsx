@@ -230,7 +230,9 @@ function shortfallTrim(e: ExpRow): number | null {
 // not "kept" — and carried/brought-forward one-offs (CARRY etc.) are noise. Mirrors NOT_NEW_NOTES so
 // the same user-added lines that get the "New" badge also read as "kept" (the user wants both).
 function isKeptLine(e: ExpRow): boolean {
-  return e.oneOff && (e.note == null || isPoolNote(e.note) || e.note === DEFERRED_NOTE);
+  // A pre-paid periodic bill (e.g. Arni property tax paid together with a prior cycle) is a generated
+  // line (oneOff:false) the family deliberately keeps showing for the month — so it's "kept" too.
+  return (e.oneOff && (e.note == null || isPoolNote(e.note) || e.note === DEFERRED_NOTE)) || e.label.endsWith("(pre-paid)");
 }
 
 function ExpenseRow({
@@ -300,7 +302,7 @@ function ExpenseRow({
   // shows 🧾 Bill — both drop the "(monthly share)" suffix. Saving-share months keep it.
   const tPhase = taxPhase(e, periodMonth);
   const billMonthDue = tPhase != null || isFundBillMonth(e, periodMonth);
-  const displayLabel = billMonthDue
+  const displayLabel = billMonthDue || (e.category.fundingStyle != null && e.paid)
     ? e.label.replace(/\s*\(monthly share\)$/, "")
     : withShareCount(e.label, e.category.billEveryMonths);
   // Periodic / fund bills carry a cadence pill + a due-date sub-line + a tap-for-details ⓘ, so one row
@@ -323,6 +325,12 @@ function ExpenseRow({
   ) : paidCard ? (
     <CardTag name={paidCard.name} last4={paidCard.last4} color={paidCard.color} />
   ) : null;
+  // Keep at most 2 tags inline (+ the ⓘ): the 🔁 cadence pill is lowest priority, so it shows inline
+  // only when there's room (< 2 other tags: phase, New, kept/pinned). Otherwise it lives only in the ⓘ
+  // popover's "Recurs" row — the "more than 2 tags → into the details popover" rule, kept uncluttered.
+  const keptOrPinned = e.pinned || isKeptLine(e);
+  const inlineOtherTags = (phaseTag ? 1 : 0) + (isNew ? 1 : 0) + (keptOrPinned ? 1 : 0);
+  const showCadenceInline = cad != null && inlineOtherTags < 2;
   return (
     <Row
       label={displayLabel}
@@ -335,7 +343,7 @@ function ExpenseRow({
       extraTag={periodic ? (
         <>
           {phaseTag}
-          {cad && <CadencePill label={cad} />}
+          {showCadenceInline && <CadencePill label={cad!} />}
           <BillDetails name={e.category.name} rows={billDetailRows(e, paidCard)} />
         </>
       ) : (phaseTag ?? undefined)}

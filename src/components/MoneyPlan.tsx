@@ -327,6 +327,11 @@ export function MoneyPlan({
                   {isManual && s.note && (
                     <div className="mt-0.5 text-[10px] italic text-slate-500">📝 {s.note}</div>
                   )}
+                  {/* What a disbursement is FOR — the expense label (e.g. "Harish Urbanrise cleaning reward"),
+                      so "Arumugam → Harish · from hub" says what the money is for, not just who → who. */}
+                  {isAllowance && s.source && (
+                    <div className="mt-0.5 text-[10px] italic text-slate-500">📝 {s.source}</div>
+                  )}
                   {!s.done && isHandover && (
                     <div className="mt-0.5 text-[10px] text-amber-600">
                       🐷 Last month’s Piggy → {s.toName}’s once ticked · separate bucket, doesn’t move this month’s cash
@@ -337,7 +342,7 @@ export function MoneyPlan({
                   {isHandover && s.done && (
                     <span className="mt-1 inline-flex items-center rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-medium text-emerald-700 no-underline">✓ handed over</span>
                   )}
-                  {isHandover && !s.done && canEdit && (
+                  {isHandover && !s.done && (canEdit || currentMemberId === s.fromId || currentMemberId === s.toId) && (
                     <form action={withToast(markPiggyHandedOver, { success: "Marked handed over" })} className="mt-1">
                       <input type="hidden" name="periodId" value={s.handoverPeriodId} />
                       <MiniBtn primary>✓ mark handed over</MiniBtn>
