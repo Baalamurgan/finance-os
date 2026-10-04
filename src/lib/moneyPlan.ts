@@ -56,6 +56,7 @@ export type PlanStep = {
   poolVendorLeg?: boolean; // leg 2 of a two-step pool-funded misc: the member → vendor payment (ticked separately)
   fromId?: number; toId?: number; fromName?: string; toName?: string; recordId?: number | null; feedsBills?: boolean;
   fundsMember?: boolean; // a disbursement piece timed to fund the recipient's own bills below
+  disbMaxDay?: number; // a hub funding disbursement: its natural (bill-driven) day = the latest the head may re-date it to (the date picker's upper bound)
   advanceId?: number; // this step is a funding advance (write-through to the Advance record)
   payback?: boolean; // this advance step is the PAYBACK leg (borrower → funder), not the front
   reimbursement?: boolean; // a disbursement that pays a member back for prior-month out-of-pocket spends (scheduled early)
@@ -106,8 +107,9 @@ export function buildMoneyPlan(input: {
   openingByMember?: Record<number, number>; // each member's carry (prior-month closing personal) — the cash they actually START the month holding, so the walk opens from reality instead of 0
   hiddenKeys?: string[]; // step ids the head has hidden from the plan view
   orderOverrides?: Record<string, number>; // head "move up/down": step id → manual sort index (overrides day/rank order)
+  disbDayByCreditor?: Record<number, number>; // head re-dated a creditor's hub funding earlier: creditorId → chosen day; all hub→creditor "funds ↓" pieces move to it (setStepDay only persists an affordable day ≤ the bill)
 }): MoneyPlan {
-  const { treasurerId, treasurerName, transfers, bills, allowances = [], piggyReturns = [], advances = [], incomeDayByMember, incomeByMember = {}, incomeArrivals, reimburseByMember = {}, reimburseDay, piggyHandover, manualSteps = [], poolHandovers = [], openingByMember = {}, hiddenKeys = [], orderOverrides = {} } = input;
+  const { treasurerId, treasurerName, transfers, bills, allowances = [], piggyReturns = [], advances = [], incomeDayByMember, incomeByMember = {}, incomeArrivals, reimburseByMember = {}, reimburseDay, piggyHandover, manualSteps = [], poolHandovers = [], openingByMember = {}, hiddenKeys = [], orderOverrides = {}, disbDayByCreditor = {} } = input;
 
   const inbound = transfers.filter((t) => t.toId === treasurerId);
   const outbound = transfers.filter((t) => t.toId !== treasurerId && t.fromId === treasurerId); // hub → creditor
@@ -535,6 +537,20 @@ export function buildMoneyPlan(input: {
     for (const front of frontSteps.get(p.lenderId) ?? []) front.returnBy = pday; // "returned by the Nth"
   }
   steps.push(...pieces);
+
+  // Head re-dated a creditor's funding (the "funds <name> ↓" step's date dropdown / up-arrow): move ALL of
+  // the hub's funding pieces to that person onto the chosen day, and record each piece's NATURAL (bill-
+  // driven) day as disbMaxDay — the latest the date picker allows. setStepDay only persists a day the hub
+  // can afford and that isn't past the bill (it re-runs this plan and rejects otherwise); here we just
+  // apply it — the balance walk below still flags any residual shortfall.
+  if (treasurerId != null) {
+    for (const s of steps) {
+      if (s.kind !== "transfer-out" || s.fromId !== treasurerId || !s.fundsMember || s.budgetLoan || s.reroute || s.done || s.toId == null) continue;
+      s.disbMaxDay = s.day ?? undefined;
+      const d = disbDayByCreditor[s.toId];
+      if (d != null) s.day = d;
+    }
+  }
 
   // A reroute means a debtor paid a creditor directly, so that debtor owes the hub that much LESS —
   // shrink their inbound collection to match (drop it entirely if fully redirected). Keeps the books

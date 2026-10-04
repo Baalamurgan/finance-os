@@ -3240,10 +3240,27 @@ export async function setStepDay(formData: FormData) {
     // the step falls back to its derived date. `id` here is the periodId the override belongs to.
     const stepKey = String(formData.get("stepKey") ?? "");
     if (!stepKey) return { ok: false, error: "Bad request." };
-    const period = await prisma.period.findUnique({ where: { id }, select: { status: true } });
+    const period = await prisma.period.findUnique({ where: { id }, select: { status: true, householdId: true } });
     if (!period || period.status === "closed") return { ok: false, error: "This month is closed." };
-    if (day == null) await prisma.stepDayOverride.deleteMany({ where: { periodId: id, stepKey } });
-    else await prisma.stepDayOverride.upsert({ where: { periodId_stepKey: { periodId: id, stepKey } }, create: { periodId: id, stepKey, day }, update: { day } });
+    if (stepKey.startsWith("disbday-")) {
+      // Re-dating a creditor's hub funding is bounded to AFFORDABLE dates only: apply it, re-run the plan,
+      // and revert if it introduces ANY shortfall — which also blocks dating it past the bill (that shorts
+      // the bill). So the head can only move funding to a day the hub can actually cover, on/before the bill.
+      const prev = await prisma.stepDayOverride.findUnique({ where: { periodId_stepKey: { periodId: id, stepKey } }, select: { day: true } });
+      const before = await getMoneyPlan(period.householdId, id);
+      if (day == null) await prisma.stepDayOverride.deleteMany({ where: { periodId: id, stepKey } });
+      else await prisma.stepDayOverride.upsert({ where: { periodId_stepKey: { periodId: id, stepKey } }, create: { periodId: id, stepKey, day }, update: { day } });
+      const after = await getMoneyPlan(period.householdId, id);
+      if (after.shortBills > before.shortBills || after.hubShortfall > before.hubShortfall + 0.5) {
+        if (prev) await prisma.stepDayOverride.upsert({ where: { periodId_stepKey: { periodId: id, stepKey } }, create: { periodId: id, stepKey, day: prev.day }, update: { day: prev.day } });
+        else await prisma.stepDayOverride.deleteMany({ where: { periodId: id, stepKey } });
+        return { ok: false, error: "The treasurer can’t cover it that early (or it’s past the bill). Pick a later day." };
+      }
+    } else if (day == null) {
+      await prisma.stepDayOverride.deleteMany({ where: { periodId: id, stepKey } });
+    } else {
+      await prisma.stepDayOverride.upsert({ where: { periodId_stepKey: { periodId: id, stepKey } }, create: { periodId: id, stepKey, day }, update: { day } });
+    }
   } else if (kind === "manual") {
     // A head-added manual step owns its own day (positioning still follows its insert anchor, so the
     // date is display + fallback order). Editable even once ticked done — it's ad-hoc metadata.
@@ -3264,6 +3281,9 @@ function stepDayParamsFor(s: import("@/lib/moneyPlan").PlanStep, periodId: numbe
   if (s.kind === "manual") return s.manualId != null ? { kind: "manual", id: s.manualId } : null;
   const rowId = s.kind === "income" ? s.incomeId : (s.kind === "bill" && !s.fund) || s.kind === "allowance" ? s.billId : s.kind === "advance" ? s.advanceId : undefined;
   if (rowId != null) return { kind: s.kind === "advance" ? (s.payback ? "advance-payback" : "advance") : s.kind, id: rowId };
+  // A hub funding disbursement ("funds <name> ↓") — no row of its own; keyed per creditor so re-dating moves
+  // all of the hub's funding to that person. (Excludes reroutes / budget-loan fronts — not hub pieces.)
+  if (s.kind === "transfer-out" && s.fundsMember && !s.budgetLoan && !s.reroute && s.toId != null) return { kind: "override", id: periodId, stepKey: `disbday-${s.toId}` };
   const stepKey =
     s.kind === "piggy" && s.handoverPeriodId != null && s.fromId != null ? `piggyho-${s.handoverPeriodId}-${s.fromId}`
       : s.kind === "pool-handover" && s.fromId != null ? `poolho-${s.fromId}`

@@ -293,7 +293,12 @@ export function MoneyPlan({
                             ? `fund-${s.categoryId}`
                             : undefined;
                       if (stepKey) return <StepDayEditor kind="override" id={periodId} stepKey={stepKey} day={s.day}>{tag}</StepDayEditor>;
-                      // Everything else (collections / disbursements) derives its date — read-only.
+                      // A hub funding disbursement ("funds <name> ↓"): re-datable to an EARLIER affordable day
+                      // (picker goes up to the bill day; the server rejects a day the hub can't cover or that's
+                      // past the bill). Keyed per creditor, so all the hub's funding to them moves together.
+                      if (s.kind === "transfer-out" && s.fundsMember && !s.budgetLoan && !s.reroute && s.toId != null)
+                        return <StepDayEditor kind="override" id={periodId} stepKey={`disbday-${s.toId}`} day={s.day} maxDay={s.disbMaxDay ?? s.day ?? undefined}>{tag}</StepDayEditor>;
+                      // Everything else (collections) derives its date — read-only.
                       return tag;
                     })()}
                     {/* A done step keeps its date visible — when it was scheduled / due — as a muted tag,

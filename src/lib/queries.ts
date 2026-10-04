@@ -804,6 +804,9 @@ export async function getMoneyPlan(householdId: number, periodId: number, inhand
   ];
   const hiddenKeys = hiddenRows.map((r) => r.stepKey);
   const orderOverrides = Object.fromEntries(orderRows.map((r) => [r.stepKey, r.sortIndex]));
+  // Head re-dated a creditor's hub funding (StepDayOverride keyed `disbday-<creditorId>`) → creditorId → day.
+  const disbDayByCreditor: Record<number, number> = {};
+  for (const [k, d] of dayOverride) { if (typeof k === "string" && k.startsWith("disbday-") && d != null) { const cid = Number(k.slice(8)); if (Number.isFinite(cid)) disbDayByCreditor[cid] = d; } }
 
   // Prior-month cash now booked as this month's pool income but still HELD by a member (their budget
   // leftover routed to income and/or the general Piggy) → one combined tickable "holder → treasurer"
@@ -873,7 +876,7 @@ export async function getMoneyPlan(householdId: number, periodId: number, inhand
   for (const g of inhand.byPerson) if (g.memberId != null && g.openingCarry != null) openingByMember[g.memberId] = g.openingCarry;
 
   const { buildMoneyPlan } = await import("./moneyPlan");
-  const plan = buildMoneyPlan({ treasurerId: inhand.treasurerId, treasurerName: settlement.treasurer?.name, transfers, bills, allowances, piggyReturns, advances, incomeDayByMember, incomeByMember, incomeArrivals, reimburseByMember, reimburseDay, piggyHandover, manualSteps, poolHandovers: [...poolHandovers, ...piggyBatchHandovers], openingByMember, hiddenKeys, orderOverrides });
+  const plan = buildMoneyPlan({ treasurerId: inhand.treasurerId, treasurerName: settlement.treasurer?.name, transfers, bills, allowances, piggyReturns, advances, incomeDayByMember, incomeByMember, incomeArrivals, reimburseByMember, reimburseDay, piggyHandover, manualSteps, poolHandovers: [...poolHandovers, ...piggyBatchHandovers], openingByMember, hiddenKeys, orderOverrides, disbDayByCreditor });
 
   // Enrich done steps with the day they were ACTUALLY marked paid (IST), so the plan can show
   // "paid <day>" when it differs from the scheduled/due day. Timestamps live on the underlying record:
