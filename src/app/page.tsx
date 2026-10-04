@@ -536,6 +536,10 @@ export default async function SheetPage({
   ]);
   const newExpenseIds = newLines.expenses;
   const newIncomeIds = newLines.incomes;
+  // Number the "From Piggy" income rows (2), (3)… so multiple withdrawals in a month are distinguishable
+  // (the 1st stays unnumbered). Each withdrawal is its own row; its hand-over to the treasurer locks it.
+  const piggyIncomeNo = new Map<number, number>();
+  { let n = 0; for (const i of rollup.incomes) if (i.note === PIGGY_INCOME_NOTE) piggyIncomeNo.set(i.id, ++n); }
   const shownPiggy = projectedPiggy ? projectedPiggy.generalTotal : c.piggyBalance;
   // Part of the Piggy figure may be last month's leftover still sitting with the category owners
   // (not yet handed to the holder). Surface it so the piggy number isn't mistaken for fully received.
@@ -774,7 +778,7 @@ export default async function SheetPage({
                     </div>
                   </div>
                 ) : (
-                  <Row key={i.id} label={i.source} tag={i.owner?.name} amount={i.amount} locked={i.receivedAt != null} tags={incomeTags}>
+                  <Row key={i.id} label={(piggyIncomeNo.get(i.id) ?? 0) > 1 ? `${i.source} (${piggyIncomeNo.get(i.id)})` : i.source} tag={i.owner?.name} amount={i.amount} locked={i.receivedAt != null} tags={incomeTags}>
                     {c.isHead ? (
                       <IncomeRowActions
                         members={c.members}

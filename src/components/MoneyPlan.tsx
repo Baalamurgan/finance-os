@@ -353,7 +353,15 @@ export function MoneyPlan({
                     <div className="mt-0.5 text-[10px] text-amber-600">{s.source}</div>
                   )}
                   {isPoolHandover && s.done && (
-                    <span className="mt-1 inline-flex items-center rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-medium text-emerald-700 no-underline">✓ handed to {s.toName}</span>
+                    <div className="mt-1 flex items-center gap-2">
+                      <span className="inline-flex items-center rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-medium text-emerald-700 no-underline">✓ handed to {s.toName}</span>
+                      {(canEdit || currentMemberId === s.fromId) && s.recordIds && s.recordIds.length > 0 && (
+                        <form action={withToast(togglePoolHandover, { success: "Hand-over undone" })}>
+                          <input type="hidden" name="ids" value={s.recordIds.join(",")} />
+                          <button className="text-[10px] font-medium text-slate-400 underline hover:text-slate-600">undo</button>
+                        </form>
+                      )}
+                    </div>
                   )}
                   {isPoolHandover && !s.done && (canEdit || currentMemberId === s.fromId) && s.recordIds && s.recordIds.length > 0 && (
                     <form action={withToast(togglePoolHandover, { success: "Marked handed over" })} className="mt-1">
