@@ -114,6 +114,7 @@ function sheetSection(e: ExpRow): string {
 // as a bill, while saving months keep "(monthly share)". The "— from fund" credit line is never tagged.
 function isFundBillMonth(e: ExpRow, periodMonth: number): boolean {
   const c = e.category;
+  if (e.paid) return false; // already paid → no bill prompt (the ✓/locked row says it's done)
   if (c.fundingStyle == null || c.billMonth == null || c.billEveryMonths == null) return false;
   if (e.label.endsWith("— from fund")) return false;
   return isLumpDue(c.billMonth, c.billEveryMonths, { month: periodMonth });
@@ -124,6 +125,7 @@ function isFundBillMonth(e: ExpRow, periodMonth: number): boolean {
 // saving-share month (keeps "(monthly share)") and for the "— from fund" credit line. Drives 💰 vs 🧾.
 function taxPhase(e: ExpRow, periodMonth: number): "incentive" | "bill" | null {
   const c = e.category;
+  if (e.paid) return null; // already paid → no incentive/bill prompt
   if (c.earlyAmount == null && c.latePenaltyPct == null) return null; // not a tax
   if (c.billMonth == null || c.billEveryMonths == null) return null;
   if (e.label.endsWith("— from fund") || e.label.endsWith("(monthly share)")) return null;
