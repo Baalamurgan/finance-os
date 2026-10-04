@@ -26,6 +26,8 @@ type Row = {
   fundingStyle: string | null;
   saveEveryMonths: number | null;
   onUnpaid: string;
+  earlyAmount: number | null;
+  latePenaltyPct: number | null;
   needsReview: boolean;
   isAllowance: boolean;
 };
@@ -57,6 +59,7 @@ type MonthlyKind = "track" | "fixed" | "bill";
 type Draft = {
   name: string; section: string; cycle: string; amount: string; monthlyKind: MonthlyKind;
   fundingStyle: string; saveEvery: string; billMonth: string; billDay: string; resp: string; payer: string; onUnpaid: string; allowance: boolean;
+  earlyAmount: string; latePenaltyPct: string;
 };
 const toDraft = (r: Row): Draft => ({
   name: r.name,
@@ -72,6 +75,8 @@ const toDraft = (r: Row): Draft => ({
   payer: r.payerMemberId != null ? String(r.payerMemberId) : "",
   onUnpaid: r.onUnpaid === "skip" ? "skip" : "carry",
   allowance: r.isAllowance,
+  earlyAmount: r.earlyAmount != null ? String(r.earlyAmount) : "",
+  latePenaltyPct: r.latePenaltyPct != null ? String(r.latePenaltyPct) : "",
 });
 const isPeriodic = (d: Draft) => Number(d.cycle) > 1;
 const isMonthlyBill = (d: Draft) => !isPeriodic(d) && d.monthlyKind === "bill";
@@ -98,6 +103,9 @@ const draftPayload = (id: number, d: Draft) => {
     onUnpaid: bill && (periodic ? d.fundingStyle === "auto" : true) ? d.onUnpaid : "carry",
     // allowance = flat monthly personal money sent to a member (only a flat fixed monthly expense)
     isAllowance: !periodic && d.monthlyKind === "fixed" && d.allowance ? "on" : "",
+    // tax knobs — periodic bills only (property/water early price + late penalty)
+    earlyAmount: periodic ? d.earlyAmount : "",
+    latePenaltyPct: periodic ? d.latePenaltyPct : "",
   };
 };
 
@@ -328,6 +336,13 @@ function SetupRow({ r, draft, patch, members, readOnly }: { r: Row; draft: Draft
                 </select>
               )}
             </div>
+            {/* Tax knobs (property/water): early-payment price + simple %/mo late penalty. Blank = off. */}
+            <div className="flex flex-wrap items-center gap-1 text-[11px] text-slate-500">
+              <span title="Discounted price if paid within the first 30 days of the due month. Blank = no early discount.">early ₹</span>
+              <input type="number" step="0.01" value={draft.earlyAmount} onChange={(e) => patch({ earlyAmount: e.target.value })} placeholder="none" disabled={readOnly} className="input w-20 py-1 text-xs disabled:bg-slate-100" />
+              <span title="Simple interest per month charged on the full amount after the deadline. Blank = no penalty.">late %/mo</span>
+              <input type="number" step="0.1" value={draft.latePenaltyPct} onChange={(e) => patch({ latePenaltyPct: e.target.value })} placeholder="none" disabled={readOnly} className="input w-14 py-1 text-xs disabled:bg-slate-100" />
+            </div>
             {shareHint != null && <div className="text-[10px] text-slate-400">≈ {formatINR(shareHint)} set aside each time</div>}
             {draft.fundingStyle === "auto" && <OnUnpaidSelect draft={draft} patch={patch} readOnly={readOnly} />}
           </div>
@@ -407,12 +422,14 @@ function AddCategory({ householdId, members }: { householdId: number; members: M
   const [section, setSection] = useState("Monthly");
   const [paidBy, setPaidBy] = useState("");
   const [payer, setPayer] = useState("");
+  const [earlyAmt, setEarlyAmt] = useState("");
+  const [latePen, setLatePen] = useState("");
   const [state, formAction, pending] = useActionState(createCategory, { ok: false, n: 0 });
 
   useEffect(() => {
     if (state.n === 0) return;
     if (state.ok) {
-      setName(""); setCycle("1"); setFixed(false); setAmount(""); setFundingStyle("auto"); setSaveEvery("1"); setBillDay(""); setPaidBy(""); setPayer("");
+      setName(""); setCycle("1"); setFixed(false); setAmount(""); setFundingStyle("auto"); setSaveEvery("1"); setBillDay(""); setPaidBy(""); setPayer(""); setEarlyAmt(""); setLatePen("");
       toast("Category added", "success");
     } else toast(state.error ?? "Couldn't add category", "error");
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -441,6 +458,8 @@ function AddCategory({ householdId, members }: { householdId: number; members: M
         <input type="hidden" name="billDay" value={periodic ? billDay : ""} />
         <input type="hidden" name="fundingStyle" value={periodic ? fundingStyle : ""} />
         <input type="hidden" name="saveEveryMonths" value={periodic && fundingStyle === "auto" ? saveEvery : ""} />
+        <input type="hidden" name="earlyAmount" value={periodic ? earlyAmt : ""} />
+        <input type="hidden" name="latePenaltyPct" value={periodic ? latePen : ""} />
         <input type="hidden" name="responsibleMemberId" value={paidBy} />
         <input type="hidden" name="payerMemberId" value={periodic ? payer : ""} />
 
@@ -479,6 +498,8 @@ function AddCategory({ householdId, members }: { householdId: number; members: M
                 {cadencesFor(Number(cycle)).map((c) => <option key={c.v} value={String(c.v)}>{c.label}</option>)}
               </select>
             )}
+            <input type="number" step="0.01" value={earlyAmt} onChange={(e) => setEarlyAmt(e.target.value)} placeholder="early ₹" title="Discounted price if paid in the first 30 days of the due month (property/water tax). Blank = none." className="input w-20 py-1 text-xs" />
+            <input type="number" step="0.1" value={latePen} onChange={(e) => setLatePen(e.target.value)} placeholder="late %/mo" title="Simple interest per month after the deadline. Blank = none." className="input w-16 py-1 text-xs" />
             <select value={payer} onChange={(e) => setPayer(e.target.value)} className="input py-1 text-xs" title="who pays it on the due month">
               <option value="">paid by: same</option>
               {members.map((m) => <option key={m.id} value={String(m.id)}>paid by {m.name}</option>)}

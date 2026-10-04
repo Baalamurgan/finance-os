@@ -1551,10 +1551,11 @@ type BillingFields = {
   monthlyBudget: number | null; sinking: boolean; cycleMonths: number | null; fixed: boolean; tracked: boolean;
   billEveryMonths: number | null; billMonth: number | null; billDay: number | null; billAmount: number | null;
   fundingStyle: string | null; saveEveryMonths: number | null; onUnpaid: string;
+  earlyAmount: number | null; latePenaltyPct: number | null;
 };
 type Getter = (k: string) => string | null;
 function parseBilling(get: Getter): { ok: true; fields: BillingFields } | { ok: false; error: string } {
-  const blank: BillingFields = { monthlyBudget: null, sinking: false, cycleMonths: null, fixed: false, tracked: false, billEveryMonths: null, billMonth: null, billDay: null, billAmount: null, fundingStyle: null, saveEveryMonths: null, onUnpaid: "carry" };
+  const blank: BillingFields = { monthlyBudget: null, sinking: false, cycleMonths: null, fixed: false, tracked: false, billEveryMonths: null, billMonth: null, billDay: null, billAmount: null, fundingStyle: null, saveEveryMonths: null, onUnpaid: "carry", earlyAmount: null, latePenaltyPct: null };
   const round = (x: number) => Math.round(x * 100) / 100;
   const onUnpaidOf = () => (get("onUnpaid") === "skip" ? "skip" : "carry");
   const cycle = Math.max(1, Math.round(Number(get("billEveryMonths")) || 1));
@@ -1589,7 +1590,15 @@ function parseBilling(get: Getter): { ok: true; fields: BillingFields } | { ok: 
     if (cycle % s !== 0) return { ok: false, error: "Save cadence must divide the billing cycle." };
     saveEveryMonths = s;
   }
-  return { ok: true, fields: { ...blank, tracked: false, billEveryMonths: cycle, billMonth: monthOf(), billDay: billDayOf(), billAmount: round(amt), fundingStyle, saveEveryMonths, onUnpaid: fundingStyle === "auto" ? onUnpaidOf() : "carry" } };
+  // Optional tax knobs (property/water): an explicit early-payment price (paid within the first 30 days
+  // of the due month) + a simple %/month late penalty. Both blank ⇒ a plain periodic bill.
+  const earlyRaw = String(get("earlyAmount") ?? "").trim();
+  const earlyAmount = earlyRaw === "" ? null : round(parseAmount(earlyRaw));
+  const penRaw = String(get("latePenaltyPct") ?? "").trim();
+  const penNum = Number(penRaw);
+  const latePenaltyPct = penRaw === "" || !Number.isFinite(penNum) || penNum <= 0 ? null : penNum;
+  if (earlyAmount != null && (!(earlyAmount > 0) || earlyAmount > amt)) return { ok: false, error: "Early-payment price must be positive and not exceed the full amount." };
+  return { ok: true, fields: { ...blank, tracked: false, billEveryMonths: cycle, billMonth: monthOf(), billDay: billDayOf(), billAmount: round(amt), fundingStyle, saveEveryMonths, onUnpaid: fundingStyle === "auto" ? onUnpaidOf() : "carry", earlyAmount, latePenaltyPct } };
 }
 function parseBillingFields(formData: FormData) {
   return parseBilling((k) => { const v = formData.get(k); return v == null ? null : String(v); });
