@@ -192,10 +192,11 @@ export function taxCycleMonth(input: {
     return { phase: "window", amount: round2(earlyAmount ?? billAmount) };
   }
   if (monthsIntoCycle >= E) {
-    // Overdue — simple penalty on what's still owed, per month past the deadline.
+    // Overdue — the FULL tax plus simple penalty per month late, LESS what's saved in the pot (the saved
+    // amount pays down the out-of-pocket; the penalty is on the tax, not the savings). Clamped ≥ 0.
     const monthsLate = monthsIntoCycle - (E - 1);
     const pct = latePenaltyPct ?? 0;
-    return { phase: "overdue", amount: round2(remaining * (1 + (pct / 100) * monthsLate)) };
+    return { phase: "overdue", amount: Math.max(0, round2(billAmount * (1 + (pct / 100) * monthsLate) - saved)) };
   }
   // Share months (incl. the deadline month, where monthsLeft = 1 ⇒ the whole remaining).
   const monthsLeft = E - monthsIntoCycle; // Nov=5 … Mar=1

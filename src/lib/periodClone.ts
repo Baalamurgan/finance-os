@@ -53,19 +53,31 @@ export async function generateMonth(
   // cycle (cycleStart … the target month). Distinct from a skip: a skip re-spreads into shares, a payment
   // settles the whole cycle until the next one. (BillPayment has only a scalar periodId, so map via periods.)
   const taxCyclePaid = new Set<number>();
+  // …and a PRIOR cycle that was engaged (skipped) but never paid is OVERDUE — it carries alongside the new
+  // cycle's window bill as a second line (catId → monthsLate past the prior deadline).
+  const taxOverdue = new Map<number, number>();
   const taxCatIds = cats.filter((c) => (c.earlyAmount != null || c.latePenaltyPct != null) && c.billMonth != null && c.billEveryMonths != null).map((c) => c.id);
   if (taxCatIds.length && period) {
-    const bps = await tx.billPayment.findMany({ where: { categoryId: { in: taxCatIds } }, select: { categoryId: true, periodId: true } });
-    const pids = [...new Set(bps.map((b) => b.periodId))];
+    const [bps, aSkips] = await Promise.all([
+      tx.billPayment.findMany({ where: { categoryId: { in: taxCatIds } }, select: { categoryId: true, periodId: true } }),
+      tx.setAsideSkip.findMany({ where: { categoryId: { in: taxCatIds } }, select: { categoryId: true, periodId: true } }),
+    ]);
+    const pids = [...new Set([...bps.map((b) => b.periodId), ...aSkips.map((s) => s.periodId)])];
     const prds = pids.length ? await tx.period.findMany({ where: { id: { in: pids } }, select: { id: true, year: true, month: true } }) : [];
     const totalOf = new Map(prds.map((p) => [p.id, p.year * 12 + (p.month - 1)]));
     const curTotal = period.year * 12 + (period.month - 1);
+    const paidIn = (cid: number, lo: number, hi: number) => bps.some((b) => b.categoryId === cid && (totalOf.get(b.periodId) ?? -1) >= lo && (totalOf.get(b.periodId) ?? -1) <= hi);
+    const skippedIn = (cid: number, lo: number, hi: number) => aSkips.some((s) => s.categoryId === cid && (totalOf.get(s.periodId) ?? -1) >= lo && (totalOf.get(s.periodId) ?? -1) <= hi);
     for (const c of cats) {
       if (!taxCatIds.includes(c.id)) continue;
       const E = Math.max(1, c.billEveryMonths!);
       const k = (((period.month - c.billMonth!) % E) + E) % E; // monthsIntoCycle
-      const cycleStartTotal = curTotal - k;
-      if (bps.some((b) => b.categoryId === c.id && (totalOf.get(b.periodId) ?? -1) >= cycleStartTotal && (totalOf.get(b.periodId) ?? -1) <= curTotal)) taxCyclePaid.add(c.id);
+      const windowTotal = curTotal - k; // this cycle's window month
+      if (paidIn(c.id, windowTotal, curTotal)) taxCyclePaid.add(c.id);
+      // prior cycle = [window−E, window−1]; overdue if it was skipped (engaged) but never paid
+      if (skippedIn(c.id, windowTotal - E, windowTotal - 1) && !paidIn(c.id, windowTotal - E, windowTotal - 1)) {
+        taxOverdue.set(c.id, k + 1); // months past the prior deadline (window−1): April=1, May=2, …
+      }
     }
   }
   const catById = new Map(cats.map((c) => [c.id, c]));
@@ -237,18 +249,27 @@ export async function generateMonth(
     // accrued pot (fund). A window/deadline/overdue month is a payable BILL; a share month is a set-aside.
     // Gated on earlyAmount/latePenaltyPct so plain fund bills (EB/YouTube/Brio) are untouched.
     if (cat.earlyAmount != null || cat.latePenaltyPct != null) {
-      if (skippedSetAside.has(cat.id)) continue; // this month's incentive/share was skipped → no line (it re-spreads next month)
-      if (taxCyclePaid.has(cat.id)) continue; // this cycle is already paid → nothing more this cycle
-      const { monthsIntoCycle } = billCyclePhase(cat.billMonth, cat.billEveryMonths, period!.month);
-      const saved = Math.max(0, fundByCat.get(cat.id) ?? 0);
-      const t = taxCycleMonth({ billAmount: cat.billAmount, earlyAmount: cat.earlyAmount, latePenaltyPct: cat.latePenaltyPct, everyMonths: cat.billEveryMonths, monthsIntoCycle, saved });
-      if (t.amount <= 0.005) continue;
-      if (t.phase === "share") {
-        await mkLine(cat, `${cat.name} (monthly share)`, t.amount, saver);
-      } else {
-        // window / deadline / overdue → one payable bill at its price. No separate "from fund" credit
-        // line (clutter) — the accrued pot is applied when the bill is actually paid (payPeriodicBill).
-        await mkLine(cat, cat.name, t.amount, payer);
+      const fund = Math.max(0, fundByCat.get(cat.id) ?? 0);
+      const overdueMonths = taxOverdue.get(cat.id);
+      const E = Math.max(1, cat.billEveryMonths);
+      // An unpaid PRIOR cycle carries as a second "(overdue)" line — full + penalty, less the saved pot
+      // (the pot was saved for THAT bill). The pot is earmarked for it, so the new cycle saves from 0.
+      if (overdueMonths != null) {
+        const o = taxCycleMonth({ billAmount: cat.billAmount, latePenaltyPct: cat.latePenaltyPct, everyMonths: E, monthsIntoCycle: (E - 1) + overdueMonths, saved: fund });
+        if (o.amount > 0.005) await mkLine(cat, `${cat.name} (overdue)`, o.amount, payer);
+      }
+      // The current cycle's line (window/share/deadline). If a prior cycle is overdue the pot is spoken
+      // for, so this cycle starts fresh (saved = 0); otherwise the pot reduces the shares as usual.
+      if (!skippedSetAside.has(cat.id) && !taxCyclePaid.has(cat.id)) {
+        const { monthsIntoCycle } = billCyclePhase(cat.billMonth, cat.billEveryMonths, period!.month);
+        const saved = overdueMonths != null ? 0 : fund;
+        const t = taxCycleMonth({ billAmount: cat.billAmount, earlyAmount: cat.earlyAmount, latePenaltyPct: cat.latePenaltyPct, everyMonths: E, monthsIntoCycle, saved });
+        if (t.amount > 0.005) {
+          // window / deadline / overdue → one payable bill at its price (the pot applies when it's actually
+          // paid via payPeriodicBill, no separate credit line); a share month → a set-aside.
+          if (t.phase === "share") await mkLine(cat, `${cat.name} (monthly share)`, t.amount, saver);
+          else await mkLine(cat, cat.name, t.amount, payer);
+        }
       }
       continue;
     }

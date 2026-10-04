@@ -127,6 +127,7 @@ function taxPhase(e: ExpRow, periodMonth: number): "incentive" | "bill" | null {
   if (c.earlyAmount == null && c.latePenaltyPct == null) return null; // not a tax
   if (c.billMonth == null || c.billEveryMonths == null) return null;
   if (e.label.endsWith("— from fund") || e.label.endsWith("(monthly share)")) return null;
+  if (e.label.endsWith("(overdue)")) return "bill"; // a carried prior-cycle bill — never the incentive window
   const { isDueMonth } = billCyclePhase(c.billMonth, c.billEveryMonths, periodMonth);
   return isDueMonth && c.earlyAmount != null ? "incentive" : "bill";
 }
@@ -274,7 +275,7 @@ function ExpenseRow({
           </button>
         </ConfirmForm>
       )}
-      {canEditHere && tPhase != null && (
+      {canEditHere && tPhase != null && !e.label.endsWith("(overdue)") && (
         <ConfirmForm action={skipSetAside} message={taxSkipMsg(e)}>
           <input type="hidden" name="categoryId" value={e.categoryId} />
           <input type="hidden" name="periodId" value={periodId} />

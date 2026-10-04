@@ -220,10 +220,10 @@ describe("taxCycleMonth (property/water 'Both' model — ₹1000 bill, early ₹
     expect(taxCycleMonth({ ...base, monthsIntoCycle: 5, saved: 0 })).toEqual({ phase: "deadline", amount: 1000 });
     expect(taxCycleMonth({ ...base, monthsIntoCycle: 5, saved: 800 })).toEqual({ phase: "deadline", amount: 200 });
   });
-  it("overdue → remaining + 1%/month simple (April = 1 month late)", () => {
-    expect(taxCycleMonth({ ...base, monthsIntoCycle: 6, saved: 0 })).toEqual({ phase: "overdue", amount: 1010 });   // 1000×1.01
-    expect(taxCycleMonth({ ...base, monthsIntoCycle: 7, saved: 0 })).toEqual({ phase: "overdue", amount: 1020 });   // 1000×1.02
-    expect(taxCycleMonth({ ...base, monthsIntoCycle: 6, saved: 600 })).toEqual({ phase: "overdue", amount: 404 }); // 400×1.01
+  it("overdue → full + 1%/month simple, minus the saved pot (April = 1 month late)", () => {
+    expect(taxCycleMonth({ ...base, monthsIntoCycle: 6, saved: 0 })).toEqual({ phase: "overdue", amount: 1010 });   // 1000×1.01 − 0
+    expect(taxCycleMonth({ ...base, monthsIntoCycle: 7, saved: 0 })).toEqual({ phase: "overdue", amount: 1020 });   // 1000×1.02 − 0
+    expect(taxCycleMonth({ ...base, monthsIntoCycle: 6, saved: 600 })).toEqual({ phase: "overdue", amount: 410 }); // 1000×1.01 − 600
   });
   it("no earlyAmount → window shows the full bill", () => {
     expect(taxCycleMonth({ billAmount: 1000, everyMonths: 6, monthsIntoCycle: 0 })).toEqual({ phase: "window", amount: 1000 });
