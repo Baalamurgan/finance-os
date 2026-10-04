@@ -122,16 +122,18 @@ const SECTION_COLOR: Record<string, string> = {
   Monthly: "#6366f1",
   PiggyBudget: "#0ea5e9",
   Yearly: "#14b8a6",
+  Planned: "#10b981",
   Misc: "#a855f7",
 };
 
-const SECTION_ORDER = ["Loans", "Chits", "Monthly", "PiggyBudget", "Yearly", "Misc"] as const;
+const SECTION_ORDER = ["Loans", "Chits", "Monthly", "PiggyBudget", "Yearly", "Planned", "Misc"] as const;
 const SECTION_LABEL: Record<string, string> = {
   Loans: "Loans",
   Chits: "Chits",
   Monthly: "Monthly Expense",
   PiggyBudget: "Budgeted · leftover → Piggy",
   Yearly: "Yearly / Periodic bills",
+  Planned: "Planned expenses",
   Misc: "Miscellaneous",
 };
 
@@ -581,6 +583,10 @@ export default async function SheetPage({
   // Current month in IST (the family's timezone / device time) — NOT the server's UTC clock, which
   // lags 5.5h and would treat a just-started IST month as still "next month" until ~5:30am.
   const { year: curY, month: curM } = istYearMonth();
+  // The "Planned expenses" split (and the donut decouple) applies to the current month ONWARD; closed/past
+  // months render exactly as before. "Planned" promotes this-month's misc/one-off lines (incl. the loan
+  // prepay) into their own Sheet section + donut-by-home-category; "Misc" then keeps only carried lines.
+  const usePlanned = c.selected.year * 12 + c.selected.month >= curY * 12 + curM;
   const currentMonthMissing = !c.periods.some((p) => p.year === curY && p.month === curM);
 
   // A draft that IS the current calendar month (e.g. Aug's preview being viewed on/after
@@ -602,6 +608,22 @@ export default async function SheetPage({
     const rows = rollup.expenses.filter((e) => sheetSection(e) === section);
     return { section, rows, subtotal: rows.reduce((s, e) => s + e.amount, 0) };
   }).filter((g) => g.rows.length > 0);
+
+  // Donut slices are DECOUPLED from the list: this-month "Planned" lines (misc spend-cards + one-offs) get
+  // their OWN "Planned expenses" slice, cleanly out of Misc — EXCEPT the loan prepay, which stays in the
+  // Loans slice (your Q2 choice). Carried misc stays Misc. Pre-"Planned" months fall back to sheetSection
+  // (donut unchanged). The LIST still groups all of these under the "Planned expenses" section regardless.
+  const donutSectionOf = (e: ExpRow): string => {
+    const planned = usePlanned && e.note !== CARRY_NOTE && e.note !== REMOVED_NOTE && (e.category.miscCard || e.oneOff);
+    if (!planned) return sheetSection(e);
+    if (e.category.section === "Loans") return "Loans"; // the loan prepay stays in the Loans slice
+    if (e.category.fundingStyle != null || (e.category.billEveryMonths != null && e.category.billEveryMonths > 1)) return "Yearly";
+    return "Planned"; // everything else planned → its own slice, cleanly out of Misc
+  };
+  const donutGroups = SECTION_ORDER.map((section) => ({
+    section,
+    subtotal: rollup.expenses.filter((e) => donutSectionOf(e) === section).reduce((s, e) => s + e.amount, 0),
+  })).filter((g) => g.subtotal > 0);
 
   // split the Expense column into blocks: fixed monthly (Loans+Chits+Monthly), the
   // always-shown Yearly/periodic-bills block, and miscellaneous/extra (Misc).
@@ -946,6 +968,56 @@ export default async function SheetPage({
                 </div>
               </details>
 
+              {usePlanned ? (
+                <>
+                  {/* Planned expenses — promoted out of Misc into its own Sheet section; always shown + add */}
+                  <details open data-persist="planned" className="group/pl">
+                    <summary className="sticky top-[6.5rem] z-10 flex cursor-pointer list-none items-center justify-between rounded-lg bg-white px-2 py-2 hover:bg-slate-50 [&::-webkit-details-marker]:hidden sm:static">
+                      <span className="flex items-center gap-1.5">
+                        <svg width="14" height="14" viewBox="0 0 20 20" className="text-slate-400 transition-transform group-open/pl:rotate-90"><path fill="currentColor" d="M7 5l6 5-6 5z" /></svg>
+                        <span className="text-[11px] font-bold uppercase tracking-wider text-emerald-600">Planned expenses</span>
+                        <span className="text-[10px] text-slate-400">({thisMonthMisc.length})</span>
+                      </span>
+                      <span className="text-sm font-bold tabular-nums text-slate-700">{formatINR(thisMonthMiscTotal)}</span>
+                    </summary>
+                    <div className="pl-3">
+                      <div className="divide-y divide-slate-100 px-2 pb-1">
+                        {thisMonthMisc.length === 0 ? (
+                          <p className="py-2 text-xs text-slate-400">No planned expenses added this month yet.</p>
+                        ) : (
+                          thisMonthMisc.map((e) => (
+                            <ExpenseRow key={e.id} e={e} canEditHere={canEditHere} categories={c.categories} members={c.members} periodId={c.selected!.id} periodMonth={c.selected!.month} previewMonth={previewMonth} isNew={newExpenseIds.has(e.id)} spentCats={spentCats} isHead={c.isHead} />
+                          ))
+                        )}
+                      </div>
+                      {canEditHere && (
+                        <div className="px-2 py-2">
+                          <ExpenseModal categories={miscCats} members={c.members} periodId={c.selected!.id} trigger="sheet" balance={rollup.balance} sheetLabel="+ Add planned expense" newCategoryDefaultSection="Misc" showDueDay defaultRepeat={false} />
+                        </div>
+                      )}
+                    </div>
+                  </details>
+                  {/* Previous month misc — carried lines only (the old "Miscellaneous" renamed) */}
+                  {prevMonthMisc.length > 0 && (
+                    <details data-persist="prevmisc" className="group/pm mt-2">
+                      <summary className="sticky top-[6.5rem] z-10 flex cursor-pointer list-none items-center justify-between rounded-lg bg-white px-2 py-2 hover:bg-slate-50 [&::-webkit-details-marker]:hidden sm:static">
+                        <span className="flex items-center gap-1.5">
+                          <svg width="14" height="14" viewBox="0 0 20 20" className="text-slate-400 transition-transform group-open/pm:rotate-90"><path fill="currentColor" d="M7 5l6 5-6 5z" /></svg>
+                          <span className="text-[11px] font-bold uppercase tracking-wider text-amber-600">Previous month misc</span>
+                          <span className="text-[10px] text-slate-400">({prevMonthMisc.length})</span>
+                        </span>
+                        <span className="text-sm font-bold tabular-nums text-slate-500">{formatINR(prevMonthMiscTotal)}</span>
+                      </summary>
+                      <div className="pl-3 divide-y divide-slate-100 px-2 pb-1">
+                        {prevMonthMisc.map((e) => (
+                          <ExpenseRow key={e.id} e={e} canEditHere={canEditHere} categories={c.categories} members={c.members} periodId={c.selected!.id} periodMonth={c.selected!.month} previewMonth={previewMonth} />
+                        ))}
+                      </div>
+                    </details>
+                  )}
+                </>
+              ) : (
+                <>
               {/* Miscellaneous (unplanned / extra) — collapsible */}
               <details open data-persist="misc" className="group/msc">
                 <summary className="sticky top-[6.5rem] z-10 flex cursor-pointer list-none items-center justify-between rounded-lg bg-white px-2 py-2 hover:bg-slate-50 [&::-webkit-details-marker]:hidden sm:static">
@@ -1039,6 +1111,8 @@ export default async function SheetPage({
                   )}
                 </div>
               </details>
+                </>
+              )}
             </div>
           </details>
         </div>
@@ -1112,7 +1186,7 @@ export default async function SheetPage({
         {rollup.totalIncome > 0 &&
           (() => {
             const segments = [
-              ...grouped.map((g) => ({
+              ...donutGroups.map((g) => ({
                 name: SECTION_LABEL[g.section],
                 value: g.subtotal,
                 color: SECTION_COLOR[g.section] ?? "#94a3b8",
