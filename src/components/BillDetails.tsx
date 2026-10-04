@@ -42,7 +42,11 @@ export function BillDetails({ name, rows, tags = [] }: { name: string; rows: { l
         i
       </button>
       {open && (
-        <span className="absolute right-0 top-full z-40 mt-1 block w-64 max-w-[78vw] rounded-xl border border-slate-200 bg-white p-3 text-left shadow-xl">
+        <>
+          {/* Phone: a dimmed backdrop so the panel reads as a centered modal (and taps outside close it). */}
+          <span className="fixed inset-0 z-40 bg-black/25 sm:hidden" aria-hidden onClick={() => setOpen(false)} />
+          {/* Phone → fixed & centered on screen; wide screen → a small popover anchored under the ⓘ. */}
+          <span className="fixed left-1/2 top-1/2 z-50 block max-h-[80vh] w-[82vw] max-w-xs -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-xl border border-slate-200 bg-white p-3 text-left shadow-xl sm:absolute sm:left-auto sm:right-0 sm:top-full sm:mt-1 sm:max-h-none sm:w-64 sm:max-w-[78vw] sm:translate-x-0 sm:translate-y-0">
           <span className="mb-2 block text-xs font-bold text-slate-800">{name}</span>
           {tags.length > 0 && (
             <span className="mb-2 flex flex-wrap gap-1 empty:hidden">
@@ -66,7 +70,8 @@ export function BillDetails({ name, rows, tags = [] }: { name: string; rows: { l
               ))}
             </span>
           )}
-        </span>
+          </span>
+        </>
       )}
     </span>
   );

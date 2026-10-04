@@ -318,21 +318,22 @@ function ExpenseRow({
   const periodic = isPeriodicBill(e.category);
   const cad = cadenceLabel(e.category.billEveryMonths);
   const due = dueDateLabel(e.category);
-  // Build the row's tags. LOW priority (phase / cadence / card / trimmed) live in the ⓘ popover on every
-  // screen; HIGH priority (New, kept/pinned) sit inline on wide screens and move into the ⓘ on a phone,
-  // so the name is never squeezed out. Mobile row = ✓ · name · ⓘ.
+  // Build the row's tags, in priority order. HIGH priority — phase (🧾 Bill / 💰 Incentive / ✂️ Trimmed /
+  // 💳 card), then New, then kept/pinned — sits inline on wide screens and moves into the ⓘ on a phone (so
+  // the name is never squeezed out; mobile row = ✓ · name · ⓘ). LOW priority — just the 🔁 cadence pill —
+  // lives in the ⓘ popover on every screen (it's also the Recurs detail row).
   const tags: RowTag[] = [];
   if (tPhase === "incentive") {
     const save = e.category.billAmount != null && e.category.earlyAmount != null ? Math.round((e.category.billAmount - e.category.earlyAmount) * 100) / 100 : undefined;
-    tags.push({ key: "phase", priority: "low", node: <IncentiveTag full={e.category.billAmount ?? undefined} save={save} />, label: `💰 Incentive${save != null && save > 0.005 ? ` · save ${formatINR(save)}` : ""}` });
+    tags.push({ key: "phase", priority: "high", node: <IncentiveTag full={e.category.billAmount ?? undefined} save={save} />, label: `💰 Incentive${save != null && save > 0.005 ? ` · save ${formatINR(save)}` : ""}` });
   } else if (billMonthDue) {
-    tags.push({ key: "phase", priority: "low", node: <BillTag />, label: "🧾 Bill due now" });
+    tags.push({ key: "phase", priority: "high", node: <BillTag />, label: "🧾 Bill due now" });
   } else if (trimmedBy != null) {
-    tags.push({ key: "phase", priority: "low", label: `✂️ Trimmed −${formatINR(trimmedBy)}`, node: (
+    tags.push({ key: "phase", priority: "high", label: `✂️ Trimmed −${formatINR(trimmedBy)}`, node: (
       <span className="shrink-0 whitespace-nowrap rounded-full bg-amber-100 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-amber-700" title={`Trimmed by ${formatINR(trimmedBy)} — last month went over budget, so this is less than the usual ${formatINR(e.category.monthlyBudget ?? 0)}.`}>✂️ Trimmed</span>
     ) });
   } else if (paidCard) {
-    tags.push({ key: "phase", priority: "low", node: <CardTag name={paidCard.name} last4={paidCard.last4} color={paidCard.color} />, label: `💳 ${paidCard.name}${paidCard.last4 ? ` ••${paidCard.last4}` : ""}` });
+    tags.push({ key: "phase", priority: "high", node: <CardTag name={paidCard.name} last4={paidCard.last4} color={paidCard.color} />, label: `💳 ${paidCard.name}${paidCard.last4 ? ` ••${paidCard.last4}` : ""}` });
   }
   if (periodic && cad) tags.push({ key: "cadence", priority: "low", node: <CadencePill label={cad} />, label: `🔁 ${cad}` });
   if (isNew) tags.push({ key: "new", priority: "high", node: <NewBadge />, label: "✨ New this month" });
