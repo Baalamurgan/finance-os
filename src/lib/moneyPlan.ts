@@ -300,25 +300,27 @@ export function buildMoneyPlan(input: {
   // still counts against their liquidity), but only an UNPAID one can generate a funding need.
   // Deferred (wind-down) bills are the assignee's own responsibility, NOT pool-funded — exclude them
   // from need/spare math so they never pull a disbursement; the balance walk still flags them if short.
-  const cashBillsOf = (memberId: number) => bills.filter((b) => !b.fund && !b.deferred && !b.cardBill && b.payerId === memberId).map((b) => ({ day: b.day ?? lastDay, amount: -b.amount, done: b.done }));
+  const cashBillsOf = (memberId: number) => bills.filter((b) => !b.fund && !b.deferred && !b.cardBill && b.payerId === memberId).map((b) => ({ day: b.day ?? lastDay, amount: -b.amount, done: b.done, key: b.key }));
   const incomeOf = (memberId: number) => arrivalList.filter((a) => a.memberId === memberId).map((a) => ({ day: a.day ?? 0, amount: a.amount }));
 
   // The creditor's need schedule: walk their own income (in) and cash bills (out) chronologically; each
   // time an UNPAID bill would push them below zero, that shortfall is a "need" the pool must cover by
   // that day. A done bill that dips them negative was already covered (it's paid), so it resets to 0
   // without generating a need — otherwise its cost would leak into the next bill and over-fund.
-  const needsOf = (creditorId: number): { day: number; amount: number }[] => {
+  const needsOf = (creditorId: number): { day: number; amount: number; billKey?: string }[] => {
     const evs = [
-      ...incomeOf(creditorId).map((e) => ({ ...e, in: true, done: false })),
+      ...incomeOf(creditorId).map((e) => ({ ...e, in: true, done: false, key: undefined as string | undefined })),
       // Tagged funding lands as an inflow to the payer right before the funded bill, shrinking its need.
-      ...(fundingEventsByPayer.get(creditorId) ?? []).map((e) => ({ day: e.day, amount: e.amount, in: true, done: false })),
+      ...(fundingEventsByPayer.get(creditorId) ?? []).map((e) => ({ day: e.day, amount: e.amount, in: true, done: false, key: undefined as string | undefined })),
       ...cashBillsOf(creditorId).map((e) => ({ ...e, in: false })),
     ].sort((a, b) => a.day - b.day || (a.in === b.in ? 0 : a.in ? -1 : 1)); // income lands before you pay, same day
     let self = 0;
-    const needs: { day: number; amount: number }[] = [];
+    const needs: { day: number; amount: number; billKey?: string }[] = [];
     for (const e of evs) {
       self = Math.round((self + e.amount) * 100) / 100;
-      if (!e.in && self < -0.005) { if (!e.done) needs.push({ day: e.day, amount: Math.round(-self * 100) / 100 }); self = 0; }
+      // The bill that tips the creditor negative is the one this need funds → tag it, so the hub
+      // disbursement piece can name the specific bill it covers (as a tagged funder step does).
+      if (!e.in && self < -0.005) { if (!e.done) needs.push({ day: e.day, amount: Math.round(-self * 100) / 100, billKey: e.key }); self = 0; }
     }
     return needs;
   };
@@ -394,18 +396,19 @@ export function buildMoneyPlan(input: {
   const reimburseNeeds =
     reimburseDay == null ? [] :
     Object.entries(reimburseByMember)
-      .map(([id, amount]) => ({ creditorId: Number(id), day: reimburseDay, amount: Math.round((amount - (paidByCreditor.get(Number(id)) ?? 0)) * 100) / 100, reimbursement: true }))
+      .map(([id, amount]) => ({ creditorId: Number(id), day: reimburseDay, amount: Math.round((amount - (paidByCreditor.get(Number(id)) ?? 0)) * 100) / 100, reimbursement: true, billKey: undefined as string | undefined }))
       .filter((n) => owed.has(n.creditorId) && n.amount > 0.005); // net-receivers only, less any already-paid slice
   const allNeeds = [...billNeeds, ...reimburseNeeds].sort((a, b) => a.day - b.day);
   const pieces: PlanStep[] = [];
   let hubUsed = 0;
-  const emit = (creditorId: number, day: number, amount: number, fromId: number, fromName: string, reroute: boolean, fundsMember: boolean, infeasibleFrom?: number | null, reimbursement?: boolean) => {
+  const emit = (creditorId: number, day: number, amount: number, fromId: number, fromName: string, reroute: boolean, fundsMember: boolean, infeasibleFrom?: number | null, reimbursement?: boolean, billKey?: string) => {
     const r = recOf.get(creditorId)!;
     pieces.push({
       id: `${reimbursement ? "reimb" : "disb"}-${creditorId}-${fromId}-${day}-${Math.round(amount)}`, kind: "transfer-out", day, amount: Math.round(amount * 100) / 100, done: false,
       fromId, toId: creditorId, fromName, toName: r.name, recordId: reroute ? null : r.recordId, fundsMember, reroute,
       ...(infeasibleFrom !== undefined ? { infeasibleFrom } : {}), // only flag pieces that genuinely can't be funded by their day
       ...(reimbursement ? { reimbursement: true } : {}),
+      ...(billKey ? { fundsBillKey: billKey } : {}), // the bill this piece funds → UI names it, like a tagged funder step
       // Per-payment model: ticking a piece records EXACTLY this slice as one payment (no settleAmount
       // override needed — the tick uses the step's own amount, keyed by its id for double-click safety).
     });
@@ -448,7 +451,7 @@ export function buildMoneyPlan(input: {
         if (amt <= 0.005) break;
         const lend = Math.min(amt, canDirect(d), owed.get(need.creditorId) ?? 0);
         if (lend > 0.005) {
-          emit(need.creditorId, need.day, lend, d.id, d.name, true, true);
+          emit(need.creditorId, need.day, lend, d.id, d.name, true, true, undefined, undefined, need.billKey);
           d.lent += lend; d.netRemaining -= lend;
           directedByCD.set(d.collectionDay, (directedByCD.get(d.collectionDay) ?? 0) + lend);
           owed.set(need.creditorId, (owed.get(need.creditorId) ?? 0) - lend); amt -= lend;
@@ -460,7 +463,7 @@ export function buildMoneyPlan(input: {
     if (amt > 0.005) {
       const avail = hubAvailBy(need.day) - hubUsed;
       const fromHub = Math.min(amt, Math.max(0, avail));
-      if (fromHub > 0.005) { emit(need.creditorId, need.day, fromHub, treasurerId!, treasurerName2, false, true); hubUsed += fromHub; owed.set(need.creditorId, (owed.get(need.creditorId) ?? 0) - fromHub); amt -= fromHub; }
+      if (fromHub > 0.005) { emit(need.creditorId, need.day, fromHub, treasurerId!, treasurerName2, false, true, undefined, undefined, need.billKey); hubUsed += fromHub; owed.set(need.creditorId, (owed.get(need.creditorId) ?? 0) - fromHub); amt -= fromHub; }
     }
     // 2b. still short → borrow peers' RETAINED BUDGET (beyond their net) to fund the bill by its due day,
     //     as round-trips (Rule 1: largest spare first). They pay the creditor directly now; the hub repays
@@ -491,7 +494,7 @@ export function buildMoneyPlan(input: {
     //    lands in time (shouldn't happen: sheet income ≥ expense).
     if (amt > 0.005) {
       const feasible = hubCanCoverBy(amt, need.day, hubUsed) ?? lastDay;
-      emit(need.creditorId, feasible, amt, treasurerId!, treasurerName2, false, true);
+      emit(need.creditorId, feasible, amt, treasurerId!, treasurerName2, false, true, undefined, undefined, need.billKey);
       hubUsed += amt; owed.set(need.creditorId, (owed.get(need.creditorId) ?? 0) - amt);
     }
   }
@@ -703,7 +706,7 @@ export function buildMoneyPlan(input: {
         // they don't hold, so any gap surfaces on the bill it was meant to fund, not on the transfer.
         // (hubShortfall is kept as an internal safety signal only; it's not rendered on transfers.)
         if (s.kind === "bill") s.senderShort = short;
-        else if (s.fundsBillKey) s.senderShort = short; // a funder who can't cover the funding they committed
+        else if (s.fundsBillKey && s.kind === "manual") s.senderShort = short; // a funder who can't cover the funding they committed (hub/reroute pieces carry a fundsBillKey only to NAME the bill — they never show "short")
         else if (senderId === treasurerId) hubShortfall = Math.max(hubShortfall, short);
       }
     }

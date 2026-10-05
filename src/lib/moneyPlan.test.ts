@@ -285,6 +285,25 @@ describe("buildMoneyPlan", () => {
     expect(plan.steps.indexOf(funding)).toBeLessThan(plan.steps.indexOf(loan));
   });
 
+  it("tags the hub funding disbursement with the bill it covers, so the UI can name it", () => {
+    const plan = buildMoneyPlan({
+      treasurerId: T,
+      transfers: [
+        xfer({ fromId: 2, from: "B", toId: T, amount: 200, settled: false }), // B → hub 200 on day 1
+        xfer({ fromId: T, from: "A", toId: 3, to: "H", amount: 120 }), // hub owes Harish 120 (net)
+      ],
+      bills: [bill({ key: "bill-loan", payerId: 3, payerName: "H", vendor: "Loan", amount: 100, day: 5 })],
+      incomeDayByMember: { 2: 1 },
+      incomeByMember: {}, // Harish relies entirely on the disbursement
+    });
+    const funding = plan.steps.find((s) => s.kind === "transfer-out" && s.fundsMember)!;
+    expect(funding.fundsBillKey).toBe("bill-loan"); // the piece names the specific bill its need funds
+    // the 20 month-end residual payout funds nothing specific → carries NO bill tag
+    const payout = plan.steps.find((s) => s.kind === "transfer-out" && !s.fundsMember && s.toId === 3);
+    expect(payout?.amount).toBe(20);
+    expect(payout?.fundsBillKey).toBeFalsy();
+  });
+
   it("counts the treasurer's own income so his own bills don't phantom-flag a shortfall", () => {
     const plan = buildMoneyPlan({
       treasurerId: T,

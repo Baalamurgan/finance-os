@@ -310,8 +310,14 @@ export function MoneyPlan({
                       <span className="shrink-0 rounded-full bg-emerald-50 px-1.5 py-0.5 text-[10px] font-medium text-emerald-600 no-underline">paid {ordinal(s.paidDay)}</span>
                     )}
                     {s.feedsBills && !s.done && <span className="shrink-0 rounded-full bg-indigo-50 px-1.5 py-0.5 text-[9px] font-medium text-indigo-500">funds bills ↓</span>}
-                    {s.fundsMember && !s.done && !s.reimbursement && !s.budgetLoan && <span className="shrink-0 rounded-full bg-emerald-50 px-1.5 py-0.5 text-[9px] font-medium text-emerald-600">funds {s.toName} ↓</span>}
-                    {s.fundsBillKey && <span className="shrink-0 rounded-full bg-emerald-100 px-1.5 py-0.5 text-[9px] font-medium text-emerald-700" title={`${s.fromName} covers ${billVendorByKey.get(s.fundsBillKey) ?? `${s.toName}'s bill`} from pool cash they're holding — paid straight to ${s.toName}, no repayment`}>💰 funds {billVendorByKey.get(s.fundsBillKey) ?? s.toName}</span>}
+                    {s.fundsMember && !s.done && !s.reimbursement && !s.budgetLoan && !s.fundsBillKey && <span className="shrink-0 rounded-full bg-emerald-50 px-1.5 py-0.5 text-[9px] font-medium text-emerald-600">funds {s.toName} ↓</span>}
+                    {s.fundsBillKey && <span className="shrink-0 rounded-full bg-emerald-100 px-1.5 py-0.5 text-[9px] font-medium text-emerald-700" title={
+                      s.kind === "manual"
+                        ? `${s.fromName} covers ${billVendorByKey.get(s.fundsBillKey) ?? `${s.toName}'s bill`} from pool cash they're holding — paid straight to ${s.toName}, no repayment`
+                        : s.reroute
+                        ? `${s.fromName} pays ${billVendorByKey.get(s.fundsBillKey) ?? `${s.toName}'s bill`} directly for ${s.toName}, skipping the hub`
+                        : `The pool disburses this to ${s.toName} so they can pay ${billVendorByKey.get(s.fundsBillKey) ?? "this bill"} ↓`
+                    }>💰 funds {billVendorByKey.get(s.fundsBillKey) ?? s.toName}</span>}
                     {s.reimbursement && <span className="shrink-0 rounded-full bg-emerald-50 px-1.5 py-0.5 text-[9px] font-medium text-emerald-600" title={`${s.toName} is paid back early for what they spent out of pocket last month`}>reimbursement · last month’s spends</span>}
                     {s.budgetLoan && !s.done && <span className="shrink-0 rounded-full bg-violet-50 px-1.5 py-0.5 text-[9px] font-medium text-violet-600" title={`${s.fromName} lends their own budget so ${s.toName}'s bill is paid on time — the hub returns it${s.returnBy != null ? ` by the ${ordinal(s.returnBy)}` : " once income lands"}`}>💜 lends budget{s.returnBy != null ? ` · back by ${ordinal(s.returnBy)}` : ""}</span>}
                     {s.budgetPayback && !s.done && <span className="shrink-0 rounded-full bg-violet-50 px-1.5 py-0.5 text-[9px] font-medium text-violet-600" title={`The hub returns the budget ${s.toName} lent earlier to fund a bill on time`}>↩️ budget returned → {s.toName}</span>}
