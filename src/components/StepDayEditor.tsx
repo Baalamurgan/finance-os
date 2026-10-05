@@ -12,7 +12,7 @@ function ordinal(day: number) {
 // Wraps a step's date tag in a head-only "click → pick a day" dropdown. Picking a day writes through
 // to the step's underlying row (bill/allowance/income → dueDay + pin; advance → the leg's day) so it
 // holds through a refresh. Only for dated SOURCE steps — transfers/collections derive their timing.
-export function StepDayEditor({ kind, id, day, stepKey, maxDay, children }: { kind: string; id: number; day: number | null; stepKey?: string; maxDay?: number; children: React.ReactNode }) {
+export function StepDayEditor({ kind, id, day, stepKey, minDay, maxDay, children }: { kind: string; id: number; day: number | null; stepKey?: string; minDay?: number; maxDay?: number; children: React.ReactNode }) {
   const [open, setOpen] = useState(false);
   const [pending, start] = useTransition();
   const router = useRouter();
@@ -51,7 +51,7 @@ export function StepDayEditor({ kind, id, day, stepKey, maxDay, children }: { ki
           <div className="absolute left-0 top-full z-50 mt-1 w-28 rounded-lg border border-slate-200 bg-white p-1 shadow-lg">
             <div className="max-h-48 overflow-y-auto">
               {maxDay == null && <button type="button" onClick={() => pick(null)} className="block w-full rounded px-2 py-1 text-left text-[11px] text-slate-500 hover:bg-slate-50">No date</button>}
-              {Array.from({ length: maxDay ?? 31 }, (_, k) => k + 1).map((d) => (
+              {(() => { const lo = minDay ?? 1; const hi = Math.max(maxDay ?? 31, lo); return Array.from({ length: hi - lo + 1 }, (_, k) => lo + k); })().map((d) => (
                 <button
                   key={d}
                   type="button"

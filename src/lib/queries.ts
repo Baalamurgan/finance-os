@@ -9,7 +9,7 @@ import { suggestCategoryName, normalizeItem, resolveCategoryId } from "@/lib/spe
 import { withShareCount } from "@/lib/format";
 import { getCardDues, type MonthAmount } from "@/lib/personal/cash";
 import { currentCycle } from "@/lib/finance/cycle";
-import { istTodayStartMs } from "@/lib/time";
+import { istTodayStartMs, istDateParts } from "@/lib/time";
 
 // Keywords that drive the on-save category suggestion: the household's LEARNED words
 // (SpendKeyword) plus its head-curated shortcuts (SpendShortcut, weighted high since
@@ -901,7 +901,11 @@ export async function getMoneyPlan(householdId: number, periodId: number, inhand
   }
   // reimburseByMember (prior-month out-of-pocket each member fronted) is surfaced so the balance walk
   // can explain a contributor's end-of-month leftover: it ≈ what they're repaid for last month's spends.
-  return { ...plan, treasurerId: inhand.treasurerId, periodId, reimburseByMember };
+  // Earliest day the head may re-date a funding step TO: today (IST) when this IS the current month, else
+  // day 1 (a future draft hasn't started). The date dropdown drops any earlier, already-passed day.
+  const istT = istDateParts();
+  const minEditDay = period && period.year === istT.year && period.month === istT.month ? istT.day : 1;
+  return { ...plan, treasurerId: inhand.treasurerId, periodId, reimburseByMember, minEditDay };
 }
 
 export type SettlementHistory = Awaited<ReturnType<typeof getSettlementHistory>>;
