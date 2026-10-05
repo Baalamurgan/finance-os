@@ -2084,11 +2084,21 @@ export async function getMonthChanges(householdId: number, periodId: number) {
     prisma.expenseEntry.findMany({ where: { periodId: prev.id }, include: { category: true } }),
   ]);
 
-  const isMisc = (e: { category: { section: string } | null }) => e.category?.section === "Misc";
-  const isCarried = (e: { note: string | null }) => e.note === CARRY_NOTE;
+  type ExpRow = (typeof curExp)[number];
+  const isMiscSection = (e: ExpRow) => e.category?.section === "Misc"; // legacy (past-month) rule
+  // The Sheet's "Misc"/planned grouping (mirrors sheetSection): miscCard spend-cards + ANY one-off line
+  // (the loan prepay, cleaning rewards, tax penalties…) regardless of home section — but NOT periodic /
+  // fund bills, which stay with the stable Yearly bills. This is why the ₹2.4L prepay (section "Loans",
+  // oneOff) and the misc spend-cards (section "Monthly", miscCard) belong under Planned, not Expenses.
+  const isPlannedKind = (e: ExpRow) => {
+    if (!e.category || e.category.fundingStyle != null) return false;
+    if (e.category.billEveryMonths != null && e.category.billEveryMonths > 1) return false;
+    return e.category.miscCard || (e.oneOff && e.note !== REMOVED_NOTE);
+  };
+  const isCarried = (e: ExpRow) => e.note === CARRY_NOTE;
   const toRow = (e: { label: string; amount: number }) => ({ label: e.label, amount: e.amount });
-  // "Planned expenses" (this-month one-offs promoted out of Misc) is a THIS-MONTH-ONWARD view, exactly
-  // like the Sheet — a past month's changelog keeps the single Misc block it always had.
+  // "Planned expenses" (promoted out of Misc) is a THIS-MONTH-ONWARD view, exactly like the Sheet — a
+  // past month's changelog keeps the single section-based Misc block it always had.
   const { year: curY, month: curM } = istDateParts();
   const usePlanned = period.year * 12 + period.month >= curY * 12 + curM;
 
@@ -2096,23 +2106,21 @@ export async function getMonthChanges(householdId: number, periodId: number) {
     curInc.map((i) => ({ label: i.source, amount: i.amount })),
     prevInc.map((i) => ({ label: i.source, amount: i.amount })),
   );
-  // Misc is one-off and churns every month, so it gets its own block rather than
-  // flooding the main expense diff.
+  // Expenses = the stable (non-planned) bills. This-month-onward that's everything the Sheet doesn't
+  // treat as planned; a past month keeps the legacy section-based split (nothing pulled into Planned).
+  const inExpense = (e: ExpRow) => (usePlanned ? !isPlannedKind(e) : !isMiscSection(e));
   const expense = diffByKey(
-    curExp.filter((e) => !isMisc(e)).map((e) => ({ label: withShareCount(e.label, e.category?.billEveryMonths), amount: e.amount })),
-    prevExp.filter((e) => !isMisc(e)).map((e) => ({ label: withShareCount(e.label, e.category?.billEveryMonths), amount: e.amount })),
+    curExp.filter(inExpense).map((e) => ({ label: withShareCount(e.label, e.category?.billEveryMonths), amount: e.amount })),
+    prevExp.filter(inExpense).map((e) => ({ label: withShareCount(e.label, e.category?.billEveryMonths), amount: e.amount })),
   );
-  // Split Misc the way the Sheet does: this-month PLANNED lines (added/one-off, note ≠ CARRY) get their
-  // own prominent block; only the PREVIOUS-month carried spends stay in the collapsible "one-off" block.
-  const miscCur = curExp.filter(isMisc);
-  const miscPrev = prevExp.filter(isMisc);
+  // Planned = this-month planned lines that aren't carried (prepay, misc spend-cards, rewards, taxes).
   const planned = usePlanned
-    ? diffByKey(miscCur.filter((e) => !isCarried(e)).map(toRow), miscPrev.filter((e) => !isCarried(e)).map(toRow))
+    ? diffByKey(curExp.filter((e) => isPlannedKind(e) && !isCarried(e)).map(toRow), prevExp.filter((e) => isPlannedKind(e) && !isCarried(e)).map(toRow))
     : null;
-  const misc = diffByKey(
-    (usePlanned ? miscCur.filter(isCarried) : miscCur).map(toRow),
-    (usePlanned ? miscPrev.filter(isCarried) : miscPrev).map(toRow),
-  );
+  // Misc (collapsible) = only the PREVIOUS month's carried spends (this-month-onward); legacy section Misc otherwise.
+  const miscCur = usePlanned ? curExp.filter((e) => isPlannedKind(e) && isCarried(e)) : curExp.filter(isMiscSection);
+  const miscPrev = usePlanned ? prevExp.filter((e) => isPlannedKind(e) && isCarried(e)) : prevExp.filter(isMiscSection);
+  const misc = diffByKey(miscCur.map(toRow), miscPrev.map(toRow));
   return { prevLabel: prev.label, income, expense, planned, misc };
 }
 
