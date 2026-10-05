@@ -12,6 +12,7 @@ import { ExpenseModal } from "@/components/ExpenseModal";
 import { AddSpendModal } from "@/components/AddSpendModal";
 import { StepDayEditor } from "@/components/StepDayEditor";
 import { FundBillModal } from "@/components/FundBillModal";
+import { BridgeBillModal } from "@/components/BridgeBillModal";
 import { useToast, useToastAction } from "@/components/Toast";
 import type { MoneyPlanResult } from "@/lib/queries";
 import { canActOnStep, canActInMonth } from "@/lib/planAuth";
@@ -59,6 +60,8 @@ export function MoneyPlan({
   const [balances, setBalances] = useState<{ s: MoneyPlanResult["steps"][number]; n: number } | null>(null);
   // A short bill the head is funding from held cash (the cross-bill knock-on entry point).
   const [fund, setFund] = useState<MoneyPlanResult["steps"][number] | null>(null);
+  // A short bill the head is BRIDGING (repayable, via the hub) — payer's own income lands later.
+  const [bridge, setBridge] = useState<MoneyPlanResult["steps"][number] | null>(null);
   // Days (keyed by day number / "none") the viewer has FLIPPED from their default fold state.
   const [toggledDays, setToggledDays] = useState<Set<string>>(new Set());
   // Add-a-step modal: open with the anchor (the step id it goes AFTER; null = top of the list).
@@ -337,13 +340,17 @@ export function MoneyPlan({
                     )}
                     {s.feedsBills && !s.done && <span className="shrink-0 rounded-full bg-indigo-50 px-1.5 py-0.5 text-[9px] font-medium text-indigo-500">funds bills ↓</span>}
                     {s.fundsMember && !s.done && !s.reimbursement && !s.budgetLoan && !s.fundsBillKey && <span className="shrink-0 rounded-full bg-emerald-50 px-1.5 py-0.5 text-[9px] font-medium text-emerald-600">funds {s.toName} ↓</span>}
-                    {s.fundsBillKey && <span className="shrink-0 rounded-full bg-emerald-100 px-1.5 py-0.5 text-[9px] font-medium text-emerald-700" title={
+                    {s.fundsBillKey && !s.bridgeGroup && <span className="shrink-0 rounded-full bg-emerald-100 px-1.5 py-0.5 text-[9px] font-medium text-emerald-700" title={
                       s.kind === "manual"
                         ? `${s.fromName} covers ${billVendorByKey.get(s.fundsBillKey) ?? `${s.toName}'s bill`} from pool cash they're holding — paid straight to ${s.toName}, no repayment`
                         : s.reroute
                         ? `${s.fromName} pays ${billVendorByKey.get(s.fundsBillKey) ?? `${s.toName}'s bill`} directly for ${s.toName}, skipping the hub`
                         : `The pool disburses this to ${s.toName} so they can pay ${billVendorByKey.get(s.fundsBillKey) ?? "this bill"} ↓`
                     }>💰 funds {billVendorByKey.get(s.fundsBillKey) ?? s.toName}</span>}
+                    {/* Repayable bridge: the funder→debtor leg names the bill it bridges; the two pay-back
+                        legs (debtor→hub, hub→funder) carry a quiet tag so the trio reads as one bridge. */}
+                    {s.fundsBillKey && s.bridgeGroup && <span className="shrink-0 rounded-full bg-sky-100 px-1.5 py-0.5 text-[9px] font-medium text-sky-700" title={`${s.fromName} fronts ${s.toName}'s ${billVendorByKey.get(s.fundsBillKey) ?? "bill"} — the pool repays ${s.fromName} when ${s.toName}'s income lands`}>🌉 bridges {billVendorByKey.get(s.fundsBillKey) ?? s.toName}</span>}
+                    {s.bridgeGroup && !s.fundsBillKey && <span className="shrink-0 rounded-full bg-sky-50 px-1.5 py-0.5 text-[9px] font-medium text-sky-600">🌉 bridge payback</span>}
                     {s.reimbursement && <span className="shrink-0 rounded-full bg-emerald-50 px-1.5 py-0.5 text-[9px] font-medium text-emerald-600" title={`${s.toName} is paid back early for what they spent out of pocket last month`}>reimbursement · last month’s spends</span>}
                     {s.budgetLoan && !s.done && <span className="shrink-0 rounded-full bg-violet-50 px-1.5 py-0.5 text-[9px] font-medium text-violet-600" title={`${s.fromName} lends their own budget so ${s.toName}'s bill is paid on time — the hub returns it${s.returnBy != null ? ` by the ${ordinal(s.returnBy)}` : " once income lands"}`}>💜 lends budget{s.returnBy != null ? ` · back by ${ordinal(s.returnBy)}` : ""}</span>}
                     {s.budgetPayback && !s.done && <span className="shrink-0 rounded-full bg-violet-50 px-1.5 py-0.5 text-[9px] font-medium text-violet-600" title={`The hub returns the budget ${s.toName} lent earlier to fund a bill on time`}>↩️ budget returned → {s.toName}</span>}
@@ -425,11 +432,21 @@ export function MoneyPlan({
                             ? ` — not payable in full this month`
                             : ` — payable from ${ordinal(s.infeasibleFrom)}, once funding & income land`}
                         </div>
-                        {/* Head: fund this short bill from pool cash a member holds (funder → payer, no
-                            payback). Shown only when someone actually holds spare cash before this bill. */}
-                        {isHead && open && s.billId != null && members.some((m) => m.id !== s.payerId && m.id !== treasurerId && (s.balancesBefore?.[m.id] ?? 0) > 0.5) && (
-                          <button type="button" onClick={() => setFund(s)} className="mt-1 rounded-full bg-emerald-600 px-2 py-0.5 text-[10px] font-semibold text-white hover:bg-emerald-700">💰 Fund from held cash</button>
-                        )}
+                        {/* Head funding buttons — only when a NON-hub holder actually has spare cash before
+                            this bill. "Fund" = no-payback pool cash (open month). "Bridge" = repayable via
+                            the hub, shown also in the preview, when the payer's OWN income lands later (so
+                            there's something to square up from). */}
+                        {(() => {
+                          const hasSpare = s.billId != null && members.some((m) => m.id !== s.payerId && m.id !== treasurerId && (s.balancesBefore?.[m.id] ?? 0) > 0.5);
+                          if (!isHead || !hasSpare) return null;
+                          const laterIncome = plan.steps.some((x) => x.kind === "income" && x.toId === s.payerId && (x.day ?? 0) > (s.day ?? 0));
+                          return (
+                            <div className="mt-1 flex flex-wrap gap-1">
+                              {open && <button type="button" onClick={() => setFund(s)} className="rounded-full bg-emerald-600 px-2 py-0.5 text-[10px] font-semibold text-white hover:bg-emerald-700">💰 Fund from held cash</button>}
+                              {(open || datesEditable) && laterIncome && <button type="button" onClick={() => setBridge(s)} className="rounded-full bg-sky-600 px-2 py-0.5 text-[10px] font-semibold text-white hover:bg-sky-700" title="A member fronts it now; the pool repays them when this payer's income lands">🌉 Bridge &amp; repay</button>}
+                            </div>
+                          );
+                        })()}
                       </>
                     ) : (
                       <div className="text-[10px] font-semibold text-red-600">
@@ -639,6 +656,36 @@ export function MoneyPlan({
             day={fund.day ?? null}
             sources={sources}
             onClose={() => setFund(null)}
+          />
+        );
+      })()}
+
+      {/* Bridge a short bill: funder(s) front it now, the pool repays them on the payback day (the payer's
+          first income day after the bill). Sources exclude the payer AND the hub (the hub is the repayer). */}
+      {bridge && (() => {
+        const bb = bridge.balancesBefore ?? {};
+        const billDay = bridge.day ?? 0;
+        const sources = members
+          .filter((m) => m.id !== bridge.payerId && m.id !== treasurerId)
+          .map((m) => ({ memberId: m.id, name: m.name, spare: Math.round((bb[m.id] ?? 0) * 100) / 100 }))
+          .filter((src) => src.spare > 0.5)
+          .sort((a, b) => b.spare - a.spare);
+        // Payback day = the payer's earliest income landing AFTER the bill (when they can return it).
+        const paybackDay = plan.steps
+          .filter((x) => x.kind === "income" && x.toId === bridge.payerId && (x.day ?? 0) > billDay)
+          .map((x) => x.day as number)
+          .sort((a, b) => a - b)[0] ?? null;
+        return (
+          <BridgeBillModal
+            periodId={periodId}
+            billId={bridge.billId!}
+            label={bridge.vendor ?? "this bill"}
+            payerName={bridge.payerName ?? "The payer"}
+            shortfall={Math.round(bridge.senderShort ?? 0)}
+            day={bridge.day ?? null}
+            paybackDay={paybackDay}
+            sources={sources}
+            onClose={() => setBridge(null)}
           />
         );
       })()}

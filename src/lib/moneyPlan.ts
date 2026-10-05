@@ -42,6 +42,7 @@ export type PlanStep = {
   note?: string | null; // a manual move's optional note — why the sender is paying
   afterStepKey?: string; // a manual step: the step id it's anchored right after (for stable positioning)
   fundsBillKey?: string | null; // a funder→payer move earmarked to FUND this bill (its plan-step key): shrinks the hub's disbursement to the payer, placed just above the bill
+  bridgeGroup?: string | null; // the 3 steps of one REPAYABLE bridge share this id (funder→debtor + debtor→hub + hub→funder) — so they render/delete as a unit
   hidden?: boolean; // a head-hidden derived step — kept for the "un-hide" list but out of the walk/progress
   day: number | null; // effective day-of-month for ordering/display (null = undated)
   paidDay?: number | null; // day-of-month it was ACTUALLY marked paid (done steps only), for a "paid <day>" tag
@@ -102,7 +103,7 @@ export function buildMoneyPlan(input: {
   reimburseByMember?: Record<number, number>; // prior-month out-of-pocket spend each member is owed back
   reimburseDay?: number; // target day to hand back those reimbursements (e.g. the day after wind-down)
   piggyHandover?: { toId: number; toName: string; handoverPeriodId: number; owners: { fromId: number; fromName: string; amount: number; day: number; status?: "overdue" | "soon" | "normal" | null; days?: number | null }[] }; // prior wound-down month's leftover — one tickable step per owner who hands their slice to the Piggy holder
-  manualSteps?: { id: number; fromId: number; toId: number; fromName?: string; toName?: string; amount: number; day?: number | null; done: boolean; afterStepKey?: string | null; note?: string | null; fundsBillKey?: string | null }[]; // head-added ad-hoc moves (fundsBillKey → a funder→payer move earmarked for that bill)
+  manualSteps?: { id: number; fromId: number; toId: number; fromName?: string; toName?: string; amount: number; day?: number | null; done: boolean; afterStepKey?: string | null; note?: string | null; fundsBillKey?: string | null; bridgeGroup?: string | null }[]; // head-added ad-hoc moves (fundsBillKey → a funder→payer move earmarked for that bill; bridgeGroup → the 3 steps of a repayable bridge)
   poolHandovers?: { key?: string; fromId: number; fromName: string; toId: number; toName: string; amount: number; detail: string; recordIds: number[]; piggyIncomeIds?: number[]; done: boolean; day: number | null; status?: "overdue" | "soon" | "normal" | null; days?: number | null }[]; // prior-month cash (leftover→income and/or Piggy→income) a holder hands to the treasurer. `key` overrides the step id (distinct per piggy batch); `piggyIncomeIds` = a piggy-income batch (ticks via togglePiggyHandover, locking those rows)
   openingByMember?: Record<number, number>; // each member's carry (prior-month closing personal) — the cash they actually START the month holding, so the walk opens from reality instead of 0
   hiddenKeys?: string[]; // step ids the head has hidden from the plan view
@@ -587,7 +588,7 @@ export function buildMoneyPlan(input: {
   // gone (its bill was removed, say) fall back to the manual's own day. afterStepKey null → top.
   const manualObjs: PlanStep[] = manualSteps.map((m) => ({
     id: `manual-${m.id}`, kind: "manual", day: m.day ?? null, amount: Math.round(m.amount * 100) / 100, done: m.done,
-    fromId: m.fromId, toId: m.toId, fromName: m.fromName, toName: m.toName, manualId: m.id, note: m.note ?? null, afterStepKey: m.afterStepKey ?? undefined, fundsBillKey: m.fundsBillKey ?? null, status: null, days: null,
+    fromId: m.fromId, toId: m.toId, fromName: m.fromName, toName: m.toName, manualId: m.id, note: m.note ?? null, afterStepKey: m.afterStepKey ?? undefined, fundsBillKey: m.fundsBillKey ?? null, bridgeGroup: m.bridgeGroup ?? null, status: null, days: null,
   }));
   // Tagged funding steps anchor to the BILL they fund: spliced in just ABOVE that bill (same day) so the
   // walk credits the payer right before they pay. Done first so they skip the afterStepKey chain below;
@@ -619,7 +620,18 @@ export function buildMoneyPlan(input: {
     let moved = false;
     for (let i = pendingManual.length - 1; i >= 0; i--) {
       const m = pendingManual[i];
-      if (m.afterStepKey == null) { steps.unshift(m); pendingManual.splice(i, 1); moved = true; continue; }
+      if (m.afterStepKey == null) {
+        // A bridge pay-back leg (debtor→hub / hub→funder) must sit on its OWN day (after the bill it
+        // repays), NOT at the top — place it by day. Every OTHER un-anchored manual still goes to the top.
+        if (m.bridgeGroup && m.day != null) {
+          let pos = steps.length;
+          for (let j = 0; j < steps.length; j++) if ((steps[j].day ?? 0) <= (m.day as number)) pos = j + 1;
+          steps.splice(pos, 0, m);
+        } else {
+          steps.unshift(m);
+        }
+        pendingManual.splice(i, 1); moved = true; continue;
+      }
       const idx = steps.findIndex((s) => s.id === m.afterStepKey);
       if (idx >= 0) { steps.splice(idx + 1, 0, m); pendingManual.splice(i, 1); moved = true; }
     }

@@ -2094,6 +2094,60 @@ export async function fundExistingBill(formData: FormData): Promise<{ ok: boolea
   return { ok: true };
 }
 
+// Bridge a SHORT bill whose payer's own income lands later this month: the head picks who fronts the
+// cash, and it's a REPAYABLE pool bridge (unlike fundExistingBill's no-payback funding). Each funder
+// gets a 3-step set sharing one bridgeGroup: (1) funder → debtor on the bill day (earmarked to the bill
+// via fundsExpenseId, so it lands ABOVE the bill and clears the shortfall); (2) debtor → hub on the
+// payback day (the debtor returns it to the pool once their income lands); (3) hub → funder on the
+// payback day (the pool repays the funder). Net-zero for everyone = a pure timing bridge, no settlement
+// drift. Grouped so deleting any leg removes the whole bridge. Head/manager; open month unless head.
+export async function bridgeShortBill(formData: FormData): Promise<{ ok: boolean; error?: string }> {
+  const session = await auth();
+  const memberId = session?.user?.memberId ?? null;
+  if (!(await unlocked())) await relock("bridgeShortBill");
+  if (!(await canEdit())) { log.warn("bridgeShortBill", "blocked", { outcome: "blocked", reason: "not-allowed", memberId }); return { ok: false, error: "Not allowed" }; }
+  const periodId = Number(formData.get("periodId"));
+  const billId = Number(formData.get("billId"));
+  let paybackDay = Number(formData.get("paybackDay"));
+  if (!periodId || !billId) return { ok: false, error: "Missing bill" };
+  if (!(await isHead()) && !(await periodOpen(periodId))) return { ok: false, error: "This month is closed" };
+  const period = await prisma.period.findUnique({ where: { id: periodId }, select: { householdId: true, treasurerMemberId: true } });
+  const bill = await prisma.expenseEntry.findUnique({ where: { id: billId }, select: { id: true, periodId: true, memberId: true, dueDay: true, label: true } });
+  if (!period || !bill || bill.periodId !== periodId || bill.memberId == null || bill.dueDay == null) return { ok: false, error: "Bill not found" };
+  const debtorId = bill.memberId;
+  const household = await prisma.household.findUnique({ where: { id: period.householdId }, select: { treasurerMemberId: true } });
+  const head = await prisma.member.findFirst({ where: { householdId: period.householdId, role: "head" }, select: { id: true } });
+  const hubId = period.treasurerMemberId ?? household?.treasurerMemberId ?? head?.id ?? null;
+  if (hubId == null || hubId === debtorId) return { ok: false, error: "No hub to repay through" };
+  if (!Number.isFinite(paybackDay) || paybackDay < bill.dueDay) paybackDay = Math.min(31, Math.max(bill.dueDay + 1, bill.dueDay)); // must be on/after the bill day
+  paybackDay = Math.min(31, Math.max(1, Math.round(paybackDay)));
+  let funders: { memberId: number; amount: number }[] = [];
+  try {
+    funders = (JSON.parse(String(formData.get("funders") ?? "[]")) as { memberId: number; amount: number }[])
+      .filter((f) => f && Number.isFinite(f.memberId) && f.amount > 0.005 && f.memberId !== debtorId && f.memberId !== hubId)
+      .map((f) => ({ memberId: f.memberId, amount: Math.round(f.amount * 100) / 100 }));
+  } catch { funders = []; }
+  if (funders.length === 0) return { ok: false, error: "Pick at least one funder" };
+  const members = await prisma.member.findMany({ where: { householdId: period.householdId }, select: { id: true, name: true } });
+  const nameOf = (id: number) => members.find((m) => m.id === id)?.name ?? "someone";
+  const group = `bridge-${billId}-${Date.now()}`;
+  const ord = (d: number) => `${d}${["th", "st", "nd", "rd"][((d % 100) - 20) % 10] ?? ["th", "st", "nd", "rd"][d % 100] ?? "th"}`;
+  let total = 0;
+  for (const f of funders) {
+    // (1) funder → debtor, earmarked to the bill (lands above it, clears the shortfall)
+    await prisma.manualPlanStep.create({ data: { periodId, fromMemberId: f.memberId, toMemberId: debtorId, amount: f.amount, day: bill.dueDay, fundsExpenseId: bill.id, bridgeGroup: group, note: `Spots ${nameOf(debtorId)} for ${bill.label} — the pool repays ${nameOf(f.memberId)} on the ${ord(paybackDay)}` } });
+    // (2) debtor → hub on payback day (returns the bridge to the pool when their income lands)
+    await prisma.manualPlanStep.create({ data: { periodId, fromMemberId: debtorId, toMemberId: hubId, amount: f.amount, day: paybackDay, bridgeGroup: group, note: `${nameOf(debtorId)} returns the ${bill.label} bridge to the pool` } });
+    // (3) hub → funder on payback day (the pool repays the funder)
+    await prisma.manualPlanStep.create({ data: { periodId, fromMemberId: hubId, toMemberId: f.memberId, amount: f.amount, day: paybackDay, bridgeGroup: group, note: `Pool repays ${nameOf(f.memberId)} for bridging ${nameOf(debtorId)}'s ${bill.label}` } });
+    total += f.amount;
+  }
+  log.info("bridgeShortBill", "ok", { outcome: "ok", memberId, periodId, billId, total, paybackDay });
+  await logActivity("settlement", "created", `Bridged “${bill.label}” (${formatINR(total)}, repaid by the ${ord(paybackDay)})`, periodId);
+  revalidateFamily();
+  return { ok: true };
+}
+
 export async function deleteManualStep(formData: FormData) {
   if (!(await unlocked())) await relock("deleteManualStep");
   if (!(await canEdit())) return;
@@ -2101,8 +2155,15 @@ export async function deleteManualStep(formData: FormData) {
   const m = await prisma.manualPlanStep.findUnique({ where: { id } });
   if (!m) return;
   if (!(await isHead()) && !(await periodOpen(m.periodId))) return;
-  await prisma.manualPlanStep.delete({ where: { id } });
-  await logActivity("settlement", "deleted", `Removed a manual move ${formatINR(m.amount)}`, m.periodId);
+  // A bridge is 3+ linked steps — deleting any leg removes the WHOLE group, so a bridge can never be
+  // left half-applied (which would leave the pool or the funder out of pocket).
+  if (m.bridgeGroup) {
+    const { count } = await prisma.manualPlanStep.deleteMany({ where: { periodId: m.periodId, bridgeGroup: m.bridgeGroup } });
+    await logActivity("settlement", "deleted", `Removed a bridge (${count} steps)`, m.periodId);
+  } else {
+    await prisma.manualPlanStep.delete({ where: { id } });
+    await logActivity("settlement", "deleted", `Removed a manual move ${formatINR(m.amount)}`, m.periodId);
+  }
   revalidateFamily();
 }
 

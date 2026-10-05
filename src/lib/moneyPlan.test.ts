@@ -285,6 +285,41 @@ describe("buildMoneyPlan", () => {
     expect(plan.steps.indexOf(funding)).toBeLessThan(plan.steps.indexOf(loan));
   });
 
+  it("a repayable bridge clears a short bill whose payer's income lands later, with no month-end drift", () => {
+    const base = {
+      treasurerId: T,
+      transfers: [] as PlanTransfer[],
+      bills: [bill({ key: "bill-r", payerId: 2, payerName: "D", vendor: "Rent", amount: 300, day: 1 })],
+      incomeDayByMember: { 2: 5, 3: 1 },
+      incomeArrivals: [
+        { memberId: 2, day: 5, amount: 500 }, // the payer's OWN income lands LATE (day 5)
+        { memberId: 3, day: 1, amount: 500 }, // the funder is holding cash on day 1
+      ],
+    };
+    // Control: with no bridge the day-1 bill is short (income only lands day 5).
+    const noBridge = buildMoneyPlan(base);
+    expect(noBridge.steps.find((s) => s.vendor === "Rent")!.senderShort ?? 0).toBeGreaterThan(0.5);
+
+    // Bridge: funder→debtor above the bill (clears it), then debtor→hub + hub→funder on the payback day.
+    const bridged = buildMoneyPlan({
+      ...base,
+      manualSteps: [
+        { id: 1, fromId: 3, toId: 2, amount: 300, day: 1, done: false, fundsBillKey: "bill-r", bridgeGroup: "g1" },
+        { id: 2, fromId: 2, toId: T, amount: 300, day: 5, done: false, bridgeGroup: "g1" },
+        { id: 3, fromId: T, toId: 3, amount: 300, day: 5, done: false, bridgeGroup: "g1" },
+      ],
+    });
+    const rent = bridged.steps.find((s) => s.vendor === "Rent")!;
+    expect(rent.senderShort ?? 0).toBeLessThan(0.5); // bridge cleared the shortfall
+    const leg1 = bridged.steps.findIndex((s) => s.bridgeGroup === "g1" && s.fundsBillKey); // funder→debtor leg
+    expect(leg1).toBeGreaterThanOrEqual(0);
+    expect(leg1).toBeLessThan(bridged.steps.indexOf(rent)); // it sits ABOVE the bill
+    // Pure timing: every member's month-end balance is unchanged vs no bridge (no settlement drift).
+    const endNo = noBridge.steps[noBridge.steps.length - 1].balancesAfter!;
+    const endBr = bridged.steps[bridged.steps.length - 1].balancesAfter!;
+    for (const id of [T, 2, 3]) expect(Math.round(endBr[id] ?? 0)).toBe(Math.round(endNo[id] ?? 0));
+  });
+
   it("tags the hub funding disbursement with the bill it covers, so the UI can name it", () => {
     const plan = buildMoneyPlan({
       treasurerId: T,

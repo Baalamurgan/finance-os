@@ -807,6 +807,10 @@ model ManualPlanStep {
   // When set, this is a FUNDING move earmarked for that ExpenseEntry bill (funder → payer): the plan
   // shrinks the hub's disbursement to the payer by this amount and places the move just above the bill.
   fundsExpenseId Int?
+  // A REPAYABLE bridge = 3 steps sharing one bridgeGroup: funder→debtor (with fundsExpenseId, above the
+  // bill), debtor→hub and hub→funder (the pay-back, when the debtor's income lands). Grouped so the whole
+  // bridge is deleted as a unit (never half-removed, which would unbalance the pool). Null = normal step.
+  bridgeGroup  String?
   afterStepKey String? // the plan-step id this was inserted AFTER (null = top of the list)
   day          Int? // fallback ordering / display if the anchor step is gone
   note         String?

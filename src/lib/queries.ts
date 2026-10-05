@@ -797,6 +797,7 @@ export async function getMoneyPlan(householdId: number, periodId: number, inhand
       amount: m.amount, day: m.day, done: m.done, afterStepKey: m.afterStepKey, note: m.note,
       // A funder→payer move earmarked for an ExpenseEntry bill → the plan-step key the engine funds.
       fundsBillKey: m.fundsExpenseId != null ? `bill-${m.fundsExpenseId}` : null,
+      bridgeGroup: m.bridgeGroup, // the 3 steps of a repayable bridge share this id
     })),
     // Hypothetical funding injected by the add-expense preview (not persisted) — lets the gate simulate
     // the chosen funders (funder → payer, tagged to the hypothetical bill) and report what's still short.
