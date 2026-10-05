@@ -50,7 +50,9 @@ export function StepDayEditor({ kind, id, day, stepKey, minDay, maxDay, children
           <button type="button" aria-hidden onClick={() => setOpen(false)} className="fixed inset-0 z-40 cursor-default" tabIndex={-1} />
           <div className="absolute left-0 top-full z-50 mt-1 w-28 rounded-lg border border-slate-200 bg-white p-1 shadow-lg">
             <div className="max-h-48 overflow-y-auto">
-              {maxDay == null && <button type="button" onClick={() => pick(null)} className="block w-full rounded px-2 py-1 text-left text-[11px] text-slate-500 hover:bg-slate-50">No date</button>}
+              {maxDay == null
+                ? <button type="button" onClick={() => pick(null)} className="block w-full rounded px-2 py-1 text-left text-[11px] text-slate-500 hover:bg-slate-50">No date</button>
+                : <button type="button" onClick={() => pick(null)} className="block w-full rounded px-2 py-1 text-left text-[11px] font-medium text-emerald-600 hover:bg-emerald-50">↩ Original ({ordinal(maxDay)})</button>}
               {(() => { const lo = minDay ?? 1; const hi = Math.max(maxDay ?? 31, lo); return Array.from({ length: hi - lo + 1 }, (_, k) => lo + k); })().map((d) => (
                 <button
                   key={d}

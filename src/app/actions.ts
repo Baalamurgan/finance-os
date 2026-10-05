@@ -3283,7 +3283,7 @@ function stepDayParamsFor(s: import("@/lib/moneyPlan").PlanStep, periodId: numbe
   if (rowId != null) return { kind: s.kind === "advance" ? (s.payback ? "advance-payback" : "advance") : s.kind, id: rowId };
   // A hub funding disbursement ("funds <name> ↓") — no row of its own; keyed per creditor so re-dating moves
   // all of the hub's funding to that person. (Excludes reroutes / budget-loan fronts — not hub pieces.)
-  if (s.kind === "transfer-out" && s.fundsMember && !s.budgetLoan && !s.reroute && s.toId != null) return { kind: "override", id: periodId, stepKey: `disbday-${s.toId}` };
+  if (s.kind === "transfer-out" && s.fundsMember && !s.budgetLoan && !s.reroute && s.toId != null) return { kind: "override", id: periodId, stepKey: `disbday-${s.id}` };
   const stepKey =
     s.kind === "piggy" && s.handoverPeriodId != null && s.fromId != null ? `piggyho-${s.handoverPeriodId}-${s.fromId}`
       : s.kind === "pool-handover" && s.fromId != null ? `poolho-${s.fromId}`

@@ -107,9 +107,9 @@ export function buildMoneyPlan(input: {
   openingByMember?: Record<number, number>; // each member's carry (prior-month closing personal) — the cash they actually START the month holding, so the walk opens from reality instead of 0
   hiddenKeys?: string[]; // step ids the head has hidden from the plan view
   orderOverrides?: Record<string, number>; // head "move up/down": step id → manual sort index (overrides day/rank order)
-  disbDayByCreditor?: Record<number, number>; // head re-dated a creditor's hub funding earlier: creditorId → chosen day; all hub→creditor "funds ↓" pieces move to it (setStepDay only persists an affordable day ≤ the bill)
+  disbDayByStep?: Record<string, number>; // head re-dated ONE funding piece earlier: its stable step id → chosen day. Only that piece moves (setStepDay only persists an affordable day ≤ the bill)
 }): MoneyPlan {
-  const { treasurerId, treasurerName, transfers, bills, allowances = [], piggyReturns = [], advances = [], incomeDayByMember, incomeByMember = {}, incomeArrivals, reimburseByMember = {}, reimburseDay, piggyHandover, manualSteps = [], poolHandovers = [], openingByMember = {}, hiddenKeys = [], orderOverrides = {}, disbDayByCreditor = {} } = input;
+  const { treasurerId, treasurerName, transfers, bills, allowances = [], piggyReturns = [], advances = [], incomeDayByMember, incomeByMember = {}, incomeArrivals, reimburseByMember = {}, reimburseDay, piggyHandover, manualSteps = [], poolHandovers = [], openingByMember = {}, hiddenKeys = [], orderOverrides = {}, disbDayByStep = {} } = input;
 
   const inbound = transfers.filter((t) => t.toId === treasurerId);
   const outbound = transfers.filter((t) => t.toId !== treasurerId && t.fromId === treasurerId); // hub → creditor
@@ -538,16 +538,16 @@ export function buildMoneyPlan(input: {
   }
   steps.push(...pieces);
 
-  // Head re-dated a creditor's funding (the "funds <name> ↓" step's date dropdown / up-arrow): move ALL of
-  // the hub's funding pieces to that person onto the chosen day, and record each piece's NATURAL (bill-
-  // driven) day as disbMaxDay — the latest the date picker allows. setStepDay only persists a day the hub
-  // can afford and that isn't past the bill (it re-runs this plan and rejects otherwise); here we just
-  // apply it — the balance walk below still flags any residual shortfall.
+  // Head re-dated ONE funding piece (a specific "funds <name> ↓" step's date dropdown / up-arrow): move
+  // only THAT piece (keyed by its STABLE step id — the id encodes the piece's natural bill day + amount,
+  // not the overridden day) onto the chosen day. Each piece's NATURAL (bill-driven) day is recorded as
+  // disbMaxDay — the latest the date picker allows AND the "Original" revert target. setStepDay only
+  // persists a day the hub can afford and that isn't past the bill; here we just apply it (walk re-checks).
   if (treasurerId != null) {
     for (const s of steps) {
       if (s.kind !== "transfer-out" || s.fromId !== treasurerId || !s.fundsMember || s.budgetLoan || s.reroute || s.done || s.toId == null) continue;
       s.disbMaxDay = s.day ?? undefined;
-      const d = disbDayByCreditor[s.toId];
+      const d = disbDayByStep[s.id]; // per-PIECE — only the exact disbursement the head re-dated moves
       if (d != null) s.day = d;
     }
   }
