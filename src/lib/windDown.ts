@@ -181,8 +181,10 @@ export async function windDownPeriod(periodId: number, opts: { leftoversToIncome
         } else {
           // over budget → already folded into carryOut above (no separate line)
         }
-      } else if (spent > 0) {
-        // tracked, no budget = Misc → carry EACH spend as its own line ("JUL · <spend>")
+      } else if (spent > 0 && !cat.miscCard) {
+        // tracked, no budget = daily Misc → carry EACH spend as its own line ("JUL · <spend>").
+        // miscCard categories are one-off PLANNED events (Erumbu wedding, Ayudha pooja…) — their spend
+        // belongs to its own month, so it is NOT carried forward as next month's "previous month misc".
         const mon = period.label.split(" ")[0];
         for (const s of spends.filter((sp) => sp.categoryId === cat.id)) {
           carryToNext.push({

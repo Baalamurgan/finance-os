@@ -2760,6 +2760,9 @@ async function addEstimatedCarry(
   const mon = source.label.split(" ")[0]; // "JUL 2026" → "JUL"
   await tx.expenseEntry.deleteMany({ where: { periodId: targetId, note: CARRY_NOTE } });
   for (const c of trackedCats) {
+    // miscCard = a one-off PLANNED event card (Erumbu wedding, Ayudha pooja…); its spend belongs to its
+    // own month, so it's never carried forward as next month's "previous month misc" (mirror windDown).
+    if (c.miscCard) continue;
     const b = budgetOf(c.id);
     if (c.sinking && b > 0) continue; // sinking → its fund, never carried
     if (b > 0) {
