@@ -29,3 +29,14 @@ export function istDateParts(now: Date = new Date()): {
     minute: ist.getUTCMinutes(),
   };
 }
+
+// Start of TODAY in IST, built with the server's LOCAL Date constructor so it pairs with due dates built
+// the same way (new Date(year, month-1, day)) for day-count / overdue math. A raw new Date() on the UTC
+// server lags to the previous calendar day until 05:30 IST — which made "today" steps read as tomorrow.
+export function istTodayStart(now: Date = new Date()): Date {
+  const p = istDateParts(now);
+  return new Date(p.year, p.month - 1, p.day);
+}
+export function istTodayStartMs(now: Date = new Date()): number {
+  return istTodayStart(now).getTime();
+}

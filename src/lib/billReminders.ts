@@ -1,5 +1,6 @@
 import { prisma } from "@/lib/prisma";
 import { isLumpDue } from "@/lib/schedule";
+import { istTodayStart } from "@/lib/time";
 
 // Bill-due reminders (item: high-alert popups 3 days before a bill's due date, then daily
 // until it's marked paid). Covers every kind of household bill:
@@ -70,7 +71,7 @@ export async function getBillReminders(householdId: number, now = new Date()): P
     }
   }
 
-  const today = midnight(now);
+  const today = istTodayStart(now); // IST today (not the UTC server day) so reminders count from the family's date
   const out: BillReminder[] = [];
 
   const inWindow = (days: number, window: number) => days <= window && days >= -OVERDUE_LIMIT_DAYS;

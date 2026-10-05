@@ -9,6 +9,7 @@ import { suggestCategoryName, normalizeItem, resolveCategoryId } from "@/lib/spe
 import { withShareCount } from "@/lib/format";
 import { getCardDues, type MonthAmount } from "@/lib/personal/cash";
 import { currentCycle } from "@/lib/finance/cycle";
+import { istTodayStartMs } from "@/lib/time";
 
 // Keywords that drive the on-save category suggestion: the household's LEARNED words
 // (SpendKeyword) plus its head-curated shortcuts (SpendShortcut, weighted high since
@@ -645,8 +646,7 @@ export async function getMoneyPlan(householdId: number, periodId: number, inhand
 
   // Same overdue/soon/normal test the bills use — applied to a transfer's arrival day so an inbound
   // collection that's past its income day reads as overdue too.
-  const now = new Date();
-  const today0 = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  const today0 = istTodayStartMs(); // IST "today" — a raw new Date() on the UTC server lags to the previous day until 5:30am IST
   const dayStatus = (day: number | undefined): { status: "overdue" | "soon" | "normal"; days: number } | null => {
     if (day == null || !period) return null;
     const due0 = new Date(period.year, period.month - 1, Math.min(day, new Date(period.year, period.month, 0).getDate())).getTime();
@@ -1452,8 +1452,7 @@ export async function _getInHand(householdId: number, periodId: number, settleme
   // Due-date status for a bill line, evaluated against today for THIS period's month. `overdue`
   // = due date has passed & still unpaid; `soon` = due within 2 days; `normal` = dated but not
   // urgent; null = no date set (render plain, per "no due date → show as normal").
-  const now = new Date();
-  const today0 = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  const today0 = istTodayStartMs(); // IST "today" — a raw new Date() on the UTC server lags to the previous day until 5:30am IST
   const dueOf = (dueDay: number | null | undefined) => {
     if (!dueDay || !period) return null;
     const lastDay = new Date(period.year, period.month, 0).getDate();

@@ -9,6 +9,7 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { auth } from "@/auth";
 import { parseAmount, formatINR } from "@/lib/format";
+import { istTodayStartMs } from "@/lib/time";
 import { recordActivity } from "@/lib/activity";
 import { validateSpendLabel } from "@/lib/spendCategorize";
 import { log } from "@/lib/log";
@@ -76,7 +77,7 @@ export async function getMyLendingReminders(): Promise<LendingReminder[]> {
     orderBy: { dueDate: "asc" },
   });
   const DAY = 86400000;
-  const today = new Date(); const t0 = new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime();
+  const t0 = istTodayStartMs(); // IST today — not the UTC server day (a raw new Date() lags until 5:30am IST)
   return loans
     .map((l) => {
       const due = l.dueDate!;

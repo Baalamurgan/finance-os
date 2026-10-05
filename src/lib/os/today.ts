@@ -5,6 +5,7 @@ import { getBillReminders } from "@/lib/billReminders";
 import { getCardBillReminders, getPersonalCash } from "@/lib/personal/cash";
 import { prisma } from "@/lib/prisma";
 import type { TodayItem } from "./timeline";
+import { istTodayStart, istDateParts } from "@/lib/time";
 
 // Server aggregator for the Today dashboard. Composes calendar + birthdays (Google) with
 // finance facts (this app) into one flat TodayItem[] the pure timeline builder can shape.
@@ -33,8 +34,7 @@ async function getWindDown(householdId: number): Promise<{ daysUntil: number } |
   const hh = await prisma.household.findUnique({ where: { id: householdId }, select: { windDownDay: true } }).catch(() => null);
   const wd = hh?.windDownDay;
   if (!wd || wd < 1 || wd > 31) return null;
-  const now = new Date();
-  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const today = istTodayStart(); // IST — the family's calendar day, not the UTC server day
   let close = new Date(today.getFullYear(), today.getMonth(), wd);
   if (close.getTime() < today.getTime()) close = new Date(today.getFullYear(), today.getMonth() + 1, wd);
   const daysUntil = Math.round((close.getTime() - today.getTime()) / 86400000);
@@ -81,8 +81,10 @@ export async function getTodayData(opts: {
   const windDown = await getWindDown(householdId);
 
   // The Day grid + Today timeline are about today only; the briefing looks a week out.
-  const todayStr = new Date().toDateString();
-  const events = weekEvents.filter((e) => new Date(e.startISO).toDateString() === todayStr);
+  // "Today" in IST (the family's day) — group each event by its IST calendar date, not the UTC server day.
+  const istKey = (d: Date) => { const p = istDateParts(d); return `${p.year}-${p.month}-${p.day}`; };
+  const todayKey = istKey(new Date());
+  const events = weekEvents.filter((e) => istKey(new Date(e.startISO)) === todayKey);
 
   const items: TodayItem[] = [];
 
