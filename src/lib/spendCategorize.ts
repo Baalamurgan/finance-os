@@ -8,26 +8,22 @@
 // The Add-Spend quick chips are now head-curated (SpendShortcut) rather than hardcoded;
 // this module keeps only the seed keyword knowledge that powers the on-save suggestion.
 
-/** Seed word → category map that powers the "did you mean {Category}?" nudge. Per the
- *  household's own rules: fruits & veggies are the budgeted (capped) "Veg & Fruits"; milk & maavu
- *  (flour) have their OWN uncapped category so they don't eat into that cap; rice/dal/oil/etc are
- *  Provision. Keywords must NOT overlap across categories (a word maps to one place). */
+/** Seed word → category map that powers the "did you mean {Category}?" nudge. Per the household's own
+ *  rules: fruits, veggies, milk AND maavu/flour all share ONE budgeted category "Veg & Fruits & Milk &
+ *  Maavu"; rice/dal/oil/etc are Provision. Keywords must NOT overlap across categories (a word maps to one
+ *  place). */
 export const SEED_KEYWORDS: { category: string; keywords: string[] }[] = [
   {
-    // Fruits + veggies ONLY — the budgeted (capped) category. Milk & maavu were split out (below).
-    category: "Veg & Fruits",
+    // ONE combined budget — fruits, veggies, milk AND maavu/flour all share the "Veg & Fruits & Milk &
+    // Maavu" cap. (The earlier split into a separate uncapped "Milk & Maavu" was reverted — same budget.)
+    category: "Veg & Fruits & Milk & Maavu",
     keywords: [
       "coconut", "thengai", "tomato", "thakkali", "onion", "vengayam", "greens", "keerai",
       "vegetable", "vegetables", "veg", "vegg", "veggies", "kai", "kaai", "kaaikari", "kaaigari", "kaigari",
       "fruit", "fruits", "pazham", "palam", "palangal", "pazhangal", "banana", "apple", "carrot", "potato",
       "urulai", "beans", "brinjal", "kathrikai", "curry leaves", "coriander", "kothamalli", "chilli", "milagai", "lemon",
+      "milk", "paal", "pal", "maavu", "mavu", "flour", "atta",
     ],
-  },
-  {
-    // Milk & flour (maavu) — intentionally UNCAPPED (its own no-budget category), so daily milk/maavu
-    // doesn't count against the Veg & Fruits cap.
-    category: "Milk & Maavu",
-    keywords: ["milk", "paal", "pal", "maavu", "mavu", "flour", "atta"],
   },
   {
     category: "Provision",
@@ -187,8 +183,8 @@ const UMBRELLA_WORDS = new Set([
 ]);
 const FUEL_WORDS = ["petrol", "diesel", "fuel", "bunk"];
 // Concrete seed ITEMS (milk, maavu, tomato, rice…) — specific products, never umbrellas. A note that IS
-// one of these is always meaningful even when it echoes its category's name (e.g. "milk" under the new
-// "Milk & Maavu" category), so it's allowed through rather than flagged "too generic".
+// one of these is always meaningful even when it echoes its category's name (e.g. "milk" / "maavu" under
+// "Veg & Fruits & Milk & Maavu"), so it's allowed through rather than flagged "too generic".
 const CONCRETE_SEED = new Set(
   SEED_KEYWORDS.flatMap((m) => m.keywords).filter((k) => !k.includes(" ") && !UMBRELLA_WORDS.has(k)),
 );
