@@ -44,7 +44,7 @@ export default async function ActivityPage({
 
   const nonEmpty = (d?: { added: unknown[]; removed: unknown[]; changed: unknown[] } | null) =>
     !!d && (d.added.length > 0 || d.removed.length > 0 || d.changed.length > 0);
-  const hasChanges = nonEmpty(changes?.income) || nonEmpty(changes?.expense) || nonEmpty(changes?.misc);
+  const hasChanges = nonEmpty(changes?.income) || nonEmpty(changes?.expense) || nonEmpty(changes?.planned) || nonEmpty(changes?.misc);
 
   return (
     <>
@@ -70,6 +70,13 @@ export default async function ActivityPage({
             <div className="mt-3 space-y-4">
               <ChangeBlock title="Income" diff={changes.income!} />
               <ChangeBlock title="Expenses" diff={changes.expense!} skipMonth={c.selected?.label} />
+              {/* Planned expenses — this-month one-off/added lines, promoted out of the collapsed Misc
+                  block (mirrors the Sheet's "Planned expenses" split) so they read at a glance. */}
+              {nonEmpty(changes.planned) && (
+                <div className="rounded-lg border border-emerald-100 bg-emerald-50/50 p-3">
+                  <ChangeBlock title="Planned expenses" diff={changes.planned!} />
+                </div>
+              )}
               {nonEmpty(changes.misc) && (
                 <div className="rounded-lg bg-slate-50 p-3">
                   <ChangeBlock title="Miscellaneous (one-off)" diff={changes.misc!} collapsible />

@@ -2075,7 +2075,7 @@ export async function getMonthChanges(householdId: number, periodId: number) {
   const prev = await prisma.period.findUnique({
     where: { householdId_year_month: { householdId, year: prevYear, month: prevMonth } },
   });
-  if (!prev) return { prevLabel: null, income: null, expense: null };
+  if (!prev) return { prevLabel: null, income: null, expense: null, planned: null, misc: null };
 
   const [curInc, curExp, prevInc, prevExp] = await Promise.all([
     prisma.incomeEntry.findMany({ where: { periodId } }),
@@ -2085,6 +2085,12 @@ export async function getMonthChanges(householdId: number, periodId: number) {
   ]);
 
   const isMisc = (e: { category: { section: string } | null }) => e.category?.section === "Misc";
+  const isCarried = (e: { note: string | null }) => e.note === CARRY_NOTE;
+  const toRow = (e: { label: string; amount: number }) => ({ label: e.label, amount: e.amount });
+  // "Planned expenses" (this-month one-offs promoted out of Misc) is a THIS-MONTH-ONWARD view, exactly
+  // like the Sheet — a past month's changelog keeps the single Misc block it always had.
+  const { year: curY, month: curM } = istDateParts();
+  const usePlanned = period.year * 12 + period.month >= curY * 12 + curM;
 
   const income = diffByKey(
     curInc.map((i) => ({ label: i.source, amount: i.amount })),
@@ -2096,11 +2102,18 @@ export async function getMonthChanges(householdId: number, periodId: number) {
     curExp.filter((e) => !isMisc(e)).map((e) => ({ label: withShareCount(e.label, e.category?.billEveryMonths), amount: e.amount })),
     prevExp.filter((e) => !isMisc(e)).map((e) => ({ label: withShareCount(e.label, e.category?.billEveryMonths), amount: e.amount })),
   );
+  // Split Misc the way the Sheet does: this-month PLANNED lines (added/one-off, note ≠ CARRY) get their
+  // own prominent block; only the PREVIOUS-month carried spends stay in the collapsible "one-off" block.
+  const miscCur = curExp.filter(isMisc);
+  const miscPrev = prevExp.filter(isMisc);
+  const planned = usePlanned
+    ? diffByKey(miscCur.filter((e) => !isCarried(e)).map(toRow), miscPrev.filter((e) => !isCarried(e)).map(toRow))
+    : null;
   const misc = diffByKey(
-    curExp.filter(isMisc).map((e) => ({ label: e.label, amount: e.amount })),
-    prevExp.filter(isMisc).map((e) => ({ label: e.label, amount: e.amount })),
+    (usePlanned ? miscCur.filter(isCarried) : miscCur).map(toRow),
+    (usePlanned ? miscPrev.filter(isCarried) : miscPrev).map(toRow),
   );
-  return { prevLabel: prev.label, income, expense, misc };
+  return { prevLabel: prev.label, income, expense, planned, misc };
 }
 
 // ── Loan / chit detail (per-item page) ──────────────────────────────────────
