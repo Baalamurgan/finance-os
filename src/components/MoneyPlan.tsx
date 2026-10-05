@@ -11,6 +11,7 @@ import { MiscPayModal } from "@/components/MiscPayModal";
 import { ExpenseModal } from "@/components/ExpenseModal";
 import { AddSpendModal } from "@/components/AddSpendModal";
 import { StepDayEditor } from "@/components/StepDayEditor";
+import { FundBillModal } from "@/components/FundBillModal";
 import { useToast, useToastAction } from "@/components/Toast";
 import type { MoneyPlanResult } from "@/lib/queries";
 import { canActOnStep, canActInMonth } from "@/lib/planAuth";
@@ -54,6 +55,8 @@ export function MoneyPlan({
   );
   const [addOpen, setAddOpen] = useState(false);
   const [balances, setBalances] = useState<{ s: MoneyPlanResult["steps"][number]; n: number } | null>(null);
+  // A short bill the head is funding from held cash (the cross-bill knock-on entry point).
+  const [fund, setFund] = useState<MoneyPlanResult["steps"][number] | null>(null);
   // Add-a-step modal: open with the anchor (the step id it goes AFTER; null = top of the list).
   const [insert, setInsert] = useState<{ anchor: string | null } | null>(null);
   const treasurerId = plan.treasurerId;
@@ -392,12 +395,19 @@ export function MoneyPlan({
                     s.kind === "bill" ? (
                       // The shortfall lives on the bill itself: the hub sends the fullest it can; whatever
                       // the payer still lacks shows here, with the day it becomes payable (funding/income in).
-                      <div className="text-[10px] font-semibold text-red-600">
-                        ⚠ {s.payerName} short {formatINR(short)}
-                        {s.infeasibleFrom == null
-                          ? ` — not payable in full this month`
-                          : ` — payable from ${ordinal(s.infeasibleFrom)}, once funding & income land`}
-                      </div>
+                      <>
+                        <div className="text-[10px] font-semibold text-red-600">
+                          ⚠ {s.payerName} short {formatINR(short)}
+                          {s.infeasibleFrom == null
+                            ? ` — not payable in full this month`
+                            : ` — payable from ${ordinal(s.infeasibleFrom)}, once funding & income land`}
+                        </div>
+                        {/* Head: fund this short bill from pool cash a member holds (funder → payer, no
+                            payback). Shown only when someone actually holds spare cash before this bill. */}
+                        {isHead && open && s.billId != null && members.some((m) => m.id !== s.payerId && m.id !== treasurerId && (s.balancesBefore?.[m.id] ?? 0) > 0.5) && (
+                          <button type="button" onClick={() => setFund(s)} className="mt-1 rounded-full bg-emerald-600 px-2 py-0.5 text-[10px] font-semibold text-white hover:bg-emerald-700">💰 Fund from held cash</button>
+                        )}
+                      </>
                     ) : (
                       <div className="text-[10px] font-semibold text-red-600">
                         ⚠ {isPiggy || isTransfer || isAllowance || isAdvance || isPoolHandover ? s.fromName : s.payerName} needs {formatINR(short)} more in hand first
@@ -585,6 +595,29 @@ export function MoneyPlan({
         )}
         </>
       )}
+
+      {/* Fund a short bill from held cash: the spare-cash holders are read straight off the bill step's
+          balancesBefore (what each member holds right before it) — the payer and the hub are excluded. */}
+      {fund && (() => {
+        const bb = fund.balancesBefore ?? {};
+        const sources = members
+          .filter((m) => m.id !== fund.payerId && m.id !== treasurerId)
+          .map((m) => ({ memberId: m.id, name: m.name, spare: Math.round((bb[m.id] ?? 0) * 100) / 100 }))
+          .filter((src) => src.spare > 0.5)
+          .sort((a, b) => b.spare - a.spare);
+        return (
+          <FundBillModal
+            periodId={periodId}
+            billId={fund.billId!}
+            label={fund.vendor ?? "this bill"}
+            payerName={fund.payerName ?? "The payer"}
+            shortfall={Math.round(fund.senderShort ?? 0)}
+            day={fund.day ?? null}
+            sources={sources}
+            onClose={() => setFund(null)}
+          />
+        );
+      })()}
 
       {/* Add-a-step modal: a real member↔member (or ↔ hub) move, inserted at the chosen spot. */}
       {insert && (

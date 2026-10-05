@@ -2058,6 +2058,42 @@ export async function addManualStep(formData: FormData) {
   revalidateFamily();
 }
 
+// Fund an ALREADY-SAVED short bill from pool cash a member is holding — the Money-Plan counterpart to
+// the add-expense funder picker. Creates one TAGGED ManualPlanStep per funder (funder → payer, earmarked
+// to THIS bill via fundsExpenseId, NO payback), so the engine shrinks the hub's disbursement to the payer
+// and places the funder just above the bill. Funding one bill can leave ANOTHER short (the knock-on) —
+// that bill then surfaces its own "Fund from held cash" button, so the head clears the chain one tap at a
+// time (the recursion the add-expense modal can't do once a bill is saved). Partial funding is allowed
+// (cover some now, the rest surfaces as still-short). Head/manager; open month unless head.
+export async function fundExistingBill(formData: FormData): Promise<{ ok: boolean; error?: string }> {
+  const session = await auth();
+  const memberId = session?.user?.memberId ?? null;
+  if (!(await unlocked())) await relock("fundExistingBill");
+  if (!(await canEdit())) { log.warn("fundExistingBill", "blocked", { outcome: "blocked", reason: "not-allowed", memberId }); return { ok: false, error: "Not allowed" }; }
+  const periodId = Number(formData.get("periodId"));
+  const billId = Number(formData.get("billId"));
+  if (!periodId || !billId) return { ok: false, error: "Missing bill" };
+  if (!(await isHead()) && !(await periodOpen(periodId))) return { ok: false, error: "This month is closed" };
+  const bill = await prisma.expenseEntry.findUnique({ where: { id: billId }, select: { id: true, periodId: true, memberId: true, dueDay: true, label: true } });
+  if (!bill || bill.periodId !== periodId || bill.memberId == null) return { ok: false, error: "Bill not found" };
+  let funders: { memberId: number; amount: number }[] = [];
+  try {
+    funders = (JSON.parse(String(formData.get("funders") ?? "[]")) as { memberId: number; amount: number }[])
+      .filter((f) => f && Number.isFinite(f.memberId) && f.amount > 0.005 && f.memberId !== bill.memberId) // can't fund your own bill
+      .map((f) => ({ memberId: f.memberId, amount: Math.round(f.amount * 100) / 100 }));
+  } catch { funders = []; }
+  if (funders.length === 0) return { ok: false, error: "Pick at least one funder" };
+  let total = 0;
+  for (const f of funders) {
+    await prisma.manualPlanStep.create({ data: { periodId, fromMemberId: f.memberId, toMemberId: bill.memberId, amount: f.amount, day: bill.dueDay, fundsExpenseId: bill.id, note: `Funds ${bill.label}` } });
+    total += f.amount;
+  }
+  log.info("fundExistingBill", "ok", { outcome: "ok", memberId, periodId, billId, total });
+  await logActivity("settlement", "created", `Funding to cover “${bill.label}” (${formatINR(total)})`, periodId);
+  revalidateFamily();
+  return { ok: true };
+}
+
 export async function deleteManualStep(formData: FormData) {
   if (!(await unlocked())) await relock("deleteManualStep");
   if (!(await canEdit())) return;
