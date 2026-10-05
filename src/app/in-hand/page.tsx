@@ -1,4 +1,5 @@
 import { formatINR } from "@/lib/format";
+import { istDateParts } from "@/lib/time";
 import { loadCommon } from "@/lib/load";
 import { getInHand, getMoneyPlan, getMoneyPlanActivity, getFamilyCreditCards, type InHand } from "@/lib/queries";
 import { pendingCashMoveByMember, doneCashMoveByMember, doneCashMoveDetailByMember } from "@/lib/moneyPlan";
@@ -67,6 +68,10 @@ export default async function InHandPage({
     getFamilyCreditCards(c.household.id),
   ]);
   const currentMemberId = c.currentMember?.id ?? null;
+  // Today's day-of-month (IST) — but only when viewing the CURRENT month, so the Money Plan leaves just
+  // today's date expanded and folds the rest. Any other month in view → null → every day folds.
+  const ist = istDateParts();
+  const currentDay = c.selected.year === ist.year && c.selected.month === ist.month ? ist.day : null;
   // "Holding now" per member = their projected In-Hand total MINUS the cash-moves not yet completed
   // (see pendingCashMoveByMember). Backs each member's total down to what they physically hold given
   // only the steps done so far; converges to the projection as the plan is worked through.
@@ -128,6 +133,7 @@ export default async function InHandPage({
           members={c.members.map((m) => ({ id: m.id, name: m.name }))}
           monthBalance={inHand.monthBalance}
           cardsByMember={cardsByMember}
+          currentDay={currentDay}
         />
 
         {showInHand && isPreview && (

@@ -23,7 +23,7 @@ import { canActOnStep, canActInMonth } from "@/lib/planAuth";
 // Refresh re-pulls due dates + amounts from Setup into this month, then re-orders the plan.
 export function MoneyPlan({
   plan, householdId, periodId, isHead, currentMemberId, canEdit, open, datesEditable = false, generalPiggy,
-  billCategories, members, monthBalance, cardsByMember = {},
+  billCategories, members, monthBalance, cardsByMember = {}, currentDay = null,
 }: {
   plan: MoneyPlanResult;
   householdId: number;
@@ -41,6 +41,8 @@ export function MoneyPlan({
   monthBalance: number;
   // Each member's own credit cards → the "Paid with" picker on their bills' Pay modals.
   cardsByMember?: Record<number, { id: number; name: string; last4: string | null; color: string }[]>;
+  // Today's day-of-month (IST) when viewing the CURRENT month, else null — the one date left expanded.
+  currentDay?: number | null;
 }) {
   const router = useRouter();
   const toast = useToast();
@@ -57,8 +59,8 @@ export function MoneyPlan({
   const [balances, setBalances] = useState<{ s: MoneyPlanResult["steps"][number]; n: number } | null>(null);
   // A short bill the head is funding from held cash (the cross-bill knock-on entry point).
   const [fund, setFund] = useState<MoneyPlanResult["steps"][number] | null>(null);
-  // Days (keyed by day number / "none") the viewer has expanded back open after they auto-collapsed done.
-  const [expandedDays, setExpandedDays] = useState<Set<string>>(new Set());
+  // Days (keyed by day number / "none") the viewer has FLIPPED from their default fold state.
+  const [toggledDays, setToggledDays] = useState<Set<string>>(new Set());
   // Add-a-step modal: open with the anchor (the step id it goes AFTER; null = top of the list).
   const [insert, setInsert] = useState<{ anchor: string | null } | null>(null);
   const treasurerId = plan.treasurerId;
@@ -90,8 +92,9 @@ export function MoneyPlan({
   // starts whenever the day changes from the previous visible step (undated steps share a "no date" head).
   const visibleRows = shown.filter(({ s }) => !s.hidden);
 
-  // Collapse a whole day once EVERY visible step in it is done — a settled day folds into its date header
-  // (tap to expand/collapse) so the plan stays focused on what's left. Keyed by day; undated → "none".
+  // Every day folds into its date header (tap to expand/collapse), showing "N done" / "N pending" — so the
+  // plan stays focused. ONLY today's date is expanded by default; every other day starts collapsed. Keyed
+  // by day; undated → "none" (never today's date, so always collapsed by default).
   const dayKeyOf = (step: MoneyPlanResult["steps"][number]) => (step.day == null ? "none" : String(step.day));
   const dayStats = new Map<string, { total: number; done: number }>();
   for (const { s } of visibleRows) {
@@ -99,9 +102,11 @@ export function MoneyPlan({
     e.total++; if (s.done) e.done++;
     dayStats.set(dayKeyOf(s), e);
   }
-  const dayAllDone = (k: string) => { const e = dayStats.get(k); return !!e && e.total > 0 && e.done === e.total; };
-  // A done day is collapsed by DEFAULT (not in the set); tapping its header opts it into "expanded".
-  const toggleDay = (k: string) => setExpandedDays((prev) => { const n = new Set(prev); if (n.has(k)) n.delete(k); else n.add(k); return n; });
+  // Default-collapsed for every day except today; `toggledDays` flips that (XOR) so a tap on any header
+  // expands/collapses it. currentDay null (not viewing the current month) → every day collapsed.
+  const defaultCollapsed = (dayNum: number | null) => currentDay == null || dayNum !== currentDay;
+  const isDayCollapsed = (s: MoneyPlanResult["steps"][number]) => defaultCollapsed(s.day) !== toggledDays.has(dayKeyOf(s));
+  const toggleDay = (k: string) => setToggledDays((prev) => { const n = new Set(prev); if (n.has(k)) n.delete(k); else n.add(k); return n; });
 
   // Money-plan refresh re-derives the STEPS from the current Sheet — it does NOT pull from Setup or
   // touch Sheet lines (that's the Sheet's own refresh). Done steps stay done (their state is persisted);
@@ -207,8 +212,7 @@ export function MoneyPlan({
             const prev = i > 0 ? visibleRows[i - 1].s : null;
             const newDateGroup = i === 0 || (prev?.day ?? null) !== (s.day ?? null);
             const dayKey = dayKeyOf(s);
-            const dayDone = dayAllDone(dayKey);
-            const dayCollapsed = dayDone && !expandedDays.has(dayKey); // settled day → folded into its header
+            const dayCollapsed = isDayCollapsed(s); // every day folds except today (tap any header to flip)
             const isAllowance = s.kind === "allowance";
             const isPiggy = s.kind === "piggy";
             const isAdvance = s.kind === "advance";
@@ -266,7 +270,7 @@ export function MoneyPlan({
 
             return (
               <Fragment key={s.id}>
-              {newDateGroup && <DateGroupHeader day={s.day} kind={s.kind} collapsed={dayCollapsed} count={dayStats.get(dayKey)?.total} onToggle={dayDone ? () => toggleDay(dayKey) : undefined} />}
+              {newDateGroup && <DateGroupHeader day={s.day} kind={s.kind} collapsed={dayCollapsed} count={dayStats.get(dayKey)?.total} done={dayStats.get(dayKey)?.done} onToggle={() => toggleDay(dayKey)} />}
               {!dayCollapsed && (
               <li className={`flex items-start gap-2.5 rounded-lg px-2.5 py-2 text-xs ${s.done ? "bg-emerald-50/50" : isIncome ? "bg-emerald-50/40" : isManual ? "bg-cyan-50/50" : urgent ? "bg-red-50" : soon ? "bg-amber-50" : "bg-slate-50"}`}>
                 <button
@@ -785,17 +789,21 @@ function FilterPill({ active, onClick, children }: { active: boolean; onClick: (
 // A slim "+" sitting between two rows — click to insert a manual step right there.
 // A date heading above a group of same-day steps. Dated → the ordinal day (e.g. "5th"); undated income/
 // collections at the top → "Up front"; anything else undated (sinks to the bottom) → "No set date".
-function DateGroupHeader({ day, kind, collapsed, count, onToggle }: { day: number | null; kind: MoneyPlanResult["steps"][number]["kind"]; collapsed?: boolean; count?: number; onToggle?: () => void }) {
+function DateGroupHeader({ day, kind, collapsed, count, done, onToggle }: { day: number | null; kind: MoneyPlanResult["steps"][number]["kind"]; collapsed?: boolean; count?: number; done?: number; onToggle?: () => void }) {
   const label =
     day != null ? `📅 ${ordinal(day)}` : kind === "income" || kind === "transfer-in" ? "⬆︎ Up front" : "🗓 No set date";
-  // A fully-done day folds into a single tappable header — tap to expand/collapse its settled steps.
+  // Each day folds into a single tappable header — tap to expand/collapse its steps. The chip reads
+  // "✓ N done" when the whole day is settled, else "N pending" (how many steps are still to do).
   if (onToggle) {
+    const total = count ?? 0;
+    const pending = total - (done ?? 0);
+    const allDone = total > 0 && pending <= 0;
     return (
       <li className="list-none pt-2.5 first:pt-0">
         <button type="button" onClick={onToggle} className="flex w-full items-center gap-2 rounded-md py-0.5 text-left hover:bg-slate-50">
-          <span className="shrink-0 text-[11px] font-bold uppercase tracking-wide text-slate-400">{label}</span>
-          <span className="shrink-0 rounded-full bg-emerald-50 px-1.5 py-0.5 text-[9px] font-semibold text-emerald-600">
-            ✓ {count ?? 0} done{collapsed ? " · tap to show" : ""}
+          <span className="shrink-0 text-[11px] font-bold uppercase tracking-wide text-slate-500">{label}</span>
+          <span className={`shrink-0 rounded-full px-1.5 py-0.5 text-[9px] font-semibold ${allDone ? "bg-emerald-50 text-emerald-600" : "bg-amber-50 text-amber-600"}`}>
+            {allDone ? `✓ ${total} done` : `${pending} pending`}
           </span>
           <span className="h-px flex-1 bg-slate-200" />
           <svg width="12" height="12" viewBox="0 0 20 20" className={`shrink-0 text-slate-400 transition-transform ${collapsed ? "" : "rotate-90"}`} aria-hidden>

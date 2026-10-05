@@ -999,7 +999,7 @@ export default async function SheetPage({
                   </details>
                   {/* Previous month misc — carried lines only (the old "Miscellaneous" renamed) */}
                   {prevMonthMisc.length > 0 && (
-                    <details data-persist="prevmisc" className="group/pm mt-2">
+                    <details data-persist="prevmisc" className="group/pm">
                       <summary className="sticky top-[6.5rem] z-10 flex cursor-pointer list-none items-center justify-between rounded-lg bg-white px-2 py-2 hover:bg-slate-50 [&::-webkit-details-marker]:hidden sm:static">
                         <span className="flex items-center gap-1.5">
                           <svg width="14" height="14" viewBox="0 0 20 20" className="text-slate-400 transition-transform group-open/pm:rotate-90"><path fill="currentColor" d="M7 5l6 5-6 5z" /></svg>
