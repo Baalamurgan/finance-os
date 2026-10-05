@@ -57,6 +57,8 @@ export function MoneyPlan({
   const [balances, setBalances] = useState<{ s: MoneyPlanResult["steps"][number]; n: number } | null>(null);
   // A short bill the head is funding from held cash (the cross-bill knock-on entry point).
   const [fund, setFund] = useState<MoneyPlanResult["steps"][number] | null>(null);
+  // Days (keyed by day number / "none") the viewer has expanded back open after they auto-collapsed done.
+  const [expandedDays, setExpandedDays] = useState<Set<string>>(new Set());
   // Add-a-step modal: open with the anchor (the step id it goes AFTER; null = top of the list).
   const [insert, setInsert] = useState<{ anchor: string | null } | null>(null);
   const treasurerId = plan.treasurerId;
@@ -87,6 +89,19 @@ export function MoneyPlan({
   // Steps are already in display order (sorted by day). Group them under a date heading: a new heading
   // starts whenever the day changes from the previous visible step (undated steps share a "no date" head).
   const visibleRows = shown.filter(({ s }) => !s.hidden);
+
+  // Collapse a whole day once EVERY visible step in it is done — a settled day folds into its date header
+  // (tap to expand/collapse) so the plan stays focused on what's left. Keyed by day; undated → "none".
+  const dayKeyOf = (step: MoneyPlanResult["steps"][number]) => (step.day == null ? "none" : String(step.day));
+  const dayStats = new Map<string, { total: number; done: number }>();
+  for (const { s } of visibleRows) {
+    const e = dayStats.get(dayKeyOf(s)) ?? { total: 0, done: 0 };
+    e.total++; if (s.done) e.done++;
+    dayStats.set(dayKeyOf(s), e);
+  }
+  const dayAllDone = (k: string) => { const e = dayStats.get(k); return !!e && e.total > 0 && e.done === e.total; };
+  // A done day is collapsed by DEFAULT (not in the set); tapping its header opts it into "expanded".
+  const toggleDay = (k: string) => setExpandedDays((prev) => { const n = new Set(prev); if (n.has(k)) n.delete(k); else n.add(k); return n; });
 
   // Money-plan refresh re-derives the STEPS from the current Sheet — it does NOT pull from Setup or
   // touch Sheet lines (that's the Sheet's own refresh). Done steps stay done (their state is persisted);
@@ -191,6 +206,9 @@ export function MoneyPlan({
             // undated bills/piggy "no date" at the bottom) so same-day steps read as one dated group.
             const prev = i > 0 ? visibleRows[i - 1].s : null;
             const newDateGroup = i === 0 || (prev?.day ?? null) !== (s.day ?? null);
+            const dayKey = dayKeyOf(s);
+            const dayDone = dayAllDone(dayKey);
+            const dayCollapsed = dayDone && !expandedDays.has(dayKey); // settled day → folded into its header
             const isAllowance = s.kind === "allowance";
             const isPiggy = s.kind === "piggy";
             const isAdvance = s.kind === "advance";
@@ -248,7 +266,8 @@ export function MoneyPlan({
 
             return (
               <Fragment key={s.id}>
-              {newDateGroup && <DateGroupHeader day={s.day} kind={s.kind} />}
+              {newDateGroup && <DateGroupHeader day={s.day} kind={s.kind} collapsed={dayCollapsed} count={dayStats.get(dayKey)?.total} onToggle={dayDone ? () => toggleDay(dayKey) : undefined} />}
+              {!dayCollapsed && (
               <li className={`flex items-start gap-2.5 rounded-lg px-2.5 py-2 text-xs ${s.done ? "bg-emerald-50/50" : isIncome ? "bg-emerald-50/40" : isManual ? "bg-cyan-50/50" : urgent ? "bg-red-50" : soon ? "bg-amber-50" : "bg-slate-50"}`}>
                 <button
                   type="button"
@@ -568,7 +587,8 @@ export function MoneyPlan({
                   )
                 )}
               </li>
-              {canEdit && open && who == null && <InsertHere onClick={() => setInsert({ anchor: s.id })} />}
+              )}
+              {!dayCollapsed && canEdit && open && who == null && <InsertHere onClick={() => setInsert({ anchor: s.id })} />}
               </Fragment>
             );
           })}
@@ -765,9 +785,26 @@ function FilterPill({ active, onClick, children }: { active: boolean; onClick: (
 // A slim "+" sitting between two rows — click to insert a manual step right there.
 // A date heading above a group of same-day steps. Dated → the ordinal day (e.g. "5th"); undated income/
 // collections at the top → "Up front"; anything else undated (sinks to the bottom) → "No set date".
-function DateGroupHeader({ day, kind }: { day: number | null; kind: MoneyPlanResult["steps"][number]["kind"] }) {
+function DateGroupHeader({ day, kind, collapsed, count, onToggle }: { day: number | null; kind: MoneyPlanResult["steps"][number]["kind"]; collapsed?: boolean; count?: number; onToggle?: () => void }) {
   const label =
     day != null ? `📅 ${ordinal(day)}` : kind === "income" || kind === "transfer-in" ? "⬆︎ Up front" : "🗓 No set date";
+  // A fully-done day folds into a single tappable header — tap to expand/collapse its settled steps.
+  if (onToggle) {
+    return (
+      <li className="list-none pt-2.5 first:pt-0">
+        <button type="button" onClick={onToggle} className="flex w-full items-center gap-2 rounded-md py-0.5 text-left hover:bg-slate-50">
+          <span className="shrink-0 text-[11px] font-bold uppercase tracking-wide text-slate-400">{label}</span>
+          <span className="shrink-0 rounded-full bg-emerald-50 px-1.5 py-0.5 text-[9px] font-semibold text-emerald-600">
+            ✓ {count ?? 0} done{collapsed ? " · tap to show" : ""}
+          </span>
+          <span className="h-px flex-1 bg-slate-200" />
+          <svg width="12" height="12" viewBox="0 0 20 20" className={`shrink-0 text-slate-400 transition-transform ${collapsed ? "" : "rotate-90"}`} aria-hidden>
+            <path fill="currentColor" d="M7 5l6 5-6 5z" />
+          </svg>
+        </button>
+      </li>
+    );
+  }
   return (
     <li className="list-none pt-2.5 first:pt-0">
       <div className="flex items-center gap-2">
