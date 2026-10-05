@@ -271,7 +271,7 @@ export function MoneyPlan({
                     {isManual && (() => {
                       const tag = <DayTag kind="manual" day={s.day} status={null} days={null} />;
                       if (!isHead || !datesEditable || s.manualId == null) return s.day != null ? tag : null;
-                      return <StepDayEditor kind="manual" id={s.manualId} day={s.day}>{tag}</StepDayEditor>;
+                      return <StepDayEditor kind="manual" id={s.manualId} day={s.day} minDay={s.fundsBillKey ? plan.minEditDay : undefined} maxDay={s.fundsBillKey ? (s.disbMaxDay ?? s.day ?? undefined) : undefined}>{tag}</StepDayEditor>;
                     })()}
                     {!isManual && !s.done && (!isPiggy || isHandover) && (() => {
                       const tag = <DayTag kind={s.kind} day={s.day} status={s.status ?? null} days={s.days ?? null} />;

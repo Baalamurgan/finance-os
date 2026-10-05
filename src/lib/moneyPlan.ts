@@ -593,7 +593,21 @@ export function buildMoneyPlan(input: {
   for (const m of manualObjs) {
     if (m.fundsBillKey) {
       const bi = steps.findIndex((s) => s.id === m.fundsBillKey);
-      if (bi >= 0) { m.day = steps[bi].day ?? m.day; steps.splice(bi, 0, m); continue; }
+      if (bi >= 0) {
+        const billDay = steps[bi].day ?? null;
+        m.disbMaxDay = billDay ?? undefined; // the bill's day = the picker's upper bound + "Original" target
+        if (m.day == null || (billDay != null && m.day >= billDay)) {
+          m.day = billDay ?? m.day; // default / not-earlier → sit on the bill's day, right above it
+          steps.splice(bi, 0, m);
+        } else {
+          // head re-dated it EARLIER than the bill → place it in day order (end of its day group), still
+          // before the bill (so the walk credits the payer first and the display groups it on its own day)
+          let pos = steps.findIndex((s) => eff(s) > (m.day as number));
+          if (pos < 0 || pos > bi) pos = bi;
+          steps.splice(pos, 0, m);
+        }
+        continue;
+      }
     }
     pendingManual.push(m);
   }

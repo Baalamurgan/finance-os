@@ -3264,9 +3264,23 @@ export async function setStepDay(formData: FormData) {
   } else if (kind === "manual") {
     // A head-added manual step owns its own day (positioning still follows its insert anchor, so the
     // date is display + fallback order). Editable even once ticked done — it's ad-hoc metadata.
-    const m = await prisma.manualPlanStep.findUnique({ where: { id }, select: { period: { select: { status: true } } } });
+    const m = await prisma.manualPlanStep.findUnique({ where: { id }, select: { fundsExpenseId: true, periodId: true, day: true, period: { select: { status: true, householdId: true } } } });
     if (!m || m.period.status === "closed") return { ok: false, error: "This month is closed." };
-    await prisma.manualPlanStep.update({ where: { id }, data: { day } });
+    if (m.fundsExpenseId != null) {
+      // A TAGGED funding move (funder → payer) is bounded like a hub disbursement: apply, re-run the plan,
+      // and revert if it leaves that funder (or anyone) short (past the bill is already clamped in the walk).
+      const prevDay = m.day;
+      const before = await getMoneyPlan(m.period.householdId, m.periodId);
+      await prisma.manualPlanStep.update({ where: { id }, data: { day } });
+      const after = await getMoneyPlan(m.period.householdId, m.periodId);
+      const funderShort = (after.steps.find((s) => s.manualId === id)?.senderShort ?? 0) > 0.5;
+      if (funderShort || after.shortBills > before.shortBills || after.hubShortfall > before.hubShortfall + 0.5) {
+        await prisma.manualPlanStep.update({ where: { id }, data: { day: prevDay } });
+        return { ok: false, error: "That date leaves the funder short — pick a later day (or use Original)." };
+      }
+    } else {
+      await prisma.manualPlanStep.update({ where: { id }, data: { day } });
+    }
   } else {
     return { ok: false, error: "This step's date can’t be edited." };
   }
