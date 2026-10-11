@@ -2076,7 +2076,7 @@ export async function getMonthChanges(householdId: number, periodId: number) {
   const prev = await prisma.period.findUnique({
     where: { householdId_year_month: { householdId, year: prevYear, month: prevMonth } },
   });
-  if (!prev) return { prevLabel: null, income: null, expense: null, planned: null, misc: null };
+  if (!prev) return { prevLabel: null, income: null, expense: [] as { section: string; label: string; diff: ReturnType<typeof diffByKey> }[], planned: null, misc: null };
 
   const [curInc, curExp, prevInc, prevExp] = await Promise.all([
     prisma.incomeEntry.findMany({ where: { periodId } }),
@@ -2110,10 +2110,33 @@ export async function getMonthChanges(householdId: number, periodId: number) {
   // Expenses = the stable (non-planned) bills. This-month-onward that's everything the Sheet doesn't
   // treat as planned; a past month keeps the legacy section-based split (nothing pulled into Planned).
   const inExpense = (e: ExpRow) => (usePlanned ? !isPlannedKind(e) : !isMiscSection(e));
-  const expense = diffByKey(
-    curExp.filter(inExpense).map((e) => ({ label: withShareCount(e.label, e.category?.billEveryMonths), amount: e.amount })),
-    prevExp.filter(inExpense).map((e) => ({ label: withShareCount(e.label, e.category?.billEveryMonths), amount: e.amount })),
-  );
+  // …broken into the SAME sections the Sheet shows (Loans · Chits · Monthly · Budgeted · Yearly), so the
+  // changelog reads section-by-section instead of one long Expenses list. Mirrors page.tsx sheetSection.
+  const sectionOf = (e: ExpRow): string => {
+    const c = e.category;
+    if (!c) return "Monthly";
+    if (c.fundingStyle != null) return "Yearly";
+    if (c.billEveryMonths != null && c.billEveryMonths > 1) return "Yearly";
+    if (c.section === "Monthly" && c.tracked && !c.sinking && c.fundingStyle == null && (c.billEveryMonths == null || c.billEveryMonths <= 1)) return "PiggyBudget";
+    return c.section; // Loans / Chits / Monthly
+  };
+  const EXP_SECTIONS: { section: string; label: string }[] = [
+    { section: "Loans", label: "Loans" },
+    { section: "Chits", label: "Chits" },
+    { section: "Monthly", label: "Monthly Expense" },
+    { section: "PiggyBudget", label: "Budgeted" },
+    { section: "Yearly", label: "Yearly / Periodic bills" },
+  ];
+  const toExp = (e: ExpRow) => ({ label: withShareCount(e.label, e.category?.billEveryMonths), amount: e.amount });
+  const expense = EXP_SECTIONS
+    .map(({ section, label }) => ({
+      section, label,
+      diff: diffByKey(
+        curExp.filter((e) => inExpense(e) && sectionOf(e) === section).map(toExp),
+        prevExp.filter((e) => inExpense(e) && sectionOf(e) === section).map(toExp),
+      ),
+    }))
+    .filter(({ diff }) => diff.added.length + diff.changed.length + diff.removed.length > 0);
   // Planned = this-month planned lines that aren't carried (prepay, misc spend-cards, rewards, taxes).
   const planned = usePlanned
     ? diffByKey(curExp.filter((e) => isPlannedKind(e) && !isCarried(e)).map(toRow), prevExp.filter((e) => isPlannedKind(e) && !isCarried(e)).map(toRow))

@@ -44,7 +44,7 @@ export default async function ActivityPage({
 
   const nonEmpty = (d?: { added: unknown[]; removed: unknown[]; changed: unknown[] } | null) =>
     !!d && (d.added.length > 0 || d.removed.length > 0 || d.changed.length > 0);
-  const hasChanges = nonEmpty(changes?.income) || nonEmpty(changes?.expense) || nonEmpty(changes?.planned) || nonEmpty(changes?.misc);
+  const hasChanges = nonEmpty(changes?.income) || (changes?.expense?.length ?? 0) > 0 || nonEmpty(changes?.planned) || nonEmpty(changes?.misc);
 
   return (
     <>
@@ -69,7 +69,13 @@ export default async function ActivityPage({
           ) : (
             <div className="mt-3 space-y-4">
               <ChangeBlock title="Income" diff={changes.income!} />
-              <ChangeBlock title="Expenses" diff={changes.expense!} skipMonth={c.selected?.label} />
+              {/* Expenses, split into the Sheet's own sections (Loans · Chits · Monthly · Budgeted ·
+                  Yearly/Periodic) — each its own box, in sheet order, so the changelog reads like the sheet. */}
+              {(changes.expense ?? []).map((g) => (
+                <div key={g.section} className="rounded-lg border border-slate-200 bg-white p-3">
+                  <ChangeBlock title={g.label} diff={g.diff} skipMonth={c.selected?.label} />
+                </div>
+              ))}
               {/* Planned expenses — this-month one-off/added lines, promoted out of the collapsed Misc
                   block (mirrors the Sheet's "Planned expenses" split) so they read at a glance. */}
               {nonEmpty(changes.planned) && (
