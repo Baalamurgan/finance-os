@@ -330,6 +330,15 @@ export function InHandPersonGroup({
         )}
         </>
         )}
+        {/* Cash out-of-pocket & misc — ALREADY subtracted from the total above (it's in `net`). Spelt out
+            here, beside the card line, so the headline explains itself for every member (the treasurer sees
+            the same figure in their detailed list above, so it's only added here when that list is absent). */}
+        {!isTreasurer && miscSpent > 0.005 && (
+          <li className="flex items-center justify-between gap-2 text-[11px] text-amber-600">
+            <span className="truncate">💵 Out-of-pocket &amp; misc <span className="italic text-slate-400">· cash · subtracted · back at settlement</span></span>
+            <span className="shrink-0 tabular-nums">− {formatINR(miscSpent)}</span>
+          </li>
+        )}
         {/* Card spends, split. The out-of-pocket/misc portion IS subtracted from the total above — it's
             family money the member fronted on their card, owed back at the next settlement, so the month
             opens next from the real position (and the reimbursement fills it back). The rest is their own
