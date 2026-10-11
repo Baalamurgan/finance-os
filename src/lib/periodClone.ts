@@ -34,7 +34,7 @@ export async function generateMonth(
     tx.piggyEntry.groupBy({ by: ["categoryId"], where: { householdId, kind: "sinking" }, _sum: { amount: true } }),
     // set-asides in the CURRENT open month(s) that haven't accrued to the fund yet (accrual is at
     // wind-down) — count them so a draft's shares reflect what the fund WILL hold, not what it holds now.
-    tx.expenseEntry.findMany({ where: { periodId: { not: targetId }, period: { householdId, status: "open" }, category: { fundingStyle: { not: null } }, OR: [{ label: { endsWith: "(saving)" } }, { label: { endsWith: "(monthly share)" } }] }, select: { categoryId: true, amount: true } }),
+    tx.expenseEntry.findMany({ where: { periodId: { not: targetId }, period: { householdId, status: "open" }, category: { fundingStyle: { not: null } }, OR: [{ label: { endsWith: "(saving)" } }, { label: { endsWith: "(monthly share)" } }] }, select: { categoryId: true, amount: true, period: { select: { month: true } } } }),
     tx.setAsideSkip.findMany({ where: { periodId: targetId }, select: { categoryId: true } }),
     // open month(s) whose set-asides are still pending (≠ the target draft) — used to scope the
     // bill-payment lookup below (BillPayment has no period relation, just a scalar periodId).
@@ -108,8 +108,19 @@ export async function generateMonth(
   // set-aside, minus any part a paid due-month bill already consumed from that set-aside.
   const fundByCat = new Map<number, number>();
   for (const f of funds) if (f.categoryId != null) fundByCat.set(f.categoryId, f._sum.amount ?? 0);
-  for (const e of pending) if (e.categoryId != null) fundByCat.set(e.categoryId, (fundByCat.get(e.categoryId) ?? 0) + e.amount);
-  for (const p of pendingBillPays) fundByCat.set(p.categoryId, (fundByCat.get(p.categoryId) ?? 0) - p.fromSetAside);
+  // A set-aside from an open month that is ITSELF that bill's due month funds THAT month's bill (drawn
+  // at wind-down), so it does NOT carry into the draft's fund — skip it. Without this, an auto fund bill
+  // paid at wind-down (no BillPayment record, so pendingBillPays misses it) looked fully funded and the
+  // draft dropped its share — e.g. EB (bills Oct) showed NO Nov set-aside when it should save toward Dec.
+  const consumedCats = new Set<number>();
+  for (const e of pending) {
+    if (e.categoryId == null) continue;
+    const c = catById.get(e.categoryId);
+    if (c && c.billMonth != null && c.billEveryMonths != null && isLumpDue(c.billMonth, c.billEveryMonths, { month: e.period.month })) { consumedCats.add(e.categoryId); continue; }
+    fundByCat.set(e.categoryId, (fundByCat.get(e.categoryId) ?? 0) + e.amount);
+  }
+  // Skip the BillPayment offset for a consumed category too (its set-aside was never added → no double-remove).
+  for (const p of pendingBillPays) if (!consumedCats.has(p.categoryId)) fundByCat.set(p.categoryId, (fundByCat.get(p.categoryId) ?? 0) - p.fromSetAside);
   const isBillWithFund = (categoryId: number | null): boolean => {
     if (categoryId == null) return false;
     const c = catById.get(categoryId);
