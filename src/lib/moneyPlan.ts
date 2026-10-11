@@ -756,6 +756,43 @@ export function buildMoneyPlan(input: {
     bill.infeasibleFrom = feasible;
   }
 
+  // Show each member's OWN money, not the physical lump. A member can be SEEDED above (lines ~691/696)
+  // with cash they only hold ON THE FAMILY'S BEHALF — the Piggy they pass to the treasurer, and family
+  // card-bill cash held since the swipe. That seed is REAL and necessary for the funding logic (so the
+  // hub sees the cash to disburse, and the hand-over / bill steps never false-flag "short") — but it
+  // isn't the member's own money, so the running balances read as an inflated lump (e.g. 18,740 at the
+  // open) with no tie to last month's close. Peel the custodial back out of the SHOWN balances only: the
+  // month then opens at the member's true carry (−5,750, equal to September's close) and each custodial
+  // pot drains to 0 as its step runs, leaving own money. All logic above (short-checks, payable-from,
+  // hubShortfall, hubAfter) already ran on the physical figures, so NOTHING in the plan shifts.
+  const custodialSeed = new Map<number, number>();
+  for (const p of poolHandovers) custodialSeed.set(p.fromId, (custodialSeed.get(p.fromId) ?? 0) + p.amount);
+  for (const b of bills) if (b.cardBill && !b.paidPriorMonth && b.payerId != null) custodialSeed.set(b.payerId, (custodialSeed.get(b.payerId) ?? 0) + b.amount);
+  if (custodialSeed.size > 0) {
+    // Custodial OUTFLOW in the first `upto` steps (walk order) — the Piggy hand-overs + own card bills
+    // that have physically left by then. What a member still holds = seed − outflow; own = shown − that.
+    const outflow = (id: number, upto: number) =>
+      steps.slice(0, upto).reduce(
+        (sum, st) =>
+          sum +
+          (!st.hidden && st.kind === "pool-handover" && st.fromId === id ? st.amount
+            : !st.hidden && st.kind === "bill" && st.cardBill && st.payerId === id && !st.paidPriorMonth ? st.amount
+            : 0),
+        0,
+      );
+    const peel = (snap: Record<number, number> | undefined, upto: number) => {
+      if (!snap) return;
+      for (const [id, seed] of custodialSeed) {
+        const held = Math.round((seed - outflow(id, upto)) * 100) / 100; // custodial still held at this point
+        if (Math.abs(held) > 0.005 && snap[id] != null) snap[id] = Math.round((snap[id] - held) * 100) / 100;
+      }
+    };
+    steps.forEach((s, i) => {
+      peel(s.balancesBefore, i); // held BEFORE step i = seed − outflow over steps[0..i-1]
+      peel(s.balancesAfter, i + 1); // held AFTER step i = seed − outflow over steps[0..i]
+    });
+  }
+
   // Income rows are informational and Piggy returns are live projections (finalised at wind-down), so
   // neither counts toward the "N/total done" progress — they're context, not tickable settlement steps.
   const counted = steps.filter((s) => s.kind !== "piggy" && s.kind !== "income" && !s.hidden);

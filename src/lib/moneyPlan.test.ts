@@ -18,20 +18,22 @@ describe("buildMoneyPlan", () => {
     expect(plan.done).toBe(1); // the settled inbound transfer
   });
 
-  it("card bill: seeded from held cash, visibly reduces the balance, never short", () => {
+  it("card bill: self-funded from held card cash — never short, and NOT shown as own money", () => {
     const plan = buildMoneyPlan({
       treasurerId: T,
       transfers: [],
       // Member 2 owes a ₹9,804 family card bill with NO income this month — it's paid from cash they've
-      // HELD since the swipe, so the walk seeds them with it: the step shows 9,804 → 0 and is never short.
+      // HELD since the swipe, so the walk seeds them with it internally: the step is never short.
       bills: [bill({ key: "cardbill-7-2026-09-14", payerId: 2, payerName: "Baala", vendor: "RBL bill", amount: 9804, day: 2, cardBill: true, cardId: 7, cycleEndISO: "2026-09-14", dueISO: "2026-10-02" })],
       incomeDayByMember: {},
     });
     const step = plan.steps.find((s) => s.cardBill)!;
-    expect(step.senderShort ?? 0).toBe(0); // never flagged short (self-funded from the seed)
+    expect(step.senderShort ?? 0).toBe(0); // never flagged short (self-funded from the held card cash)
     expect(plan.shortBills).toBe(0);
-    expect(step.balancesBefore?.[2] ?? 0).toBe(9804); // seeded with the carried card cash
-    expect(step.balancesAfter?.[2] ?? 0).toBe(0); // paying the bill draws it back down — the visible drop
+    // The held card cash is CUSTODIAL (held only to pay the bill), not the member's own money — so it's
+    // peeled from the shown balance: own reads 0 before AND after (the bill draws the custodial, not own).
+    expect(step.balancesBefore?.[2] ?? 0).toBe(0);
+    expect(step.balancesAfter?.[2] ?? 0).toBe(0);
   });
 
   it("piggy taken as income: a separate step per batch (done + open), each walk-correct", () => {
@@ -53,9 +55,10 @@ describe("buildMoneyPlan", () => {
     const open = steps.find((s) => s.id === "piggyincome-open")!;
     expect(open.done).toBe(false);
     expect(open.piggyIncomeIds).toEqual([9999]);
-    // Holder seeded with BOTH batches (12,936); the done batch already moved to the treasurer, the open
-    // one still sits with the holder until ticked, then lands at the treasurer.
-    expect(open.balancesBefore?.[2] ?? 0).toBe(7436);
+    // Holder seeded with BOTH batches (12,936) internally so the hand-overs are self-funded — but the
+    // Piggy is family money they pass on, NOT their own, so it's peeled from the shown balance: the holder
+    // reads 0 own throughout, while the treasurer still receives the full 12,936.
+    expect(open.balancesBefore?.[2] ?? 0).toBe(0);
     expect(open.balancesAfter?.[2] ?? 0).toBe(0);
     expect(open.balancesAfter?.[T] ?? 0).toBe(12936);
   });
