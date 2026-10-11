@@ -192,20 +192,32 @@ export function InHandPersonGroup({
             (A SETTLED month uses the clean component breakdown added just below instead.) */}
         {!isTreasurer && !isSettled && (
           <>
-            {sinkingHeld > 0.005 && (
-              <li className="flex items-center justify-between gap-2 text-xs"><span className="truncate text-indigo-600">🏦 Sinking held</span><span className="shrink-0 tabular-nums text-indigo-700">{money(sinkingHeld)}</span></li>
-            )}
-            {Math.abs(carryLeftover) > 0.005 && (
-              <li className="flex items-center justify-between gap-2 text-xs">
-                {group.openingCarry != null ? (
-                  // Opens from last month's CLOSED, static in-hand — click through to see exactly why
-                  // (its own breakdown, card out-of-pocket included). This is the continuity anchor.
-                  <a href={`/in-hand?y=${selMonth === 1 ? selYear - 1 : selYear}&m=${selMonth === 1 ? 12 : selMonth - 1}`} title="See last month's closing in-hand — where this carry comes from" className="truncate text-slate-500 underline decoration-dotted underline-offset-2 hover:text-slate-700">Carried from last month ↗</a>
-                ) : (
-                  <span className="truncate text-slate-500">Carried (category remaining)</span>
+            {group.openingCarry != null ? (
+              // The live month OPENS at last month's close — show the FULL carried figure (exactly that
+              // month's closing in-hand, which the ↗ link opens), NOT carry-minus-sinking. The sinking it
+              // already includes is called out beneath (an "incl.", not a separate summed line) so the
+              // number ties to last month to the rupee instead of reading as the lower net (−8,060).
+              (Math.abs(group.openingCarry) > 0.005 || sinkingHeld > 0.005) && (
+                <li className="text-xs">
+                  <div className="flex items-center justify-between gap-2">
+                    <a href={`/in-hand?y=${selMonth === 1 ? selYear - 1 : selYear}&m=${selMonth === 1 ? 12 : selMonth - 1}`} title="See last month's closing in-hand — where this carry comes from" className="truncate text-slate-500 underline decoration-dotted underline-offset-2 hover:text-slate-700">Carried from last month ↗</a>
+                    <span className="shrink-0 tabular-nums text-slate-600">{money(group.openingCarry)}</span>
+                  </div>
+                  {sinkingHeld > 0.005 && (
+                    <div className="pl-3 text-[10px] text-indigo-400">🏦 incl. {formatINR(sinkingHeld)} held in sinking funds</div>
+                  )}
+                </li>
+              )
+            ) : (
+              // First tracked month (no prior close): sinking on its own line + the category-remaining carry.
+              <>
+                {sinkingHeld > 0.005 && (
+                  <li className="flex items-center justify-between gap-2 text-xs"><span className="truncate text-indigo-600">🏦 Sinking held</span><span className="shrink-0 tabular-nums text-indigo-700">{money(sinkingHeld)}</span></li>
                 )}
-                <span className="shrink-0 tabular-nums text-slate-600">{money(carryLeftover)}</span>
-              </li>
+                {Math.abs(carryLeftover) > 0.005 && (
+                  <li className="flex items-center justify-between gap-2 text-xs"><span className="truncate text-slate-500">Carried (category remaining)</span><span className="shrink-0 tabular-nums text-slate-600">{money(carryLeftover)}</span></li>
+                )}
+              </>
             )}
             {isPiggyHolder && Math.abs(piggyAmt) > 0.005 && (
               <li className="flex items-center justify-between gap-2 text-xs"><span className="truncate text-pink-600">🐷 General Piggy held <span className="text-[10px] text-slate-400">excl. sinking</span></span><span className="shrink-0 tabular-nums font-medium text-pink-700">{money(piggyAmt)}</span></li>
