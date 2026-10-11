@@ -130,6 +130,12 @@ export default async function ActivityPage({
 // skipped — worth calling out WHICH month so it reads clearly on a preview/past sheet too.
 const isSetAside = (label: string) => /\(saving\)$/.test(label) || /monthly share\)$/.test(label);
 
+// "(BILL)" marker — the line is a payable (non-tracked) bill (loan / insurance / periodic bill),
+// not a daily-spend budget or a spend-card.
+function BillTag({ on }: { on?: boolean }) {
+  return on ? <span className="ml-1 text-[10px] font-semibold tracking-wide text-slate-400">(BILL)</span> : null;
+}
+
 function ChangeBlock({
   title,
   diff,
@@ -138,9 +144,9 @@ function ChangeBlock({
 }: {
   title: string;
   diff: {
-    added: { label: string; amount: number }[];
-    removed: { label: string; amount: number }[];
-    changed: { label: string; from: number; to: number }[];
+    added: { label: string; amount: number; isBill?: boolean }[];
+    removed: { label: string; amount: number; isBill?: boolean }[];
+    changed: { label: string; from: number; to: number; isBill?: boolean }[];
   };
   collapsible?: boolean;
   skipMonth?: string; // the month whose set-aside was skipped (shown as a tag on set-aside rows)
@@ -151,13 +157,13 @@ function ChangeBlock({
     <ul className="mt-1 space-y-1 text-sm">
       {diff.added.map((r, i) => (
         <li key={`a${i}`} className="flex justify-between gap-2">
-          <span className="text-emerald-700">＋ Added “{r.label}”</span>
+          <span className="text-emerald-700">＋ Added “{r.label}”<BillTag on={r.isBill} /></span>
           <span className="tabular-nums text-emerald-700">{formatINR(r.amount)}</span>
         </li>
       ))}
       {diff.changed.map((r, i) => (
         <li key={`c${i}`} className="flex justify-between gap-2">
-          <span className="text-amber-700">✎ “{r.label}”</span>
+          <span className="text-amber-700">✎ “{r.label}”<BillTag on={r.isBill} /></span>
           <span className="tabular-nums text-amber-700">
             {formatINR(r.from)} → {formatINR(r.to)}
           </span>
@@ -166,7 +172,7 @@ function ChangeBlock({
       {diff.removed.map((r, i) => (
         <li key={`r${i}`} className="flex justify-between gap-2">
           <span className="text-red-600">
-            ✕ Removed “{r.label}”
+            ✕ Removed “{r.label}”<BillTag on={r.isBill} />
             {skipMonth && isSetAside(r.label) && (
               <span className="ml-1.5 rounded-full bg-amber-100 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-amber-700">
                 {skipMonth} skipped

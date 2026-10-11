@@ -2027,30 +2027,30 @@ export async function getNewSheetLineIds(householdId: number, periodId: number) 
 }
 
 function diffByKey(
-  cur: { label: string; amount: number }[],
-  prev: { label: string; amount: number }[],
+  cur: { label: string; amount: number; isBill?: boolean }[],
+  prev: { label: string; amount: number; isBill?: boolean }[],
 ) {
-  const roll = (rows: { label: string; amount: number }[]) => {
-    // key → { amount, label } — label keeps the latest human-readable text for that key.
-    const m = new Map<string, { amount: number; label: string }>();
+  const roll = (rows: { label: string; amount: number; isBill?: boolean }[]) => {
+    // key → { amount, label, isBill } — label keeps the latest human-readable text; isBill if ANY row is a bill.
+    const m = new Map<string, { amount: number; label: string; isBill: boolean }>();
     for (const r of rows) {
       const k = diffKey(r.label);
       const prev = m.get(k);
-      m.set(k, { amount: (prev?.amount ?? 0) + r.amount, label: r.label });
+      m.set(k, { amount: (prev?.amount ?? 0) + r.amount, label: r.label, isBill: (prev?.isBill ?? false) || !!r.isBill });
     }
     return m;
   };
   const c = roll(cur);
   const p = roll(prev);
-  const added: { label: string; amount: number }[] = [];
-  const removed: { label: string; amount: number }[] = [];
-  const changed: { label: string; from: number; to: number }[] = [];
+  const added: { label: string; amount: number; isBill: boolean }[] = [];
+  const removed: { label: string; amount: number; isBill: boolean }[] = [];
+  const changed: { label: string; from: number; to: number; isBill: boolean }[] = [];
   for (const [key, v] of c) {
-    if (!p.has(key)) added.push({ label: v.label, amount: v.amount });
+    if (!p.has(key)) added.push({ label: v.label, amount: v.amount, isBill: v.isBill });
     else if (Math.abs((p.get(key)!.amount) - v.amount) >= 0.5)
-      changed.push({ label: v.label, from: p.get(key)!.amount, to: v.amount });
+      changed.push({ label: v.label, from: p.get(key)!.amount, to: v.amount, isBill: v.isBill });
   }
-  for (const [key, v] of p) if (!c.has(key)) removed.push({ label: v.label, amount: v.amount });
+  for (const [key, v] of p) if (!c.has(key)) removed.push({ label: v.label, amount: v.amount, isBill: v.isBill });
   return { added, removed, changed };
 }
 
@@ -2097,7 +2097,10 @@ export async function getMonthChanges(householdId: number, periodId: number) {
     return e.category.miscCard || (e.oneOff && e.note !== REMOVED_NOTE);
   };
   const isCarried = (e: ExpRow) => e.note === CARRY_NOTE;
-  const toRow = (e: { label: string; amount: number }) => ({ label: e.label, amount: e.amount });
+  // A "bill" = a payable (non-tracked) category — a loan/insurance/periodic bill, NOT a daily-spend budget
+  // or spend-card. Flagged per line so the changelog can tag it "(BILL)".
+  const isBillCat = (e: ExpRow) => (e.category ? !e.category.tracked : false);
+  const toRow = (e: ExpRow) => ({ label: e.label, amount: e.amount, isBill: isBillCat(e) });
   // "Planned expenses" (promoted out of Misc) is a THIS-MONTH-ONWARD view, exactly like the Sheet — a
   // past month's changelog keeps the single section-based Misc block it always had.
   const { year: curY, month: curM } = istDateParts();
@@ -2127,7 +2130,7 @@ export async function getMonthChanges(householdId: number, periodId: number) {
     { section: "PiggyBudget", label: "Budgeted" },
     { section: "Yearly", label: "Yearly / Periodic bills" },
   ];
-  const toExp = (e: ExpRow) => ({ label: withShareCount(e.label, e.category?.billEveryMonths), amount: e.amount });
+  const toExp = (e: ExpRow) => ({ label: withShareCount(e.label, e.category?.billEveryMonths), amount: e.amount, isBill: isBillCat(e) });
   const expense = EXP_SECTIONS
     .map(({ section, label }) => ({
       section, label,
