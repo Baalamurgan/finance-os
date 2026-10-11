@@ -2097,10 +2097,21 @@ export async function getMonthChanges(householdId: number, periodId: number) {
     return e.category.miscCard || (e.oneOff && e.note !== REMOVED_NOTE);
   };
   const isCarried = (e: ExpRow) => e.note === CARRY_NOTE;
-  // A "bill" = a payable (non-tracked) category — a loan/insurance/periodic bill, NOT a daily-spend budget
-  // or spend-card. Flagged per line so the changelog can tag it "(BILL)".
-  const isBillCat = (e: ExpRow) => (e.category ? !e.category.tracked : false);
-  const toRow = (e: ExpRow) => ({ label: e.label, amount: e.amount, isBill: isBillCat(e) });
+  // "(BILL)" = the Sheet's "bill due this month" state (page.tsx `billMonthDue` = isFundBillMonth ||
+  // taxPhase): a PERIODIC fund/tax bill whose actual BILL — not its monthly saving share — is scheduled
+  // THIS month. NOT shown on plain saving-share rows, nor on plain monthly bills or loans (no schedule).
+  const pmonth = period.month;
+  const isBillDue = (e: ExpRow): boolean => {
+    const c = e.category;
+    if (!c || e.paid || c.billMonth == null || c.billEveryMonths == null) return false;
+    if (e.label.endsWith("— from fund")) return false; // the fund-credit line, never the bill
+    // tax (property/water): a window/deadline bill line — i.e. NOT a "(monthly share)" saving row
+    if ((c.earlyAmount != null || c.latePenaltyPct != null) && !e.label.endsWith("(monthly share)")) return true;
+    // fund bill (auto/legacy): tagged only in its scheduled bill month
+    if (c.fundingStyle != null) return isLumpDue(c.billMonth, c.billEveryMonths, { month: pmonth });
+    return false;
+  };
+  const toRow = (e: ExpRow) => ({ label: e.label, amount: e.amount, isBill: isBillDue(e) });
   // "Planned expenses" (promoted out of Misc) is a THIS-MONTH-ONWARD view, exactly like the Sheet — a
   // past month's changelog keeps the single section-based Misc block it always had.
   const { year: curY, month: curM } = istDateParts();
@@ -2130,7 +2141,7 @@ export async function getMonthChanges(householdId: number, periodId: number) {
     { section: "PiggyBudget", label: "Budgeted" },
     { section: "Yearly", label: "Yearly / Periodic bills" },
   ];
-  const toExp = (e: ExpRow) => ({ label: withShareCount(e.label, e.category?.billEveryMonths), amount: e.amount, isBill: isBillCat(e) });
+  const toExp = (e: ExpRow) => ({ label: withShareCount(e.label, e.category?.billEveryMonths), amount: e.amount, isBill: isBillDue(e) });
   const expense = EXP_SECTIONS
     .map(({ section, label }) => ({
       section, label,
