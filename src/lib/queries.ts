@@ -1376,6 +1376,26 @@ export async function _getInHand(householdId: number, periodId: number, settleme
   // the same misc subtraction (they're already off the holder's remaining, above).
   for (const [k, v] of outOfPocketByMember) miscByMember.set(k, (miscByMember.get(k) ?? 0) + v);
 
+  // CARD out-of-pocket + misc (settles next month): the SAME out-of-pocket / misc rule as above, but for
+  // spends on a member's OWN card (credit / reimbursed) that haven't left cash yet. They're still money
+  // the member fronted for the family — owed back at the next settlement — so folding them into the
+  // member's in-hand makes a month OPEN from reality: they start "down" by what they put on their card,
+  // and the reimbursement step fills it back, so the card float nets to zero across the month boundary
+  // instead of silently inflating their holding. EXCLUDED (like cash): spends on their OWN budgeted
+  // category (their held budget — cash still in hand until the card bill, e.g. FUEL on an owner's RBL
+  // card) and bill-fund spends (those draw the fund, not a pocket). Mirror of the settlement credit, so
+  // a member's opening deficit equals the reimbursement they're owed.
+  const cardOutOfPocketByMember = new Map<number | null, number>();
+  for (const s of spends) {
+    if (!settlesLater(s) || s.memberId == null) continue;
+    if (fundCatIds.has(s.categoryId)) continue;
+    if (budgetedIds.has(s.categoryId)) {
+      const holder = catHolder.get(s.categoryId) ?? null;
+      if (s.memberId === holder) continue; // own held budget → still in hand, not out-of-pocket
+    }
+    cardOutOfPocketByMember.set(s.memberId, (cardOutOfPocketByMember.get(s.memberId) ?? 0) + s.amount);
+  }
+
   // Set-asides = held/earmarked cash for the SAVER (from the Sheet "(saving)"/"(monthly share)"
   // lines — the latter appear in older sinking-fund months still frozen in their open month).
   const isSaveLine = (lbl: string) => lbl.endsWith("(saving)") || lbl.endsWith("(monthly share)");
@@ -1531,6 +1551,10 @@ export async function _getInHand(householdId: number, periodId: number, settleme
     const unpaidTotal = unpaidBills.reduce((s, b) => s + b.amount, 0);
     const earmarkedTotal = earmarked.reduce((s, e) => s + e.amount, 0);
     const miscSpent = miscByMember.get(key) ?? 0;
+    // Card out-of-pocket + misc the member fronted (settles next month) — subtracted like misc so the
+    // month's close (and thus next month's opening) reflects what they really put out. Never their own
+    // held budget (that stays in hand). See cardOutOfPocketByMember above.
+    const cardOop = key != null ? (cardOutOfPocketByMember.get(key) ?? 0) : 0;
     // Last month's Piggy leftover this owner is still HOLDING (until they hand it to the Piggy holder).
     const pendingPiggyHeld = key != null ? Math.round((pendingByOwner.get(key) ?? 0) * 100) / 100 : 0;
     // Self-funded bills: a CONTRIBUTOR (settlement net ≥ 0 — their own income covers their tagged
@@ -1549,17 +1573,19 @@ export async function _getInHand(householdId: number, periodId: number, settleme
     // from `net` for closed months (it lives in sinkingHeld there); keep it for open/draft months where
     // it hasn't accrued yet. (This is the ₹769 bug.)
     const earmarkedNet = period?.status === "closed" ? 0 : earmarkedTotal;
-    const netHeld = budgetRemaining + earmarkedNet - miscSpent + pendingPiggyHeld + heldBills + pendingCardHeld;
+    const netHeld = budgetRemaining + earmarkedNet - miscSpent - cardOop + pendingPiggyHeld + heldBills + pendingCardHeld;
     // `personal` = this member's OWN in-hand (what their headline should read): budget left + set-asides
-    // + sinking they hold − their out-of-pocket. Excludes role money (general Piggy / treasurer pool),
-    // which is shown on its own line. This is the figure that must be CONTINUOUS month→month.
+    // + sinking they hold − their out-of-pocket (cash AND card). Excludes role money (general Piggy /
+    // treasurer pool), which is shown on its own line. This is the figure that must be CONTINUOUS
+    // month→month, so the next month OPENS at exactly this close (card float included).
     const personal = Math.round((netHeld + sinkingHeld) * 100) / 100;
     return {
       memberId: key, name, cats, unpaidBills, paidBills, earmarked, unpaidPeriodic, paidPeriodic, carried, carriedDue,
       sinkingFunds, sinkingHeld, pendingPiggyHeld, pendingCardBills: pendingCards,
       budgetRemaining, unpaidTotal, earmarkedTotal, miscSpent,
       cashSpent: key != null ? cashSpentByMember.get(key) ?? 0 : 0, // real cash spent this month (non-credit) — for the holding-now ledger
-      cardSpent: key != null ? cardSpentByMember.get(key) ?? 0 : 0, // credit-card spends this month (NOT in-hand; settles next month) — display only
+      cardSpent: key != null ? cardSpentByMember.get(key) ?? 0 : 0, // ALL credit-card spends this month (settles next month)
+      cardOutOfPocket: cardOop, // the out-of-pocket/misc portion of cardSpent — SUBTRACTED from in-hand (owed back at settlement); the rest (own held budget) is still in hand
       // Money still owed TO this member from the pool. For a self-funding contributor this is 0 — they
       // already hold the cash (it's in `net`); a pool-funded receiver still awaits it via the Money plan.
       yetToReceive,

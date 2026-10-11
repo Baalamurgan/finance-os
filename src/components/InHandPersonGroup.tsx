@@ -63,6 +63,11 @@ export function InHandPersonGroup({
   treasurerOwnLeftover?: number;
 }) {
   const { name, cats, unpaidBills, paidBills, earmarked, earmarkedTotal, sinkingFunds, sinkingHeld, unpaidPeriodic, paidPeriodic, carried, carriedDue, miscSpent, net, pendingPiggyHeld, pendingCardBills, cashSpent, cardSpent, yetToReceive, selfFundsBills } = group;
+  // The out-of-pocket/misc portion of card spends the member fronted — ALREADY subtracted from `net`
+  // (and the headline) on the server, because it's money owed back to them. The rest of cardSpent is
+  // their own held budget on card, still in hand. Shown split below so the headline explains itself.
+  const cardOutOfPocket = group.cardOutOfPocket ?? 0;
+  const cardStillHeld = Math.round(((cardSpent ?? 0) - cardOutOfPocket) * 100) / 100;
   const handovers = group.handovers ?? []; // tolerate a stale cached shape (pre-feature) until it refreshes
   // Per-card toggle: include or exclude this member's own misc/out-of-pocket in their total.
   // Default = include (the true position). Excluding shows "budget + bills + savings" only, so
@@ -107,7 +112,9 @@ export function InHandPersonGroup({
   // set-asides + pending hand-overs − misc − periodic fund-bills due. Role money (general Piggy / family
   // pool) is excluded here too, so "holding now" and "by month-end" are the same kind of number, and this
   // lines up with next month's openingCarry (also personal).
-  const expected = Math.round((sinkingHeld + earmarkedTotal + pendingPiggyHeld - expectedMisc - periodicBillsDue) * 100) / 100;
+  // − cardOutOfPocket: the card spend they fronted is owed back next month, so by THIS month-end it's
+  // still out — keeping "expected" equal to next month's opening (personal), card float included.
+  const expected = Math.round((sinkingHeld + earmarkedTotal + pendingPiggyHeld - expectedMisc - periodicBillsDue - cardOutOfPocket) * 100) / 100;
 
   const paidCount = paidBills.length + paidPeriodic.length;
   // Bills whose Money-Plan step the head hid drop out of the pay list into a muted "Hidden" section,
@@ -180,7 +187,16 @@ export function InHandPersonGroup({
               <li className="flex items-center justify-between gap-2 text-xs"><span className="truncate text-indigo-600">🏦 Sinking held</span><span className="shrink-0 tabular-nums text-indigo-700">{money(sinkingHeld)}</span></li>
             )}
             {Math.abs(carryLeftover) > 0.005 && (
-              <li className="flex items-center justify-between gap-2 text-xs"><span className="truncate text-slate-500">Carried {incomeReceived ? "(category remaining)" : "from last month"}</span><span className="shrink-0 tabular-nums text-slate-600">{money(carryLeftover)}</span></li>
+              <li className="flex items-center justify-between gap-2 text-xs">
+                {group.openingCarry != null ? (
+                  // Opens from last month's CLOSED, static in-hand — click through to see exactly why
+                  // (its own breakdown, card out-of-pocket included). This is the continuity anchor.
+                  <a href={`/in-hand?y=${selMonth === 1 ? selYear - 1 : selYear}&m=${selMonth === 1 ? 12 : selMonth - 1}`} title="See last month's closing in-hand — where this carry comes from" className="truncate text-slate-500 underline decoration-dotted underline-offset-2 hover:text-slate-700">Carried from last month ↗</a>
+                ) : (
+                  <span className="truncate text-slate-500">Carried (category remaining)</span>
+                )}
+                <span className="shrink-0 tabular-nums text-slate-600">{money(carryLeftover)}</span>
+              </li>
             )}
             {isPiggyHolder && Math.abs(piggyAmt) > 0.005 && (
               <li className="flex items-center justify-between gap-2 text-xs"><span className="truncate text-pink-600">🐷 General Piggy held <span className="text-[10px] text-slate-400">excl. sinking</span></span><span className="shrink-0 tabular-nums font-medium text-pink-700">{money(piggyAmt)}</span></li>
@@ -314,12 +330,20 @@ export function InHandPersonGroup({
         )}
         </>
         )}
-        {/* Credit-card spends: shown for context but NOT in the in-hand total — the cash hasn't left; it's
-            squared up at next month's settlement. Display-only, never affects the number above. */}
-        {(cardSpent ?? 0) > 0.005 && (
+        {/* Card spends, split. The out-of-pocket/misc portion IS subtracted from the total above — it's
+            family money the member fronted on their card, owed back at the next settlement, so the month
+            opens next from the real position (and the reimbursement fills it back). The rest is their own
+            held budget swiped on a card (e.g. FUEL) — cash still in hand until the bill, so not subtracted. */}
+        {cardOutOfPocket > 0.005 && (
+          <li className="flex items-center justify-between gap-2 text-[11px] text-amber-600">
+            <span className="truncate">💳 On cards · out-of-pocket <span className="italic text-slate-400">· subtracted · back at settlement</span></span>
+            <span className="shrink-0 tabular-nums">− {formatINR(cardOutOfPocket)}</span>
+          </li>
+        )}
+        {cardStillHeld > 0.005 && (
           <li className="flex items-center justify-between gap-2 text-[11px] text-slate-400">
-            <span className="truncate">💳 On cards <span className="italic">· not subtracted · settles next month</span></span>
-            <span className="shrink-0 tabular-nums italic">− {formatINR(cardSpent ?? 0)}</span>
+            <span className="truncate">💳 On cards · own budget <span className="italic">· still in hand · settles next month</span></span>
+            <span className="shrink-0 tabular-nums italic">{formatINR(cardStillHeld)}</span>
           </li>
         )}
         {isTreasurer && (
