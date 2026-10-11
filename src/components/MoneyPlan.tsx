@@ -85,6 +85,24 @@ export function MoneyPlan({
   // Keep each step's REAL number (its position in the full plan); when a member is picked, show
   // every step they're part of — done ones too, so the filter is a full picture, not just to-dos.
   const rows = plan.steps.map((s, i) => ({ s, n: i + 1 }));
+  // Custodial cash a member holds ON THE FAMILY'S BEHALF — the Piggy they hold (handed to the treasurer)
+  // and family card-bill cash (held since the swipe, pays the bill). The walk seeds it into their running
+  // balance so it can be moved without a false "short", but it's NOT their own money. We split it out in
+  // the balances sheet so the opening reads from the real position (e.g. Baala's 18,740 = −5,750 own +
+  // 12,936 Piggy + 11,554 card bill) instead of one inflated lump. Display-only — the walk is untouched.
+  // `custodialMovedBy(id, upto)` sums the custodial OUTFLOWS (Piggy hand-overs + own card bills) in the
+  // first `upto` steps (walk order = plan.steps order); the seed is the all-steps total, so what remains
+  // after step n = seed − movedBy(n), and own = running balance − custodial remaining.
+  const custodialMovedBy = (id: number, upto: number) =>
+    plan.steps.slice(0, upto).reduce(
+      (sum, st) =>
+        sum +
+        (!st.hidden && st.kind === "pool-handover" && st.fromId === id ? st.amount
+          : !st.hidden && st.cardBill && st.payerId === id && !st.paidPriorMonth ? st.amount
+          : 0),
+      0,
+    );
+  const custodialSeedOf = (id: number) => custodialMovedBy(id, plan.steps.length);
   // Vendor of each bill step, so a funding move (funder → payer, tagged to a bill) can name what it funds.
   const billVendorByKey = new Map(plan.steps.filter((s) => s.kind === "bill" && s.vendor).map((s) => [s.id, s.vendor as string]));
   const shown = who == null
@@ -779,6 +797,12 @@ export function MoneyPlan({
                 const reimb = plan.reimburseByMember?.[m.id] ?? 0;
                 const isLastStep = balances.n === rows.length;
                 const explainsReimburse = isLastStep && m.id !== treasurerId && reimb > 0.005 && Math.abs(after - reimb) <= 1;
+                // Split the running balance into OWN vs custodial (Piggy/card held for the family) so the
+                // opening reads from the real position instead of one inflated lump. custAfter = what's
+                // still held after this step; own = balance − that. Display-only; the number above is the
+                // untouched physical balance (the sheet's point is "who's physically holding cash").
+                const custAfter = Math.round((custodialSeedOf(m.id) - custodialMovedBy(m.id, balances.n)) * 100) / 100;
+                const ownAfter = Math.round((after - custAfter) * 100) / 100;
                 return (
                   <li key={m.id} className={`rounded-md px-2 py-1.5 text-sm ${acting ? "bg-slate-50" : ""}`}>
                     <div className="flex items-center justify-between">
@@ -789,6 +813,14 @@ export function MoneyPlan({
                         <span className={`w-20 text-right ${after < -0.005 ? "font-semibold text-red-600" : after > 0.005 ? "font-medium text-emerald-700" : "text-slate-400"}`}>{formatINR(after)}</span>
                       </span>
                     </div>
+                    {custodialSeedOf(m.id) > 0.005 && (
+                      <p className="mt-0.5 text-[10px] text-slate-400">
+                        own <span className="tabular-nums text-slate-500">{formatINR(ownAfter)}</span>
+                        {custAfter > 0.005 && (
+                          <> · <span className="tabular-nums text-fuchsia-500">{formatINR(custAfter)}</span> held for family <span className="text-slate-300">(Piggy / card bill)</span></>
+                        )}
+                      </p>
+                    )}
                     {explainsReimburse && (
                       <p className="mt-0.5 text-[10px] text-emerald-600">≈ repays what {m.name} spent out of pocket last month — kept instead of remitted</p>
                     )}
