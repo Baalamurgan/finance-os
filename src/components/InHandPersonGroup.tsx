@@ -68,6 +68,14 @@ export function InHandPersonGroup({
   // their own held budget on card, still in hand. Shown split below so the headline explains itself.
   const cardOutOfPocket = group.cardOutOfPocket ?? 0;
   const cardStillHeld = Math.round(((cardSpent ?? 0) - cardOutOfPocket) * 100) / 100;
+  // Subtracted total split by PURPOSE (each spanning cash + card): spent against others' budget
+  // envelopes vs unbudgeted misc. outOfPocket + misc === the amount knocked off this member's in-hand.
+  const outOfPocket = group.outOfPocket ?? 0;
+  const misc = group.misc ?? 0;
+  // A SETTLED (closed, non-preview) month shows a final, static figure — so its breakdown can be the
+  // clean component sum (budgets + sinking + held − out-of-pocket − misc = in hand), instead of the
+  // live month's carry-based "holding now" walk (which needs the running carry + realised moves).
+  const isSettled = !open && !isPreview;
   const handovers = group.handovers ?? []; // tolerate a stale cached shape (pre-feature) until it refreshes
   // Per-card toggle: include or exclude this member's own misc/out-of-pocket in their total.
   // Default = include (the true position). Excluding shows "budget + bills + savings" only, so
@@ -179,9 +187,10 @@ export function InHandPersonGroup({
       <>
       <div className="mb-1 mt-2 text-[10px] font-medium uppercase tracking-wide text-slate-400">Where it&apos;s allocated</div>
       <ul className="mt-1 space-y-1">
-        {/* NON-TREASURER reconciling breakdown: every line below sums EXACTLY to "Holding now".
-            Salary-funded lines show only once income has arrived; before that it's just the carry. */}
-        {!isTreasurer && (
+        {/* NON-TREASURER, LIVE/PREVIEW month: carry-based breakdown that sums EXACTLY to "Holding now".
+            Salary-funded lines show only once income has arrived; before that it's just the carry.
+            (A SETTLED month uses the clean component breakdown added just below instead.) */}
+        {!isTreasurer && !isSettled && (
           <>
             {sinkingHeld > 0.005 && (
               <li className="flex items-center justify-between gap-2 text-xs"><span className="truncate text-indigo-600">🏦 Sinking held</span><span className="shrink-0 tabular-nums text-indigo-700">{money(sinkingHeld)}</span></li>
@@ -204,7 +213,7 @@ export function InHandPersonGroup({
             {incomeReceived ? (
               <>
                 {cats.map((cat) => (
-                  <li key={`ac${cat.id}`} className="flex items-center justify-between gap-2 text-xs"><span className="truncate text-slate-500">{cat.name}</span><span className="shrink-0 tabular-nums text-slate-400">spent {formatINR(cat.spent)}/{formatINR(cat.allocation)} · <b className={cat.remaining < 0 ? "text-red-600" : "text-slate-600"}>{formatINR(cat.remaining)}</b></span></li>
+                  <li key={`ac${cat.id}`} className="flex items-center justify-between gap-2 text-xs"><span className="truncate text-slate-500">{cat.name}{cat.onCard > 0.005 && <span className="ml-1 text-[10px] text-fuchsia-500">· {formatINR(cat.onCard)} on card</span>}</span><span className="shrink-0 tabular-nums text-slate-400">spent {formatINR(cat.spent)}/{formatINR(cat.allocation)} · <b className={cat.remaining < 0 ? "text-red-600" : "text-slate-600"}>{formatINR(cat.remaining)}</b></span></li>
                 ))}
                 {earmarked.map((e) => (
                   <li key={`ae${e.id}`} className="flex items-center justify-between gap-2 text-xs"><span className="truncate text-teal-600">Set aside · {e.name}</span><span className="shrink-0 tabular-nums text-teal-700">{money(e.amount)}</span></li>
@@ -226,6 +235,44 @@ export function InHandPersonGroup({
               <li className="pt-0.5 text-[10px] italic leading-tight text-slate-400">Your budgets, bills &amp; treasurer hand-over appear here once your income arrives.</li>
             )}
             <li className="mt-0.5 flex items-center justify-between gap-2 border-t border-slate-200 pt-1 text-xs font-semibold text-slate-800"><span>= {holdingNow < 0 ? "To reclaim" : "Holding now"}</span><span className={`tabular-nums ${holdingNow < 0 ? "text-red-600" : "text-emerald-700"}`}>{money(holdingNow)}</span></li>
+          </>
+        )}
+        {/* NON-TREASURER, SETTLED (closed) month: clean component breakdown that sums EXACTLY to the final
+            figure — budgets + sinking + held − out-of-pocket − misc = in hand. No carry artifact, no
+            double-counted set-asides, subtractions shown in line. Piggy (role money) sits below the total. */}
+        {!isTreasurer && isSettled && (
+          <>
+            {cats.map((cat) => (
+              <li key={`sc${cat.id}`} className="flex items-center justify-between gap-2 text-xs">
+                <span className="truncate text-slate-500">
+                  {cat.name}
+                  {cat.onCard > 0.005 && <span className="ml-1 text-[10px] text-fuchsia-500">· {formatINR(cat.onCard)} on card</span>}
+                </span>
+                <span className="shrink-0 tabular-nums text-slate-400">spent {formatINR(cat.spent)}/{formatINR(cat.allocation)} · <b className={cat.remaining < 0 ? "text-red-600" : "text-slate-600"}>{formatINR(cat.remaining)}</b></span>
+              </li>
+            ))}
+            {sinkingHeld > 0.005 && (
+              <li className="flex items-center justify-between gap-2 text-xs"><span className="truncate text-indigo-600">🏦 Sinking / set-asides held</span><span className="shrink-0 tabular-nums text-indigo-700">{money(sinkingHeld)}</span></li>
+            )}
+            {pendingPiggyHeld > 0.005 && (
+              <li className="flex items-center justify-between gap-2 text-xs"><span className="truncate text-pink-600">🐷 Last month&apos;s Piggy held</span><span className="shrink-0 tabular-nums text-pink-700">{money(pendingPiggyHeld)}</span></li>
+            )}
+            {selfFundsBills && shownBills.map((b) => (
+              <li key={`shb${b.id}`} className="flex items-center justify-between gap-2 text-xs"><span className="truncate text-slate-500">Held for {b.name}</span><span className="shrink-0 tabular-nums text-slate-600">{money(b.amount)}</span></li>
+            ))}
+            {selfFundsBills && (pendingCardBills ?? []).filter((b) => !b.done).map((b) => (
+              <li key={`shcb${b.cardId}-${b.cycleEndISO}`} className="flex items-center justify-between gap-2 text-xs"><span className="truncate" style={{ color: b.color }}>💳 Held for {b.cardName} bill</span><span className="shrink-0 tabular-nums" style={{ color: b.color }}>{money(b.familyAmount)}</span></li>
+            ))}
+            {outOfPocket > 0.005 && (
+              <li className="flex items-center justify-between gap-2 text-xs"><span className="truncate text-amber-600">👛 Out-of-pocket <span className="text-[10px] text-slate-400">· on others&apos; budgets · back at settlement</span></span><span className="shrink-0 tabular-nums text-amber-600">− {formatINR(outOfPocket)}</span></li>
+            )}
+            {misc > 0.005 && (
+              <li className="flex items-center justify-between gap-2 text-xs"><span className="truncate text-amber-600">🛒 Misc <span className="text-[10px] text-slate-400">· unbudgeted · back at settlement</span></span><span className="shrink-0 tabular-nums text-amber-600">− {formatINR(misc)}</span></li>
+            )}
+            <li className="mt-0.5 flex items-center justify-between gap-2 border-t border-slate-200 pt-1 text-xs font-semibold text-slate-800"><span>= {holdingNow < 0 ? "To reclaim" : "In hand"}</span><span className={`tabular-nums ${holdingNow < 0 ? "text-red-600" : "text-emerald-700"}`}>{money(holdingNow)}</span></li>
+            {isPiggyHolder && Math.abs(piggyAmt) > 0.005 && (
+              <li className="flex items-center justify-between gap-2 text-xs"><span className="truncate text-pink-600">🐷 General Piggy held <span className="text-[10px] text-slate-400">role money · not in the total</span></span><span className="shrink-0 tabular-nums font-medium text-pink-700">{money(piggyAmt)}</span></li>
+            )}
           </>
         )}
         {/* Pinned to the TOP: things owed from an earlier month that were never paid. A pure
@@ -330,10 +377,10 @@ export function InHandPersonGroup({
         )}
         </>
         )}
-        {/* Cash out-of-pocket & misc — ALREADY subtracted from the total above (it's in `net`). Spelt out
-            here, beside the card line, so the headline explains itself for every member (the treasurer sees
-            the same figure in their detailed list above, so it's only added here when that list is absent). */}
-        {!isTreasurer && miscSpent > 0.005 && (
+        {/* LIVE/PREVIEW month only — card/cash context below the holding-now walk. (A SETTLED month shows
+            the out-of-pocket/misc split inside its clean breakdown above, so these would duplicate it.)
+            Cash out-of-pocket & misc is already subtracted from the total above (it's in `net`). */}
+        {!isTreasurer && !isSettled && miscSpent > 0.005 && (
           <li className="flex items-center justify-between gap-2 text-[11px] text-amber-600">
             <span className="truncate">💵 Out-of-pocket &amp; misc <span className="italic text-slate-400">· cash · subtracted · back at settlement</span></span>
             <span className="shrink-0 tabular-nums">− {formatINR(miscSpent)}</span>
@@ -343,13 +390,13 @@ export function InHandPersonGroup({
             family money the member fronted on their card, owed back at the next settlement, so the month
             opens next from the real position (and the reimbursement fills it back). The rest is their own
             held budget swiped on a card (e.g. FUEL) — cash still in hand until the bill, so not subtracted. */}
-        {cardOutOfPocket > 0.005 && (
+        {!isSettled && cardOutOfPocket > 0.005 && (
           <li className="flex items-center justify-between gap-2 text-[11px] text-amber-600">
             <span className="truncate">💳 On cards · out-of-pocket <span className="italic text-slate-400">· subtracted · back at settlement</span></span>
             <span className="shrink-0 tabular-nums">− {formatINR(cardOutOfPocket)}</span>
           </li>
         )}
-        {cardStillHeld > 0.005 && (
+        {!isSettled && cardStillHeld > 0.005 && (
           <li className="flex items-center justify-between gap-2 text-[11px] text-slate-400">
             <span className="truncate">💳 On cards · own budget <span className="italic">· still in hand · settles next month</span></span>
             <span className="shrink-0 tabular-nums italic">{formatINR(cardStillHeld)}</span>

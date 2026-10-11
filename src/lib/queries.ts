@@ -1396,6 +1396,28 @@ export async function _getInHand(householdId: number, periodId: number, settleme
     cardOutOfPocketByMember.set(s.memberId, (cardOutOfPocketByMember.get(s.memberId) ?? 0) + s.amount);
   }
 
+  // Display split for the In-Hand breakdown — partitions the SAME subtracted total (miscSpent + cardOop)
+  // by PURPOSE instead of payment method, each spanning cash AND card:
+  //   • out-of-pocket = spent against SOMEONE ELSE's budget envelope (reimbursed at settlement);
+  //   • misc          = unbudgeted spends (no envelope).
+  // A member's OWN budgeted-category spend is neither: cash reduces its envelope (heldSpentByCat); an
+  // unpaid card swipe is still held (tracked per-category in cardHeldByCat, to flag "on card" on the
+  // budget line so the remaining isn't misread). Fund-bill spends draw the fund, excluded from all three.
+  const oopDisplayByMember = new Map<number | null, number>();
+  const miscDisplayByMember = new Map<number | null, number>();
+  const cardHeldByCat = new Map<number, number>();
+  for (const s of spends) {
+    if (s.memberId == null || fundCatIds.has(s.categoryId)) continue;
+    const budgeted = budgetedIds.has(s.categoryId);
+    const own = budgeted && (catHolder.get(s.categoryId) ?? null) === s.memberId;
+    if (own) {
+      if (settlesLater(s)) cardHeldByCat.set(s.categoryId, (cardHeldByCat.get(s.categoryId) ?? 0) + s.amount);
+      continue; // own held budget — not a subtraction (cash → envelope; unpaid card → still held)
+    }
+    const m = budgeted ? oopDisplayByMember : miscDisplayByMember;
+    m.set(s.memberId, (m.get(s.memberId) ?? 0) + s.amount);
+  }
+
   // Set-asides = held/earmarked cash for the SAVER (from the Sheet "(saving)"/"(monthly share)"
   // lines — the latter appear in older sinking-fund months still frozen in their open month).
   const isSaveLine = (lbl: string) => lbl.endsWith("(saving)") || lbl.endsWith("(monthly share)");
@@ -1498,7 +1520,9 @@ export async function _getInHand(householdId: number, periodId: number, settleme
   const isHiddenBill = (id: number) => hiddenStepKeys.has(`bill-${id}`);
   const isHiddenPeriodic = (categoryId: number) => hiddenStepKeys.has(`fund-${categoryId}`);
   const build = (key: number | null, name: string) => {
-    const cats = rows.filter((r) => (r.responsibleMemberId ?? null) === key);
+    // `onCard` = this category's budget swiped on a card and NOT yet paid → still in hand (not in `spent`),
+    // so the UI can flag it on the budget line (the "remaining" alone overstates what's free).
+    const cats = rows.filter((r) => (r.responsibleMemberId ?? null) === key).map((r) => ({ ...r, onCard: cardHeldByCat.get(r.id) ?? 0 }));
     const memberBills = bills
       .filter((e) => (e.memberId ?? null) === key)
       // `misc` = a planned misc bill (estimated) → paid via the actual-amount + Piggy-reconcile popup;
@@ -1586,6 +1610,10 @@ export async function _getInHand(householdId: number, periodId: number, settleme
       cashSpent: key != null ? cashSpentByMember.get(key) ?? 0 : 0, // real cash spent this month (non-credit) — for the holding-now ledger
       cardSpent: key != null ? cardSpentByMember.get(key) ?? 0 : 0, // ALL credit-card spends this month (settles next month)
       cardOutOfPocket: cardOop, // the out-of-pocket/misc portion of cardSpent — SUBTRACTED from in-hand (owed back at settlement); the rest (own held budget) is still in hand
+      // Subtracted total (miscSpent + cardOop) split by PURPOSE for the breakdown: spent against others'
+      // budgets vs unbudgeted misc (each spanning cash + card). outOfPocket + misc === miscSpent + cardOop.
+      outOfPocket: key != null ? Math.round((oopDisplayByMember.get(key) ?? 0) * 100) / 100 : 0,
+      misc: key != null ? Math.round((miscDisplayByMember.get(key) ?? 0) * 100) / 100 : 0,
       // Money still owed TO this member from the pool. For a self-funding contributor this is 0 — they
       // already hold the cash (it's in `net`); a pool-funded receiver still awaits it via the Money plan.
       yetToReceive,
