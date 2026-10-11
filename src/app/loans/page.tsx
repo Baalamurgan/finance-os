@@ -6,7 +6,7 @@ import { NavHeader } from "@/components/NavHeader";
 import { ConfirmForm } from "@/components/ConfirmForm";
 import { ToastForm } from "@/components/ToastForm";
 import { LoanPaymentForm } from "@/components/LoanPaymentForm";
-import { createLoan, closeLoan, deleteLoan } from "../actions";
+import { createLoan, closeLoan, deleteLoan, updateLoanRate } from "../actions";
 
 export default async function LoansPage({
   searchParams,
@@ -122,6 +122,7 @@ function LoanCard({
           <div className="text-xs text-slate-400">
             {l.memberName ? `${l.memberName} · ` : ""}
             {formatINR(l.monthlyAmount)}/mo
+            {l.kind === "loan" && (l.interestRate != null ? ` · ${l.interestRate}%/yr` : " · no rate")}
           </div>
         </div>
         <div className="text-right">
@@ -146,20 +147,42 @@ function LoanCard({
       </div>
 
       {isHead && (
-        <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-slate-100 pt-3">
-          <LoanPaymentForm loanId={l.id} periodId={periodId} kind={l.kind} outstanding={l.outstanding} />
-          <ConfirmForm action={closeLoan} successMessage="Loan closed" message={`Close ${l.name}? It moves to the Closed list.`}>
-            <input type="hidden" name="loanId" value={l.id} />
-            <button className="rounded-md px-2 py-1.5 text-xs text-slate-500 hover:bg-slate-100">
-              Close
-            </button>
-          </ConfirmForm>
-          <ConfirmForm action={deleteLoan} successMessage="Loan deleted" message={`Delete ${l.name} permanently? This removes its payment history.`}>
-            <input type="hidden" name="loanId" value={l.id} />
-            <button className="rounded-md px-2 py-1.5 text-xs text-slate-300 hover:text-red-600">
-              Delete
-            </button>
-          </ConfirmForm>
+        <div className="mt-3 space-y-2 border-t border-slate-100 pt-3">
+          {l.kind === "loan" && (
+            <ToastForm action={updateLoanRate} successMessage="Rate saved" className="flex items-center gap-1.5">
+              <input type="hidden" name="loanId" value={l.id} />
+              <span className="text-xs text-slate-500">Interest rate</span>
+              <input
+                name="interestRate"
+                type="number"
+                step="0.01"
+                min="0"
+                max="100"
+                defaultValue={l.interestRate ?? ""}
+                placeholder="e.g. 18"
+                className="input w-20"
+              />
+              <span className="text-xs text-slate-400">%/yr</span>
+              <button className="rounded-md px-2 py-1.5 text-xs font-medium text-indigo-600 hover:bg-indigo-50">
+                Save
+              </button>
+            </ToastForm>
+          )}
+          <div className="flex flex-wrap items-center gap-2">
+            <LoanPaymentForm loanId={l.id} periodId={periodId} kind={l.kind} outstanding={l.outstanding} />
+            <ConfirmForm action={closeLoan} successMessage="Loan closed" message={`Close ${l.name}? It moves to the Closed list.`}>
+              <input type="hidden" name="loanId" value={l.id} />
+              <button className="rounded-md px-2 py-1.5 text-xs text-slate-500 hover:bg-slate-100">
+                Close
+              </button>
+            </ConfirmForm>
+            <ConfirmForm action={deleteLoan} successMessage="Loan deleted" message={`Delete ${l.name} permanently? This removes its payment history.`}>
+              <input type="hidden" name="loanId" value={l.id} />
+              <button className="rounded-md px-2 py-1.5 text-xs text-slate-300 hover:text-red-600">
+                Delete
+              </button>
+            </ConfirmForm>
+          </div>
         </div>
       )}
 
@@ -213,6 +236,10 @@ function AddLoan({
         <label className="text-xs text-slate-500">
           Monthly amount
           <input name="monthlyAmount" type="number" step="0.01" placeholder="0" className="input mt-0.5 block w-32" />
+        </label>
+        <label className="text-xs text-slate-500">
+          Interest rate (%/yr)
+          <input name="interestRate" type="number" step="0.01" min="0" max="100" placeholder="e.g. 18" className="input mt-0.5 block w-28" />
         </label>
         <label className="text-xs text-slate-500">
           Total installments (chit)

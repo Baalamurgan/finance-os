@@ -2516,6 +2516,22 @@ export async function createLoan(formData: FormData) {
   revalidateFamily();
 }
 
+// Set (or clear) a loan's annual interest rate — the input the Priority board ranks on. Kept as a
+// focused inline edit (the create form also captures it); existing loans had no edit path before.
+export async function updateLoanRate(formData: FormData) {
+  if (!(await isHead())) return;
+  const loanId = Number(formData.get("loanId"));
+  const rateRaw = String(formData.get("interestRate") ?? "").trim();
+  const interestRate = rateRaw === "" ? null : Number(rateRaw);
+  if (!loanId) return;
+  if (interestRate != null && (!Number.isFinite(interestRate) || interestRate < 0 || interestRate > 100)) return;
+  const loan = await prisma.loan.findUnique({ where: { id: loanId } });
+  if (!loan) return;
+  await prisma.loan.update({ where: { id: loanId }, data: { interestRate } });
+  await logActivity("loan", "updated", `Set rate ${interestRate == null ? "—" : `${interestRate}%`} on “${loan.name}”`);
+  revalidateFamily();
+}
+
 // Record a monthly payment / prepayment. principalPart reduces the outstanding;
 // for chits it bumps the installment count. Auto-closes when done.
 export async function recordLoanPayment(formData: FormData) {

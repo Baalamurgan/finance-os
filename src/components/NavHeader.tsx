@@ -54,6 +54,7 @@ export function NavHeader({
     | "piggy"
     | "notes"
     | "loans"
+    | "priority"
     | "settlement"
     | "wind-down"
     | "setup"
@@ -106,6 +107,7 @@ export function NavHeader({
     { key: "piggy", label: "Piggy", href: "/piggy" },
     { key: "notes", label: "Notes", href: "/notes" },
     { key: "loans", label: "Loans & Chits", href: "/loans" },
+    { key: "priority", label: "Priority", href: "/priority" },
   ];
 
   const primaryTabs = tabs.slice(0, 3); // Sheet · Expenses · In Hand

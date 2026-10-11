@@ -514,6 +514,7 @@ export async function getLoans(householdId: number) {
     kind: l.kind,
     outstanding: l.outstanding,
     monthlyAmount: l.monthlyAmount,
+    interestRate: l.interestRate,
     memberId: l.memberId,
     memberName: nameOf(l.memberId),
     totalInstallments: l.totalInstallments,
