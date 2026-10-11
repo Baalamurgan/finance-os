@@ -2046,9 +2046,16 @@ function diffByKey(
   const removed: { label: string; amount: number; isBill: boolean }[] = [];
   const changed: { label: string; from: number; to: number; isBill: boolean }[] = [];
   for (const [key, v] of c) {
-    if (!p.has(key)) added.push({ label: v.label, amount: v.amount, isBill: v.isBill });
-    else if (Math.abs((p.get(key)!.amount) - v.amount) >= 0.5)
-      changed.push({ label: v.label, from: p.get(key)!.amount, to: v.amount, isBill: v.isBill });
+    const pv = p.get(key);
+    // Fresh this month = a brand-new key, OR a line that was Rs.0 last month (removed/zeroed) and now
+    // carries an amount. The latter reads as a green "＋ Added", not an amber "₹0 → ₹X" tweak — a
+    // zeroed line coming back is an addition, not a change. (Only the 0→amount direction; a line going
+    // TO ₹0 stays a "changed" so the drop is still visible.)
+    if (!pv || (Math.abs(pv.amount) < 0.5 && v.amount > 0.5)) {
+      added.push({ label: v.label, amount: v.amount, isBill: v.isBill });
+    } else if (Math.abs(pv.amount - v.amount) >= 0.5) {
+      changed.push({ label: v.label, from: pv.amount, to: v.amount, isBill: v.isBill });
+    }
   }
   for (const [key, v] of p) if (!c.has(key)) removed.push({ label: v.label, amount: v.amount, isBill: v.isBill });
   return { added, removed, changed };
