@@ -392,7 +392,16 @@ export function MoneyPlan({
                   {/* Hand-over CTA/badge lives here in the (wrapping) content column — its label is too wide
                       for the cramped w-16 action slot, where it would overlap the amount. */}
                   {isHandover && s.done && (
-                    <span className="mt-1 inline-flex items-center rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-medium text-emerald-700 no-underline">✓ handed over</span>
+                    <div className="mt-1 flex items-center gap-2">
+                      <span className="inline-flex items-center rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-medium text-emerald-700 no-underline">✓ handed over</span>
+                      {(canEdit || currentMemberId === s.fromId || currentMemberId === s.toId) && (
+                        <form action={withToast(markPiggyHandedOver, { success: "Reverted" })}>
+                          <input type="hidden" name="periodId" value={s.handoverPeriodId} />
+                          <input type="hidden" name="undo" value="1" />
+                          <MiniBtn>undo</MiniBtn>
+                        </form>
+                      )}
+                    </div>
                   )}
                   {isHandover && !s.done && (canEdit || currentMemberId === s.fromId || currentMemberId === s.toId) && (
                     <form action={withToast(markPiggyHandedOver, { success: "Marked handed over" })} className="mt-1">

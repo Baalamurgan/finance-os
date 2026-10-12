@@ -778,13 +778,14 @@ export async function getMoneyPlan(householdId: number, periodId: number, inhand
   // last month's leftover ("<owner> → <holder>"). Each owner's day defaults to the derived hand-over
   // day (see getInHand::handoverDay) unless the head overrode it (stepKey piggyho-<priorPeriod>-<owner>).
   const piggyHandover =
-    inhand.pendingPiggyHandover && inhand.piggyHolderId != null
+    inhand.piggyHandoverStep && inhand.piggyHolderId != null
       ? {
           toId: inhand.piggyHolderId,
           toName: nameById.get(inhand.piggyHolderId) ?? "Piggy holder",
-          handoverPeriodId: inhand.pendingPiggyHandover.priorPeriodId,
-          owners: inhand.pendingPiggyHandover.owners.map((o) => {
-            const day = dayOverride.get(`piggyho-${inhand.pendingPiggyHandover!.priorPeriodId}-${o.id}`) ?? inhand.pendingPiggyHandover!.day;
+          handoverPeriodId: inhand.piggyHandoverStep.priorPeriodId,
+          done: inhand.piggyHandoverStep.done, // handed-over → the step renders struck-through, not gone
+          owners: inhand.piggyHandoverStep.owners.map((o) => {
+            const day = dayOverride.get(`piggyho-${inhand.piggyHandoverStep!.priorPeriodId}-${o.id}`) ?? inhand.piggyHandoverStep!.day;
             const st = dayStatus(day); // so an overdue hand-over reads red like any late step
             return { fromId: o.id, fromName: o.name, amount: o.amount, day, status: st?.status ?? null, days: st?.days ?? null };
           }),
@@ -1651,20 +1652,28 @@ export async function _getInHand(householdId: number, periodId: number, settleme
         select: { id: true, piggyHandedOverAt: true, closedAt: true },
       })
     : null;
+  // Always fetch the prior month's piggy slices (even AFTER hand-over), so the hand-over STEP can stay
+  // visible (struck-through) once ticked instead of vanishing — but only let them affect BALANCES while
+  // still pending (see pendingByOwner below). A piggy step moves no cash in the plan, so this is display-only.
   const priorPiggyEntries =
-    priorPeriod && priorPeriod.piggyHandedOverAt == null
+    priorPeriod
       ? await prisma.piggyEntry.findMany({ where: { periodId: priorPeriod.id, kind: "piggy" }, select: { categoryId: true, amount: true } })
       : [];
   const catOwner = new Map(categories.map((c) => [c.id, c.responsibleMemberId ?? null]));
-  const pendingByOwner = new Map<number, number>();
+  // owner → their held slice of last month's general-Piggy leftover (the hand-over amounts).
+  const piggyOwnerSlices = new Map<number, number>();
   for (const e of priorPiggyEntries) {
     // Only a category's POSITIVE leftover is held cash the owner hands over. Skip pool-level
     // adjustments (no category, e.g. "excess expense adjustment") and any non-positive entries.
     if (e.categoryId == null || e.amount <= 0.005) continue;
     const owner = catOwner.get(e.categoryId) ?? treasurerId;
     if (owner == null || owner === piggyHolderId) continue; // the holder's own leftover is already theirs
-    pendingByOwner.set(owner, Math.round(((pendingByOwner.get(owner) ?? 0) + e.amount) * 100) / 100);
+    piggyOwnerSlices.set(owner, Math.round(((piggyOwnerSlices.get(owner) ?? 0) + e.amount) * 100) / 100);
   }
+  const piggyHandedOver = priorPeriod?.piggyHandedOverAt != null;
+  // Balance-affecting: the owners physically hold the slice only until it's handed over (then it's the
+  // holder's). So once handed over this is empty — keeping every in-hand balance / lump exactly as before.
+  const pendingByOwner = piggyHandedOver ? new Map<number, number>() : piggyOwnerSlices;
   const pendingPiggyLump = Math.round([...pendingByOwner.values()].reduce((s, v) => s + v, 0) * 100) / 100;
 
   // Prior-month cash a member still HOLDS that became this month's pool income (their budget leftover
@@ -1774,10 +1783,19 @@ export async function _getInHand(householdId: number, periodId: number, settleme
   // Exposed so the Money-plan hand-over step can read "<owner> → <holder>" (not just the holder).
   const pendingOwners = [...pendingByOwner.entries()].map(([id, amount]) => ({ id, name: nameOf(id), amount }));
   const pendingPiggyHandover =
-    priorPeriod && priorPeriod.piggyHandedOverAt == null && pendingPiggyLump > 0.005
+    priorPeriod && !piggyHandedOver && pendingPiggyLump > 0.005
       ? { priorPeriodId: priorPeriod.id, lump: pendingPiggyLump, day: handoverDay, owners: pendingOwners }
       : null;
-  return { byPerson, shared, allowances, piggyTotal, generalPiggy: piggy.generalTotal, treasurerId, piggyHolderId, monthBalance, treasurerPool, poolHoldsForMembers, pendingPiggyHandover, poolHandovers, poolIncoming, treasurerOwnLeftover };
+  // The hand-over STEP descriptor — present whether still pending OR already handed over (done), so the
+  // Money-Plan row stays visible and strikes through when ticked, rather than disappearing. Built from the
+  // full slices (not the balance-gated pendingByOwner); purely a display driver (piggy steps move no cash).
+  const handoverOwners = [...piggyOwnerSlices.entries()].map(([id, amount]) => ({ id, name: nameOf(id), amount }));
+  const handoverLump = Math.round([...piggyOwnerSlices.values()].reduce((s, v) => s + v, 0) * 100) / 100;
+  const piggyHandoverStep =
+    priorPeriod && handoverLump > 0.005
+      ? { priorPeriodId: priorPeriod.id, lump: handoverLump, day: handoverDay, owners: handoverOwners, done: piggyHandedOver }
+      : null;
+  return { byPerson, shared, allowances, piggyTotal, generalPiggy: piggy.generalTotal, treasurerId, piggyHolderId, monthBalance, treasurerPool, poolHoldsForMembers, pendingPiggyHandover, piggyHandoverStep, poolHandovers, poolIncoming, treasurerOwnLeftover };
 }
 
 /**
