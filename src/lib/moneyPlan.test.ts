@@ -323,6 +323,40 @@ describe("buildMoneyPlan", () => {
     for (const id of [T, 2, 3]) expect(Math.round(endBr[id] ?? 0)).toBe(Math.round(endNo[id] ?? 0));
   });
 
+  it("the hub itself can bridge a self-funder's early bill — two legs only, no hub→hub no-op", () => {
+    // When the treasurer rotates onto a member who's holding spare cash, THEY can front a short bill.
+    // The repay collapses to just debtor→hub (the hub already gets the cash back), so there's no
+    // redundant hub→hub leg. Regression test for the bridge gate/action excluding the hub as a funder.
+    const base = {
+      treasurerId: T,
+      transfers: [] as PlanTransfer[],
+      bills: [bill({ key: "bill-r", payerId: 2, payerName: "D", vendor: "Rent", amount: 300, day: 1 })],
+      incomeDayByMember: { 2: 5, [T]: 1 },
+      incomeArrivals: [
+        { memberId: 2, day: 5, amount: 500 }, // the payer's OWN income lands LATE (day 5)
+        { memberId: T, day: 1, amount: 500 }, // the HUB is holding cash on day 1
+      ],
+    };
+    const noBridge = buildMoneyPlan(base);
+    expect(noBridge.steps.find((s) => s.vendor === "Rent")!.senderShort ?? 0).toBeGreaterThan(0.5);
+
+    // Hub bridges it: hub→debtor (funds the bill) + debtor→hub (repay). NO third hub→funder leg.
+    const bridged = buildMoneyPlan({
+      ...base,
+      manualSteps: [
+        { id: 1, fromId: T, toId: 2, amount: 300, day: 1, done: false, fundsBillKey: "bill-r", bridgeGroup: "g1" },
+        { id: 2, fromId: 2, toId: T, amount: 300, day: 5, done: false, bridgeGroup: "g1" },
+      ],
+    });
+    const rent = bridged.steps.find((s) => s.vendor === "Rent")!;
+    expect(rent.senderShort ?? 0).toBeLessThan(0.5); // the hub's front cleared the shortfall
+    expect(bridged.steps.some((s) => s.fromId != null && s.fromId === s.toId)).toBe(false); // no hub→hub no-op
+    // Pure timing: every balance ends exactly where it would with no bridge (net-zero, no drift).
+    const endNo = noBridge.steps[noBridge.steps.length - 1].balancesAfter!;
+    const endBr = bridged.steps[bridged.steps.length - 1].balancesAfter!;
+    for (const id of [T, 2]) expect(Math.round(endBr[id] ?? 0)).toBe(Math.round(endNo[id] ?? 0));
+  });
+
   it("tags the hub funding disbursement with the bill it covers, so the UI can name it", () => {
     const plan = buildMoneyPlan({
       treasurerId: T,

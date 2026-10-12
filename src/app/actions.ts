@@ -2124,7 +2124,7 @@ export async function bridgeShortBill(formData: FormData): Promise<{ ok: boolean
   let funders: { memberId: number; amount: number }[] = [];
   try {
     funders = (JSON.parse(String(formData.get("funders") ?? "[]")) as { memberId: number; amount: number }[])
-      .filter((f) => f && Number.isFinite(f.memberId) && f.amount > 0.005 && f.memberId !== debtorId && f.memberId !== hubId)
+      .filter((f) => f && Number.isFinite(f.memberId) && f.amount > 0.005 && f.memberId !== debtorId)
       .map((f) => ({ memberId: f.memberId, amount: Math.round(f.amount * 100) / 100 }));
   } catch { funders = []; }
   if (funders.length === 0) return { ok: false, error: "Pick at least one funder" };
@@ -2134,12 +2134,16 @@ export async function bridgeShortBill(formData: FormData): Promise<{ ok: boolean
   const ord = (d: number) => `${d}${["th", "st", "nd", "rd"][((d % 100) - 20) % 10] ?? ["th", "st", "nd", "rd"][d % 100] ?? "th"}`;
   let total = 0;
   for (const f of funders) {
+    const funderIsHub = f.memberId === hubId;
     // (1) funder → debtor, earmarked to the bill (lands above it, clears the shortfall)
-    await prisma.manualPlanStep.create({ data: { periodId, fromMemberId: f.memberId, toMemberId: debtorId, amount: f.amount, day: bill.dueDay, fundsExpenseId: bill.id, bridgeGroup: group, note: `Spots ${nameOf(debtorId)} for ${bill.label} — the pool repays ${nameOf(f.memberId)} on the ${ord(paybackDay)}` } });
+    await prisma.manualPlanStep.create({ data: { periodId, fromMemberId: f.memberId, toMemberId: debtorId, amount: f.amount, day: bill.dueDay, fundsExpenseId: bill.id, bridgeGroup: group, note: funderIsHub ? `Pool spots ${nameOf(debtorId)} for ${bill.label} — ${nameOf(debtorId)} repays on the ${ord(paybackDay)}` : `Spots ${nameOf(debtorId)} for ${bill.label} — the pool repays ${nameOf(f.memberId)} on the ${ord(paybackDay)}` } });
     // (2) debtor → hub on payback day (returns the bridge to the pool when their income lands)
     await prisma.manualPlanStep.create({ data: { periodId, fromMemberId: debtorId, toMemberId: hubId, amount: f.amount, day: paybackDay, bridgeGroup: group, note: `${nameOf(debtorId)} returns the ${bill.label} bridge to the pool` } });
-    // (3) hub → funder on payback day (the pool repays the funder)
-    await prisma.manualPlanStep.create({ data: { periodId, fromMemberId: hubId, toMemberId: f.memberId, amount: f.amount, day: paybackDay, bridgeGroup: group, note: `Pool repays ${nameOf(f.memberId)} for bridging ${nameOf(debtorId)}'s ${bill.label}` } });
+    // (3) hub → funder on payback day (the pool repays the funder) — SKIPPED when the hub IS the funder:
+    //     leg 2 already returns the cash to the hub, so a hub→hub step would be a pure no-op.
+    if (!funderIsHub) {
+      await prisma.manualPlanStep.create({ data: { periodId, fromMemberId: hubId, toMemberId: f.memberId, amount: f.amount, day: paybackDay, bridgeGroup: group, note: `Pool repays ${nameOf(f.memberId)} for bridging ${nameOf(debtorId)}'s ${bill.label}` } });
+    }
     total += f.amount;
   }
   log.info("bridgeShortBill", "ok", { outcome: "ok", memberId, periodId, billId, total, paybackDay });

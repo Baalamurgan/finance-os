@@ -669,13 +669,15 @@ export function MoneyPlan({
         );
       })()}
 
-      {/* Bridge a short bill: funder(s) front it now, the pool repays them on the payback day (the payer's
-          first income day after the bill). Sources exclude the payer AND the hub (the hub is the repayer). */}
+      {/* Bridge a short bill: funder(s) front it now, repaid on the payback day (the payer's first income
+          day after the bill). Only the payer is excluded — the hub/treasurer CAN front it from the pool
+          cash it holds (it's repaid by the debtor on the payback day, net-zero; the action skips the
+          redundant hub→hub repay leg when the hub is the funder). */}
       {bridge && (() => {
         const bb = bridge.balancesBefore ?? {};
         const billDay = bridge.day ?? 0;
         const sources = members
-          .filter((m) => m.id !== bridge.payerId && m.id !== treasurerId)
+          .filter((m) => m.id !== bridge.payerId)
           .map((m) => ({ memberId: m.id, name: m.name, spare: Math.round((bb[m.id] ?? 0) * 100) / 100 }))
           .filter((src) => src.spare > 0.5)
           .sort((a, b) => b.spare - a.spare);
