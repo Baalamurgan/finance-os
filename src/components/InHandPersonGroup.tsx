@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { Fragment, useState } from "react";
 import { formatINR } from "@/lib/format";
 import type { InHand } from "@/lib/queries";
 import { toggleBillPaid, unpayPeriodicBill, unpayMiscBill, unhideStep } from "@/app/actions";
@@ -225,7 +225,10 @@ export function InHandPersonGroup({
             {incomeReceived ? (
               <>
                 {cats.map((cat) => (
-                  <li key={`ac${cat.id}`} className="flex items-center justify-between gap-2 text-xs"><span className="truncate text-slate-500">{cat.name}{cat.onCard > 0.005 && <span className="ml-1 text-[10px] text-fuchsia-500">· {formatINR(cat.onCard)} on card</span>}</span><span className="shrink-0 tabular-nums text-slate-400">spent {formatINR(cat.spent)}/{formatINR(cat.allocation)} · <b className={cat.remaining < 0 ? "text-red-600" : "text-slate-600"}>{formatINR(cat.remaining)}</b></span></li>
+                  <Fragment key={`ac${cat.id}`}>
+                    <li className="flex items-center justify-between gap-2 text-xs"><span className="truncate text-slate-500">{cat.name}</span><span className="shrink-0 tabular-nums text-slate-400">spent {formatINR(cat.spent)}/{formatINR(cat.allocation)} · <b className={cat.remaining < 0 ? "text-red-600" : "text-slate-600"}>{formatINR(cat.remaining)}</b></span></li>
+                    <CatBreakdown onCard={cat.onCard} othersSpent={cat.othersSpent ?? 0} remaining={cat.remaining} />
+                  </Fragment>
                 ))}
                 {earmarked.map((e) => (
                   <li key={`ae${e.id}`} className="flex items-center justify-between gap-2 text-xs"><span className="truncate text-teal-600">Set aside · {e.name}</span><span className="shrink-0 tabular-nums text-teal-700">{money(e.amount)}</span></li>
@@ -255,13 +258,13 @@ export function InHandPersonGroup({
         {!isTreasurer && isSettled && (
           <>
             {cats.map((cat) => (
-              <li key={`sc${cat.id}`} className="flex items-center justify-between gap-2 text-xs">
-                <span className="truncate text-slate-500">
-                  {cat.name}
-                  {cat.onCard > 0.005 && <span className="ml-1 text-[10px] text-fuchsia-500">· {formatINR(cat.onCard)} on card</span>}
-                </span>
-                <span className="shrink-0 tabular-nums text-slate-400">spent {formatINR(cat.spent)}/{formatINR(cat.allocation)} · <b className={cat.remaining < 0 ? "text-red-600" : "text-slate-600"}>{formatINR(cat.remaining)}</b></span>
-              </li>
+              <Fragment key={`sc${cat.id}`}>
+                <li className="flex items-center justify-between gap-2 text-xs">
+                  <span className="truncate text-slate-500">{cat.name}</span>
+                  <span className="shrink-0 tabular-nums text-slate-400">spent {formatINR(cat.spent)}/{formatINR(cat.allocation)} · <b className={cat.remaining < 0 ? "text-red-600" : "text-slate-600"}>{formatINR(cat.remaining)}</b></span>
+                </li>
+                <CatBreakdown onCard={cat.onCard} othersSpent={cat.othersSpent ?? 0} remaining={cat.remaining} />
+              </Fragment>
             ))}
             {sinkingHeld > 0.005 && (
               <li className="flex items-center justify-between gap-2 text-xs"><span className="truncate text-indigo-600">🏦 Sinking / set-asides held</span><span className="shrink-0 tabular-nums text-indigo-700">{money(sinkingHeld)}</span></li>
@@ -714,6 +717,28 @@ const ord = (n: number) => {
   const v = n % 100;
   return `${n}${s[(v - 20) % 10] ?? s[v] ?? s[0]}`;
 };
+
+// Breaks a budgeted category's `remaining` into its real parts (like "Family pool held" ↳ sub-lines),
+// so the figure reads honestly: card-held (swiped, cash kept until the card bill) + others' spend
+// (someone else bought on this category, owed back to them) + genuinely-free leftover (→ Piggy at
+// wind-down). Renders nothing when there's no card-held or others'-spend (a plain cash category).
+function CatBreakdown({ onCard, othersSpent, remaining }: { onCard: number; othersSpent: number; remaining: number }) {
+  if (onCard <= 0.005 && othersSpent <= 0.005) return null;
+  const free = Math.round((remaining - onCard - othersSpent) * 100) / 100;
+  const sub = (label: string, amt: number, tone: string) => (
+    <li className="flex items-center justify-between gap-2 pl-4 text-[10px]">
+      <span className={`truncate ${tone}`}><span className="mr-1 text-slate-300">↳</span>{label}</span>
+      <span className={`shrink-0 tabular-nums ${tone}`}>{formatINR(amt)}</span>
+    </li>
+  );
+  return (
+    <>
+      {onCard > 0.005 && sub("held for the card bill · due next month", onCard, "text-fuchsia-500")}
+      {othersSpent > 0.005 && sub("others' spend · owed back to them", othersSpent, "text-slate-400")}
+      {Math.abs(free) > 0.005 && sub(free < 0 ? "over budget" : "free → Piggy", free, "text-slate-400")}
+    </>
+  );
+}
 
 // Due-date pill: red overdue · amber due-soon (≤2d) · slate for a set-but-chill date.
 function DueChip({ due }: { due: { day: number; days: number; status: "overdue" | "soon" | "normal" } }) {

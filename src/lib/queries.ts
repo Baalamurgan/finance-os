@@ -1340,6 +1340,11 @@ export async function _getInHand(householdId: number, periodId: number, settleme
   }
   const heldSpentByCat = new Map<number, number>();
   const outOfPocketByMember = new Map<number | null, number>();
+  // Spend on a holder's OWN budgeted category by SOMEONE ELSE (cash). It isn't deducted from the
+  // holder's `remaining` (it's the spender's out-of-pocket, reimbursed to them at settlement), so it
+  // still sits inside the holder's `remaining` — tracked per-category to break that remaining down
+  // cleanly in the In-Hand ("↳ others' spend · owed back to them").
+  const othersSpentByCat = new Map<number, number>();
   for (const s of spends) {
     if (!budgetedIds.has(s.categoryId)) continue;
     if (settlesLater(s)) continue; // credit or reimbursed (Pluxee) → not family cash now; settles next month
@@ -1347,6 +1352,7 @@ export async function _getInHand(householdId: number, periodId: number, settleme
     const spender = s.memberId ?? null;
     if (spender != null && spender !== holder) {
       outOfPocketByMember.set(spender, (outOfPocketByMember.get(spender) ?? 0) + s.amount);
+      othersSpentByCat.set(s.categoryId, (othersSpentByCat.get(s.categoryId) ?? 0) + s.amount);
     } else {
       heldSpentByCat.set(s.categoryId, (heldSpentByCat.get(s.categoryId) ?? 0) + s.amount);
     }
@@ -1524,7 +1530,7 @@ export async function _getInHand(householdId: number, periodId: number, settleme
   const build = (key: number | null, name: string) => {
     // `onCard` = this category's budget swiped on a card and NOT yet paid → still in hand (not in `spent`),
     // so the UI can flag it on the budget line (the "remaining" alone overstates what's free).
-    const cats = rows.filter((r) => (r.responsibleMemberId ?? null) === key).map((r) => ({ ...r, onCard: cardHeldByCat.get(r.id) ?? 0 }));
+    const cats = rows.filter((r) => (r.responsibleMemberId ?? null) === key).map((r) => ({ ...r, onCard: cardHeldByCat.get(r.id) ?? 0, othersSpent: othersSpentByCat.get(r.id) ?? 0 }));
     const memberBills = bills
       .filter((e) => (e.memberId ?? null) === key)
       // `misc` = a planned misc bill (estimated) → paid via the actual-amount + Piggy-reconcile popup;
