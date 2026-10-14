@@ -2058,6 +2058,26 @@ export async function addManualStep(formData: FormData) {
   revalidateFamily();
 }
 
+// Edit a PLAIN manual move's amount (head only). Bridge legs and bill-funding steps are excluded —
+// their amount is tied to the bill/bridge and must stay balanced (change those via the bill/bridge flow).
+export async function editManualStepAmount(formData: FormData): Promise<{ ok: boolean; error?: string }> {
+  const session = await auth();
+  const memberId = session?.user?.memberId ?? null;
+  if (!(await unlocked())) await relock("editManualStepAmount");
+  if (!(await isHead())) { log.warn("editManualStepAmount", "blocked", { outcome: "blocked", reason: "not-head", memberId }); return { ok: false, error: "Head only" }; }
+  const id = Number(formData.get("id"));
+  const amount = Math.round((parseAmount(formData.get("amount")) || 0) * 100) / 100;
+  if (!id || !Number.isFinite(amount) || amount <= 0) return { ok: false, error: "Enter a valid amount" };
+  const step = await prisma.manualPlanStep.findUnique({ where: { id }, select: { id: true, periodId: true, bridgeGroup: true, fundsExpenseId: true } });
+  if (!step) return { ok: false, error: "Step not found" };
+  if (step.bridgeGroup || step.fundsExpenseId != null) return { ok: false, error: "This step's amount is linked to a bill/bridge — edit it there" };
+  await prisma.manualPlanStep.update({ where: { id }, data: { amount } });
+  log.info("editManualStepAmount", "ok", { outcome: "ok", memberId, periodId: step.periodId, id, amount });
+  await logActivity("settlement", "updated", `Changed a manual move to ${formatINR(amount)}`, step.periodId);
+  revalidateFamily();
+  return { ok: true };
+}
+
 // Fund an ALREADY-SAVED short bill from pool cash a member is holding — the Money-Plan counterpart to
 // the add-expense funder picker. Creates one TAGGED ManualPlanStep per funder (funder → payer, earmarked
 // to THIS bill via fundsExpenseId, NO payback), so the engine shrinks the hub's disbursement to the payer

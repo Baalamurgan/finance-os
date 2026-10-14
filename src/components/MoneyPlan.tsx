@@ -11,6 +11,7 @@ import { MiscPayModal } from "@/components/MiscPayModal";
 import { ExpenseModal } from "@/components/ExpenseModal";
 import { AddSpendModal } from "@/components/AddSpendModal";
 import { StepDayEditor } from "@/components/StepDayEditor";
+import { StepAmountEditor } from "@/components/StepAmountEditor";
 import { FundBillModal } from "@/components/FundBillModal";
 import { BridgeBillModal } from "@/components/BridgeBillModal";
 import { useToast, useToastAction } from "@/components/Toast";
@@ -483,7 +484,12 @@ export function MoneyPlan({
 
                 {/* amount + action stacked on the right so the title column keeps its full width */}
                 <div className="flex shrink-0 flex-col items-end gap-1">
-                <span className={`tabular-nums ${s.done ? "text-slate-400 line-through" : isIncome ? "font-medium text-emerald-600" : urgent ? "font-semibold text-red-700" : "text-slate-700"}`}>{isIncome ? "+" : ""}{formatINR(s.amount)}</span>
+                {(() => {
+                  const amtSpan = <span className={`tabular-nums ${s.done ? "text-slate-400 line-through" : isIncome ? "font-medium text-emerald-600" : urgent ? "font-semibold text-red-700" : "text-slate-700"}`}>{isIncome ? "+" : ""}{formatINR(s.amount)}</span>;
+                  // Head can edit a PLAIN manual move's amount inline (not bridge legs / bill-funding, not once done).
+                  const amountEditable = isManual && isHead && datesEditable && !s.done && s.manualId != null && !s.bridgeGroup && !s.fundsBillKey;
+                  return amountEditable ? <StepAmountEditor id={s.manualId!} amount={s.amount}>{amtSpan}</StepAmountEditor> : amtSpan;
+                })()}
 
                 {/* action */}
                 <span className="flex justify-end empty:hidden">
