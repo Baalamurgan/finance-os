@@ -990,6 +990,24 @@ describe("doneCashMoveByMember", () => {
     expect(d[4]).toBeUndefined(); // income not received yet
     expect(d[5]).toBeUndefined(); // hidden step ignored
   });
+
+  it("piggy-as-income hand-over: holder (sender) isn't debited, treasurer (receiver) is credited", () => {
+    // The Piggy holder forwards general-Piggy cash (role money) to the treasurer, who spends it (e.g.
+    // loan repayments counted as their bills). Debiting the holder would understate them (the piggy they
+    // received is excluded as kind "piggy"); dropping the treasurer's credit would make those bills look
+    // self-funded. A LEFTOVER hand-over (recordIds, the holder's own budget money) debits normally.
+    const steps = [
+      step({ kind: "pool-handover", fromId: 3, toId: 1, amount: 12936, done: true, piggyIncomeIds: [10, 11] }),
+      step({ kind: "pool-handover", fromId: 3, toId: 1, amount: 407, done: true, recordIds: [5] }),
+    ];
+    const d = doneCashMoveByMember(steps);
+    expect(d[3]).toBe(-407); // holder debited ONLY by their own leftover, not the role-money piggy
+    expect(d[1]).toBe(12936 + 407); // treasurer credited by both (the piggy funds their loan bills)
+    // pending behaves the same way for a not-yet-done piggy-income hand-over
+    const p = pendingCashMoveByMember([step({ kind: "pool-handover", fromId: 3, toId: 1, amount: 12936, piggyIncomeIds: [10, 11] })]);
+    expect(p[3]).toBeUndefined(); // holder not debited
+    expect(p[1]).toBe(12936); // treasurer credited
+  });
 });
 
 describe("buildMoneyPlan — tagged funding (funder → payer for a specific bill)", () => {

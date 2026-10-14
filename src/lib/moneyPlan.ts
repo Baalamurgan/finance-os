@@ -830,6 +830,7 @@ export function pendingCashMoveByMember(steps: PlanStep[]): Record<number, numbe
     if (s.done || s.hidden) continue;
     const isVendorLeg = s.kind === "bill" && s.poolVendorLeg; // leg 2: member → vendor (a bill, but a real cash move here)
     if (!CASH_MOVE_KINDS.has(s.kind) && !isVendorLeg) continue;
+    if (s.kind === "pool-handover" && (s.piggyIncomeIds?.length ?? 0) > 0) { bump(s.toId, s.amount); continue; } // piggy-as-income: skip the holder debit, keep the treasurer credit (see doneCashMoveByMember)
     if (s.kind === "income") { bump(s.toId, s.amount); continue; }
     if (s.kind === "allowance") {
       if (s.fromId != null && s.fromId !== s.toId) bump(s.fromId, -s.amount); // sender holds it
@@ -861,6 +862,14 @@ export function doneCashMoveByMember(steps: PlanStep[]): Record<number, number> 
     if (s.kind === "income") { bump(s.toId, s.amount); continue; }
     if (s.kind === "bill") { if (!s.fund) bump(s.payerId, -s.amount); continue; } // cash/card bill paid → out; fund bill from the fund
     if (s.kind === "piggy") continue; // informational — the Piggy balance is carried as a standing figure
+    // Piggy-as-income hand-over (holder → treasurer, carries piggyIncomeIds): the FROM side is the Piggy
+    // HOLDER forwarding role money they were custodying — tracked via the standing Piggy balance, NOT
+    // their own cash — so do NOT debit the holder (else their holding-now is understated: the piggy they
+    // received is excluded as kind "piggy", so counting this send would be one-sided). But DO credit the
+    // TO side: the treasurer receives pool cash they then spend (e.g. the loan-repayment bills it funds,
+    // counted as their outflow) — drop the credit and those bills would look self-funded. Only the holder
+    // side is skipped; LEFTOVER handovers (recordIds, the holder's own budget money) debit normally.
+    if (s.kind === "pool-handover" && (s.piggyIncomeIds?.length ?? 0) > 0) { bump(s.toId, s.amount); continue; }
     // transfer-in / transfer-out / allowance / advance / manual / pool-handover → real cash moved
     bump(s.fromId, -s.amount);
     bump(s.toId, s.amount);
@@ -884,6 +893,7 @@ export function doneCashMoveDetailByMember(steps: PlanStep[]): Record<number, Do
     if (s.kind === "income") { push(s.toId, { label: s.source || "Income received", amount: s.amount, dir: "in" }); continue; }
     if (s.kind === "bill") { if (!s.fund) push(s.payerId, { label: `Paid ${s.vendor || "bill"}`, amount: s.amount, dir: "out" }); continue; }
     if (s.kind === "piggy") continue;
+    if (s.kind === "pool-handover" && (s.piggyIncomeIds?.length ?? 0) > 0) { push(s.toId, { label: s.fromName ? `From ${s.fromName} · Piggy` : "Piggy received", amount: s.amount, dir: "in" }); continue; } // piggy-as-income: skip the holder's "out", keep the treasurer's "in" (see doneCashMoveByMember)
     // transfer-in / transfer-out / allowance / advance / manual / pool-handover
     push(s.fromId, { label: s.toName ? `Sent to ${s.toName}` : "Sent out", amount: s.amount, dir: "out" });
     push(s.toId, { label: s.fromName ? `From ${s.fromName}` : "Received", amount: s.amount, dir: "in" });
