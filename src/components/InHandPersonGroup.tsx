@@ -213,7 +213,37 @@ export function InHandPersonGroup({
             )}
             <li className="flex items-center justify-between gap-2 border-t border-sky-200 pt-0.5 font-semibold text-slate-800"><span>= {holdingNow < 0 ? "To reclaim" : "Holding now"}</span><span className={`shrink-0 tabular-nums ${holdingNow < 0 ? "text-red-600" : "text-emerald-700"}`}>{money(holdingNow)}</span></li>
           </ul>
-          <div className="mt-1 text-[10px] text-slate-400">held for: budgets {formatINR(cats.reduce((s, c) => s + c.remaining, 0))} · set-asides/sinking {formatINR(Math.round((earmarkedTotal + sinkingHeld) * 100) / 100)}{toTreasurerPending > 0.005 ? ` · to forward ${formatINR(toTreasurerPending)}` : ""}</div>
+          {/* held for — expanded: every rupee of the holding named, no "spare". Budgets show their ↳ split
+              (card / others / free→Piggy); set-asides + sinking itemised; the remainder (routing you're
+              passing through + last month's carry) is a labelled line, detailed in the cash-flow above. */}
+          <div className="mt-1.5 border-t border-sky-100 pt-1">
+            <div className="mb-0.5 text-[10px] font-medium uppercase tracking-wide text-slate-400">held for — every rupee</div>
+            <ul className="space-y-0.5 text-[11px]">
+              {cats.map((cat) => (
+                <Fragment key={`v2hb${cat.id}`}>
+                  <li className="flex items-center justify-between gap-2"><span className="truncate text-slate-500">{cat.name} <span className="text-slate-400">· budget left</span></span><span className="shrink-0 tabular-nums text-slate-600">{formatINR(cat.remaining)}</span></li>
+                  <CatBreakdown onCard={cat.onCard} othersSpent={cat.othersSpent ?? 0} remaining={cat.remaining} />
+                </Fragment>
+              ))}
+              {earmarked.map((e) => (
+                <li key={`v2he${e.id}`} className="flex items-center justify-between gap-2"><span className="truncate text-teal-600">Set aside · {e.name} <span className="text-slate-400">· for its bill</span></span><span className="shrink-0 tabular-nums text-teal-700">{formatINR(e.amount)}</span></li>
+              ))}
+              {sinkingFunds.map((f) => (
+                <li key={`v2hs${f.name}`} className="flex items-center justify-between gap-2"><span className="truncate text-indigo-600">🏦 Sinking · {f.name} <span className="text-slate-400">· fund held</span></span><span className="shrink-0 tabular-nums text-indigo-700">{formatINR(f.amount)}</span></li>
+              ))}
+              {toTreasurerPending > 0.005 && (
+                <li className="flex items-center justify-between gap-2"><span className="truncate text-amber-600">➡️ To forward / settle up</span><span className="shrink-0 tabular-nums text-amber-700">{formatINR(toTreasurerPending)}</span></li>
+              )}
+              {(() => {
+                const heldSum = Math.round((cats.reduce((s, c) => s + c.remaining, 0) + earmarkedTotal + sinkingHeld + toTreasurerPending) * 100) / 100;
+                const rest = Math.round((holdingNow - heldSum) * 100) / 100;
+                return Math.abs(rest) > 0.005 ? (
+                  <li className="flex items-center justify-between gap-2 border-t border-dashed border-slate-200 pt-0.5"><span className="truncate text-slate-400">↔ net in-transit <span className="text-slate-300">· routed / fronted / carried · see cash-flow above</span></span><span className={`shrink-0 tabular-nums ${rest < 0 ? "text-rose-400" : "text-slate-400"}`}>{formatINR(rest)}</span></li>
+                ) : null;
+              })()}
+              <li className="flex items-center justify-between gap-2 border-t border-sky-200 pt-0.5 font-semibold text-slate-700"><span>= {holdingNow < 0 ? "To reclaim" : "Holding now"}</span><span className={`shrink-0 tabular-nums ${holdingNow < 0 ? "text-red-600" : "text-emerald-700"}`}>{money(holdingNow)}</span></li>
+            </ul>
+          </div>
         </div>
       )}
       <div className="mb-1 mt-2 text-[10px] font-medium uppercase tracking-wide text-slate-400">Where it&apos;s allocated <span className="font-normal normal-case text-slate-300">(old)</span></div>
