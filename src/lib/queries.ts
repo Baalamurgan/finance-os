@@ -1329,13 +1329,20 @@ export async function _getInHand(householdId: number, periodId: number, settleme
 
   // Excluded from the budget/misc "held cash" math when it's deferred AND not early-paid.
   const settlesLater = (s: (typeof spends)[number]) => onDeferredCard(s) && !earlyPaidCardSpend(s);
-  // Real CASH (non-card) a member has SPENT this month (for the holding-now ledger). Card spends are
-  // handled via the budget/misc math above, so keep this strictly to cash/UPI/debit (onDeferredCard) —
-  // an early-paid card spend already reduces holding through its envelope, not here.
+  // Real cash/prepaid (non-credit-card) a member has SPENT this month (for the holding-now ledger).
+  // Credit-card spends are handled via the budget/card-bill math; with the credit-only float rule this
+  // bucket now INCLUDES prepaid/debit cards (e.g. Pluxee) — the member's own money, out at swipe.
+  const catNameById = new Map(categories.map((c) => [c.id, c.name]));
   const cashSpentByMember = new Map<number, number>();
+  // member → (categoryId → cash spent): the itemised spend lines for the v2 cash-flow ledger, so a big
+  // one-off (e.g. "G704 advance settlement") shows on its own line instead of drowning in a "misc" lump.
+  const cashByCatMember = new Map<number, Map<number, number>>();
   for (const s of spends) {
     if (onDeferredCard(s) || s.memberId == null) continue;
     cashSpentByMember.set(s.memberId, (cashSpentByMember.get(s.memberId) ?? 0) + s.amount);
+    let byCat = cashByCatMember.get(s.memberId);
+    if (!byCat) { byCat = new Map(); cashByCatMember.set(s.memberId, byCat); }
+    byCat.set(s.categoryId, (byCat.get(s.categoryId) ?? 0) + s.amount);
   }
   // Card/benefit spends that settle next month, per member — shown as an informational "on cards" note
   // (NOT in the in-hand total): the family cash hasn't left; it's squared up at next month's settlement.
@@ -1632,6 +1639,9 @@ export async function _getInHand(householdId: number, periodId: number, settleme
       sinkingFunds, sinkingHeld, pendingPiggyHeld, pendingCardBills: pendingCards,
       budgetRemaining, unpaidTotal, earmarkedTotal, miscSpent,
       cashSpent: key != null ? cashSpentByMember.get(key) ?? 0 : 0, // real cash spent this month (non-credit) — for the holding-now ledger
+      // Itemised cash/prepaid spends by category (Σ === cashSpent) for the v2 cash-flow ledger — one-offs
+      // on their own line, never a "misc" lump. Sorted biggest-first.
+      cashByCat: key != null ? [...(cashByCatMember.get(key) ?? new Map<number, number>())].map(([cid, amt]) => ({ name: catNameById.get(cid) ?? "?", amount: Math.round(amt * 100) / 100 })).sort((a, b) => b.amount - a.amount) : [],
       cardSpent: key != null ? cardSpentByMember.get(key) ?? 0 : 0, // ALL credit-card spends this month (settles next month)
       cardOutOfPocket: cardOop, // the out-of-pocket/misc portion of cardSpent — SUBTRACTED from in-hand (owed back at settlement); the rest (own held budget) is still in hand
       // Subtracted total (miscSpent + cardOop) split by PURPOSE for the breakdown: spent against others'

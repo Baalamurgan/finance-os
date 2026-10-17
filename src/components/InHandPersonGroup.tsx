@@ -13,6 +13,7 @@ export function InHandPersonGroup({
   isPreview = false,
   pendingCashMove,
   doneCashMove,
+  doneMoves = [],
   incomeReceived = false,
   toTreasurerPending = 0,
   isTreasurer,
@@ -189,7 +190,33 @@ export function InHandPersonGroup({
       )}
       {expanded && (
       <>
-      <div className="mb-1 mt-2 text-[10px] font-medium uppercase tracking-wide text-slate-400">Where it&apos;s allocated</div>
+      {/* === In-Hand v2 (cash-flow ledger) — ABOVE the old breakdown, for side-by-side verification. ===
+          Pure realized-cash walk: carry + every money-in − every money-out − itemised spends = holding.
+          No "spare" plug, no "misc" lump — every rupee is a named line. Reconciles to the same holdingNow
+          by construction. Shown only for the live carry-walk months (openingCarry set, not preview). */}
+      {group.openingCarry != null && !isPreview && (
+        <div className="mb-2 mt-2 rounded-lg border border-dashed border-sky-300 bg-sky-50/40 p-2">
+          <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-sky-700">🧪 v2 · cash-flow <span className="font-normal normal-case text-slate-400">— every rupee in &amp; out (verify vs below)</span></div>
+          <ul className="space-y-0.5 text-[11px]">
+            <li className="flex items-center justify-between gap-2"><span className="truncate text-slate-500">Carried from last month</span><span className="shrink-0 tabular-nums text-slate-600">{money(group.openingCarry)}</span></li>
+            {doneMoves.filter((d) => d.dir === "in").map((d, i) => (
+              <li key={`vin${i}`} className="flex items-center justify-between gap-2"><span className="truncate text-emerald-600">{d.label}</span><span className="shrink-0 tabular-nums text-emerald-600">+ {formatINR(d.amount)}</span></li>
+            ))}
+            {doneMoves.filter((d) => d.dir === "out").map((d, i) => (
+              <li key={`vout${i}`} className="flex items-center justify-between gap-2"><span className="truncate text-rose-500">{d.label}</span><span className="shrink-0 tabular-nums text-rose-500">− {formatINR(d.amount)}</span></li>
+            ))}
+            {(group.cashByCat ?? []).map((sp, i) => (
+              <li key={`vsp${i}`} className="flex items-center justify-between gap-2"><span className="truncate text-rose-500">spent · {sp.name}</span><span className="shrink-0 tabular-nums text-rose-500">− {formatINR(sp.amount)}</span></li>
+            ))}
+            {isPiggyHolder && Math.abs(piggyAmt) > 0.005 && (
+              <li className="flex items-center justify-between gap-2"><span className="truncate text-pink-600">General Piggy held <span className="text-slate-400">· role money</span></span><span className="shrink-0 tabular-nums text-pink-600">+ {formatINR(piggyAmt)}</span></li>
+            )}
+            <li className="flex items-center justify-between gap-2 border-t border-sky-200 pt-0.5 font-semibold text-slate-800"><span>= {holdingNow < 0 ? "To reclaim" : "Holding now"}</span><span className={`shrink-0 tabular-nums ${holdingNow < 0 ? "text-red-600" : "text-emerald-700"}`}>{money(holdingNow)}</span></li>
+          </ul>
+          <div className="mt-1 text-[10px] text-slate-400">held for: budgets {formatINR(cats.reduce((s, c) => s + c.remaining, 0))} · set-asides/sinking {formatINR(Math.round((earmarkedTotal + sinkingHeld) * 100) / 100)}{toTreasurerPending > 0.005 ? ` · to forward ${formatINR(toTreasurerPending)}` : ""}</div>
+        </div>
+      )}
+      <div className="mb-1 mt-2 text-[10px] font-medium uppercase tracking-wide text-slate-400">Where it&apos;s allocated <span className="font-normal normal-case text-slate-300">(old)</span></div>
       <ul className="mt-1 space-y-1">
         {/* NON-TREASURER, LIVE/PREVIEW month: carry-based breakdown that sums EXACTLY to "Holding now".
             Salary-funded lines show only once income has arrived; before that it's just the carry.
