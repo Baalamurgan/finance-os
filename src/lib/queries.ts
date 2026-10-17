@@ -1745,13 +1745,24 @@ export async function _getInHand(householdId: number, periodId: number, settleme
   // month needs it (a closed month shows its own settled figure); computeOpening=false on the recursive
   // call stops it after looking back exactly one month.
   const openingByMember = new Map<number, number>();
+  // Carry decomposition: what last month's close (openingCarry) is still HELD for — the persistent parts
+  // of its budget remaining (on-card for the card bill / owed to others / free→Piggy). Lets the In-Hand
+  // print "carried from last month" as named ↳ lines instead of one lump. (Sinking is shown via the
+  // current sinkingHeld; the carried out-of-pocket owed-back nets into the honest remainder.)
+  const carryPartsByMember = new Map<number, { onCard: number; others: number; free: number }>();
   if (computeOpening && priorPeriod && period?.status !== "closed") {
     // Pass the prior month's settlement explicitly (uncached _getSettlement) so the recursion never
     // calls the cached getSettlement — the per-member net is independent of who the treasurer is, so
     // reusing this month's treasurerId is exact.
     const priorSettle = await _getSettlement(householdId, priorPeriod.id, treasurerId);
     const prior = await _getInHand(householdId, priorPeriod.id, priorSettle, false);
-    for (const r of prior.byPerson) if (r.memberId != null) openingByMember.set(r.memberId, r.personal);
+    for (const r of prior.byPerson) {
+      if (r.memberId == null) continue;
+      openingByMember.set(r.memberId, r.personal);
+      let oc = 0, ot = 0, fr = 0;
+      for (const c of r.cats) { oc += c.onCard ?? 0; ot += c.othersSpent ?? 0; fr += c.remaining - (c.onCard ?? 0) - (c.othersSpent ?? 0); }
+      carryPartsByMember.set(r.memberId, { onCard: Math.round(oc * 100) / 100, others: Math.round(ot * 100) / 100, free: Math.round(fr * 100) / 100 });
+    }
   }
 
   // Show EVERY member's In-Hand card — even at ₹0 — so the family sees a complete picture (the
@@ -1764,7 +1775,7 @@ export async function _getInHand(householdId: number, periodId: number, settleme
     const ph = poolHeldByMember.get(m.id);
     // openingCarry = last month's close (null when there's no prior closed month — the first tracked
     // month opens at its own computed figure, i.e. effectively ₹0 baseline + this month's flows).
-    return { ...g, handovers, poolHeld: ph?.amount ?? 0, poolHeldVendors: ph?.vendors ?? [], openingCarry: openingByMember.get(m.id) ?? null };
+    return { ...g, handovers, poolHeld: ph?.amount ?? 0, poolHeldVendors: ph?.vendors ?? [], openingCarry: openingByMember.get(m.id) ?? null, carryParts: carryPartsByMember.get(m.id) ?? null };
   });
   const shared = build(null, "Shared / pool");
   const piggyTotal = piggy.generalTotal + piggy.sinking.reduce((s, x) => s + x.hold, 0);

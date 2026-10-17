@@ -1,7 +1,6 @@
-import { formatINR } from "@/lib/format";
 import { istDateParts } from "@/lib/time";
 import { loadCommon } from "@/lib/load";
-import { getInHand, getMoneyPlan, getMoneyPlanActivity, getFamilyCreditCards, type InHand } from "@/lib/queries";
+import { getInHand, getMoneyPlan, getMoneyPlanActivity, getFamilyCreditCards } from "@/lib/queries";
 import { pendingCashMoveByMember, doneCashMoveByMember, doneCashMoveDetailByMember } from "@/lib/moneyPlan";
 import { MoneyPlanActivity } from "@/components/MoneyPlanActivity";
 import { NavHeader } from "@/components/NavHeader";
@@ -89,11 +88,29 @@ export default async function InHandPage({
   // in both states).
   const incomeReceivedByMember: Record<number, boolean> = {};
   const toTreasurerPendingByMember: Record<number, number> = {};
+  // Routing a PASS-THROUGH conduit still holds to forward: money received via a done MANUAL step minus
+  // what they've already forwarded via a done manual step. Only counts when they BOTH received AND sent
+  // manual (a true conduit, e.g. Baala routing Lakshmi→Arumugam) — a source (sent only) or an endpoint
+  // who spent it on bills (received only) holds none to forward, so no line. Nets into the honest
+  // remainder for everyone else; the cash-flow ledger itemises the flows regardless.
+  const manualInByMember: Record<number, number> = {};
+  const manualOutByMember: Record<number, number> = {};
   for (const s of plan.steps) {
     if (s.kind === "income" && s.done && s.toId != null) incomeReceivedByMember[s.toId] = true;
     if (!s.done && s.fromId != null && s.toId === inHand.treasurerId && (s.kind === "transfer-in" || s.kind === "transfer-out" || s.kind === "pool-handover")) {
       toTreasurerPendingByMember[s.fromId] = Math.round(((toTreasurerPendingByMember[s.fromId] ?? 0) + s.amount) * 100) / 100;
     }
+    if (s.kind === "manual" && s.done) {
+      if (s.toId != null) manualInByMember[s.toId] = (manualInByMember[s.toId] ?? 0) + s.amount;
+      if (s.fromId != null) manualOutByMember[s.fromId] = (manualOutByMember[s.fromId] ?? 0) + s.amount;
+    }
+  }
+  const routingToForwardByMember: Record<number, number> = {};
+  for (const g of inHand.byPerson) {
+    if (g.memberId == null) continue;
+    const inAmt = manualInByMember[g.memberId] ?? 0;
+    const outAmt = manualOutByMember[g.memberId] ?? 0;
+    if (inAmt > 0.005 && outAmt > 0.005) routingToForwardByMember[g.memberId] = Math.round((inAmt - outAmt) * 100) / 100;
   }
   const visibleGroups = c.isHead
     ? inHand.byPerson
@@ -154,6 +171,7 @@ export default async function InHandPage({
                 doneMoves={g.memberId != null ? doneDetailByMember[g.memberId] ?? [] : []}
                 incomeReceived={g.memberId != null ? incomeReceivedByMember[g.memberId] ?? false : false}
                 toTreasurerPending={g.memberId != null ? toTreasurerPendingByMember[g.memberId] ?? 0 : 0}
+                routingToForward={g.memberId != null ? routingToForwardByMember[g.memberId] ?? 0 : 0}
                 isTreasurer={g.memberId === inHand.treasurerId}
                 pool={inHand.treasurerPool}
                 sharedNet={inHand.shared.net}
