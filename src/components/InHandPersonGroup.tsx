@@ -63,9 +63,12 @@ export function InHandPersonGroup({
   treasurerOwnLeftover?: number;
 }) {
   const { name, cats, unpaidBills, paidBills, earmarked, earmarkedTotal, sinkingFunds, sinkingHeld, unpaidPeriodic, paidPeriodic, carried, carriedDue, miscSpent, net, pendingPiggyHeld, pendingCardBills, cashSpent, cardSpent, yetToReceive, selfFundsBills } = group;
-  // The out-of-pocket/misc portion of card spends the member fronted — ALREADY subtracted from `net`
-  // (and the headline) on the server, because it's money owed back to them. The rest of cardSpent is
-  // their own held budget on card, still in hand. Shown split below so the headline explains itself.
+  // Family/others' spends the member fronted on their OWN CREDIT card. NOT subtracted from the headline —
+  // the bank fronts the cash, so no money left their hand (they owe the card AND are owed by the family =
+  // net 0); it resolves next month when the reimbursement lands and funds the card bill. Shown on its own
+  // line below as context ("fronted on a credit card · owed back"), never as a subtraction. (A prepaid/
+  // debit card like Pluxee is the member's OWN money — out at swipe — so it's subtracted like cash, not
+  // here.) The rest of cardSpent is their own held budget on a credit card (still in hand until the bill).
   const cardOutOfPocket = group.cardOutOfPocket ?? 0;
   const cardStillHeld = Math.round(((cardSpent ?? 0) - cardOutOfPocket) * 100) / 100;
   // Subtracted total split by PURPOSE (each spanning cash + card): spent against others' budget
@@ -120,9 +123,10 @@ export function InHandPersonGroup({
   // set-asides + pending hand-overs − misc − periodic fund-bills due. Role money (general Piggy / family
   // pool) is excluded here too, so "holding now" and "by month-end" are the same kind of number, and this
   // lines up with next month's openingCarry (also personal).
-  // − cardOutOfPocket: the card spend they fronted is owed back next month, so by THIS month-end it's
-  // still out — keeping "expected" equal to next month's opening (personal), card float included.
-  const expected = Math.round((sinkingHeld + earmarkedTotal + pendingPiggyHeld - expectedMisc - periodicBillsDue - cardOutOfPocket) * 100) / 100;
+  // Card out-of-pocket is NOT subtracted here — it's no-cash and nets on next month's realized ledger
+  // (reimbursement in, card bill out). Leaving it out keeps "expected" equal to next month's opening
+  // (personal), which also no longer subtracts it. See the cardOutOfPocket note up top.
+  const expected = Math.round((sinkingHeld + earmarkedTotal + pendingPiggyHeld - expectedMisc - periodicBillsDue) * 100) / 100;
 
   const paidCount = paidBills.length + paidPeriodic.length;
   // Bills whose Money-Plan step the head hid drop out of the pay list into a muted "Hidden" section,
@@ -285,6 +289,9 @@ export function InHandPersonGroup({
               <li className="flex items-center justify-between gap-2 text-xs"><span className="truncate text-amber-600">🛒 Misc <span className="text-[10px] text-slate-400">· unbudgeted · back at settlement</span></span><span className="shrink-0 tabular-nums text-amber-600">− {formatINR(misc)}</span></li>
             )}
             <li className="mt-0.5 flex items-center justify-between gap-2 border-t border-slate-200 pt-1 text-xs font-semibold text-slate-800"><span>= {holdingNow < 0 ? "To reclaim" : "In hand"}</span><span className={`tabular-nums ${holdingNow < 0 ? "text-red-600" : "text-emerald-700"}`}>{money(holdingNow)}</span></li>
+            {cardOutOfPocket > 0.005 && (
+              <li className="flex items-center justify-between gap-2 text-[11px] text-slate-400"><span className="truncate">💳 Fronted on a credit card <span className="italic">· owed back · offsets the bill · not in the total</span></span><span className="shrink-0 tabular-nums italic">{formatINR(cardOutOfPocket)}</span></li>
+            )}
             {isPiggyHolder && Math.abs(piggyAmt) > 0.005 && (
               <li className="flex items-center justify-between gap-2 text-xs"><span className="truncate text-pink-600">🐷 General Piggy held <span className="text-[10px] text-slate-400">role money · not in the total</span></span><span className="shrink-0 tabular-nums font-medium text-pink-700">{money(piggyAmt)}</span></li>
             )}
@@ -394,21 +401,23 @@ export function InHandPersonGroup({
         )}
         {/* LIVE/PREVIEW month only — card/cash context below the holding-now walk. (A SETTLED month shows
             the out-of-pocket/misc split inside its clean breakdown above, so these would duplicate it.)
-            Cash out-of-pocket & misc is already subtracted from the total above (it's in `net`). */}
+            Out-of-pocket (cash AND prepaid/debit cards like Pluxee) is already subtracted from the total
+            above — the member's own money is out at swipe; it comes back at the next settlement. */}
         {!isTreasurer && !isSettled && miscSpent > 0.005 && (
           <li className="flex items-center justify-between gap-2 text-[11px] text-amber-600">
-            <span className="truncate">💵 Out-of-pocket &amp; misc <span className="italic text-slate-400">· cash · subtracted · back at settlement</span></span>
+            <span className="truncate">💵 Out-of-pocket &amp; misc <span className="italic text-slate-400">· cash &amp; prepaid · subtracted · back at settlement</span></span>
             <span className="shrink-0 tabular-nums">− {formatINR(miscSpent)}</span>
           </li>
         )}
-        {/* Card spends, split. The out-of-pocket/misc portion IS subtracted from the total above — it's
-            family money the member fronted on their card, owed back at the next settlement, so the month
-            opens next from the real position (and the reimbursement fills it back). The rest is their own
-            held budget swiped on a card (e.g. FUEL) — cash still in hand until the bill, so not subtracted. */}
+        {/* Credit-card out-of-pocket: family money the member fronted on their CREDIT card. NOT subtracted
+            (the bank fronts it — no cash left their hand) — it's owed back at settlement AND offsets the
+            card bill next month, so it nets there, never here. (A prepaid/debit card like Pluxee is the
+            member's own money, so it's in the subtracted line above, not here.) The next block is their
+            OWN held budget on a credit card (e.g. FUEL) — cash still in hand until the bill. */}
         {!isSettled && cardOutOfPocket > 0.005 && (
-          <li className="flex items-center justify-between gap-2 text-[11px] text-amber-600">
-            <span className="truncate">💳 On cards · out-of-pocket <span className="italic text-slate-400">· subtracted · back at settlement</span></span>
-            <span className="shrink-0 tabular-nums">− {formatINR(cardOutOfPocket)}</span>
+          <li className="flex items-center justify-between gap-2 text-[11px] text-slate-400">
+            <span className="truncate">💳 Fronted on a credit card <span className="italic">· owed back · offsets the bill · not subtracted</span></span>
+            <span className="shrink-0 tabular-nums italic">{formatINR(cardOutOfPocket)}</span>
           </li>
         )}
         {!isSettled && cardStillHeld > 0.005 && (

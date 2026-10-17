@@ -1294,9 +1294,15 @@ export async function _getInHand(householdId: number, periodId: number, settleme
   // card's bill is paid. So it must NOT reduce In-Hand at swipe (it stays held until the bill). Cash/UPI
   // and debit spends DO leave immediately, so they reduce as before. The Sheet "Spent/₹budget" display
   // (getTrackedExpenses) still counts credit spends — only In-Hand's held-cash view excludes them.
-  // A spend on a credit card, or any card flagged reimbursed (e.g. a Pluxee benefit wallet), doesn't take
-  // family cash at swipe — it's squared up later. Plain cash/UPI/debit leaves hand immediately.
-  const onDeferredCard = (s: (typeof spends)[number]) => s.cardAccount?.type === "credit_card" || s.cardAccount?.reimbursed === true;
+  // ONLY a credit-card spend floats: the bank fronts the cash, so the member's own money isn't out until
+  // the bill — it must NOT reduce In-Hand at swipe (squared up later via the card bill + settlement).
+  // A prepaid / benefit card (e.g. Pluxee, type debit_card + reimbursed) spends the member's OWN loaded
+  // balance — that money IS out the moment they swipe, exactly like cash/UPI — so it DOES reduce In-Hand
+  // (and is owed back at the next settlement, like any cash out-of-pocket). The `reimbursed` flag only
+  // says WHERE it comes back from (settlement), NOT that the cash hasn't left. So the float test is
+  // credit-card only. (Verified against a real bank balance: Baala's SBI credit float must not subtract;
+  // Harish's Pluxee prepaid spend must.)
+  const onDeferredCard = (s: (typeof spends)[number]) => s.cardAccount?.type === "credit_card";
 
   // …with ONE exception: a credit-card spend whose bill was PAID EARLY (before the cycle's due month).
   // The due-month "held → paid" logic already reduces In-Hand for bills paid in/after their due month; an
@@ -1404,13 +1410,15 @@ export async function _getInHand(householdId: number, periodId: number, settleme
     cardOutOfPocketByMember.set(s.memberId, (cardOutOfPocketByMember.get(s.memberId) ?? 0) + s.amount);
   }
 
-  // Display split for the In-Hand breakdown — partitions the SAME subtracted total (miscSpent + cardOop)
-  // by PURPOSE instead of payment method, each spanning cash AND card:
+  // Display split for the In-Hand breakdown — partitions the SUBTRACTED out-of-pocket (miscSpent: cash +
+  // prepaid/debit like Pluxee — the member's OWN money that's out) by PURPOSE:
   //   • out-of-pocket = spent against SOMEONE ELSE's budget envelope (reimbursed at settlement);
   //   • misc          = unbudgeted spends (no envelope).
-  // A member's OWN budgeted-category spend is neither: cash reduces its envelope (heldSpentByCat); an
-  // unpaid card swipe is still held (tracked per-category in cardHeldByCat, to flag "on card" on the
-  // budget line so the remaining isn't misread). Fund-bill spends draw the fund, excluded from all three.
+  // CREDIT-card out-of-pocket is excluded here (the bank floats it — not the member's cash; see the cardOop
+  // note below). So out-of-pocket + misc === miscSpent exactly, and the settled breakdown reconciles to the
+  // headline. A member's OWN budgeted-category spend is neither: cash/prepaid reduces its envelope
+  // (heldSpentByCat); an unpaid CREDIT swipe is still held (tracked per-category in cardHeldByCat, to flag
+  // "on card" on the budget line). Fund-bill spends draw the fund, excluded from all.
   const oopDisplayByMember = new Map<number | null, number>();
   const miscDisplayByMember = new Map<number | null, number>();
   const cardHeldByCat = new Map<number, number>();
@@ -1422,6 +1430,7 @@ export async function _getInHand(householdId: number, periodId: number, settleme
       if (settlesLater(s)) cardHeldByCat.set(s.categoryId, (cardHeldByCat.get(s.categoryId) ?? 0) + s.amount);
       continue; // own held budget — not a subtraction (cash → envelope; unpaid card → still held)
     }
+    if (settlesLater(s)) continue; // non-own CREDIT-card spend = the card float (cardOop) — own line, not subtracted (prepaid/Pluxee falls through, subtracted like cash)
     const m = budgeted ? oopDisplayByMember : miscDisplayByMember;
     m.set(s.memberId, (m.get(s.memberId) ?? 0) + s.amount);
   }
@@ -1583,9 +1592,15 @@ export async function _getInHand(householdId: number, periodId: number, settleme
     const unpaidTotal = unpaidBills.reduce((s, b) => s + b.amount, 0);
     const earmarkedTotal = earmarked.reduce((s, e) => s + e.amount, 0);
     const miscSpent = miscByMember.get(key) ?? 0;
-    // Card out-of-pocket + misc the member fronted (settles next month) — subtracted like misc so the
-    // month's close (and thus next month's opening) reflects what they really put out. Never their own
-    // held budget (that stays in hand). See cardOutOfPocketByMember above.
+    // Card out-of-pocket: family/others' spends the member fronted on their OWN credit card (settles
+    // next month). This is NOT subtracted from the close — a credit-card swipe puts out ZERO cash (the
+    // card covers it; the member owes the card AND is owed by the family = net 0). Subtracting it used to
+    // understate the real holding by exactly the card float (verified against the actual bank balance:
+    // close read 35,025 but the bank held 46,280 = close + the 11,255 card float). The float resolves
+    // next month when the reimbursement arrives (lowers the member's remittance) and funds the card bill;
+    // both ride the realized ledger, so they net there — never here. Cash out-of-pocket (miscSpent) is a
+    // real cash outflow and IS still subtracted. Kept exposed below for the breakdown. See
+    // cardOutOfPocketByMember above.
     const cardOop = key != null ? (cardOutOfPocketByMember.get(key) ?? 0) : 0;
     // Last month's Piggy leftover this owner is still HOLDING (until they hand it to the Piggy holder).
     const pendingPiggyHeld = key != null ? Math.round((pendingByOwner.get(key) ?? 0) * 100) / 100 : 0;
@@ -1605,11 +1620,12 @@ export async function _getInHand(householdId: number, periodId: number, settleme
     // from `net` for closed months (it lives in sinkingHeld there); keep it for open/draft months where
     // it hasn't accrued yet. (This is the ₹769 bug.)
     const earmarkedNet = period?.status === "closed" ? 0 : earmarkedTotal;
-    const netHeld = budgetRemaining + earmarkedNet - miscSpent - cardOop + pendingPiggyHeld + heldBills + pendingCardHeld;
+    const netHeld = budgetRemaining + earmarkedNet - miscSpent + pendingPiggyHeld + heldBills + pendingCardHeld;
     // `personal` = this member's OWN in-hand (what their headline should read): budget left + set-asides
-    // + sinking they hold − their out-of-pocket (cash AND card). Excludes role money (general Piggy /
-    // treasurer pool), which is shown on its own line. This is the figure that must be CONTINUOUS
-    // month→month, so the next month OPENS at exactly this close (card float included).
+    // + sinking they hold − their CASH out-of-pocket (miscSpent). Credit-card out-of-pocket (cardOop) is
+    // deliberately NOT subtracted — see the note above (it's no-cash; it nets on next month's realized
+    // ledger). Excludes role money (general Piggy / treasurer pool), shown on its own line. This figure
+    // must be CONTINUOUS month→month, so the next month OPENS at exactly this close.
     const personal = Math.round((netHeld + sinkingHeld) * 100) / 100;
     return {
       memberId: key, name, cats, unpaidBills, paidBills, earmarked, unpaidPeriodic, paidPeriodic, carried, carriedDue,
