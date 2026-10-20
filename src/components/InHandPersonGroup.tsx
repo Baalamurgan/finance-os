@@ -218,12 +218,19 @@ export function InHandPersonGroup({
             // So the card reads: allowance in − spends = held, and the remainder collapses to 0 for a pure
             // allowance-holder / earner (a leftover means genuine own money, or treasurer pool fronting).
             const keptTotal = allowancesKept.reduce((s, a) => s + a.amount, 0);
+            // Cash spent this month on categories that are NOT this member's own budgets — the out-of-pocket
+            // (others' budgets) + misc (unbudgeted) that's subtracted from holding — itemised BY CATEGORY so
+            // a big one-off (e.g. the ₹26k G704 advance) shows on its own named line, never buried in a "misc"
+            // lump. Own-budget spends are already netted inside each budget's "remaining" above. Σ === miscSpent.
+            const budgetedNames = new Set(cats.map((c) => c.name));
+            const spentLines = (group.cashByCat ?? []).filter((sp) => !budgetedNames.has(sp.name) && sp.amount > 0.005);
+            const subtractedTotal = Math.round(spentLines.reduce((s, sp) => s + sp.amount, 0) * 100) / 100;
             const labeled =
               carriedOnCard + carriedOthers + carriedFree +
               sinkingHeld + piggyAmt + pendingPiggyHeld +
               (incomeReceived ? budgetsTotal + earmarkedTotal : 0) +
               give + bills + routingToForward + monthBal +
-              keptTotal - outOfPocket - misc;
+              keptTotal - subtractedTotal;
             const remainder = Math.round((holdingNow - labeled) * 100) / 100;
             const remLabel = isTreasurer && remainder < -0.005
               ? "↩ Fronted for the family · owed back"
@@ -247,7 +254,7 @@ export function InHandPersonGroup({
                   {pendingPiggyHeld > 0.005 && <li className="flex items-center justify-between gap-2"><a href="/piggy" title="Open the Piggy tab" className={piggyLink}>🐷 Piggy to hand over <span className="text-slate-400">· held ↗</span></a><span className="shrink-0 tabular-nums text-pink-700">{formatINR(pendingPiggyHeld)}</span></li>}
                   {incomeReceived && cats.map((cat) => (
                     <Fragment key={`v3hb${cat.id}`}>
-                      <li className="flex items-center justify-between gap-2"><span className="truncate text-slate-500">{cat.name} <span className="text-slate-400">· budget left</span></span><span className="shrink-0 tabular-nums text-slate-600">{formatINR(cat.remaining)}</span></li>
+                      <li className="flex items-center justify-between gap-2"><span className="truncate text-slate-500">{cat.name}</span><span className="shrink-0 tabular-nums text-slate-400">spent {formatINR(cat.spent)}/{formatINR(cat.allocation)} · <b className={cat.remaining < 0 ? "text-red-600" : "text-slate-600"}>{formatINR(cat.remaining)}</b></span></li>
                       <CatBreakdown onCard={cat.onCard} othersSpent={cat.othersSpent ?? 0} remaining={cat.remaining} />
                     </Fragment>
                   ))}
@@ -266,12 +273,9 @@ export function InHandPersonGroup({
                   {isTreasurer && Math.abs(monthBal) > 0.005 && (
                     <li className="flex items-center justify-between gap-2"><span className="truncate text-emerald-600">Family month balance <span className="text-slate-400">· pool</span></span><span className="shrink-0 tabular-nums text-emerald-700">{formatINR(monthBal)}</span></li>
                   )}
-                  {outOfPocket > 0.005 && (
-                    <li className="flex items-center justify-between gap-2"><span className="truncate text-amber-600">👛 Out-of-pocket <span className="text-slate-400">· on others&apos; budgets · back at settlement</span></span><span className="shrink-0 tabular-nums text-amber-600">− {formatINR(outOfPocket)}</span></li>
-                  )}
-                  {misc > 0.005 && (
-                    <li className="flex items-center justify-between gap-2"><span className="truncate text-amber-600">🛒 Misc <span className="text-slate-400">· unbudgeted · back at settlement</span></span><span className="shrink-0 tabular-nums text-amber-600">− {formatINR(misc)}</span></li>
-                  )}
+                  {spentLines.map((sp, i) => (
+                    <li key={`v3sp${i}`} className="flex items-center justify-between gap-2"><span className="truncate text-amber-600">{sp.name} <span className="text-slate-400">· spent</span></span><span className="shrink-0 tabular-nums text-amber-600">− {formatINR(sp.amount)}</span></li>
+                  ))}
                   {Math.abs(remainder) > 0.005 && (
                     <li className="flex items-center justify-between gap-2 border-t border-dashed border-slate-200 pt-0.5"><span className="truncate text-slate-500">{remLabel}</span><span className={`shrink-0 tabular-nums ${remainder < 0 ? "text-rose-500" : "text-slate-600"}`}>{remainder < 0 ? "− " : ""}{formatINR(Math.abs(remainder))}</span></li>
                   )}
