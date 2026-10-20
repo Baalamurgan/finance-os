@@ -122,6 +122,15 @@ export default async function InHandPage({
       toTreasurerPendingByMember[g.memberId] = Math.max(0, Math.round(((toTreasurerPendingByMember[g.memberId] ?? 0) - outAmt) * 100) / 100);
     }
   }
+  // Each member's OWN expense allowances actually RECEIVED (done) and KEPT — i.e. not a pass-through
+  // pool bill (vendorLeg = receive-then-pay-the-vendor, which nets to 0 and must NOT show as held). These
+  // are the SOURCE of an allowance-holder's in-hand (e.g. Harish's ₹10k monthly expense + ₹1k reward),
+  // surfaced as "+" lines so the card reads: allowance in − out-of-pocket/misc = held.
+  const keptAllowancesByMember: Record<number, { label: string; amount: number }[]> = {};
+  for (const a of inHand.allowances) {
+    if (!a.done || a.vendorLeg) continue;
+    (keptAllowancesByMember[a.recipientId] ??= []).push({ label: a.label, amount: a.amount });
+  }
   const visibleGroups = c.isHead
     ? inHand.byPerson
     : inHand.byPerson.filter((g) => g.memberId === currentMemberId);
@@ -179,6 +188,7 @@ export default async function InHandPage({
                 pendingCashMove={g.memberId != null ? pendingByMember[g.memberId] ?? 0 : 0}
                 doneCashMove={g.memberId != null ? doneByMember[g.memberId] ?? 0 : 0}
                 incomeReceived={g.memberId != null ? incomeReceivedByMember[g.memberId] ?? false : false}
+                allowancesKept={g.memberId != null ? keptAllowancesByMember[g.memberId] ?? [] : []}
                 toTreasurerPending={g.memberId != null ? toTreasurerPendingByMember[g.memberId] ?? 0 : 0}
                 routingToForward={g.memberId != null ? routingToForwardByMember[g.memberId] ?? 0 : 0}
                 isTreasurer={g.memberId === inHand.treasurerId}

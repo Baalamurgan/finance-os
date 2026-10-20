@@ -14,6 +14,7 @@ export function InHandPersonGroup({
   pendingCashMove,
   doneCashMove,
   incomeReceived = false,
+  allowancesKept = [],
   toTreasurerPending = 0,
   routingToForward = 0,
   isTreasurer,
@@ -42,6 +43,8 @@ export function InHandPersonGroup({
   pendingCashMove: number;
   doneCashMove: number;
   incomeReceived?: boolean;
+  // This member's own expense allowances received & kept this month (e.g. Harish's ₹10k monthly + ₹1k reward).
+  allowancesKept?: { label: string; amount: number }[];
   toTreasurerPending?: number;
   routingToForward?: number;
   isTreasurer: boolean;
@@ -210,11 +213,17 @@ export function InHandPersonGroup({
             const give = incomeReceived ? toTreasurerPending : 0;
             const bills = incomeReceived ? heldBillsTotal : 0;
             const monthBal = isTreasurer ? monthBalance : 0;
+            // Allowance money received & kept (e.g. Harish's ₹10k expense + ₹1k reward) is the SOURCE of
+            // what an allowance-holder holds — shown "+"; out-of-pocket / misc cash spent is shown "−".
+            // So the card reads: allowance in − spends = held, and the remainder collapses to 0 for a pure
+            // allowance-holder / earner (a leftover means genuine own money, or treasurer pool fronting).
+            const keptTotal = allowancesKept.reduce((s, a) => s + a.amount, 0);
             const labeled =
               carriedOnCard + carriedOthers + carriedFree +
               sinkingHeld + piggyAmt + pendingPiggyHeld +
               (incomeReceived ? budgetsTotal + earmarkedTotal : 0) +
-              give + bills + routingToForward + monthBal;
+              give + bills + routingToForward + monthBal +
+              keptTotal - outOfPocket - misc;
             const remainder = Math.round((holdingNow - labeled) * 100) / 100;
             const remLabel = isTreasurer && remainder < -0.005
               ? "↩ Fronted for the family · owed back"
@@ -227,6 +236,9 @@ export function InHandPersonGroup({
               <div className="mb-2 mt-2">
                 <div className="mb-1 text-[10px] font-medium uppercase tracking-wide text-slate-400">Held for <span className="font-normal normal-case text-slate-300">— every rupee</span></div>
                 <ul className="space-y-0.5 text-[11px]">
+                  {allowancesKept.map((a, i) => (
+                    <li key={`v3al${i}`} className="flex items-center justify-between gap-2"><span className="truncate text-emerald-700">{a.label} <span className="text-slate-400">· your expense money</span></span><span className="shrink-0 tabular-nums text-emerald-700">+ {formatINR(a.amount)}</span></li>
+                  ))}
                   {carriedOnCard > 0.005 && <li className="flex items-center justify-between gap-2"><span className="truncate text-fuchsia-600">💳 Held for the card bill{carr}</span><span className="shrink-0 tabular-nums text-fuchsia-700">{formatINR(carriedOnCard)}</span></li>}
                   {carriedOthers > 0.005 && <li className="flex items-center justify-between gap-2"><span className="truncate text-slate-500">Others&apos; spend on your budget · owe back{carr}</span><span className="shrink-0 tabular-nums text-slate-600">{formatINR(carriedOthers)}</span></li>}
                   {carriedFree > 0.005 && <li className="flex items-center justify-between gap-2"><a href="/piggy" title="This goes to the Piggy — open the Piggy tab" className={piggyLink}>🐷 Free → Piggy{carr} ↗</a><span className="shrink-0 tabular-nums text-pink-700">{formatINR(carriedFree)}</span></li>}
@@ -254,10 +266,19 @@ export function InHandPersonGroup({
                   {isTreasurer && Math.abs(monthBal) > 0.005 && (
                     <li className="flex items-center justify-between gap-2"><span className="truncate text-emerald-600">Family month balance <span className="text-slate-400">· pool</span></span><span className="shrink-0 tabular-nums text-emerald-700">{formatINR(monthBal)}</span></li>
                   )}
+                  {outOfPocket > 0.005 && (
+                    <li className="flex items-center justify-between gap-2"><span className="truncate text-amber-600">👛 Out-of-pocket <span className="text-slate-400">· on others&apos; budgets · back at settlement</span></span><span className="shrink-0 tabular-nums text-amber-600">− {formatINR(outOfPocket)}</span></li>
+                  )}
+                  {misc > 0.005 && (
+                    <li className="flex items-center justify-between gap-2"><span className="truncate text-amber-600">🛒 Misc <span className="text-slate-400">· unbudgeted · back at settlement</span></span><span className="shrink-0 tabular-nums text-amber-600">− {formatINR(misc)}</span></li>
+                  )}
                   {Math.abs(remainder) > 0.005 && (
                     <li className="flex items-center justify-between gap-2 border-t border-dashed border-slate-200 pt-0.5"><span className="truncate text-slate-500">{remLabel}</span><span className={`shrink-0 tabular-nums ${remainder < 0 ? "text-rose-500" : "text-slate-600"}`}>{remainder < 0 ? "− " : ""}{formatINR(Math.abs(remainder))}</span></li>
                   )}
                   <li className="flex items-center justify-between gap-2 border-t border-slate-300 pt-0.5 font-semibold text-slate-800"><span>= {holdingNow < 0 ? "To reclaim" : "Holding now"}</span><span className={`shrink-0 tabular-nums ${holdingNow < 0 ? "text-red-600" : "text-emerald-700"}`}>{money(holdingNow)}</span></li>
+                  {cardOutOfPocket > 0.005 && (
+                    <li className="flex items-center justify-between gap-2 text-[10px] text-slate-400"><span className="truncate">💳 Fronted on a credit card <span className="italic">· owed back · offsets the bill · not subtracted</span></span><span className="shrink-0 tabular-nums italic">{formatINR(cardOutOfPocket)}</span></li>
+                  )}
                 </ul>
               </div>
             );
