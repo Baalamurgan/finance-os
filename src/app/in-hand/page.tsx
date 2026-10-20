@@ -110,7 +110,19 @@ export default async function InHandPage({
     if (g.memberId == null) continue;
     const inAmt = manualInByMember[g.memberId] ?? 0;
     const outAmt = manualOutByMember[g.memberId] ?? 0;
-    if (inAmt > 0.005 && outAmt > 0.005) routingToForwardByMember[g.memberId] = Math.round((inAmt - outAmt) * 100) / 100;
+    if (inAmt > 0.005 && outAmt > 0.005) {
+      // True pass-through conduit (received manual AND sent manual) still holds the difference to forward.
+      routingToForwardByMember[g.memberId] = Math.round((inAmt - outAmt) * 100) / 100;
+    } else if (inAmt <= 0.005 && outAmt > 0.005 && (toTreasurerPendingByMember[g.memberId] ?? 0) > 0.005) {
+      // A member ROUTING their own settlement to the treasurer by manual sends (e.g. Lakshmi → Baala →
+      // Arumugam, plus a direct leg) has already parted with that cash — it's left their hand. So the
+      // canonical settlement transfer still sitting "pending" in the plan is SUPERSEDED by what they've
+      // manually sent: what they're still HOLDING to give is only the un-routed remainder. Without this
+      // the In-Hand card prints a phantom "to give treasurer" for cash that's already gone (Lakshmi's
+      // ₹1,04,170 → true ₹4,170). Floored at 0; a conduit (handled above) is forwarding others' money,
+      // not settling, so it's never netted here.
+      toTreasurerPendingByMember[g.memberId] = Math.max(0, Math.round(((toTreasurerPendingByMember[g.memberId] ?? 0) - outAmt) * 100) / 100);
+    }
   }
   const visibleGroups = c.isHead
     ? inHand.byPerson

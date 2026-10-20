@@ -198,7 +198,7 @@ export function InHandPersonGroup({
           by construction. Shown only for the live carry-walk months (openingCarry set, not preview). */}
       {group.openingCarry != null && !isPreview && (
         <div className="mb-2 mt-2 rounded-lg border border-dashed border-sky-300 bg-sky-50/40 p-2">
-          <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-sky-700">🧪 v2 · cash-flow <span className="font-normal normal-case text-slate-400">— every rupee in &amp; out (verify vs below)</span></div>
+          <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-sky-700">🧪 v3 · cash-flow <span className="font-normal normal-case text-slate-400">— every rupee in &amp; out (verify vs below)</span></div>
           <ul className="space-y-0.5 text-[11px]">
             <li className="flex items-center justify-between gap-2"><span className="truncate text-slate-500">Carried from last month</span><span className="shrink-0 tabular-nums text-slate-600">{money(group.openingCarry)}</span></li>
             {doneMoves.filter((d) => d.dir === "in").map((d, i) => (
@@ -222,35 +222,66 @@ export function InHandPersonGroup({
               this month's genuine position: a member who fronted cash shows "− fronted, owed back next month"
               (nets to 0 over the cycle — income−expense=0); an allowance-holder shows their own money left. */}
           {(() => {
+            // v3 forward partition: every rupee of holding-now labelled by what it's held FOR. Persistent
+            // savings (sinking / piggy) show at their CURRENT value — the same money as the carried amount,
+            // counted once. This-month allocations (budgets / set-asides / to-give-treasurer / to-pay-bills)
+            // appear only once income has ARRIVED (the physical-cash model) — before that only the carry
+            // shows. The remainder is then the member's genuine own position: negative = cash fronted (owed
+            // back next month, nets to 0 over the reimbursement cycle); positive = own money; for the
+            // treasurer a negative = fronted for the family (pool/advances). Reconciles by construction.
             const carriedOnCard = group.carryParts?.onCard ?? 0;
             const carriedOthers = group.carryParts?.others ?? 0;
             const carriedFree = group.carryParts?.free ?? 0;
-            const carriedSink = Math.round(sinkingFunds.reduce((s, f) => s + f.amount, 0) * 100) / 100;
-            const persistent = Math.round((carriedOnCard + carriedOthers + carriedFree + carriedSink) * 100) / 100;
-            const remainder = Math.round((holdingNow - persistent - cats.reduce((s, c) => s + c.remaining, 0) - earmarkedTotal - routingToForward) * 100) / 100;
+            const budgetsTotal = cats.reduce((s, c) => s + c.remaining, 0);
+            const give = incomeReceived ? toTreasurerPending : 0;
+            const bills = incomeReceived ? heldBillsTotal : 0;
+            const monthBal = isTreasurer ? monthBalance : 0;
+            const labeled =
+              carriedOnCard + carriedOthers + carriedFree +
+              sinkingHeld + piggyAmt + pendingPiggyHeld +
+              (incomeReceived ? budgetsTotal + earmarkedTotal : 0) +
+              give + bills + routingToForward + monthBal;
+            const remainder = Math.round((holdingNow - labeled) * 100) / 100;
+            const remLabel = isTreasurer && remainder < -0.005
+              ? "↩ Fronted for the family · owed back"
+              : remainder < -0.005
+                ? "↩ Fronted this month · owed back next month"
+                : "Your own money · spend as you like";
             const carr = <span className="text-slate-400"> · carried</span>;
+            const piggyLink = "truncate text-pink-600 underline decoration-dotted underline-offset-2 hover:text-pink-700";
             return (
               <div className="mt-1.5 border-t border-sky-100 pt-1">
                 <div className="mb-0.5 text-[10px] font-medium uppercase tracking-wide text-slate-400">held for — every rupee</div>
                 <ul className="space-y-0.5 text-[11px]">
                   {carriedOnCard > 0.005 && <li className="flex items-center justify-between gap-2"><span className="truncate text-fuchsia-600">💳 Held for the card bill{carr}</span><span className="shrink-0 tabular-nums text-fuchsia-700">{formatINR(carriedOnCard)}</span></li>}
-                  {carriedOthers > 0.005 && <li className="flex items-center justify-between gap-2"><span className="truncate text-slate-500">Owed to others{carr}</span><span className="shrink-0 tabular-nums text-slate-600">{formatINR(carriedOthers)}</span></li>}
-                  {carriedFree > 0.005 && <li className="flex items-center justify-between gap-2"><span className="truncate text-pink-600">🐷 Free → Piggy{carr}</span><span className="shrink-0 tabular-nums text-pink-700">{formatINR(carriedFree)}</span></li>}
-                  {sinkingFunds.map((f) => <li key={`v2cs${f.name}`} className="flex items-center justify-between gap-2"><span className="truncate text-indigo-600">🏦 Sinking · {f.name}{carr}</span><span className="shrink-0 tabular-nums text-indigo-700">{formatINR(f.amount)}</span></li>)}
-                  {cats.map((cat) => (
-                    <Fragment key={`v2hb${cat.id}`}>
+                  {carriedOthers > 0.005 && <li className="flex items-center justify-between gap-2"><span className="truncate text-slate-500">Others&apos; spend on your budget · owe back{carr}</span><span className="shrink-0 tabular-nums text-slate-600">{formatINR(carriedOthers)}</span></li>}
+                  {carriedFree > 0.005 && <li className="flex items-center justify-between gap-2"><a href="/piggy" title="This goes to the Piggy — open the Piggy tab" className={piggyLink}>🐷 Free → Piggy{carr} ↗</a><span className="shrink-0 tabular-nums text-pink-700">{formatINR(carriedFree)}</span></li>}
+                  {sinkingFunds.map((f) => <li key={`v3cs${f.name}`} className="flex items-center justify-between gap-2"><span className="truncate text-indigo-600">🏦 Sinking for {f.name}</span><span className="shrink-0 tabular-nums text-indigo-700">{formatINR(f.amount)}</span></li>)}
+                  {isPiggyHolder && Math.abs(piggyAmt) > 0.005 && <li className="flex items-center justify-between gap-2"><a href="/piggy" title="Open the Piggy tab" className={piggyLink}>🐷 General Piggy <span className="text-slate-400">· role money ↗</span></a><span className="shrink-0 tabular-nums text-pink-700">{formatINR(piggyAmt)}</span></li>}
+                  {pendingPiggyHeld > 0.005 && <li className="flex items-center justify-between gap-2"><a href="/piggy" title="Open the Piggy tab" className={piggyLink}>🐷 Piggy to hand over <span className="text-slate-400">· held ↗</span></a><span className="shrink-0 tabular-nums text-pink-700">{formatINR(pendingPiggyHeld)}</span></li>}
+                  {incomeReceived && cats.map((cat) => (
+                    <Fragment key={`v3hb${cat.id}`}>
                       <li className="flex items-center justify-between gap-2"><span className="truncate text-slate-500">{cat.name} <span className="text-slate-400">· budget left</span></span><span className="shrink-0 tabular-nums text-slate-600">{formatINR(cat.remaining)}</span></li>
                       <CatBreakdown onCard={cat.onCard} othersSpent={cat.othersSpent ?? 0} remaining={cat.remaining} />
                     </Fragment>
                   ))}
-                  {earmarked.map((e) => (
-                    <li key={`v2he${e.id}`} className="flex items-center justify-between gap-2"><span className="truncate text-teal-600">Set aside · {e.name} <span className="text-slate-400">· for its bill</span></span><span className="shrink-0 tabular-nums text-teal-700">{formatINR(e.amount)}</span></li>
+                  {incomeReceived && earmarked.map((e) => (
+                    <li key={`v3he${e.id}`} className="flex items-center justify-between gap-2"><span className="truncate text-teal-600">Set aside for {e.name} <span className="text-slate-400">· its bill</span></span><span className="shrink-0 tabular-nums text-teal-700">{formatINR(e.amount)}</span></li>
                   ))}
+                  {give > 0.005 && (
+                    <li className="flex items-center justify-between gap-2"><span className="truncate text-violet-600">To give treasurer <span className="text-slate-400">· your settlement</span></span><span className="shrink-0 tabular-nums text-violet-700">{formatINR(give)}</span></li>
+                  )}
+                  {bills > 0.005 && (
+                    <li className="flex items-center justify-between gap-2"><span className="truncate text-amber-700">To pay bills <span className="text-slate-400">· self-funded</span></span><span className="shrink-0 tabular-nums text-amber-800">{formatINR(bills)}</span></li>
+                  )}
                   {routingToForward > 0.005 && (
                     <li className="flex items-center justify-between gap-2"><span className="truncate text-amber-600">➡️ To forward <span className="text-slate-400">· routing through you</span></span><span className="shrink-0 tabular-nums text-amber-700">{formatINR(routingToForward)}</span></li>
                   )}
+                  {isTreasurer && Math.abs(monthBal) > 0.005 && (
+                    <li className="flex items-center justify-between gap-2"><span className="truncate text-emerald-600">Family month balance <span className="text-slate-400">· pool</span></span><span className="shrink-0 tabular-nums text-emerald-700">{formatINR(monthBal)}</span></li>
+                  )}
                   {Math.abs(remainder) > 0.005 && (
-                    <li className="flex items-center justify-between gap-2 border-t border-dashed border-slate-200 pt-0.5"><span className="truncate text-slate-500">{remainder < 0 ? "↩ Fronted this month · owed back next month" : "Your own money · spend as you like"} <span className="text-slate-300">· see cash-flow above</span></span><span className={`shrink-0 tabular-nums ${remainder < 0 ? "text-rose-500" : "text-slate-600"}`}>{remainder < 0 ? "− " : ""}{formatINR(Math.abs(remainder))}</span></li>
+                    <li className="flex items-center justify-between gap-2 border-t border-dashed border-slate-200 pt-0.5"><span className="truncate text-slate-500">{remLabel} <span className="text-slate-300">· see cash-flow above</span></span><span className={`shrink-0 tabular-nums ${remainder < 0 ? "text-rose-500" : "text-slate-600"}`}>{remainder < 0 ? "− " : ""}{formatINR(Math.abs(remainder))}</span></li>
                   )}
                   <li className="flex items-center justify-between gap-2 border-t border-sky-200 pt-0.5 font-semibold text-slate-700"><span>= {holdingNow < 0 ? "To reclaim" : "Holding now"}</span><span className={`shrink-0 tabular-nums ${holdingNow < 0 ? "text-red-600" : "text-emerald-700"}`}>{money(holdingNow)}</span></li>
                 </ul>
