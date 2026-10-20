@@ -1,7 +1,7 @@
 import { istDateParts } from "@/lib/time";
 import { loadCommon } from "@/lib/load";
 import { getInHand, getMoneyPlan, getMoneyPlanActivity, getFamilyCreditCards } from "@/lib/queries";
-import { pendingCashMoveByMember, doneCashMoveByMember, doneCashMoveDetailByMember } from "@/lib/moneyPlan";
+import { pendingCashMoveByMember, doneCashMoveByMember } from "@/lib/moneyPlan";
 import { MoneyPlanActivity } from "@/components/MoneyPlanActivity";
 import { NavHeader } from "@/components/NavHeader";
 import { MoneyPlan } from "@/components/MoneyPlan";
@@ -79,8 +79,6 @@ export default async function InHandPage({
   // bills paid). The component adds each member's standing balances (Piggy/sinking/pending hand-overs)
   // and subtracts their cash spent, so holding-now = actual bank cash, not a projection.
   const doneByMember = doneCashMoveByMember(plan.steps);
-  // Per-member list of this month's completed moves — drives the "how this adds up" breakdown on the card.
-  const doneDetailByMember = doneCashMoveDetailByMember(plan.steps);
   // Reconciling "Where it's allocated" inputs: a member's salary-funded lines (budgets / set-asides /
   // held bills / to-treasurer / last-month misc) appear only once their income has ARRIVED — before
   // that their card shows just the carry. `toTreasurerPending` is their still-unpaid settlement
@@ -180,7 +178,6 @@ export default async function InHandPage({
                 isPreview={isPreview}
                 pendingCashMove={g.memberId != null ? pendingByMember[g.memberId] ?? 0 : 0}
                 doneCashMove={g.memberId != null ? doneByMember[g.memberId] ?? 0 : 0}
-                doneMoves={g.memberId != null ? doneDetailByMember[g.memberId] ?? [] : []}
                 incomeReceived={g.memberId != null ? incomeReceivedByMember[g.memberId] ?? false : false}
                 toTreasurerPending={g.memberId != null ? toTreasurerPendingByMember[g.memberId] ?? 0 : 0}
                 routingToForward={g.memberId != null ? routingToForwardByMember[g.memberId] ?? 0 : 0}

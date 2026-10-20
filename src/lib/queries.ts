@@ -794,13 +794,19 @@ export async function getMoneyPlan(householdId: number, periodId: number, inhand
 
   // Head edits to the plan (persisted, so a refresh keeps them): ad-hoc manual moves + hidden steps.
   const manualSteps = [
-    ...manualStepRows.map((m) => ({
-      id: m.id, fromId: m.fromMemberId, toId: m.toMemberId, fromName: nameById.get(m.fromMemberId), toName: nameById.get(m.toMemberId),
-      amount: m.amount, day: m.day, done: m.done, afterStepKey: m.afterStepKey, note: m.note,
-      // A funder→payer move earmarked for an ExpenseEntry bill → the plan-step key the engine funds.
-      fundsBillKey: m.fundsExpenseId != null ? `bill-${m.fundsExpenseId}` : null,
-      bridgeGroup: m.bridgeGroup, // the 3 steps of a repayable bridge share this id
-    })),
+    ...manualStepRows.map((m) => {
+      // A manual step with a due day gets the SAME urgency as any other dated step — overdue → red,
+      // due-soon → amber — so a late peer-move/settlement nags like a bill (previously always null → cyan).
+      const st = dayStatus(m.day ?? undefined);
+      return {
+        id: m.id, fromId: m.fromMemberId, toId: m.toMemberId, fromName: nameById.get(m.fromMemberId), toName: nameById.get(m.toMemberId),
+        amount: m.amount, day: m.day, done: m.done, afterStepKey: m.afterStepKey, note: m.note,
+        status: st?.status ?? null, days: st?.days ?? null,
+        // A funder→payer move earmarked for an ExpenseEntry bill → the plan-step key the engine funds.
+        fundsBillKey: m.fundsExpenseId != null ? `bill-${m.fundsExpenseId}` : null,
+        bridgeGroup: m.bridgeGroup, // the 3 steps of a repayable bridge share this id
+      };
+    }),
     // Hypothetical funding injected by the add-expense preview (not persisted) — lets the gate simulate
     // the chosen funders (funder → payer, tagged to the hypothetical bill) and report what's still short.
     ...(extraManualSteps ?? []),

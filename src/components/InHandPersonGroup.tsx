@@ -13,7 +13,6 @@ export function InHandPersonGroup({
   isPreview = false,
   pendingCashMove,
   doneCashMove,
-  doneMoves = [],
   incomeReceived = false,
   toTreasurerPending = 0,
   routingToForward = 0,
@@ -42,7 +41,6 @@ export function InHandPersonGroup({
   isPreview?: boolean;
   pendingCashMove: number;
   doneCashMove: number;
-  doneMoves?: { label: string; amount: number; dir: "in" | "out" }[];
   incomeReceived?: boolean;
   toTreasurerPending?: number;
   routingToForward?: number;
@@ -114,6 +112,9 @@ export function InHandPersonGroup({
     group.openingCarry != null && !isPreview
       ? Math.round((group.openingCarry + doneCashMove - (cashSpent ?? 0) + piggyAmt) * 100) / 100
       : total;
+  // The live carry-walk month shows the clean "Held for" partition only; preview/closed months (no
+  // opening carry) keep the detailed carry/pool/in-transit breakdown below.
+  const showV3 = group.openingCarry != null && !isPreview;
   // "Expected by month-end" = the CARRY-FORWARD: what genuinely remains as this member's own money once
   // budgets are spent (or leftover→Piggy) and bills/card-bills are paid — i.e. pool + Piggy + sinking +
   // set-asides + pending hand-overs − misc/out-of-pocket fronted. Budgets, bills & card-bills are EXCLUDED
@@ -192,43 +193,16 @@ export function InHandPersonGroup({
       )}
       {expanded && (
       <>
-      {/* === In-Hand v2 (cash-flow ledger) — ABOVE the old breakdown, for side-by-side verification. ===
-          Pure realized-cash walk: carry + every money-in − every money-out − itemised spends = holding.
-          No "spare" plug, no "misc" lump — every rupee is a named line. Reconciles to the same holdingNow
-          by construction. Shown only for the live carry-walk months (openingCarry set, not preview). */}
-      {group.openingCarry != null && !isPreview && (
-        <div className="mb-2 mt-2 rounded-lg border border-dashed border-sky-300 bg-sky-50/40 p-2">
-          <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-sky-700">🧪 v3 · cash-flow <span className="font-normal normal-case text-slate-400">— every rupee in &amp; out (verify vs below)</span></div>
-          <ul className="space-y-0.5 text-[11px]">
-            <li className="flex items-center justify-between gap-2"><span className="truncate text-slate-500">Carried from last month</span><span className="shrink-0 tabular-nums text-slate-600">{money(group.openingCarry)}</span></li>
-            {doneMoves.filter((d) => d.dir === "in").map((d, i) => (
-              <li key={`vin${i}`} className="flex items-center justify-between gap-2"><span className="truncate text-emerald-600">{d.label}</span><span className="shrink-0 tabular-nums text-emerald-600">+ {formatINR(d.amount)}</span></li>
-            ))}
-            {doneMoves.filter((d) => d.dir === "out").map((d, i) => (
-              <li key={`vout${i}`} className="flex items-center justify-between gap-2"><span className="truncate text-rose-500">{d.label}</span><span className="shrink-0 tabular-nums text-rose-500">− {formatINR(d.amount)}</span></li>
-            ))}
-            {(group.cashByCat ?? []).map((sp, i) => (
-              <li key={`vsp${i}`} className="flex items-center justify-between gap-2"><span className="truncate text-rose-500">spent · {sp.name}</span><span className="shrink-0 tabular-nums text-rose-500">− {formatINR(sp.amount)}</span></li>
-            ))}
-            {isPiggyHolder && Math.abs(piggyAmt) > 0.005 && (
-              <li className="flex items-center justify-between gap-2"><span className="truncate text-pink-600">General Piggy held <span className="text-slate-400">· role money</span></span><span className="shrink-0 tabular-nums text-pink-600">+ {formatINR(piggyAmt)}</span></li>
-            )}
-            <li className="flex items-center justify-between gap-2 border-t border-sky-200 pt-0.5 font-semibold text-slate-800"><span>= {holdingNow < 0 ? "To reclaim" : "Holding now"}</span><span className={`shrink-0 tabular-nums ${holdingNow < 0 ? "text-red-600" : "text-emerald-700"}`}>{money(holdingNow)}</span></li>
-          </ul>
-          {/* held for — every rupee named, NO phantom surplus. Last month's carry is shown by its PERSISTENT
-              held parts (card-held / owed-others / free→Piggy / sinking) — the carried out-of-pocket deficit
-              is NOT shown, because it's reimbursed THIS month (the two cancel). This month's budgets (↳ split)
-              + set-asides are named, a true conduit's routing is its own line, and the remainder is then just
-              this month's genuine position: a member who fronted cash shows "− fronted, owed back next month"
-              (nets to 0 over the cycle — income−expense=0); an allowance-holder shows their own money left. */}
-          {(() => {
-            // v3 forward partition: every rupee of holding-now labelled by what it's held FOR. Persistent
-            // savings (sinking / piggy) show at their CURRENT value — the same money as the carried amount,
-            // counted once. This-month allocations (budgets / set-asides / to-give-treasurer / to-pay-bills)
-            // appear only once income has ARRIVED (the physical-cash model) — before that only the carry
-            // shows. The remainder is then the member's genuine own position: negative = cash fronted (owed
-            // back next month, nets to 0 over the reimbursement cycle); positive = own money; for the
-            // treasurer a negative = fronted for the family (pool/advances). Reconciles by construction.
+      {/* Live carry-walk month: the clean "Held for" partition — every rupee of holding-now labelled by
+          what it's held FOR, reconciling by construction. The step-by-step cash-in/out lives in each
+          Money-Plan step modal; preview/closed months keep the detailed breakdown below. */}
+      {showV3 && (() => {
+            // Persistent savings (sinking / piggy) show at their CURRENT value — the same money as the
+            // carried amount, counted once. This-month allocations (budgets / set-asides / to-give-treasurer
+            // / to-pay-bills) appear only once income has ARRIVED (the physical-cash model) — before that
+            // only the carry shows. The remainder is the member's genuine own position: negative = cash
+            // fronted (owed back next month, nets to 0 over the reimbursement cycle); positive = own money;
+            // for the treasurer a negative = fronted for the family (pool/advances). Reconciles by construction.
             const carriedOnCard = group.carryParts?.onCard ?? 0;
             const carriedOthers = group.carryParts?.others ?? 0;
             const carriedFree = group.carryParts?.free ?? 0;
@@ -250,8 +224,8 @@ export function InHandPersonGroup({
             const carr = <span className="text-slate-400"> · carried</span>;
             const piggyLink = "truncate text-pink-600 underline decoration-dotted underline-offset-2 hover:text-pink-700";
             return (
-              <div className="mt-1.5 border-t border-sky-100 pt-1">
-                <div className="mb-0.5 text-[10px] font-medium uppercase tracking-wide text-slate-400">held for — every rupee</div>
+              <div className="mb-2 mt-2">
+                <div className="mb-1 text-[10px] font-medium uppercase tracking-wide text-slate-400">Held for <span className="font-normal normal-case text-slate-300">— every rupee</span></div>
                 <ul className="space-y-0.5 text-[11px]">
                   {carriedOnCard > 0.005 && <li className="flex items-center justify-between gap-2"><span className="truncate text-fuchsia-600">💳 Held for the card bill{carr}</span><span className="shrink-0 tabular-nums text-fuchsia-700">{formatINR(carriedOnCard)}</span></li>}
                   {carriedOthers > 0.005 && <li className="flex items-center justify-between gap-2"><span className="truncate text-slate-500">Others&apos; spend on your budget · owe back{carr}</span><span className="shrink-0 tabular-nums text-slate-600">{formatINR(carriedOthers)}</span></li>}
@@ -281,21 +255,19 @@ export function InHandPersonGroup({
                     <li className="flex items-center justify-between gap-2"><span className="truncate text-emerald-600">Family month balance <span className="text-slate-400">· pool</span></span><span className="shrink-0 tabular-nums text-emerald-700">{formatINR(monthBal)}</span></li>
                   )}
                   {Math.abs(remainder) > 0.005 && (
-                    <li className="flex items-center justify-between gap-2 border-t border-dashed border-slate-200 pt-0.5"><span className="truncate text-slate-500">{remLabel} <span className="text-slate-300">· see cash-flow above</span></span><span className={`shrink-0 tabular-nums ${remainder < 0 ? "text-rose-500" : "text-slate-600"}`}>{remainder < 0 ? "− " : ""}{formatINR(Math.abs(remainder))}</span></li>
+                    <li className="flex items-center justify-between gap-2 border-t border-dashed border-slate-200 pt-0.5"><span className="truncate text-slate-500">{remLabel}</span><span className={`shrink-0 tabular-nums ${remainder < 0 ? "text-rose-500" : "text-slate-600"}`}>{remainder < 0 ? "− " : ""}{formatINR(Math.abs(remainder))}</span></li>
                   )}
-                  <li className="flex items-center justify-between gap-2 border-t border-sky-200 pt-0.5 font-semibold text-slate-700"><span>= {holdingNow < 0 ? "To reclaim" : "Holding now"}</span><span className={`shrink-0 tabular-nums ${holdingNow < 0 ? "text-red-600" : "text-emerald-700"}`}>{money(holdingNow)}</span></li>
+                  <li className="flex items-center justify-between gap-2 border-t border-slate-300 pt-0.5 font-semibold text-slate-800"><span>= {holdingNow < 0 ? "To reclaim" : "Holding now"}</span><span className={`shrink-0 tabular-nums ${holdingNow < 0 ? "text-red-600" : "text-emerald-700"}`}>{money(holdingNow)}</span></li>
                 </ul>
               </div>
             );
           })()}
-        </div>
-      )}
-      <div className="mb-1 mt-2 text-[10px] font-medium uppercase tracking-wide text-slate-400">Where it&apos;s allocated <span className="font-normal normal-case text-slate-300">(old)</span></div>
+      {!showV3 && <div className="mb-1 mt-2 text-[10px] font-medium uppercase tracking-wide text-slate-400">Where it&apos;s allocated <span className="font-normal normal-case text-slate-300">(old)</span></div>}
       <ul className="mt-1 space-y-1">
         {/* NON-TREASURER, LIVE/PREVIEW month: carry-based breakdown that sums EXACTLY to "Holding now".
             Salary-funded lines show only once income has arrived; before that it's just the carry.
             (A SETTLED month uses the clean component breakdown added just below instead.) */}
-        {!isTreasurer && !isSettled && (
+        {!isTreasurer && !isSettled && !showV3 && (
           <>
             {group.openingCarry != null ? (
               // The live month OPENS at last month's close — show the FULL carried figure (exactly that
@@ -440,6 +412,9 @@ export function InHandPersonGroup({
             <li className="pb-0.5"><div className="border-b border-dashed border-rose-100" /></li>
           </>
         )}
+        {/* Preview & closed months only: the detailed carry / pool / in-transit view. The live month's
+            clean "Held for" block above replaces all of this; only the actionable bill lists remain. */}
+        {!showV3 && (<>
         {isTreasurer && (
         <>
         {cats.map((cat) => (
@@ -658,6 +633,7 @@ export function InHandPersonGroup({
             </li>
           </>
         )}
+        </>)}
 
         {/* Bills to pay THIS month — assigned bills (loans / EMIs / interest / fixed) AND periodic
             fund bills. A SELF-FUNDER (net contributor) holds this cash from their own salary, so it's

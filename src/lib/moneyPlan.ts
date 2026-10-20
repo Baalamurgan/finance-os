@@ -103,7 +103,7 @@ export function buildMoneyPlan(input: {
   reimburseByMember?: Record<number, number>; // prior-month out-of-pocket spend each member is owed back
   reimburseDay?: number; // target day to hand back those reimbursements (e.g. the day after wind-down)
   piggyHandover?: { toId: number; toName: string; handoverPeriodId: number; done?: boolean; owners: { fromId: number; fromName: string; amount: number; day: number; status?: "overdue" | "soon" | "normal" | null; days?: number | null }[] }; // prior wound-down month's leftover — one tickable step per owner who hands their slice to the Piggy holder. `done` = already handed over (the step shows struck-through instead of disappearing).
-  manualSteps?: { id: number; fromId: number; toId: number; fromName?: string; toName?: string; amount: number; day?: number | null; done: boolean; afterStepKey?: string | null; note?: string | null; fundsBillKey?: string | null; bridgeGroup?: string | null }[]; // head-added ad-hoc moves (fundsBillKey → a funder→payer move earmarked for that bill; bridgeGroup → the 3 steps of a repayable bridge)
+  manualSteps?: { id: number; fromId: number; toId: number; fromName?: string; toName?: string; amount: number; day?: number | null; status?: "overdue" | "soon" | "normal" | null; days?: number | null; done: boolean; afterStepKey?: string | null; note?: string | null; fundsBillKey?: string | null; bridgeGroup?: string | null }[]; // head-added ad-hoc moves (fundsBillKey → a funder→payer move earmarked for that bill; bridgeGroup → the 3 steps of a repayable bridge)
   poolHandovers?: { key?: string; fromId: number; fromName: string; toId: number; toName: string; amount: number; detail: string; recordIds: number[]; piggyIncomeIds?: number[]; done: boolean; day: number | null; status?: "overdue" | "soon" | "normal" | null; days?: number | null }[]; // prior-month cash (leftover→income and/or Piggy→income) a holder hands to the treasurer. `key` overrides the step id (distinct per piggy batch); `piggyIncomeIds` = a piggy-income batch (ticks via togglePiggyHandover, locking those rows)
   openingByMember?: Record<number, number>; // each member's carry (prior-month closing personal) — the cash they actually START the month holding, so the walk opens from reality instead of 0
   hiddenKeys?: string[]; // step ids the head has hidden from the plan view
@@ -588,7 +588,7 @@ export function buildMoneyPlan(input: {
   // gone (its bill was removed, say) fall back to the manual's own day. afterStepKey null → top.
   const manualObjs: PlanStep[] = manualSteps.map((m) => ({
     id: `manual-${m.id}`, kind: "manual", day: m.day ?? null, amount: Math.round(m.amount * 100) / 100, done: m.done,
-    fromId: m.fromId, toId: m.toId, fromName: m.fromName, toName: m.toName, manualId: m.id, note: m.note ?? null, afterStepKey: m.afterStepKey ?? undefined, fundsBillKey: m.fundsBillKey ?? null, bridgeGroup: m.bridgeGroup ?? null, status: null, days: null,
+    fromId: m.fromId, toId: m.toId, fromName: m.fromName, toName: m.toName, manualId: m.id, note: m.note ?? null, afterStepKey: m.afterStepKey ?? undefined, fundsBillKey: m.fundsBillKey ?? null, bridgeGroup: m.bridgeGroup ?? null, status: m.status ?? null, days: m.days ?? null,
   }));
   // Tagged funding steps anchor to the BILL they fund: spliced in just ABOVE that bill (same day) so the
   // walk credits the payer right before they pay. Done first so they skip the afterStepKey chain below;

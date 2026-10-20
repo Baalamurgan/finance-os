@@ -276,7 +276,7 @@ export function MoneyPlan({
               <Fragment key={s.id}>
               {newDateGroup && <DateGroupHeader day={s.day} kind={s.kind} collapsed={dayCollapsed} count={dayStats.get(dayKey)?.total} done={dayStats.get(dayKey)?.done} onToggle={() => toggleDay(dayKey)} />}
               {!dayCollapsed && (
-              <li className={`flex items-start gap-2.5 rounded-lg px-2.5 py-2 text-xs ${s.done ? "bg-emerald-50/50" : isIncome ? "bg-emerald-50/40" : isManual ? "bg-cyan-50/50" : urgent ? "bg-red-50" : soon ? "bg-amber-50" : "bg-slate-50"}`}>
+              <li className={`flex items-start gap-2.5 rounded-lg px-2.5 py-2 text-xs ${s.done ? "bg-emerald-50/50" : isIncome ? "bg-emerald-50/40" : urgent ? "bg-red-50" : soon ? "bg-amber-50" : isManual ? "bg-cyan-50/50" : "bg-slate-50"}`}>
                 <button
                   type="button"
                   onClick={() => setBalances({ s, n })}
@@ -299,7 +299,7 @@ export function MoneyPlan({
                     {/* Manual steps own their day and can edit it in ANY state (it's ad-hoc metadata;
                         position still follows the insert anchor). Handled here so it's not gated by !done. */}
                     {isManual && (() => {
-                      const tag = <DayTag kind="manual" day={s.day} status={null} days={null} />;
+                      const tag = <DayTag kind="manual" day={s.day} status={s.status ?? null} days={s.days ?? null} />;
                       if (!isHead || !datesEditable || s.manualId == null) return s.day != null ? tag : null;
                       return <StepDayEditor kind="manual" id={s.manualId} day={s.day} minDay={s.fundsBillKey ? plan.minEditDay : undefined} maxDay={s.fundsBillKey ? (s.disbMaxDay ?? s.day ?? undefined) : undefined}>{tag}</StepDayEditor>;
                     })()}
