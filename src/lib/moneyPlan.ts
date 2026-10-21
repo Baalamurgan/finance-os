@@ -860,7 +860,7 @@ export function doneCashMoveByMember(steps: PlanStep[]): Record<number, number> 
     if (!s.done || s.hidden) continue;
     if (s.paidPriorMonth) continue; // cash left in a prior month (already in that month's close) → not this month's move
     if (s.kind === "income") { bump(s.toId, s.amount); continue; }
-    if (s.kind === "bill") { if (!s.fund) bump(s.payerId, -s.amount); continue; } // cash/card bill paid → out; fund bill from the fund
+    if (s.kind === "bill") { if (!s.fund && !s.miscCard) bump(s.payerId, -s.amount); continue; } // cash/card bill paid → out; fund bill drawn from the fund; a miscCard planned-spend "bill" is paid by LOGGING A SPEND — that spend is the real cash-out (counted in cashSpent, at its ACTUAL amount), so counting the bill too would double-subtract (and at the full envelope, not the actual spend)
     if (s.kind === "piggy") continue; // informational — the Piggy balance is carried as a standing figure
     // Piggy-as-income hand-over (holder → treasurer, carries piggyIncomeIds): the FROM side is the Piggy
     // HOLDER forwarding role money they were custodying — tracked via the standing Piggy balance, NOT
@@ -891,7 +891,7 @@ export function doneCashMoveDetailByMember(steps: PlanStep[]): Record<number, Do
     if (!s.done || s.hidden) continue;
     if (s.paidPriorMonth) continue; // paid in a prior month — not part of this month's additions
     if (s.kind === "income") { push(s.toId, { label: s.source || "Income received", amount: s.amount, dir: "in" }); continue; }
-    if (s.kind === "bill") { if (!s.fund) push(s.payerId, { label: `Paid ${s.vendor || "bill"}`, amount: s.amount, dir: "out" }); continue; }
+    if (s.kind === "bill") { if (!s.fund && !s.miscCard) push(s.payerId, { label: `Paid ${s.vendor || "bill"}`, amount: s.amount, dir: "out" }); continue; } // miscCard "bill" is paid via a logged spend (in cashSpent) — don't double-count it here
     if (s.kind === "piggy") continue;
     if (s.kind === "pool-handover" && (s.piggyIncomeIds?.length ?? 0) > 0) { push(s.toId, { label: s.fromName ? `From ${s.fromName} · Piggy` : "Piggy received", amount: s.amount, dir: "in" }); continue; } // piggy-as-income: skip the holder's "out", keep the treasurer's "in" (see doneCashMoveByMember)
     // transfer-in / transfer-out / allowance / advance / manual / pool-handover
