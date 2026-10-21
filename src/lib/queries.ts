@@ -1282,6 +1282,14 @@ export async function _getInHand(householdId: number, periodId: number, settleme
     prisma.category.findMany({ where: { householdId, OR: [{ sinking: true }, { fundingStyle: { not: null } }] }, select: { id: true, name: true, responsibleMemberId: true } }),
   ]);
   const plannedByCat = new Map(budgets.map((b) => [b.categoryId, b.planned]));
+  // A miscCard category (a planned one-off spend, e.g. "G704 advance settlement") carries its budget as an
+  // envelope ExpenseEntry, NOT a Budget row — so mirror the Sheet (getTrackedExpenses) and use that envelope
+  // as the allocation here too. Without this the in-hand saw them as unbudgeted and dropped their spend into
+  // the misc lump; now they surface as proper budgeted categories (spent/total · remaining), matching the
+  // Spends tab and keeping In-Hand ↔ Sheet in sync.
+  for (const e of await prisma.expenseEntry.findMany({ where: { periodId, note: null, category: { householdId, tracked: true, miscCard: true } }, select: { categoryId: true, amount: true } })) {
+    if (e.categoryId != null && (plannedByCat.get(e.categoryId) ?? 0) === 0 && e.amount > 0) plannedByCat.set(e.categoryId, e.amount);
+  }
   const budgetedIds = new Set(categories.filter((c) => (plannedByCat.get(c.id) ?? 0) > 0).map((c) => c.id));
   // Bill list = tagged Sheet lines to pay, in EVERY state (draft included) so the preview shows them as
   // dated, orderable Money-Plan steps + held cash — exactly like the open month. billLines already pulls
