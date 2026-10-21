@@ -106,6 +106,10 @@ export default async function InHandPage({
   const routingToForwardByMember: Record<number, number> = {};
   for (const g of inHand.byPerson) {
     if (g.memberId == null) continue;
+    // The treasurer is the HUB, never a pass-through conduit: money routed to them is theirs to hold/pool,
+    // not "to forward" onward (there's nowhere onward). Manual in/out on the treasurer is pool collection +
+    // disbursement, handled by the pool view — so never emit a "to forward" line for them.
+    if (g.memberId === inHand.treasurerId) continue;
     const inAmt = manualInByMember[g.memberId] ?? 0;
     const outAmt = manualOutByMember[g.memberId] ?? 0;
     if (inAmt > 0.005 && outAmt > 0.005) {
@@ -199,6 +203,7 @@ export default async function InHandPage({
                 isPiggyHolder={g.memberId === inHand.piggyHolderId}
                 piggy={inHand.generalPiggy}
                 pendingPiggyLump={inHand.pendingPiggyHandover?.lump ?? 0}
+                piggyHandedOver={inHand.piggyHandoverStep?.done ?? false}
                 canToggle={canToggle}
                 periodId={periodId}
                 generalPiggy={inHand.generalPiggy}
