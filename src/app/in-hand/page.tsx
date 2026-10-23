@@ -1,7 +1,7 @@
 import { istDateParts } from "@/lib/time";
 import { loadCommon } from "@/lib/load";
 import { getInHand, getMoneyPlan, getMoneyPlanActivity, getFamilyCreditCards } from "@/lib/queries";
-import { pendingCashMoveByMember, doneCashMoveByMember, doneCashMoveDetailByMember } from "@/lib/moneyPlan";
+import { pendingCashMoveByMember, doneCashMoveByMember } from "@/lib/moneyPlan";
 import { MoneyPlanActivity } from "@/components/MoneyPlanActivity";
 import { NavHeader } from "@/components/NavHeader";
 import { MoneyPlan } from "@/components/MoneyPlan";
@@ -79,9 +79,6 @@ export default async function InHandPage({
   // bills paid). The component adds each member's standing balances (Piggy/sinking/pending hand-overs)
   // and subtracts their cash spent, so holding-now = actual bank cash, not a projection.
   const doneByMember = doneCashMoveByMember(plan.steps);
-  // Itemised done cash-moves per member (label + in/out) — drives the TREASURER's full money-in/out ledger
-  // (collected by source, paid out by destination). Only the treasurer's card renders these.
-  const doneDetailByMember = doneCashMoveDetailByMember(plan.steps);
   // Reconciling "Where it's allocated" inputs: a member's salary-funded lines (budgets / set-asides /
   // held bills / to-treasurer / last-month misc) appear only once their income has ARRIVED — before
   // that their card shows just the carry. `toTreasurerPending` is their still-unpaid settlement
@@ -196,7 +193,6 @@ export default async function InHandPage({
                 doneCashMove={g.memberId != null ? doneByMember[g.memberId] ?? 0 : 0}
                 incomeReceived={g.memberId != null ? incomeReceivedByMember[g.memberId] ?? false : false}
                 allowancesKept={g.memberId != null ? keptAllowancesByMember[g.memberId] ?? [] : []}
-                doneMoves={g.memberId != null ? doneDetailByMember[g.memberId] ?? [] : []}
                 toTreasurerPending={g.memberId != null ? toTreasurerPendingByMember[g.memberId] ?? 0 : 0}
                 routingToForward={g.memberId != null ? routingToForwardByMember[g.memberId] ?? 0 : 0}
                 isTreasurer={g.memberId === inHand.treasurerId}

@@ -15,7 +15,6 @@ export function InHandPersonGroup({
   doneCashMove,
   incomeReceived = false,
   allowancesKept = [],
-  doneMoves = [],
   toTreasurerPending = 0,
   routingToForward = 0,
   isTreasurer,
@@ -47,8 +46,6 @@ export function InHandPersonGroup({
   incomeReceived?: boolean;
   // This member's own expense allowances received & kept this month (e.g. Harish's ₹10k monthly + ₹1k reward).
   allowancesKept?: { label: string; amount: number }[];
-  // Itemised done cash-moves (label + in/out) — used only for the treasurer's full money-in/out ledger.
-  doneMoves?: { label: string; amount: number; dir: "in" | "out" }[];
   toTreasurerPending?: number;
   routingToForward?: number;
   isTreasurer: boolean;
@@ -119,13 +116,18 @@ export function InHandPersonGroup({
   // Last month's FREE budget leftover that swept into the Piggy still sits inside openingCarry. Once the
   // Piggy's been handed over (owners) / forwarded as income (holder — piggyAmt back to 0), that cash has
   // physically left; the Piggy hand-over step is informational (moves no cash in this walk), so without
-  // this it lingers as phantom held cash. Drop it from holding-now once it's gone. (User-reported: Baala
-  // ₹471, Arumugam ₹9,242 — the money's already been spent as this month's income.)
-  const carriedFree = group.carryParts?.free ?? 0;
+  // this it lingers as phantom held cash. Drop it from holding-now once it's gone.
+  // Use `swept` (Σ of each category's POSITIVE leftover — the REAL amount that went to the Piggy, matching
+  // the recorded PiggyEntry sweeps), NOT `free` (the NET, which wrongly nets back an overspent budget that
+  // swept nothing). They diverge only when a budget was overspent: Arumugam swept ₹12,465 (Arni 8,075 +
+  // G704 2,083 + Non-Veg 2,277 + Vinayagar 30) but net free was just ₹9,242 because Provision/Veg overspent
+  // — so the net understated the Piggy outflow by ₹3,223 and overstated his holding by the same. Baala has
+  // no overspend, so swept == net == ₹471 (unaffected).
+  const sweptToPiggy = group.carryParts?.swept ?? 0;
   const piggyGone = group.openingCarry != null && !isPreview && (isPiggyHolder ? piggyAmt <= 0.005 : piggyHandedOver);
   const holdingNow =
     group.openingCarry != null && !isPreview
-      ? Math.round((group.openingCarry + doneCashMove - (cashSpent ?? 0) + piggyAmt - (piggyGone ? carriedFree : 0)) * 100) / 100
+      ? Math.round((group.openingCarry + doneCashMove - (cashSpent ?? 0) + piggyAmt - (piggyGone ? sweptToPiggy : 0)) * 100) / 100
       : total;
   // The live carry-walk month shows the clean "Held for" partition only; preview/closed months (no
   // opening carry) keep the detailed carry/pool/in-transit breakdown below.
@@ -221,7 +223,7 @@ export function InHandPersonGroup({
             const carriedOnCard = group.carryParts?.onCard ?? 0;
             const carriedOthers = group.carryParts?.others ?? 0;
             // free→Piggy only still "held" if the Piggy hasn't been handed over/forwarded yet (see piggyGone).
-            const carriedFreeHeld = piggyGone ? 0 : carriedFree;
+            const carriedFreeHeld = piggyGone ? 0 : sweptToPiggy;
             const budgetsTotal = cats.reduce((s, c) => s + c.remaining, 0);
             const give = incomeReceived ? toTreasurerPending : 0;
             const bills = incomeReceived ? heldBillsTotal : 0;
@@ -245,44 +247,13 @@ export function InHandPersonGroup({
               give + bills + routingToForward + monthBal +
               keptTotal - subtractedTotal;
             const remainder = Math.round((holdingNow - labeled) * 100) / 100;
-            const remLabel = remainder < -0.005
-              ? "↩ Fronted this month · owed back next month"
-              : "Your own money · spend as you like";
+            const remLabel = isTreasurer && remainder < -0.005
+              ? "↩ Fronted for the family · owed back"
+              : remainder < -0.005
+                ? "↩ Fronted this month · owed back next month"
+                : "Your own money · spend as you like";
             const carr = <span className="text-slate-400"> · carried</span>;
             const piggyLink = "truncate text-pink-600 underline decoration-dotted underline-offset-2 hover:text-pink-700";
-            // TREASURER: a full money-in / money-out ledger (he's the family hub, not a regular held-for) —
-            // carried + everything COLLECTED (each source) − everything PAID OUT (each destination) − his
-            // own spends (each category) = holding. All real flows, reconciles by construction, no own/pool
-            // plug. Dynamic — renders for whoever is the treasurer in any month.
-            if (isTreasurer) {
-              const carriedNet = Math.round(((group.openingCarry ?? 0) - (piggyGone ? carriedFree : 0)) * 100) / 100;
-              const ins = doneMoves.filter((d) => d.dir === "in");
-              const outs = doneMoves.filter((d) => d.dir === "out");
-              return (
-                <div className="mb-2 mt-2">
-                  <div className="mb-1 text-[10px] font-medium uppercase tracking-wide text-slate-400">Money in &amp; out <span className="font-normal normal-case text-slate-300">— as treasurer, every rupee</span></div>
-                  <ul className="space-y-0.5 text-[11px]">
-                    <li className="flex items-center justify-between gap-2"><span className="truncate text-slate-500">Carried from last month{piggyGone && carriedFree > 0.005 ? <span className="text-slate-400"> · net of {formatINR(carriedFree)} → Piggy</span> : null}</span><span className="shrink-0 tabular-nums text-slate-600">{money(carriedNet)}</span></li>
-                    {ins.length > 0 && <li className="pt-1 text-[10px] font-semibold uppercase tracking-wide text-emerald-600">Collected</li>}
-                    {ins.map((d, i) => (
-                      <li key={`tin${i}`} className="flex items-center justify-between gap-2"><span className="truncate text-emerald-600">{d.label}</span><span className="shrink-0 tabular-nums text-emerald-600">+ {formatINR(d.amount)}</span></li>
-                    ))}
-                    {outs.length > 0 && <li className="pt-1 text-[10px] font-semibold uppercase tracking-wide text-rose-500">Paid out</li>}
-                    {outs.map((d, i) => (
-                      <li key={`tout${i}`} className="flex items-center justify-between gap-2"><span className="truncate text-rose-500">{d.label}</span><span className="shrink-0 tabular-nums text-rose-500">− {formatINR(d.amount)}</span></li>
-                    ))}
-                    {(group.cashByCat ?? []).length > 0 && <li className="pt-1 text-[10px] font-semibold uppercase tracking-wide text-amber-600">Your own spends</li>}
-                    {(group.cashByCat ?? []).map((c, i) => (
-                      <li key={`tsp${i}`} className="flex items-center justify-between gap-2"><span className="truncate text-amber-600">{c.name}</span><span className="shrink-0 tabular-nums text-amber-600">− {formatINR(c.amount)}</span></li>
-                    ))}
-                    {isPiggyHolder && Math.abs(piggyAmt) > 0.005 && (
-                      <li className="flex items-center justify-between gap-2"><a href="/piggy" title="Open the Piggy tab" className={piggyLink}>🐷 General Piggy held <span className="text-slate-400">· role money ↗</span></a><span className="shrink-0 tabular-nums text-pink-700">+ {formatINR(piggyAmt)}</span></li>
-                    )}
-                    <li className="flex items-center justify-between gap-2 border-t border-slate-300 pt-0.5 font-semibold text-slate-800"><span>= {holdingNow < 0 ? "To reclaim" : "Holding now"}</span><span className={`shrink-0 tabular-nums ${holdingNow < 0 ? "text-red-600" : "text-emerald-700"}`}>{money(holdingNow)}</span></li>
-                  </ul>
-                </div>
-              );
-            }
             return (
               <div className="mb-2 mt-2">
                 <div className="mb-1 text-[10px] font-medium uppercase tracking-wide text-slate-400">Held for <span className="font-normal normal-case text-slate-300">— every rupee</span></div>
@@ -313,6 +284,9 @@ export function InHandPersonGroup({
                   )}
                   {routingToForward > 0.005 && (
                     <li className="flex items-center justify-between gap-2"><span className="truncate text-amber-600">➡️ To forward <span className="text-slate-400">· routing through you</span></span><span className="shrink-0 tabular-nums text-amber-700">{formatINR(routingToForward)}</span></li>
+                  )}
+                  {isTreasurer && Math.abs(monthBal) > 0.005 && (
+                    <li className="flex items-center justify-between gap-2"><span className="truncate text-emerald-600">Family month balance <span className="text-slate-400">· pool</span></span><span className="shrink-0 tabular-nums text-emerald-700">{formatINR(monthBal)}</span></li>
                   )}
                   {spentLines.map((sp, i) => (
                     <li key={`v3sp${i}`} className="flex items-center justify-between gap-2"><span className="truncate text-amber-600">{sp.name} <span className="text-slate-400">· spent</span></span><span className="shrink-0 tabular-nums text-amber-600">− {formatINR(sp.amount)}</span></li>

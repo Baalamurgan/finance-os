@@ -1763,7 +1763,7 @@ export async function _getInHand(householdId: number, periodId: number, settleme
   // of its budget remaining (on-card for the card bill / owed to others / free→Piggy). Lets the In-Hand
   // print "carried from last month" as named ↳ lines instead of one lump. (Sinking is shown via the
   // current sinkingHeld; the carried out-of-pocket owed-back nets into the honest remainder.)
-  const carryPartsByMember = new Map<number, { onCard: number; others: number; free: number }>();
+  const carryPartsByMember = new Map<number, { onCard: number; others: number; free: number; swept: number }>();
   if (computeOpening && priorPeriod && period?.status !== "closed") {
     // Pass the prior month's settlement explicitly (uncached _getSettlement) so the recursion never
     // calls the cached getSettlement — the per-member net is independent of who the treasurer is, so
@@ -1773,9 +1773,15 @@ export async function _getInHand(householdId: number, periodId: number, settleme
     for (const r of prior.byPerson) {
       if (r.memberId == null) continue;
       openingByMember.set(r.memberId, r.personal);
-      let oc = 0, ot = 0, fr = 0;
-      for (const c of r.cats) { oc += c.onCard ?? 0; ot += c.othersSpent ?? 0; fr += c.remaining - (c.onCard ?? 0) - (c.othersSpent ?? 0); }
-      carryPartsByMember.set(r.memberId, { onCard: Math.round(oc * 100) / 100, others: Math.round(ot * 100) / 100, free: Math.round(fr * 100) / 100 });
+      // `free` = NET free per category (can go negative when others overspent a budget). `swept` = what
+      // actually left to the Piggy at wind-down: the PER-CATEGORY POSITIVE free only (Σ max(0, free)) —
+      // an overspent category sweeps nothing. This matches the recorded PiggyEntry sweeps exactly, so the
+      // In-Hand subtracts the REAL amount that went to the Piggy, not the net (which understates it when a
+      // budget was overspent). (Verified: Arumugam Sept swept ₹12,465 = Arni 8,075 + G704 2,083 + Non-Veg
+      // 2,277 + Vinayagar 30; net free was only ₹9,242 because Provision/Veg overspent.)
+      let oc = 0, ot = 0, fr = 0, sw = 0;
+      for (const c of r.cats) { const f = c.remaining - (c.onCard ?? 0) - (c.othersSpent ?? 0); oc += c.onCard ?? 0; ot += c.othersSpent ?? 0; fr += f; sw += Math.max(0, f); }
+      carryPartsByMember.set(r.memberId, { onCard: Math.round(oc * 100) / 100, others: Math.round(ot * 100) / 100, free: Math.round(fr * 100) / 100, swept: Math.round(sw * 100) / 100 });
     }
   }
 
