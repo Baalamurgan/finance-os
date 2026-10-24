@@ -252,8 +252,14 @@ export function InHandPersonGroup({
               give + bills + routingToForward + monthBal +
               keptTotal - subtractedTotal;
             const remainder = Math.round((holdingNow - labeled) * 100) / 100;
-            const remLabel = isTreasurer && remainder < -0.005
-              ? "↩ Fronted for the family · owed back"
+            // The TREASURER's remainder is NOT his own money fronted/owed back — it's the family pool
+            // churning through the hub: cash he's net paid out ahead of collecting (negative) or net
+            // holding before it goes out (positive). It nets out as the month's collections/disbursements
+            // settle, so it's labelled as family-pool-in-transit, never "your own money" or "owed back".
+            const remLabel = isTreasurer
+              ? remainder < -0.005
+                ? "↩ Family money paid out ahead · nets out as the month settles"
+                : "Family money in your hands · nets out as the month settles"
               : remainder < -0.005
                 ? "↩ Fronted this month · owed back next month"
                 : "Your own money · spend as you like";
