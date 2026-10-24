@@ -1526,6 +1526,10 @@ export async function _getInHand(householdId: number, periodId: number, settleme
   // How much of each category's set-aside a due-month bill already consumed this period.
   const consumedByCat = new Map<number, number>();
   for (const p of billPayments) if (p.fromSetAside > 0) consumedByCat.set(p.categoryId, (consumedByCat.get(p.categoryId) ?? 0) + p.fromSetAside);
+  // Bill cadence per fund category — used to tell a MULTI-month set-aside (accrues toward a less-frequent
+  // bill; paying it from the set-aside draws cash the holding walk never sees) from a MONTHLY one (its
+  // payment already lands in the walk). See setAsideConsumedCash below.
+  const bemByCat = new Map(fundCats.map((c) => [c.id, c.billEveryMonths ?? 1]));
   const dueBills = fundCats
     .filter((c) => c.fundingStyle === "auto" && c.billAmount != null && c.billAmount > 0 && c.billMonth != null && c.billEveryMonths != null && isLumpDue(c.billMonth, c.billEveryMonths, { month: period?.month ?? 0 }))
     .map((c) => {
@@ -1576,6 +1580,19 @@ export async function _getInHand(householdId: number, periodId: number, settleme
       .filter((e) => (e.memberId ?? null) === key)
       .map((e) => ({ id: e.id, name: e.category.name, amount: Math.round((e.amount - (consumedByCat.get(e.categoryId) ?? 0)) * 100) / 100 }))
       .filter((e) => e.amount > 0.005);
+    // Cash that has LEFT the hand to pay a MULTI-month bill from THIS month's set-aside. `fromSetAside` is
+    // "no ledger draw", so the holding WALK (openingCarry + doneCashMove − cashSpent) never subtracts it —
+    // and a multi-month fund bill's step is excluded from doneCashMove too. Result: once such a bill is
+    // paid, its set-aside drops out of `earmarked` (above) yet the same rupees still sit in the walk's
+    // holding with nothing to label them → a phantom "own money" equal to the payment (user-reported: EB
+    // ₹4,000). The In-Hand subtracts this so the walk reflects the real outflow. MONTHLY bills (billEvery
+    // Months 1, e.g. Youtube) are excluded — their payment already lands in the walk, so subtracting would
+    // double-count. Capped at the set-aside so a partial fromSetAside is handled.
+    const setAsideConsumedCash = Math.round(
+      savingLines
+        .filter((e) => (e.memberId ?? null) === key && (bemByCat.get(e.categoryId) ?? 1) > 1)
+        .reduce((s, e) => s + Math.min(e.amount, consumedByCat.get(e.categoryId) ?? 0), 0) * 100,
+    ) / 100;
     // due-month periodic bills this member pays (net-neutral; paid from fund/Piggy in the modal)
     const memberDue = dueBills.filter((b) => b.payer === key);
     const unpaidPeriodic = memberDue.filter((b) => !b.paid).map((b) => ({ categoryId: b.categoryId, name: b.name, bill: b.bill, fund: b.fund, afterWindDown: b.afterWindDown, due: dueOf(b.day), hidden: isHiddenPeriodic(b.categoryId) }));
@@ -1672,6 +1689,9 @@ export async function _getInHand(householdId: number, periodId: number, settleme
       // aren't here either (settled in their month).
       net: netHeld,
       personal,
+      // Cash paid out of this month's set-aside toward a multi-month bill — the holding walk must subtract
+      // it (fromSetAside is "no ledger draw"), else it lingers as phantom "own money". See above.
+      setAsideConsumedCash,
     };
   };
 

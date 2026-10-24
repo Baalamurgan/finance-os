@@ -125,9 +125,14 @@ export function InHandPersonGroup({
   // no overspend, so swept == net == ₹471 (unaffected).
   const sweptToPiggy = group.carryParts?.swept ?? 0;
   const piggyGone = group.openingCarry != null && !isPreview && (isPiggyHolder ? piggyAmt <= 0.005 : piggyHandedOver);
+  // A MULTI-month bill paid from this month's set-aside (fromSetAside = "no ledger draw") sends real cash
+  // to the vendor that the walk never subtracts — it would otherwise linger as phantom "own money" equal
+  // to the payment (EB ₹4,000). Subtract it so holding-now reflects the outflow. (Engine already excludes
+  // monthly set-asides, which the walk captures on their own.)
+  const setAsideConsumedCash = group.setAsideConsumedCash ?? 0;
   const holdingNow =
     group.openingCarry != null && !isPreview
-      ? Math.round((group.openingCarry + doneCashMove - (cashSpent ?? 0) + piggyAmt - (piggyGone ? sweptToPiggy : 0)) * 100) / 100
+      ? Math.round((group.openingCarry + doneCashMove - (cashSpent ?? 0) + piggyAmt - (piggyGone ? sweptToPiggy : 0) - setAsideConsumedCash) * 100) / 100
       : total;
   // The live carry-walk month shows the clean "Held for" partition only; preview/closed months (no
   // opening carry) keep the detailed carry/pool/in-transit breakdown below.
