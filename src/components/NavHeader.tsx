@@ -49,6 +49,7 @@ export function NavHeader({
     | "sheet"
     | "expenses"
     | "in-hand"
+    | "transactions"
     | "activity"
     | "analysis"
     | "piggy"
@@ -101,6 +102,7 @@ export function NavHeader({
     { key: "sheet", label: "Sheet", href: "/" },
     { key: "expenses", label: "Spends", href: "/expenses" },
     { key: "in-hand", label: "Money Plan", href: "/in-hand" },
+    { key: "transactions", label: "Transactions", href: "/transactions" },
     { key: "settlement", label: "Settlement", href: "/settlement" },
     { key: "activity", label: "Changes", href: "/activity" },
     { key: "analysis", label: "Analysis", href: "/analysis" },
@@ -290,6 +292,7 @@ const TAB_ICON: Record<string, string> = {
   sheet: "📋",
   expenses: "🧾",
   "in-hand": "🧭",
+  transactions: "📒",
   settlement: "🤝",
   analysis: "📊",
 };

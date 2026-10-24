@@ -2411,3 +2411,72 @@ export async function getMiscSubCategories(householdId: number): Promise<MiscSub
     return fallback;
   }
 }
+
+export type LedgerRow = { day: number | null; label: string; amount: number; dir: "in" | "out"; running: number };
+export type MemberLedger = { memberId: number; name: string; rows: LedgerRow[]; inHand: number };
+
+// Per-member DATED transaction ledger for one month — powers the Transactions tab. Opening carry + every
+// money-in / money-out event (income, transfers, bills, spends, Piggy sweep, set-aside bill payments),
+// sorted by day, with a running balance that ends EXACTLY at that member's In-Hand. It reuses the SAME
+// walk the In-Hand card uses (openingCarry + doneCashMove − cashSpent + piggyHeld − swept − set-aside), so
+// the final `running` equals the holding-now figure by construction.
+export async function getTransactionLedger(householdId: number, periodId: number): Promise<MemberLedger[]> {
+  const inhand = await getInHand(householdId, periodId);
+  const plan = await getMoneyPlan(householdId, periodId, inhand);
+  const piggyHandedOver = inhand.piggyHandoverStep?.done ?? false;
+  const pendingPiggyLump = inhand.pendingPiggyHandover?.lump ?? 0;
+  const [spends, setAsidePays, cats] = await Promise.all([
+    prisma.spend.findMany({
+      where: { periodId },
+      select: { memberId: true, amount: true, createdAt: true, label: true, category: { select: { name: true } }, cardAccount: { select: { type: true } } },
+      orderBy: { createdAt: "asc" },
+    }),
+    prisma.billPayment.findMany({ where: { periodId, fromSetAside: { gt: 0 } }, select: { memberId: true, categoryId: true, fromSetAside: true, paidAt: true } }),
+    prisma.category.findMany({ where: { householdId }, select: { id: true, name: true, billEveryMonths: true } }),
+  ]);
+  const catOf = new Map(cats.map((c) => [c.id, c]));
+  const dayOf = (d: Date | null | undefined) => (d ? istDateParts(d).day : null);
+  const r2 = (n: number) => Math.round(n * 100) / 100;
+
+  const out: MemberLedger[] = [];
+  for (const g of inhand.byPerson) {
+    if (g.memberId == null) continue;
+    const mid = g.memberId;
+    const isHolder = mid === inhand.piggyHolderId;
+    const piggyAmt = isHolder ? r2(inhand.generalPiggy - pendingPiggyLump) : 0;
+    const swept = g.carryParts?.swept ?? 0;
+    const piggyGone = g.openingCarry != null && (isHolder ? piggyAmt <= 0.005 : piggyHandedOver);
+    const opening = g.openingCarry ?? 0;
+
+    const raw: { day: number | null; label: string; amount: number; dir: "in" | "out" }[] = [];
+    // Boundary rows (day −1 so they sort before any dated October row).
+    raw.push({ day: -1, label: "Carried from last month", amount: Math.abs(opening), dir: opening >= 0 ? "in" : "out" });
+    if (piggyGone && Math.abs(swept) > 0.005) raw.push({ day: -1, label: "Last month's free → Piggy", amount: Math.abs(swept), dir: "out" });
+    if (isHolder && Math.abs(piggyAmt) > 0.005) raw.push({ day: -1, label: "🐷 General Piggy held (as holder)", amount: Math.abs(piggyAmt), dir: piggyAmt >= 0 ? "in" : "out" });
+    // Done cash moves — mirrors doneCashMoveDetailByMember (so it sums to doneCashMove) plus the step day.
+    for (const s of plan.steps) {
+      if (!s.done || s.hidden || s.paidPriorMonth) continue;
+      if (s.kind === "income") { if (s.toId === mid) raw.push({ day: s.day, label: s.source || "Income received", amount: s.amount, dir: "in" }); continue; }
+      if (s.kind === "bill") { if (!s.fund && !s.miscCard && s.payerId === mid) raw.push({ day: s.day, label: `Paid ${s.vendor || "bill"}`, amount: s.amount, dir: "out" }); continue; }
+      if (s.kind === "piggy") continue;
+      if (s.kind === "pool-handover" && (s.piggyIncomeIds?.length ?? 0) > 0) { if (s.toId === mid) raw.push({ day: s.day, label: s.fromName ? `From ${s.fromName} · Piggy` : "Piggy received", amount: s.amount, dir: "in" }); continue; }
+      if (s.fromId === mid) raw.push({ day: s.day, label: s.toName ? `Sent to ${s.toName}` : "Sent out", amount: s.amount, dir: "out" });
+      if (s.toId === mid) raw.push({ day: s.day, label: s.fromName ? `From ${s.fromName}` : "Received", amount: s.amount, dir: "in" });
+    }
+    // Individual cash spends (non-credit-card — credit float isn't cash-out). Σ === cashSpent.
+    for (const sp of spends) {
+      if (sp.memberId !== mid || sp.cardAccount?.type === "credit_card") continue;
+      raw.push({ day: dayOf(sp.createdAt), label: (sp.label?.trim() || sp.category?.name || "Spend"), amount: sp.amount, dir: "out" });
+    }
+    // Set-aside paid toward a MULTI-month bill (EB/Brio…) — real cash out that fromSetAside hides. Σ === setAsideConsumedCash.
+    for (const p of setAsidePays) {
+      if (p.memberId !== mid || (catOf.get(p.categoryId)?.billEveryMonths ?? 1) <= 1) continue;
+      raw.push({ day: dayOf(p.paidAt), label: `${catOf.get(p.categoryId)?.name ?? "Bill"} (paid from set-aside)`, amount: p.fromSetAside, dir: "out" });
+    }
+    raw.sort((a, b) => (a.day ?? 999) - (b.day ?? 999));
+    let running = 0;
+    const rows: LedgerRow[] = raw.map((x) => { running = r2(running + (x.dir === "in" ? x.amount : -x.amount)); return { ...x, running }; });
+    out.push({ memberId: mid, name: g.name, rows, inHand: running });
+  }
+  return out;
+}
