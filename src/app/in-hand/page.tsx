@@ -7,6 +7,12 @@ import { NavHeader } from "@/components/NavHeader";
 import { MoneyPlan } from "@/components/MoneyPlan";
 import { InHandPersonGroup } from "@/components/InHandPersonGroup";
 
+// A manual step whose note contains this marker is a member RETURNING the budget cash others spent on their
+// category (owed-others) back to the treasurer/pool. When such a step is done, that much is netted off the
+// member's "owe back" held line. The marker (not just "any manual→treasurer") keeps routing legs — e.g.
+// Baala's "Lakshmi remaining" pass-through — from being mistaken for an owed-others return.
+const OWED_OTHERS_MARKER = "owed-others settlement";
+
 export default async function InHandPage({
   searchParams,
 }: {
@@ -140,10 +146,23 @@ export default async function InHandPage({
   // toTreasurerPending, so Lakshmi reads her real ₹4,170 not the superseded ₹1,04,170). To send = what he
   // still owes members (undone transfer-out / allowance / advance / manual from the hub to a member).
   const memberName = (id: number | null | undefined) => c.members.find((m) => m.id === id)?.name ?? "";
+  // To receive = members' netted settlement (toTreasurerPendingByMember) PLUS any PENDING manual step a
+  // member has queued to the treasurer (e.g. Baala returning the ₹636 others spent on his budget). A
+  // pending manual→treasurer isn't in toTreasurerPendingByMember (page.tsx:98 nets only transfers there) —
+  // fold it in HERE, not into toTreasurerPendingByMember itself, or it would also print a duplicate "to
+  // give treasurer" line on the sender's own card right beside their "owe back" owed-others line.
+  const toTreasurerCombined: Record<number, number> = { ...toTreasurerPendingByMember };
+  if (inHand.treasurerId != null) {
+    for (const s of plan.steps) {
+      if (!s.done && s.kind === "manual" && s.toId === inHand.treasurerId && s.fromId != null && s.fromId !== inHand.treasurerId) {
+        toTreasurerCombined[s.fromId] = Math.round(((toTreasurerCombined[s.fromId] ?? 0) + s.amount) * 100) / 100;
+      }
+    }
+  }
   const treasurerReceiveItems =
     inHand.treasurerId == null
       ? []
-      : Object.entries(toTreasurerPendingByMember)
+      : Object.entries(toTreasurerCombined)
           .filter(([mid, amt]) => Number(mid) !== inHand.treasurerId && amt > 0.005)
           .map(([mid, amt]) => ({ name: memberName(Number(mid)), amount: amt }))
           .sort((a, b) => b.amount - a.amount);
@@ -162,6 +181,24 @@ export default async function InHandPage({
           )
           .map((s) => ({ name: memberName(s.toId), label: s.source || s.vendor || null, amount: s.amount }))
           .sort((a, b) => b.amount - a.amount);
+  // How much of each member's carried owed-others they've PAID BACK to the treasurer via a DONE manual
+  // step (capped at the owed-others). Drives the netting of their "owe back" held line once they settle.
+  // The step MUST carry the OWED_OTHERS_MARKER in its note — a member can have other done manual→treasurer
+  // moves (e.g. Baala's ₹22,330 "Lakshmi remaining" routing leg) that must NOT be mistaken for settling
+  // their own owed-others; only a step explicitly tagged as the owed-others return counts.
+  const owedOthersSettledByMember: Record<number, number> = {};
+  if (inHand.treasurerId != null) {
+    for (const g of inHand.byPerson) {
+      if (g.memberId == null || g.memberId === inHand.treasurerId) continue;
+      const owed = g.carryParts?.others ?? 0;
+      if (owed <= 0.005) continue;
+      let doneToTreasurer = 0;
+      for (const s of plan.steps) {
+        if (s.done && s.kind === "manual" && s.fromId === g.memberId && s.toId === inHand.treasurerId && (s.note ?? "").toLowerCase().includes(OWED_OTHERS_MARKER)) doneToTreasurer += s.amount;
+      }
+      owedOthersSettledByMember[g.memberId] = Math.min(owed, Math.round(doneToTreasurer * 100) / 100);
+    }
+  }
   const visibleGroups = c.isHead
     ? inHand.byPerson
     : inHand.byPerson.filter((g) => g.memberId === currentMemberId);
@@ -225,6 +262,7 @@ export default async function InHandPage({
                 isTreasurer={g.memberId === inHand.treasurerId}
                 toReceiveItems={g.memberId === inHand.treasurerId ? treasurerReceiveItems : []}
                 toSendItems={g.memberId === inHand.treasurerId ? treasurerSendItems : []}
+                owedOthersSettled={g.memberId != null ? owedOthersSettledByMember[g.memberId] ?? 0 : 0}
                 pool={inHand.treasurerPool}
                 sharedNet={inHand.shared.net}
                 monthBalance={inHand.monthBalance}
