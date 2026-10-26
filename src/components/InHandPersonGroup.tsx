@@ -39,6 +39,7 @@ export function InHandPersonGroup({
   toReceiveItems = [],
   toSendItems = [],
   owedOthersSettled = 0,
+  ownerChargeActive = false,
 }: {
   group: InHand["byPerson"][number];
   // This person's OWN credit cards → the "Paid with" picker on their bills' Pay modals.
@@ -79,6 +80,10 @@ export function InHandPersonGroup({
   // the done manual move already took the cash out of their holding, so netting the line keeps the card
   // reconciled (holding −X and labelled −X cancel in the remainder) and shows the debt as resolved.
   owedOthersSettled?: number;
+  // From the owner-charge start month, a non-treasurer's owed-others is collected through the settlement
+  // (folded into their "to give treasurer"), so the separate "owe back · held" line is suppressed to avoid
+  // double-counting — exactly as it already is for the treasurer.
+  ownerChargeActive?: boolean;
 }) {
   const { name, cats, unpaidBills, paidBills, earmarked, earmarkedTotal, sinkingFunds, sinkingHeld, unpaidPeriodic, paidPeriodic, carried, carriedDue, miscSpent, net, pendingPiggyHeld, pendingCardBills, cashSpent, cardSpent, yetToReceive, selfFundsBills } = group;
   // Family/others' spends the member fronted on their OWN CREDIT card. NOT subtracted from the headline —
@@ -244,7 +249,7 @@ export function InHandPersonGroup({
             // into his "Sent to …" done moves / netted off what they pay him). So for the hub it's a
             // pass-through that nets in the holding — showing it as "held" double-counts it and inflated the
             // old remainder. Drop it from his held-for; the walk already nets it.
-            const carriedOthers = isTreasurer ? 0 : Math.max(0, (group.carryParts?.others ?? 0) - owedOthersSettled);
+            const carriedOthers = (isTreasurer || ownerChargeActive) ? 0 : Math.max(0, (group.carryParts?.others ?? 0) - owedOthersSettled);
             // free→Piggy only still "held" if the Piggy hasn't been handed over/forwarded yet (see piggyGone).
             const carriedFreeHeld = piggyGone ? 0 : sweptToPiggy;
             const budgetsTotal = cats.reduce((s, c) => s + c.remaining, 0);

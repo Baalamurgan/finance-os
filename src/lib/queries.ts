@@ -3,7 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { FAMILY_TAG } from "@/lib/revalidate";
 import { MISC_SUBCATEGORIES } from "@/lib/misc";
 import { SURPLUS_NOTE, LEFTOVER_NOTE, CARRY_NOTE, PIGGY_INCOME_NOTE, POOL_NOTE, POOL_BILL_NOTE, REMOVED_NOTE, isPoolNote } from "@/lib/notes";
-import { computeSettlement, type SettleTagged } from "@/lib/settlement-core";
+import { computeSettlement, ownerChargeActiveFor, type SettleTagged } from "@/lib/settlement-core";
 import { planBillMonth, isLumpDue, monthsUntilNextDue, type FundingStyle } from "@/lib/schedule";
 import { suggestCategoryName, normalizeItem, resolveCategoryId } from "@/lib/spendCategorize";
 import { withShareCount } from "@/lib/format";
@@ -597,8 +597,14 @@ export async function _getSettlement(
   const prevLabel = prevPeriod?.label ?? null;
   const expensesForCalc = extraExpenses?.length ? [...expenses, ...extraExpenses] : expenses;
 
+  // Owner-charge (settlement charges a budget OWNER for others' spend on their categories) goes live from
+  // Nov 2026 onward. It is OFF for Oct 2026 and earlier so already-paid settlements never shift — turning
+  // it on for a month whose transfers were settled without it un-settles those paid transfers (desync).
+  // Gated by the SETTLEMENT month itself (not a live date), so a period always computes the same way, and
+  // November's settlement — which settles October's spends — is the first to collect owners' cross-spend.
+  const ownerChargeActive = period != null && ownerChargeActiveFor(period.year, period.month);
   // pure math (unit-tested in settlement-core.test.ts)
-  return computeSettlement({ members, incomes, expenses: expensesForCalc, spends, records, treasurerId, prevLabel });
+  return computeSettlement({ members, incomes, expenses: expensesForCalc, spends, records, treasurerId, prevLabel, applyOwnerCharge: ownerChargeActive });
 }
 
 // The Money Plan for a month: the settlement transfers + dated bill payments, ordered into one

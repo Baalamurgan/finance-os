@@ -24,6 +24,13 @@ export type SettleRecord = {
   key?: string | null;
 };
 
+// The owner-charge (settlement charges a budget owner for others' spend on their category) goes live from
+// this month on. Gated by the SETTLEMENT month itself so a period always computes the same way, and never
+// ON for a month whose transfers were already settled without it (which would un-settle them = desync).
+export const OWNER_CHARGE_FROM = { year: 2026, month: 11 } as const;
+export const ownerChargeActiveFor = (year: number, month: number) =>
+  year > OWNER_CHARGE_FROM.year || (year === OWNER_CHARGE_FROM.year && month >= OWNER_CHARGE_FROM.month);
+
 export function computeSettlement(opts: {
   members: SettleMember[];
   incomes: SettleIncome[];
@@ -32,8 +39,13 @@ export function computeSettlement(opts: {
   records: SettleRecord[];
   treasurerId: number | null;
   prevLabel: string | null;
+  // When true, a budget OWNER is CHARGED for others' spend on their category (the mirror of the spender's
+  // credit): it lands as a negative "charge" line in their paid breakdown, raising their net so they settle
+  // it with the hub instead of the hub silently absorbing it. Gated ON only from a start month (see
+  // queries.ts) — switching it on mid-month would un-settle already-paid transfers.
+  applyOwnerCharge?: boolean;
 }) {
-  const { members, incomes, expenses, spends, records, treasurerId, prevLabel } = opts;
+  const { members, incomes, expenses, spends, records, treasurerId, prevLabel, applyOwnerCharge = false } = opts;
 
   const rows = members.map((m) => {
     const contributed = incomes
@@ -65,7 +77,31 @@ export function computeSettlement(opts: {
         kind: "spend" as const,
       }))
       .sort((a, b) => b.amount - a.amount);
-    const paidItems = [...sheetItems, ...spendItems];
+    // Owner-charge: others' spend on THIS member's OWN budget categories (the exact mirror of the credit
+    // above — same spend set, roles flipped). Lands as a NEGATIVE paid line so `net = contributed − paid`
+    // still holds while the net rises by the charge — i.e. the owner settles their budget that others
+    // fronted, instead of keeping the cash and leaving the hub short. Off unless applyOwnerCharge.
+    // The TREASURER is never owner-charged: others' spend on the HUB's own budget already nets for them
+    // (they hold that budget AND reimburse the spenders as the hub = 0), and the treasurer's net drives no
+    // transfer, so charging them would only inflate their displayed net. Only NON-treasurer owners — who
+    // hold the budget but let the hub reimburse — actually owe it back, so only they are charged.
+    const chargeByCat = new Map<string, number>();
+    if (applyOwnerCharge && m.id !== treasurerId) {
+      for (const sp of spends) {
+        if ((sp.category.responsibleMemberId ?? null) !== m.id) continue; // only this member's own categories
+        if (sp.memberId == null || sp.memberId === m.id) continue; // only OTHERS' spend on them
+        chargeByCat.set(sp.category.name, (chargeByCat.get(sp.category.name) ?? 0) + sp.amount);
+      }
+    }
+    const chargeItems = [...chargeByCat.entries()]
+      .map(([category, amount]) => ({
+        label: prevLabel ? `↩ others' spend on your ${category} (${prevLabel}) · owe pool` : `↩ others' spend on your ${category} · owe pool`,
+        amount: -amount,
+        category,
+        kind: "charge" as const,
+      }))
+      .sort((a, b) => a.amount - b.amount);
+    const paidItems = [...sheetItems, ...spendItems, ...chargeItems];
     const paid = paidItems.reduce((s, it) => s + it.amount, 0);
     return { id: m.id, name: m.name, contributed, paid, net: contributed - paid, paidItems };
   });

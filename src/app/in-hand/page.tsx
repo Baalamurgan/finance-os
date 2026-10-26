@@ -6,6 +6,7 @@ import { MoneyPlanActivity } from "@/components/MoneyPlanActivity";
 import { NavHeader } from "@/components/NavHeader";
 import { MoneyPlan } from "@/components/MoneyPlan";
 import { InHandPersonGroup } from "@/components/InHandPersonGroup";
+import { ownerChargeActiveFor } from "@/lib/settlement-core";
 
 // A manual step whose note contains this marker is a member RETURNING the budget cash others spent on their
 // category (owed-others) back to the treasurer/pool. When such a step is done, that much is netted off the
@@ -199,6 +200,11 @@ export default async function InHandPage({
       owedOthersSettledByMember[g.memberId] = Math.min(owed, Math.round(doneToTreasurer * 100) / 100);
     }
   }
+  // From the owner-charge start month, a non-treasurer's owed-others is COLLECTED through the settlement
+  // (their "to give treasurer" already includes it), so it must NOT also show as a separate "owe back ·
+  // held" line — that would double it. Suppress the held line for those months (the treasurer's is already
+  // always suppressed). Before the start month it stays a real held line (nothing collects it yet).
+  const ownerChargeActive = ownerChargeActiveFor(c.selYear, c.selMonth);
   const visibleGroups = c.isHead
     ? inHand.byPerson
     : inHand.byPerson.filter((g) => g.memberId === currentMemberId);
@@ -263,6 +269,7 @@ export default async function InHandPage({
                 toReceiveItems={g.memberId === inHand.treasurerId ? treasurerReceiveItems : []}
                 toSendItems={g.memberId === inHand.treasurerId ? treasurerSendItems : []}
                 owedOthersSettled={g.memberId != null ? owedOthersSettledByMember[g.memberId] ?? 0 : 0}
+                ownerChargeActive={ownerChargeActive}
                 pool={inHand.treasurerPool}
                 sharedNet={inHand.shared.net}
                 monthBalance={inHand.monthBalance}
