@@ -1,9 +1,42 @@
 import { prisma } from "@/lib/prisma";
+import { Prisma } from "@prisma/client";
 import { CATEGORY_KINDS } from "@/lib/misc";
 import { getPersonalCash } from "@/lib/personal/cash";
 import { istNow } from "@/lib/time";
 
 const MONTHS = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"];
+
+// Carry a recurring template's day-of-month into the target (year, month), clamped to that month's length
+// (so a "31st" template still lands on Feb 28). `month` is 1-based.
+function recurDate(year: number, month: number, template: Date): Date {
+  const day = Math.min(template.getDate(), new Date(year, month, 0).getDate());
+  return new Date(year, month - 1, day);
+}
+
+// Clone the member's recurring templates (set in Personal setup) from `fromPeriodId` into the new month
+// `to`, each stamped with its own day-of-month. Income, fixed expenses AND daily spends all recur; the
+// cloned rows stay `recurring: true` so they roll forward again next month. Runs inside a transaction.
+async function seedRecurring(
+  tx: Prisma.TransactionClient,
+  memberId: number,
+  fromPeriodId: number,
+  to: { id: number; year: number; month: number },
+) {
+  const [incomes, expenses, spends] = await Promise.all([
+    tx.personalIncome.findMany({ where: { periodId: fromPeriodId, recurring: true } }),
+    tx.personalExpense.findMany({ where: { periodId: fromPeriodId, recurring: true } }),
+    tx.personalSpend.findMany({ where: { periodId: fromPeriodId, recurring: true } }),
+  ]);
+  for (const e of incomes) {
+    await tx.personalIncome.create({ data: { memberId, periodId: to.id, source: e.source, amount: e.amount, date: recurDate(to.year, to.month, e.date), recurring: true } });
+  }
+  for (const e of expenses) {
+    await tx.personalExpense.create({ data: { memberId, periodId: to.id, label: e.label, categoryId: e.categoryId, amount: e.amount, note: e.note, recurring: true, cardAccountId: e.cardAccountId, date: recurDate(to.year, to.month, e.date) } });
+  }
+  for (const e of spends) {
+    await tx.personalSpend.create({ data: { memberId, periodId: to.id, categoryId: e.categoryId, amount: e.amount, note: e.note, recurring: true, cardAccountId: e.cardAccountId, date: recurDate(to.year, to.month, e.date) } });
+  }
+}
 
 export function personalMonthLabel(month: number, year: number) {
   return `${MONTHS[month - 1]} ${year}`;
@@ -97,25 +130,7 @@ export async function ensurePersonalMonth(memberId: number, now = new Date()) {
           carryForward,
         },
       });
-      if (latest) {
-        const recurring = await tx.personalExpense.findMany({
-          where: { periodId: latest.id, recurring: true },
-        });
-        for (const e of recurring) {
-          await tx.personalExpense.create({
-            data: {
-              memberId,
-              periodId: p.id,
-              label: e.label,
-              categoryId: e.categoryId,
-              amount: e.amount,
-              note: e.note,
-              recurring: true,
-              cardAccountId: e.cardAccountId, // a subscription on a card stays on the card
-            },
-          });
-        }
-      }
+      if (latest) await seedRecurring(tx, memberId, latest.id, p);
     }
     if (latest) {
       await tx.personalPeriod.update({
@@ -150,12 +165,7 @@ export async function ensurePersonalPreview(memberId: number) {
     const p = await tx.personalPeriod.create({
       data: { memberId, year, month, label: personalMonthLabel(month, year), status: "draft", income: latest.income, carryForward },
     });
-    const recurring = await tx.personalExpense.findMany({ where: { periodId: latest.id, recurring: true } });
-    for (const e of recurring) {
-      await tx.personalExpense.create({
-        data: { memberId, periodId: p.id, label: e.label, categoryId: e.categoryId, amount: e.amount, note: e.note, recurring: true, cardAccountId: e.cardAccountId },
-      });
-    }
+    await seedRecurring(tx, memberId, latest.id, p);
     return p;
   });
 }
@@ -172,13 +182,13 @@ export async function rebuildPersonalPreview(memberId: number, draftId: number) 
   if (!latest) return;
   const carryForward = (await getPersonalCash(latest)).canSpend;
   await prisma.$transaction(async (tx) => {
-    await tx.personalExpense.deleteMany({ where: { periodId: draftId, recurring: true } });
-    const recurring = await tx.personalExpense.findMany({ where: { periodId: latest.id, recurring: true } });
-    for (const e of recurring) {
-      await tx.personalExpense.create({
-        data: { memberId, periodId: draftId, label: e.label, categoryId: e.categoryId, amount: e.amount, note: e.note, recurring: true, cardAccountId: e.cardAccountId },
-      });
-    }
+    // drop the previously-generated recurring rows, then re-clone from the latest real month's templates
+    await Promise.all([
+      tx.personalIncome.deleteMany({ where: { periodId: draftId, recurring: true } }),
+      tx.personalExpense.deleteMany({ where: { periodId: draftId, recurring: true } }),
+      tx.personalSpend.deleteMany({ where: { periodId: draftId, recurring: true } }),
+    ]);
+    await seedRecurring(tx, memberId, latest.id, draft);
     await tx.personalPeriod.update({ where: { id: draftId }, data: { income: latest.income, carryForward } });
   });
 }

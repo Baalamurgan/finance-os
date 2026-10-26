@@ -255,6 +255,10 @@ model PersonalIncome {
   periodId  Int
   source    String
   amount    Float
+  // Recurring income templates (set in Personal setup) clone into each new month on `date`'s day-of-month
+  // — mirrors the recurring flag on PersonalExpense. `date` is the day it lands (so it can be shown/ordered).
+  date      DateTime @default(now())
+  recurring Boolean  @default(false)
   createdAt DateTime @default(now())
 }
 
@@ -313,6 +317,9 @@ model PersonalSpend {
   categoryId Int
   amount     Float
   note       String?
+  // Recurring spend template (set in Personal setup): clones into each new month on `date`'s day-of-month,
+  // carrying its category + card. A normal daily spend leaves this false.
+  recurring  Boolean  @default(false)
   date       DateTime @default(now())
   // Paid by a credit card → the cash leaves when that card's bill is paid, but the spend
   // still counts against this month at spend time. null = cash/UPI.

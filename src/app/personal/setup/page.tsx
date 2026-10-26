@@ -1,9 +1,7 @@
-import { formatINR } from "@/lib/format";
 import { prisma } from "@/lib/prisma";
 import { loadPersonal } from "@/lib/loadPersonal";
 import { PersonalNav } from "@/components/personal/PersonalNav";
-import { PersonalFixedModal } from "@/components/personal/PersonalFixedModal";
-import { PersonalFixedRowActions } from "@/components/personal/PersonalFixedRowActions";
+import { PersonalRecurringSection } from "@/components/personal/PersonalRecurringManager";
 import { PersonalSecurity } from "@/components/personal/PersonalSecurity";
 import { setPersonalWindDownDay, setPersonalCategoryBucket } from "@/app/personal/actions";
 
@@ -23,13 +21,16 @@ export default async function PersonalSetup({
   const nav = <PersonalNav active="setup" name={c.account.name} selYear={c.selYear} selMonth={c.selMonth} financeDue={c.cardReminders.length > 0} />;
 
   const catList = c.categories.map((cat) => ({ id: cat.id, name: cat.name, icon: cat.icon }));
-  const catName = (id: number | null) => (id == null ? null : c.categories.find((x) => x.id === id));
-  const recurring = c.selected
-    ? await prisma.personalExpense.findMany({
-        where: { periodId: c.selected.id, recurring: true },
-        orderBy: { amount: "desc" },
-      })
-    : [];
+  const cardOpts = c.creditCards.map((k) => ({ id: k.id, name: k.name, color: k.color }));
+  const periodId = c.selected?.id ?? null;
+  // Recurring templates live as `recurring: true` rows in the current month (they clone forward each month,
+  // dated to their day). One list per kind for the three setup sections.
+  const recIncome = c.selected ? await prisma.personalIncome.findMany({ where: { periodId: c.selected.id, recurring: true }, orderBy: { amount: "desc" } }) : [];
+  const recExpense = c.selected ? await prisma.personalExpense.findMany({ where: { periodId: c.selected.id, recurring: true }, orderBy: { amount: "desc" } }) : [];
+  const recSpend = c.selected ? await prisma.personalSpend.findMany({ where: { periodId: c.selected.id, recurring: true }, orderBy: { amount: "desc" } }) : [];
+  const incomeItems = recIncome.map((e) => ({ id: e.id, label: e.source, amount: e.amount, day: e.date.getDate(), categoryId: null, cardAccountId: null }));
+  const expenseItems = recExpense.map((e) => ({ id: e.id, label: e.label, amount: e.amount, day: e.date.getDate(), categoryId: e.categoryId, cardAccountId: e.cardAccountId }));
+  const spendItems = recSpend.map((e) => ({ id: e.id, label: e.note ?? "", amount: e.amount, day: e.date.getDate(), categoryId: e.categoryId, cardAccountId: e.cardAccountId }));
 
   return (
     <>
@@ -37,42 +38,39 @@ export default async function PersonalSetup({
       <main className="mx-auto max-w-3xl space-y-5 p-4 sm:p-6">
         <h1 className="text-xl font-bold text-slate-900">Personal setup</h1>
 
-        {/* Recurring fixed expenses */}
-        <section className="rounded-xl border border-slate-200 bg-white p-4">
-          <h2 className="text-sm font-semibold text-slate-900">Standard monthly expenses</h2>
-          <p className="mt-0.5 text-xs text-slate-500">
-            Rent, subscriptions, EMIs — these auto-appear on every month&apos;s Sheet. Edit or remove
-            any amount; new months copy from the previous one.
-          </p>
-          <div className="mt-3 divide-y divide-slate-100">
-            {recurring.length === 0 ? (
-              <p className="py-2 text-sm text-slate-400">None yet.</p>
-            ) : (
-              recurring.map((e) => (
-                <div key={e.id} className="flex items-center justify-between py-2 text-sm">
-                  <span className="text-slate-700">
-                    {catName(e.categoryId)?.icon} {e.label}
-                  </span>
-                  <span className="flex items-center gap-2">
-                    <span className="tabular-nums font-medium text-slate-800">{formatINR(e.amount)}</span>
-                    {c.selected && (
-                      <PersonalFixedRowActions
-                        periodId={c.selected.id}
-                        categories={catList}
-                        initial={{ id: e.id, label: e.label, categoryId: e.categoryId, amount: e.amount, recurring: e.recurring }}
-                      />
-                    )}
-                  </span>
-                </div>
-              ))
-            )}
-          </div>
-          {c.selected && (
-            <div className="mt-3">
-              <PersonalFixedModal periodId={c.selected.id} categories={catList} defaultRecurring triggerLabel="+ Add standard expense" />
-            </div>
-          )}
-        </section>
+        <p className="-mb-1 text-xs text-slate-500">
+          Everything here repeats <b>every month automatically</b> — each entry lands on its day on your
+          Spends/Expenses tabs. Edit or remove any; changes apply from next month.
+        </p>
+
+        {/* Recurring income / expenses / spends — the monthly template */}
+        <PersonalRecurringSection
+          kind="income"
+          title="💰 Recurring income"
+          hint="Salary, rent received, interest — added to each month on its day."
+          items={incomeItems}
+          periodId={periodId}
+          categories={catList}
+          cards={cardOpts}
+        />
+        <PersonalRecurringSection
+          kind="expense"
+          title="🧾 Recurring expenses"
+          hint="Rent, EMIs, subscriptions — fixed bills each month. Pick a card to put it on the card bill."
+          items={expenseItems}
+          periodId={periodId}
+          categories={catList}
+          cards={cardOpts}
+        />
+        <PersonalRecurringSection
+          kind="spend"
+          title="🛒 Recurring spends"
+          hint="Regular daily-type spends (gym, chai, fuel) that repeat each month on their day."
+          items={spendItems}
+          periodId={periodId}
+          categories={catList}
+          cards={cardOpts}
+        />
 
         {/* Close day */}
         <section className="rounded-xl border border-slate-200 bg-white p-4">

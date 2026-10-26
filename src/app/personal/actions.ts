@@ -459,6 +459,74 @@ export async function updatePersonalExpense(
   return { ok: true, n };
 }
 
+// ── Recurring setup templates (income / fixed expense / daily spend) ──────────────────────────────────
+// One upsert for all three. Each is a real entry in the CURRENT month flagged `recurring: true` + dated to
+// its day-of-month, so it shows this month AND clones forward every month (seedRecurring in personal.ts).
+// income: no category/card. expense + spend: a category (+ optional card as payment mode).
+export async function upsertPersonalRecurring(prev: PersonalSaveState, formData: FormData): Promise<PersonalSaveState> {
+  const n = (prev?.n ?? 0) + 1;
+  const member = await me();
+  if (!member) return { ok: false, error: "Signed out.", n };
+  const kind = String(formData.get("kind"));
+  if (kind !== "income" && kind !== "expense" && kind !== "spend") return { ok: false, error: "Bad type.", n };
+  const id = Number(formData.get("id")) || 0;
+  const periodId = Number(formData.get("periodId"));
+  const label = String(formData.get("label") ?? "").trim();
+  const amount = parseAmount(formData.get("amount"));
+  const categoryId = Number(formData.get("categoryId")) || 0;
+  const day = Math.min(28, Math.max(1, Math.round(Number(formData.get("day")) || 1)));
+  if (!label || !amount || amount <= 0) return { ok: false, error: "Enter a name and amount.", n };
+  if ((kind === "expense" || kind === "spend") && !categoryId) return { ok: false, error: "Pick a category.", n };
+  const period = await prisma.personalPeriod.findFirst({ where: { id: periodId, memberId: member.id }, select: { year: true, month: true } });
+  if (!period) return { ok: false, error: "Not your month.", n };
+  // `day` → a real date in this month, clamped to its length (so "28" is always valid).
+  const date = new Date(period.year, period.month - 1, Math.min(day, new Date(period.year, period.month, 0).getDate()));
+  const cardAccountId = kind === "income" ? null : await ccCardId(member.id, formData);
+  if (kind === "income") {
+    const data = { source: label, amount, date, recurring: true };
+    if (id) {
+      const e = await prisma.personalIncome.findUnique({ where: { id } });
+      if (!e || e.memberId !== member.id) return { ok: false, error: "Not found.", n };
+      await prisma.personalIncome.update({ where: { id }, data });
+    } else await prisma.personalIncome.create({ data: { memberId: member.id, periodId, ...data } });
+  } else if (kind === "expense") {
+    const data = { label, categoryId, amount, date, recurring: true, cardAccountId };
+    if (id) {
+      const e = await prisma.personalExpense.findUnique({ where: { id } });
+      if (!e || e.memberId !== member.id) return { ok: false, error: "Not found.", n };
+      await prisma.personalExpense.update({ where: { id }, data });
+    } else await prisma.personalExpense.create({ data: { memberId: member.id, periodId, ...data } });
+  } else {
+    const data = { categoryId, amount, note: label, date, recurring: true, cardAccountId };
+    if (id) {
+      const e = await prisma.personalSpend.findUnique({ where: { id } });
+      if (!e || e.memberId !== member.id) return { ok: false, error: "Not found.", n };
+      await prisma.personalSpend.update({ where: { id }, data });
+    } else await prisma.personalSpend.create({ data: { memberId: member.id, periodId, ...data } });
+  }
+  rev();
+  return { ok: true, n };
+}
+
+export async function deletePersonalRecurring(formData: FormData) {
+  const member = await me();
+  if (!member) return;
+  const kind = String(formData.get("kind"));
+  const id = Number(formData.get("id"));
+  if (!id) return;
+  if (kind === "income") {
+    const e = await prisma.personalIncome.findUnique({ where: { id } });
+    if (e && e.memberId === member.id) await prisma.personalIncome.delete({ where: { id } });
+  } else if (kind === "expense") {
+    const e = await prisma.personalExpense.findUnique({ where: { id } });
+    if (e && e.memberId === member.id) await prisma.personalExpense.delete({ where: { id } });
+  } else if (kind === "spend") {
+    const e = await prisma.personalSpend.findUnique({ where: { id } });
+    if (e && e.memberId === member.id) await prisma.personalSpend.delete({ where: { id } });
+  }
+  rev();
+}
+
 export async function deletePersonalExpense(formData: FormData) {
   const member = await me();
   if (!member) return;
