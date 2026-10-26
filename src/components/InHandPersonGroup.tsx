@@ -36,6 +36,8 @@ export function InHandPersonGroup({
   poolIncoming = [],
   poolDisbursements = [],
   treasurerOwnLeftover = 0,
+  toReceiveItems = [],
+  toSendItems = [],
 }: {
   group: InHand["byPerson"][number];
   // This person's OWN credit cards → the "Paid with" picker on their bills' Pay modals.
@@ -67,6 +69,10 @@ export function InHandPersonGroup({
   poolIncoming?: { fromId: number; fromName: string; amount: number; kind: "leftover" | "piggy"; detail: string | null }[];
   poolDisbursements?: { recipientId: number; recipientName: string; label: string; amount: number }[];
   treasurerOwnLeftover?: number;
+  // Pending (not-yet-done) settlement for the treasurer: money still coming IN from members, and money
+  // he still owes OUT to members. Shown as their own sections BELOW the in-hand splits, never folded in.
+  toReceiveItems?: { name: string; amount: number }[];
+  toSendItems?: { name: string; label?: string | null; amount: number }[];
 }) {
   const { name, cats, unpaidBills, paidBills, earmarked, earmarkedTotal, sinkingFunds, sinkingHeld, unpaidPeriodic, paidPeriodic, carried, carriedDue, miscSpent, net, pendingPiggyHeld, pendingCardBills, cashSpent, cardSpent, yetToReceive, selfFundsBills } = group;
   // Family/others' spends the member fronted on their OWN CREDIT card. NOT subtracted from the headline —
@@ -226,7 +232,13 @@ export function InHandPersonGroup({
             // fronted (owed back next month, nets to 0 over the reimbursement cycle); positive = own money;
             // for the treasurer a negative = fronted for the family (pool/advances). Reconciles by construction.
             const carriedOnCard = group.carryParts?.onCard ?? 0;
-            const carriedOthers = group.carryParts?.others ?? 0;
+            // "Others' spend on your budget" — for a REGULAR member this is budget cash they still hold and
+            // owe the treasurer (real, shown). For the TREASURER it's the reverse: he owes it to those
+            // members, and he's already paying it back THROUGH his settlement transfers to them (it's folded
+            // into his "Sent to …" done moves / netted off what they pay him). So for the hub it's a
+            // pass-through that nets in the holding — showing it as "held" double-counts it and inflated the
+            // old remainder. Drop it from his held-for; the walk already nets it.
+            const carriedOthers = isTreasurer ? 0 : (group.carryParts?.others ?? 0);
             // free→Piggy only still "held" if the Piggy hasn't been handed over/forwarded yet (see piggyGone).
             const carriedFreeHeld = piggyGone ? 0 : sweptToPiggy;
             const budgetsTotal = cats.reduce((s, c) => s + c.remaining, 0);
@@ -310,6 +322,29 @@ export function InHandPersonGroup({
                     <li className="flex items-center justify-between gap-2 text-[10px] text-slate-400"><span className="truncate">💳 Fronted on a credit card <span className="italic">· owed back · offsets the bill · not subtracted</span></span><span className="shrink-0 tabular-nums italic">{formatINR(cardOutOfPocket)}</span></li>
                   )}
                 </ul>
+                {/* Pending settlement, shown AFTER the in-hand splits (not folded in): money still coming
+                    to him, and money he still owes out. These aren't in the holding above (the steps aren't
+                    done) — they're just what's left to flow. */}
+                {toReceiveItems.length > 0 && (
+                  <div className="mt-2">
+                    <div className="mb-1 text-[10px] font-medium uppercase tracking-wide text-slate-400">📥 To receive <span className="font-normal normal-case text-slate-300">— not in the in-hand yet</span></div>
+                    <ul className="space-y-0.5 text-[11px]">
+                      {toReceiveItems.map((r, i) => (
+                        <li key={`rc${i}`} className="flex items-center justify-between gap-2"><span className="truncate text-emerald-600">from {r.name}</span><span className="shrink-0 tabular-nums text-emerald-700">+ {formatINR(r.amount)}</span></li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+                {toSendItems.length > 0 && (
+                  <div className="mt-2">
+                    <div className="mb-1 text-[10px] font-medium uppercase tracking-wide text-slate-400">📤 To send <span className="font-normal normal-case text-slate-300">— still owed out</span></div>
+                    <ul className="space-y-0.5 text-[11px]">
+                      {toSendItems.map((s, i) => (
+                        <li key={`sd${i}`} className="flex items-center justify-between gap-2"><span className="truncate text-rose-600">to {s.name}{s.label ? <span className="text-slate-400"> · {s.label}</span> : null}</span><span className="shrink-0 tabular-nums text-rose-700">− {formatINR(s.amount)}</span></li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
               </div>
             );
           })()}

@@ -135,6 +135,33 @@ export default async function InHandPage({
     if (!a.done || a.vendorLeg) continue;
     (keptAllowancesByMember[a.recipientId] ??= []).push({ label: a.label, amount: a.amount });
   }
+  // Treasurer's PENDING settlement, for the "To receive" / "To send" sections on his card (shown below
+  // the in-hand splits, not folded into holding). To receive = what members still owe him (the NETTED
+  // toTreasurerPending, so Lakshmi reads her real ₹4,170 not the superseded ₹1,04,170). To send = what he
+  // still owes members (undone transfer-out / allowance / advance / manual from the hub to a member).
+  const memberName = (id: number | null | undefined) => c.members.find((m) => m.id === id)?.name ?? "";
+  const treasurerReceiveItems =
+    inHand.treasurerId == null
+      ? []
+      : Object.entries(toTreasurerPendingByMember)
+          .filter(([mid, amt]) => Number(mid) !== inHand.treasurerId && amt > 0.005)
+          .map(([mid, amt]) => ({ name: memberName(Number(mid)), amount: amt }))
+          .sort((a, b) => b.amount - a.amount);
+  const treasurerSendItems =
+    inHand.treasurerId == null
+      ? []
+      : plan.steps
+          .filter(
+            (s) =>
+              !s.done &&
+              !s.hidden &&
+              s.fromId === inHand.treasurerId &&
+              s.toId != null &&
+              s.toId !== inHand.treasurerId &&
+              (s.kind === "transfer-out" || s.kind === "allowance" || s.kind === "advance" || s.kind === "manual"),
+          )
+          .map((s) => ({ name: memberName(s.toId), label: s.source || s.vendor || null, amount: s.amount }))
+          .sort((a, b) => b.amount - a.amount);
   const visibleGroups = c.isHead
     ? inHand.byPerson
     : inHand.byPerson.filter((g) => g.memberId === currentMemberId);
@@ -196,6 +223,8 @@ export default async function InHandPage({
                 toTreasurerPending={g.memberId != null ? toTreasurerPendingByMember[g.memberId] ?? 0 : 0}
                 routingToForward={g.memberId != null ? routingToForwardByMember[g.memberId] ?? 0 : 0}
                 isTreasurer={g.memberId === inHand.treasurerId}
+                toReceiveItems={g.memberId === inHand.treasurerId ? treasurerReceiveItems : []}
+                toSendItems={g.memberId === inHand.treasurerId ? treasurerSendItems : []}
                 pool={inHand.treasurerPool}
                 sharedNet={inHand.shared.net}
                 monthBalance={inHand.monthBalance}
