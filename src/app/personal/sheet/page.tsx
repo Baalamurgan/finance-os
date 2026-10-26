@@ -49,10 +49,12 @@ export default async function PersonalSheet({
   // Every spend counts at spend time. Key figures (see the money model in lib/personal/cash.ts):
   //  Can spend      = personalExpense − your NET spend (splits net out others' shares)
   //  In account now = actual bank balance: can-spend + card cash still there (dues) − money lent out
+  //                   (owed) + money you've borrowed that's in your account (borrowed)
   //  Spent          = net spend (your share only)
   const { totalIn, personalExpense, netSpent, canSpend } = cash;
   const owed = lending.owed;
-  const inAccount = canSpend + unpaidCardDues - owed;
+  const borrowed = lending.borrowed;
+  const inAccount = canSpend + unpaidCardDues - owed + borrowed;
   const spentPct = personalExpense > 0 ? Math.min(100, (netSpent / personalExpense) * 100) : 0;
 
   // group monthly expenses by category (collapsible)

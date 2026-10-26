@@ -60,14 +60,19 @@ export async function getPersonalCash(period: {
   };
 }
 
-// Money others owe the member (open lent loans) — both manual lends and shared-spend
-// receivables. Used to derive cash-in-hand (canSpend + card dues − owed).
-export async function getPersonalLending(memberId: number): Promise<{ owed: number }> {
-  const agg = await prisma.personalLoan.aggregate({
-    where: { memberId, direction: "lent", status: "open" },
-    _sum: { outstanding: true },
-  });
-  return { owed: agg._sum.outstanding ?? 0 };
+// Lending that moves the member's ACTUAL cash:
+//  • owed     = open "lent" loans (manual lends + shared-spend receivables) — cash that's left your hand.
+//  • borrowed = open MANUAL "borrowed" loans (cardAccountId null) — real cash someone gave you that's
+//    sitting in your account. Card-fronted "borrowed" (peer card) is EXCLUDED: no cash came to you, you
+//    just spent on someone's card, and that debt squares at the card bill — not cash-in-hand.
+// Drives cash-in-hand: canSpend + unpaid card dues − owed + borrowed. Neither touches "Can spend"
+// (lending/borrowing isn't budget) — they only move "In account".
+export async function getPersonalLending(memberId: number): Promise<{ owed: number; borrowed: number }> {
+  const [lentAgg, borrowedAgg] = await Promise.all([
+    prisma.personalLoan.aggregate({ where: { memberId, direction: "lent", status: "open" }, _sum: { outstanding: true } }),
+    prisma.personalLoan.aggregate({ where: { memberId, direction: "borrowed", status: "open", cardAccountId: null }, _sum: { outstanding: true } }),
+  ]);
+  return { owed: lentAgg._sum.outstanding ?? 0, borrowed: borrowedAgg._sum.outstanding ?? 0 };
 }
 
 // The member's total unpaid credit-card obligation across ALL cycles (what you still owe

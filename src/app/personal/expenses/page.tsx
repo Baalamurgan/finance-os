@@ -46,14 +46,16 @@ export default async function PersonalExpenses({
   const { personalExpense, netSpent, canSpend } = cash;
   const unpaidCardDues = cardDues.reduce((s, d) => s + d.unpaidTotal, 0);
   const owed = lending.owed;
+  const borrowed = lending.borrowed;
   // Three honest figures (see the money model in lib/personal/cash.ts):
   //  canSpend    = budget headroom left this month. Splits already net out others' shares, so it's
-  //                purely what YOU can still spend.
+  //                purely what YOU can still spend. (Lending/borrowing never touch this — not budget.)
   //  inAccount   = actual cash in your bank RIGHT NOW. Card spends haven't left yet, so that money is
-  //                still there (+ card dues); money you've lent out has left (− owed).
-  //  afterSettle = what you keep once every card is paid AND every due/lend is collected. The card cash
-  //                and the receivables both reverse out, so it lands exactly back on canSpend.
-  const inAccount = canSpend + unpaidCardDues - owed;
+  //                still there (+ card dues); money you've lent out has left (− owed); money you've
+  //                borrowed is sitting in your account (+ borrowed) until you repay it.
+  //  afterSettle = what you keep once every card is paid AND every due/lend/borrow is settled. The card
+  //                cash, the receivables and the borrowings all reverse out, landing back on canSpend.
+  const inAccount = canSpend + unpaidCardDues - owed + borrowed;
   const afterSettle = canSpend;
 
   // The category donut reflects your NET spend (your share of splits) — the exact spend you did.
@@ -116,15 +118,16 @@ export default async function PersonalExpenses({
             <div className={`mt-1 text-xl font-bold ${canSpend >= 0 ? "text-emerald-800" : "text-red-600"}`}>{formatINR(canSpend)}</div>
             <div className="text-[10px] text-slate-500">of {formatINR(Math.max(0, personalExpense))} · spent {formatINR(netSpent)}</div>
           </div>
-          {/* 2 — money actually in your account now: card cash hasn't left (+), lends have (−) */}
+          {/* 2 — money actually in your account now: card cash hasn't left (+), lends out (−), borrowed in (+) */}
           <div className="rounded-xl border border-slate-200 bg-white p-4">
             <div className="text-[11px] font-medium uppercase tracking-wide text-slate-400">In account now</div>
             <div className={`mt-1 text-xl font-bold ${inAccount >= 0 ? "text-slate-800" : "text-red-600"}`}>{formatINR(inAccount)}</div>
             <div className="text-[10px] text-slate-400">
-              {unpaidCardDues > 0 && <>{formatINR(unpaidCardDues)} held for cards</>}
-              {unpaidCardDues > 0 && owed > 0 && " · "}
-              {owed > 0 && <>{formatINR(owed)} out on loan</>}
-              {unpaidCardDues === 0 && owed === 0 && "cash in hand"}
+              {[
+                unpaidCardDues > 0 ? `${formatINR(unpaidCardDues)} held for cards` : null,
+                owed > 0 ? `${formatINR(owed)} out on loan` : null,
+                borrowed > 0 ? `${formatINR(borrowed)} borrowed in` : null,
+              ].filter(Boolean).join(" · ") || "cash in hand"}
             </div>
           </div>
           {/* 3 — after paying every card and collecting every due/lend; nets back to your budget headroom */}
