@@ -30,6 +30,7 @@ export function PersonalSpendModal({
   categories,
   cards = [],
   members = [],
+  pastNames = [],
   remaining,
   initial,
   hideTrigger = false,
@@ -40,6 +41,7 @@ export function PersonalSpendModal({
   categories: Cat[];
   cards?: Card[];
   members?: Member[];
+  pastNames?: string[];
   remaining?: number;
   initial?: Initial;
   hideTrigger?: boolean;
@@ -404,6 +406,7 @@ export function PersonalSpendModal({
           total={amountNum}
           initial={splits ?? undefined}
           members={members}
+          pastNames={pastNames}
           onClose={() => setSplitOpen(false)}
           onConfirm={(others, mine) => { setSplits(others); setMyShare(mine); setSplitOpen(false); }}
         />

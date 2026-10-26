@@ -168,7 +168,7 @@ export default async function PersonalExpenses({
         </section>
       </main>
 
-      <PersonalSpendFab periodId={period.id} categories={catList} cards={c.spendCards} members={c.members} remaining={canSpend} autoOpen={sp.add === "1"} showButton={false} />
+      <PersonalSpendFab periodId={period.id} categories={catList} cards={c.spendCards} members={c.members} pastNames={c.pastNames} remaining={canSpend} autoOpen={sp.add === "1"} showButton={false} />
     </>
   );
 }

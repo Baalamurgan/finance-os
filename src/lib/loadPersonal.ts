@@ -103,6 +103,18 @@ export async function loadPersonal(params?: { y?: string; m?: string }) {
   // Due-bill reminders (soon/overdue) — drives the landing banner + the Finance-tab badge.
   const cardReminders = creditCards.length > 0 ? await getCardBillReminders(member.id) : [];
 
+  // Past OUTSIDE people (typed names, not household members) you've split/lent with before — offered as
+  // quick-picks in the split "Someone else" box so you don't retype the same name. Linked (household)
+  // loans carry the member's name and are picked from the members list instead, so filter to the
+  // single-sided (linkGroup null) typed names.
+  const pastLoans = await prisma.personalLoan.findMany({
+    where: { memberId: member.id, linkGroup: null },
+    select: { counterparty: true },
+    distinct: ["counterparty"],
+    orderBy: { counterparty: "asc" },
+  });
+  const pastNames = pastLoans.map((l) => l.counterparty).filter((n) => n.trim().length > 0);
+
   return {
     member,
     account,
@@ -114,6 +126,7 @@ export async function loadPersonal(params?: { y?: string; m?: string }) {
     creditCards,
     spendCards,
     members,
+    pastNames,
     cardReminders,
     hasBiometric,
   };

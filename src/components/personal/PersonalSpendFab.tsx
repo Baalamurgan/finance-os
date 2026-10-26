@@ -18,6 +18,7 @@ export function PersonalSpendFab({
   categories,
   cards = [],
   members = [],
+  pastNames = [],
   remaining,
   autoOpen = false,
   showButton = true,
@@ -26,6 +27,7 @@ export function PersonalSpendFab({
   categories: Cat[];
   cards?: Card[];
   members?: Member[];
+  pastNames?: string[];
   remaining: number;
   autoOpen?: boolean;
   showButton?: boolean;
@@ -105,6 +107,7 @@ export function PersonalSpendFab({
         categories={categories}
         cards={cards}
         members={members}
+        pastNames={pastNames}
         remaining={remaining}
         hideTrigger
         controlledOpen={open}
