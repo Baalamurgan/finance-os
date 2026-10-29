@@ -724,9 +724,10 @@ export async function deletePersonalSpend(formData: FormData) {
   const s = await prisma.personalSpend.findUnique({ where: { id } });
   if (!s || s.memberId !== member.id) return;
   await prisma.$transaction(async (tx) => {
-    // Auto-created peer-card debt (borrower + lender rows) goes with the spend — spendId is SetNull on
-    // the loan, so it would otherwise linger. The ledger mirror cascades on the spend delete itself.
-    await tx.personalLoan.deleteMany({ where: { spendId: id, linkGroup: { not: null } } });
+    // Deleting a spend removes EVERYTHING it created: every loan row tied to it — peer-card debt,
+    // member-split mirror AND single-sided split/reimbursement receivables (all carry this spendId, both
+    // sides) — and the card-ledger line (cascades via the personalSpendId FK). Nothing left dangling.
+    await tx.personalLoan.deleteMany({ where: { spendId: id } });
     await tx.personalSpend.delete({ where: { id } });
   });
   rev();
@@ -996,7 +997,18 @@ export async function deletePersonalLoan(formData: FormData) {
   const id = Number(formData.get("id"));
   const loan = await prisma.personalLoan.findUnique({ where: { id } });
   if (!loan || loan.memberId !== member.id) return;
-  await prisma.personalLoan.deleteMany({ where: loanGroupWhere(loan) });
+  await prisma.$transaction(async (tx) => {
+    if (loan.spendId != null) {
+      // This debt came from splitting/reimbursing a spend (or a peer-card use). Deleting it is two-way:
+      // wipe the WHOLE set — every loan row tied to that spend (both members' sides) + the parent spend
+      // itself, which cascades its card-ledger line. Delete the loans first, then the spend.
+      await tx.personalLoan.deleteMany({ where: { spendId: loan.spendId } });
+      await tx.personalSpend.deleteMany({ where: { id: loan.spendId } });
+    } else {
+      // A manual lend/borrow with no parent spend → just clear it (and its linked mirror, via linkGroup).
+      await tx.personalLoan.deleteMany({ where: loanGroupWhere(loan) });
+    }
+  });
   rev();
 }
 
