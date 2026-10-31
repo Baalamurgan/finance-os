@@ -789,7 +789,16 @@ export async function markCardBillPaid(formData: FormData) {
   // Paid less than the tagged total → the difference is a saving/cashback on that card.
   // Record it as a cashback transaction (marked by category so undo can reverse it).
   const cashbackMarker = `__billcashback__:${cycleEnd.toISOString()}`;
+  const billpayMarker = `__billpay__:${cycleEnd.toISOString()}`;
   const cashback = cycleTotal && cycleTotal > amount ? Math.round((cycleTotal - amount) * 100) / 100 : 0;
+  // Optionally pay the bill FROM one of the member's balance accounts → a transfer_out that drops its
+  // balance (tagged by billpayMarker so unmarking reverses it). null = just settle the cycle (as before).
+  const rawFrom = Number(formData.get("fromAccountId")) || 0;
+  let payFromId: number | null = null;
+  if (rawFrom) {
+    const acc = await prisma.financeAccount.findFirst({ where: { id: rawFrom, memberId: member.id, active: true }, select: { id: true, type: true } });
+    if (acc && BALANCE_ACCOUNT_TYPES.has(acc.type)) payFromId = acc.id;
+  }
   await prisma.$transaction(async (tx) => {
     await tx.personalCardBill.upsert({
       where: { cardAccountId_cycleEnd: { cardAccountId, cycleEnd } },
@@ -800,16 +809,14 @@ export async function markCardBillPaid(formData: FormData) {
     await tx.accountTransaction.deleteMany({ where: { accountId: cardAccountId, category: cashbackMarker } });
     if (cashback > 0) {
       await tx.accountTransaction.create({
-        data: {
-          memberId: member.id,
-          accountId: cardAccountId,
-          date: new Date(),
-          merchant: "Bill savings / cashback",
-          amount: cashback,
-          type: "cashback",
-          category: cashbackMarker,
-          source: "manual",
-        },
+        data: { memberId: member.id, accountId: cardAccountId, date: new Date(), merchant: "Bill savings / cashback", amount: cashback, type: "cashback", category: cashbackMarker, source: "manual" },
+      });
+    }
+    // replace any prior bill-payment decrement for this cycle, then (if paying from an account) post it
+    await tx.accountTransaction.deleteMany({ where: { memberId: member.id, category: billpayMarker } });
+    if (payFromId) {
+      await tx.accountTransaction.create({
+        data: { memberId: member.id, accountId: payFromId, date: new Date(), merchant: `Paid ${card.name} bill`, amount, type: "transfer_out", category: billpayMarker, source: "manual" },
       });
     }
   });
@@ -832,8 +839,10 @@ export async function unmarkCardBillPaid(formData: FormData) {
   const bill = await prisma.personalCardBill.findUnique({ where: { id }, include: { cardAccount: { select: { name: true } } } });
   if (!bill || bill.memberId !== member.id) { log.warn("unmarkCardBillPaid", "blocked", { outcome: "blocked", reason: "not-owner", memberId: member.id, id }); return; }
   const cashbackMarker = `__billcashback__:${bill.cycleEnd.toISOString()}`;
+  const billpayMarker = `__billpay__:${bill.cycleEnd.toISOString()}`;
   await prisma.$transaction([
     prisma.accountTransaction.deleteMany({ where: { accountId: bill.cardAccountId, category: cashbackMarker } }),
+    prisma.accountTransaction.deleteMany({ where: { memberId: member.id, category: billpayMarker } }),
     prisma.personalCardBill.delete({ where: { id } }),
   ]);
   log.info("unmarkCardBillPaid", "ok", { outcome: "ok", memberId: member.id, id });

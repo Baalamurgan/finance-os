@@ -9,6 +9,7 @@ import { ensurePlanSteps, orderSteps } from "@/lib/personal/planSteps";
 import { PersonalNav } from "@/components/personal/PersonalNav";
 import { TransferModal } from "@/components/personal/TransferModal";
 import { PersonalPlanSteps, type PlanStepView } from "@/components/personal/PersonalPlanSteps";
+import { CardBillStep } from "@/components/personal/CardBillStep";
 
 const fmtDate = (iso: string | null) =>
   iso ? new Date(iso).toLocaleDateString("en-IN", { day: "numeric", month: "short" }) : "—";
@@ -82,16 +83,21 @@ export default async function PersonalPlanPage({
 
   // Card bills still to pay (your personal dues + any family/peer spends the card fronts), soonest first.
   const cardBills = dues
-    .map((d) => ({
-      cardId: d.cardId,
-      cardName: d.cardName,
-      toPay: d.unpaidTotal + d.familyUnpaidTotal,
-      dueISO: d.cycles[0]?.dueISO ?? null,
-      needsSetup: d.needsStatementDay,
-    }))
-    .filter((d) => d.toPay > 0.005)
+    .map((d) => {
+      const c0 = d.cycles[0]; // oldest unpaid cycle — the one a "mark paid" step clears
+      return {
+        cardId: d.cardId,
+        cardName: d.cardName,
+        payAmount: c0 ? Math.round((c0.total + c0.familyTotal) * 100) / 100 : 0,
+        totalDue: d.unpaidTotal + d.familyUnpaidTotal,
+        dueISO: c0?.dueISO ?? null,
+        cycleEnd: c0?.cycleEndISO ?? null,
+        needsSetup: d.needsStatementDay,
+      };
+    })
+    .filter((d) => d.totalDue > 0.005)
     .sort((a, b) => (a.dueISO ?? "9").localeCompare(b.dueISO ?? "9"));
-  const cardBillTotal = cardBills.reduce((s, d) => s + d.toPay, 0);
+  const cardBillTotal = cardBills.reduce((s, d) => s + d.totalDue, 0);
 
   // People you owe (borrowed, still open).
   const owedTotal = owed.reduce((s, l) => s + l.outstanding, 0);
@@ -153,18 +159,7 @@ export default async function PersonalPlanPage({
             <ul className="space-y-2">
               {cardBills.map((d) => (
                 <li key={`c${d.cardId}`}>
-                  <Link href={`/personal/finance/${d.cardId}`} className="flex items-center justify-between gap-3 rounded-lg border border-slate-100 p-3 hover:bg-slate-50">
-                    <span className="flex min-w-0 items-center gap-2">
-                      <span>💳</span>
-                      <span className="min-w-0">
-                        <span className="block truncate text-sm font-medium text-slate-800">{d.cardName} bill</span>
-                        <span className="block text-[11px] text-slate-400">
-                          {d.needsSetup ? "set a statement day" : d.dueISO ? `due ${fmtDate(d.dueISO)}` : "due date not set"}
-                        </span>
-                      </span>
-                    </span>
-                    <span className="shrink-0 tabular-nums font-semibold text-red-600">{formatINR(d.toPay)}</span>
-                  </Link>
+                  <CardBillStep bill={d} accounts={balAccts.map((a) => ({ id: a.id, name: a.name }))} />
                 </li>
               ))}
               {owed.map((l) => (
