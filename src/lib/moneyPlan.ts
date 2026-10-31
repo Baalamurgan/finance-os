@@ -624,8 +624,10 @@ export function buildMoneyPlan(input: {
         // A bridge pay-back leg (debtor→hub / hub→funder) must sit on its OWN day (after the bill it
         // repays), NOT at the top — place it by day. Every OTHER un-anchored manual still goes to the top.
         if (m.bridgeGroup && m.day != null) {
+          // Use `eff` (not `day ?? 0`) so a NO-DATE step counts as Infinity, not day 0 — otherwise the
+          // payback lands AFTER the undated bills (dead last) instead of on its own day.
           let pos = steps.length;
-          for (let j = 0; j < steps.length; j++) if ((steps[j].day ?? 0) <= (m.day as number)) pos = j + 1;
+          for (let j = 0; j < steps.length; j++) if (eff(steps[j]) <= (m.day as number)) pos = j + 1;
           steps.splice(pos, 0, m);
         } else {
           steps.unshift(m);
@@ -637,9 +639,9 @@ export function buildMoneyPlan(input: {
     }
     if (!moved) break;
   }
-  for (const m of pendingManual) { // anchor missing → place by day
+  for (const m of pendingManual) { // anchor missing → place by day (eff: no-date steps sort last, not day 0)
     let pos = steps.length;
-    for (let i = 0; i < steps.length; i++) if ((steps[i].day ?? 0) <= (m.day ?? 0)) pos = i + 1;
+    for (let i = 0; i < steps.length; i++) if (eff(steps[i]) <= eff(m)) pos = i + 1;
     steps.splice(pos, 0, m);
   }
 
