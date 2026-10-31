@@ -17,6 +17,7 @@ import { isPersonalUnlocked } from "@/lib/personal-lock";
 import { ensurePersonalMonth, ensurePersonalPreview, rebuildPersonalPreview, seedPersonalCategories } from "@/lib/personal";
 import { getCardBillReminders } from "@/lib/personal/cash";
 import { currentCycle } from "@/lib/finance/cycle";
+import { BALANCE_ACCOUNT_TYPES } from "@/lib/finance/types";
 
 // The "high alert" CC dues for the signed-in member: bills due within 3 days (or overdue).
 // Used by the after-unlock popup in BOTH family and personal views (a member's own cards).
@@ -280,6 +281,34 @@ async function syncPersonalSpendLedger(
   }
 }
 
+// Resolve the member's OWN balance account an extra income was deposited into (bank / cash / debit /
+// prepaid), or null for untracked. Guards a crafted id: must be the member's own active balance account.
+async function resolveIncomeAccount(memberId: number, formData: FormData): Promise<number | null> {
+  const raw = Number(formData.get("accountId"));
+  if (!raw) return null;
+  const acc = await prisma.financeAccount.findFirst({ where: { id: raw, memberId, active: true }, select: { id: true, type: true } });
+  return acc && BALANCE_ACCOUNT_TYPES.has(acc.type) ? acc.id : null;
+}
+
+// Keep a balance account's LEDGER in sync with an extra income tagged to it, so the deposit shows as a line
+// item and raises the account's balance. View-layer + opt-in: the month's spendable (getPersonalCash) counts
+// the income regardless. Idempotent: upsert on the income link, or remove the line if it moved back to
+// untracked. Deleting the income cascades the line away via the personalIncomeId FK.
+async function syncPersonalIncomeLedger(
+  tx: Prisma.TransactionClient,
+  a: { incomeId: number; memberId: number; accountId: number | null; amount: number; source: string; date: Date },
+) {
+  if (a.accountId) {
+    await tx.accountTransaction.upsert({
+      where: { personalIncomeId: a.incomeId },
+      update: { amount: a.amount, merchant: a.source || "Income", accountId: a.accountId },
+      create: { memberId: a.memberId, accountId: a.accountId, date: a.date, merchant: a.source || "Income", amount: a.amount, type: "topup", source: "manual", personalIncomeId: a.incomeId },
+    });
+  } else {
+    await tx.accountTransaction.deleteMany({ where: { personalIncomeId: a.incomeId } });
+  }
+}
+
 // Create / refresh / remove the two-sided peer-card debt for a spend. Called after the spend row is
 // written. Idempotent: it clears any prior peer pair for this spend, then (if the spend is on a peer
 // card) writes a fresh borrower + lender pair sharing a linkGroup, so settling/deleting either clears
@@ -386,7 +415,13 @@ export async function addPersonalIncome(formData: FormData) {
   const amount = parseAmount(formData.get("amount"));
   if (!source || !amount || amount <= 0) return;
   if (!(await ownsPeriod(member.id, periodId))) return;
-  await prisma.personalIncome.create({ data: { memberId: member.id, periodId, source, amount } });
+  // Optionally deposit it into one of the member's balance accounts (bank/cash/…) — raises that account's
+  // balance via a mirror ledger line. null = untracked (just raises the month's spendable).
+  const accountId = await resolveIncomeAccount(member.id, formData);
+  await prisma.$transaction(async (tx) => {
+    const created = await tx.personalIncome.create({ data: { memberId: member.id, periodId, source, amount, accountId } });
+    await syncPersonalIncomeLedger(tx, { incomeId: created.id, memberId: member.id, accountId, amount, source, date: created.date });
+  });
   rev();
 }
 

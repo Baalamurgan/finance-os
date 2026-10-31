@@ -255,6 +255,13 @@ model PersonalIncome {
   periodId  Int
   source    String
   amount    Float
+  // Which of the member's balance accounts this income landed in (bank / cash / debit / prepaid). When set,
+  // a 1:1 mirror ledger line (ledgerTxn) raises that account's balance — so the money shows up in real life.
+  // null = untracked. The month's spendable (getPersonalCash) counts the income either way; SetNull on
+  // account delete just detaches the tag (the mirror line cascades away with the income, not the account).
+  account   FinanceAccount? @relation("PersonalIncomeAccount", fields: [accountId], references: [id], onDelete: SetNull)
+  accountId Int?
+  ledgerTxn AccountTransaction? @relation("PersonalIncomeLedger")
   // Recurring income templates (set in Personal setup) clone into each new month on `date`'s day-of-month
   // — mirrors the recurring flag on PersonalExpense. `date` is the day it lands (so it can be shown/ordered).
   date      DateTime @default(now())
@@ -423,6 +430,7 @@ model FinanceAccount {
   txns        AccountTransaction[]
   taggedSpends   PersonalSpend[]   @relation("PersonalSpendCard")
   taggedExpenses PersonalExpense[] @relation("PersonalExpenseCard")
+  taggedIncome   PersonalIncome[]  @relation("PersonalIncomeAccount")
   familySpends   Spend[]           @relation("FamilySpendCard")
   peerLoans      PersonalLoan[]    @relation("PeerCardLoan")
   cardBills      PersonalCardBill[]
@@ -543,6 +551,10 @@ model AccountTransaction {
   // card balance in sync when the personal spend is removed. Null = not a personal-spend mirror.
   personalSpend   PersonalSpend? @relation("PersonalSpendLedger", fields: [personalSpendId], references: [id], onDelete: Cascade)
   personalSpendId Int?           @unique
+  // When this line mirrors a PERSONAL income deposited into a balance account (1:1). Cascade delete keeps
+  // the account balance in sync when the income is removed. Null = not an income mirror.
+  personalIncome   PersonalIncome? @relation("PersonalIncomeLedger", fields: [personalIncomeId], references: [id], onDelete: Cascade)
+  personalIncomeId Int?            @unique
   // When this line mirrors a FUND/periodic BILL paid on a credit card (1:1). The bill is covered by its
   // sinking fund (settlement already nets it), but the cash physically rode the owner's card — so this
   // line puts it on that card's statement WITHOUT creating a reimbursable family spend (no double-pay).

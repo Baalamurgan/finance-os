@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { loadPersonal } from "@/lib/loadPersonal";
 import { personalMonthLabel, personalCycleRange } from "@/lib/personal";
 import { getPersonalCash, getUnpaidCardDues, getPersonalLending } from "@/lib/personal/cash";
+import { BALANCE_ACCOUNT_TYPES } from "@/lib/finance/types";
 import { PersonalNav } from "@/components/personal/PersonalNav";
 import { PersonalFixedModal } from "@/components/personal/PersonalFixedModal";
 import { PersonalFixedRowActions } from "@/components/personal/PersonalFixedRowActions";
@@ -37,6 +38,9 @@ export default async function PersonalSheet({
   const cats = new Map(c.categories.map((cat) => [cat.id, cat]));
   const catList = c.categories.map((cat) => ({ id: cat.id, name: cat.name, icon: cat.icon }));
   const cardMap = new Map(c.creditCards.map((cc) => [cc.id, cc]));
+  // The member's own balance accounts (bank / cash / debit / prepaid) that extra income can be deposited
+  // into — a tagged income posts a ledger line that raises that account's balance.
+  const incomeAccounts = c.spendCards.filter((a) => a.mine && BALANCE_ACCOUNT_TYPES.has(a.type ?? ""));
 
   const [expenses, extraIncomes, cash, unpaidCardDues, lending] = await Promise.all([
     prisma.personalExpense.findMany({ where: { periodId: period.id }, orderBy: { amount: "desc" } }),
@@ -154,10 +158,18 @@ export default async function PersonalSheet({
           ))}
           <details className="mt-2 border-t border-slate-100 pt-2">
             <summary className="cursor-pointer text-xs font-medium text-emerald-700">+ Add extra income (gift, top-up)</summary>
-            <form action={addPersonalIncome} className="mt-2 flex gap-2">
+            <form action={addPersonalIncome} className="mt-2 flex flex-wrap gap-2">
               <input type="hidden" name="periodId" value={period.id} />
-              <input name="source" placeholder="e.g. Dad gave" required className="input flex-1" />
+              <input name="source" placeholder="e.g. Dad gave" required className="input min-w-[8rem] flex-1" />
               <input name="amount" type="number" step="0.01" placeholder="₹" required className="input w-24" />
+              {incomeAccounts.length > 0 && (
+                <select name="accountId" defaultValue="" title="Deposited into (optional) — raises that account's balance" className="input w-full sm:w-auto">
+                  <option value="">Budget only</option>
+                  {incomeAccounts.map((a) => (
+                    <option key={a.id} value={a.id}>→ {a.name}</option>
+                  ))}
+                </select>
+              )}
               <button className="rounded-md bg-emerald-600 px-3 py-1.5 text-sm font-medium text-white">Add</button>
             </form>
           </details>

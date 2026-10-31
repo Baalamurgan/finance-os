@@ -70,8 +70,11 @@ export function PersonalSpendModal({
   const [cardId, setCardId] = useState(isEdit ? String(initial!.cardAccountId ?? "") : "");
   const selectedCard = cards.find((c) => String(c.id) === cardId);
   const peerCard = selectedCard && selectedCard.mine === false ? selectedCard : null;
+  const isCardType = (t?: string) => t === "credit_card" || t === "debit_card" || t === "prepaid_card";
   const myCards = cards.filter((c) => c.mine !== false);
-  const peerCards = cards.filter((c) => c.mine === false);
+  // Peer usage only makes sense for a CARD (they front the charge, you owe them) — not someone's
+  // bank/cash account, which you can't spend from. So peers are limited to card accounts.
+  const peerCards = cards.filter((c) => c.mine === false && isCardType(c.type));
   const shared = splits != null;
   // The amount field doubles as a mini-calculator: "120+45*2" evaluates on demand. amountEval is the
   // resolved number (also for a plain "120"); the hidden input submits it, so a raw expression never
@@ -103,6 +106,7 @@ export function PersonalSpendModal({
         toast(isEdit ? "Updated" : "Spend added", "success");
         if (!isEdit) {
           formRef.current?.reset();
+          // eslint-disable-next-line react-hooks/set-state-in-effect -- one-shot reset after the server action resolves
           setAmount(""); setNote(""); setCategoryId(""); setCatTouched(false);
           resetShared(); setReimburse(false); setReimbSel(""); setCardId("");
         }
@@ -254,10 +258,10 @@ export function PersonalSpendModal({
                     >
                       <option value="">Cash / UPI (from this month)</option>
                       {myCards.length > 0 && (
-                        <optgroup label="My cards">
+                        <optgroup label="My cards & accounts">
                           {myCards.map((c) => (
                             <option key={c.id} value={c.id}>
-                              {c.name}{c.type === "credit_card" ? " — pay at card bill" : c.type === "prepaid_card" ? " — from wallet balance" : c.type === "debit_card" ? " — from card balance" : ""}
+                              {c.name}{c.type === "credit_card" ? " — pay at card bill" : c.type === "prepaid_card" ? " — from wallet balance" : c.type === "debit_card" ? " — from card balance" : c.type === "bank" ? " — from bank balance" : c.type === "cash" ? " — cash on hand" : ""}
                             </option>
                           ))}
                         </optgroup>
