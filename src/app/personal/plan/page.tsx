@@ -5,10 +5,10 @@ import { prisma } from "@/lib/prisma";
 import { getWalletAccounts } from "@/lib/finance/queries";
 import { getCardDues, getPersonalCash } from "@/lib/personal/cash";
 import { getPersonalSavings } from "@/lib/personal/savings";
-import { buildRecurringMoves } from "@/lib/personal/plan";
+import { ensurePlanSteps, orderSteps } from "@/lib/personal/planSteps";
 import { PersonalNav } from "@/components/personal/PersonalNav";
 import { TransferModal } from "@/components/personal/TransferModal";
-import { RecurringMoves } from "@/components/personal/RecurringMoves";
+import { PersonalPlanSteps, type PlanStepView } from "@/components/personal/PersonalPlanSteps";
 
 const fmtDate = (iso: string | null) =>
   iso ? new Date(iso).toLocaleDateString("en-IN", { day: "numeric", month: "short" }) : "—";
@@ -40,11 +40,9 @@ export default async function PersonalPlanPage({
     );
   }
 
-  // This month's calendar bounds — used to tell whether a repeating move has already been done.
-  const monthStart = new Date(Date.UTC(c.selected.year, c.selected.month - 1, 1));
-  const monthEnd = new Date(Date.UTC(c.selected.year, c.selected.month, 1));
-
-  const [wallet, dues, cash, savings, bills, owed, transfers, planItems, monthTransfersOut, monthSavings] = await Promise.all([
+  // Materialise this month's plan steps from the templates (idempotent), then load them.
+  await ensurePlanSteps(c.member.id, c.selected.id);
+  const [wallet, dues, cash, savings, bills, owed, transfers, steps] = await Promise.all([
     getWalletAccounts(c.member.id),
     getCardDues(c.member.id),
     getPersonalCash({ id: c.selected.id, income: c.selected.income, carryForward: c.selected.carryForward }),
@@ -61,17 +59,9 @@ export default async function PersonalPlanPage({
       take: 6,
       include: { account: { select: { name: true, color: true } } },
     }),
-    prisma.personalPlanItem.findMany({
-      where: { memberId: c.member.id, active: true },
-      select: { id: true, kind: true, label: true, amount: true, dayOfMonth: true, fromAccountId: true, toAccountId: true, note: true, sortOrder: true },
-    }),
-    prisma.accountTransaction.findMany({
-      where: { memberId: c.member.id, type: "transfer_out", date: { gte: monthStart, lt: monthEnd } },
-      select: { accountId: true, amount: true },
-    }),
-    prisma.personalSavings.findMany({
-      where: { memberId: c.member.id, amount: { gt: 0 }, createdAt: { gte: monthStart, lt: monthEnd } },
-      select: { amount: true },
+    prisma.personalPlanStep.findMany({
+      where: { periodId: c.selected.id },
+      select: { id: true, kind: true, label: true, amount: true, dayOfMonth: true, status: true, templateKind: true, fromAccountId: true, toAccountId: true, sortOrder: true },
     }),
   ]);
 
@@ -81,14 +71,14 @@ export default async function PersonalPlanPage({
     .map((w) => ({ id: w.account.id, name: w.account.name, color: w.account.color, balance: w.balance ?? 0 }));
   const totalInAccounts = balAccts.reduce((s, a) => s + a.balance, 0);
 
-  // Recurring moves (the maintainable template) → this month's steps with a done flag.
+  // This month's executable plan steps (generated from templates + one-offs), account names resolved.
   const accountNameById = new Map(wallet.map((w) => [w.account.id, w.account.name]));
-  const recurringMoves = buildRecurringMoves(
-    planItems,
-    monthTransfersOut,
-    monthSavings,
-    (id) => (id == null ? null : accountNameById.get(id) ?? null),
-  );
+  const stepViews: PlanStepView[] = orderSteps(steps).map((s) => ({
+    id: s.id, kind: s.kind, label: s.label, amount: s.amount, dayOfMonth: s.dayOfMonth, status: s.status,
+    templateKind: s.templateKind,
+    fromName: s.fromAccountId == null ? null : accountNameById.get(s.fromAccountId) ?? null,
+    toName: s.toAccountId == null ? null : accountNameById.get(s.toAccountId) ?? null,
+  }));
 
   // Card bills still to pay (your personal dues + any family/peer spends the card fronts), soonest first.
   const cardBills = dues
@@ -153,8 +143,8 @@ export default async function PersonalPlanPage({
           )}
         </section>
 
-        {/* Repeating moves (the maintainable monthly plan) */}
-        <RecurringMoves moves={recurringMoves} accounts={balAccts} />
+        {/* This month's executable plan steps (income · transfers · saves), ticked as they happen */}
+        <PersonalPlanSteps steps={stepViews} accounts={balAccts.map((a) => ({ id: a.id, name: a.name }))} periodId={c.selected.id} />
 
         {/* Still to pay this month (flow) */}
         <section className="rounded-2xl border border-slate-200 bg-white p-4">

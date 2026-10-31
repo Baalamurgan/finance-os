@@ -2,6 +2,8 @@ import { prisma } from "@/lib/prisma";
 import { loadPersonal } from "@/lib/loadPersonal";
 import { PersonalNav } from "@/components/personal/PersonalNav";
 import { PersonalRecurringSection } from "@/components/personal/PersonalRecurringManager";
+import { RecurringTransfersSection } from "@/components/personal/RecurringTransfersSection";
+import { getWalletAccounts } from "@/lib/finance/queries";
 import { PersonalSecurity } from "@/components/personal/PersonalSecurity";
 import { setPersonalWindDownDay, setPersonalCategoryBucket } from "@/app/personal/actions";
 
@@ -28,9 +30,19 @@ export default async function PersonalSetup({
   const recIncome = c.selected ? await prisma.personalIncome.findMany({ where: { periodId: c.selected.id, recurring: true }, orderBy: { amount: "desc" } }) : [];
   const recExpense = c.selected ? await prisma.personalExpense.findMany({ where: { periodId: c.selected.id, recurring: true }, orderBy: { amount: "desc" } }) : [];
   const recSpend = c.selected ? await prisma.personalSpend.findMany({ where: { periodId: c.selected.id, recurring: true }, orderBy: { amount: "desc" } }) : [];
-  const incomeItems = recIncome.map((e) => ({ id: e.id, label: e.source, amount: e.amount, day: e.date.getDate(), categoryId: null, cardAccountId: null }));
-  const expenseItems = recExpense.map((e) => ({ id: e.id, label: e.label, amount: e.amount, day: e.date.getDate(), categoryId: e.categoryId, cardAccountId: e.cardAccountId }));
-  const spendItems = recSpend.map((e) => ({ id: e.id, label: e.note ?? "", amount: e.amount, day: e.date.getDate(), categoryId: e.categoryId, cardAccountId: e.cardAccountId }));
+  const incomeItems = recIncome.map((e) => ({ id: e.id, label: e.source, amount: e.amount, day: e.date.getDate(), categoryId: null, cardAccountId: null, accountId: e.accountId }));
+  const expenseItems = recExpense.map((e) => ({ id: e.id, label: e.label, amount: e.amount, day: e.date.getDate(), categoryId: e.categoryId, cardAccountId: e.cardAccountId, accountId: null }));
+  const spendItems = recSpend.map((e) => ({ id: e.id, label: e.note ?? "", amount: e.amount, day: e.date.getDate(), categoryId: e.categoryId, cardAccountId: e.cardAccountId, accountId: null }));
+  // Balance accounts (for the income "deposited into" picker + the recurring transfers) and the member's
+  // active transfer/save templates.
+  const wallet = await getWalletAccounts(c.member.id);
+  const balAccts = wallet.filter((w) => w.balance != null).map((w) => ({ id: w.account.id, name: w.account.name, balance: w.balance ?? 0 }));
+  const acctOpts = balAccts.map((a) => ({ id: a.id, name: a.name }));
+  const planItems = await prisma.personalPlanItem.findMany({
+    where: { memberId: c.member.id, active: true },
+    orderBy: [{ dayOfMonth: "asc" }, { id: "asc" }],
+    select: { id: true, kind: true, label: true, amount: true, dayOfMonth: true, fromAccountId: true, toAccountId: true, note: true },
+  });
 
   return (
     <>
@@ -52,6 +64,7 @@ export default async function PersonalSetup({
           periodId={periodId}
           categories={catList}
           cards={cardOpts}
+          accounts={acctOpts}
         />
         <PersonalRecurringSection
           kind="expense"
@@ -61,6 +74,7 @@ export default async function PersonalSetup({
           periodId={periodId}
           categories={catList}
           cards={cardOpts}
+          accounts={acctOpts}
         />
         <PersonalRecurringSection
           kind="spend"
@@ -70,7 +84,11 @@ export default async function PersonalSetup({
           periodId={periodId}
           categories={catList}
           cards={cardOpts}
+          accounts={acctOpts}
         />
+
+        {/* Recurring transfers & savings — templates for the plan's transfer/save steps */}
+        <RecurringTransfersSection items={planItems} accounts={balAccts} />
 
         {/* Close day */}
         <section className="rounded-xl border border-slate-200 bg-white p-4">

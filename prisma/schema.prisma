@@ -177,6 +177,7 @@ model Member {
   personalCardBills  PersonalCardBill[]
   personalSavings    PersonalSavings[]
   personalPlanItems  PersonalPlanItem[]
+  personalPlanSteps  PersonalPlanStep[]
   integrations       Integration[]
 
   @@unique([householdId, code])
@@ -285,6 +286,7 @@ model PersonalPeriod {
   incomes   PersonalIncome[]
   cardBills PersonalCardBill[]
   savings   PersonalSavings[]
+  planSteps PersonalPlanStep[]
   createdAt DateTime @default(now())
 
   @@unique([memberId, year, month])
@@ -506,6 +508,44 @@ model PersonalPlanItem {
   createdAt     DateTime @default(now())
 
   @@index([memberId])
+}
+
+// This month's materialised Money-Plan steps for a member — the executable choreography. Generated each
+// month from the templates (recurring income rows + PersonalPlanItem transfers/saves) and from one-off
+// additions. Unlike the derived recurring-moves view, a step carries an EXPLICIT done state: ticking it
+// executes the real money movement (income → credits the account; transfer → two ledger legs; save → a
+// savings deposit) and unticking reverses it. dayOfMonth is re-dateable per month; status "skipped" hides
+// it for this month only (the template still generates it again next month).
+model PersonalPlanStep {
+  id          Int      @id @default(autoincrement())
+  member      Member   @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  memberId    Int
+  period      PersonalPeriod @relation(fields: [periodId], references: [id], onDelete: Cascade)
+  periodId    Int
+  kind        String   // income | transfer | save
+  label       String
+  amount      Float
+  dayOfMonth  Int?     // 1–28: when it's due this month (re-dateable); null = anytime
+  fromAccountId Int?   // transfer source / save source (raw id; a deleted account is handled in code)
+  toAccountId   Int?   // income target / transfer destination
+  note        String?
+  // Provenance so monthly generation is idempotent. templateKind "income" → templateId = PersonalIncome.id;
+  // "planitem" → templateId = PersonalPlanItem.id. Both null = a one-off step added this month.
+  templateKind String?
+  templateId   Int?
+  // Execution. pending → tick executes (done); untick reverses. skipped = intentionally not this month.
+  status  String   @default("pending") // pending | done | skipped
+  doneAt  DateTime?
+  // Ledger rows created on execute (deleted + cleared on undo). An income credit rides the AccountTransaction
+  // keyed by its PersonalIncome mirror (personalIncomeId), so it needs no id stored here.
+  transferOutId Int?
+  transferInId  Int?
+  savingsId     Int?
+  sortOrder   Int      @default(0)
+  createdAt   DateTime @default(now())
+
+  @@unique([periodId, templateKind, templateId])
+  @@index([memberId, periodId])
 }
 
 // Credit-card specifics. Cycles are DERIVED from statementDay + dueOffsetDays (no

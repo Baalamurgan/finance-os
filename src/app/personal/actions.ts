@@ -517,8 +517,10 @@ export async function upsertPersonalRecurring(prev: PersonalSaveState, formData:
   // `day` → a real date in this month, clamped to its length (so "28" is always valid).
   const date = new Date(period.year, period.month - 1, Math.min(day, new Date(period.year, period.month, 0).getDate()));
   const cardAccountId = kind === "income" ? null : await ccCardId(member.id, formData);
+  // Recurring income can name a target balance account (where it lands) → becomes the income step's account.
+  const incomeAccountId = kind === "income" ? await ownBalanceAccountId(member.id, formData.get("accountId")) : null;
   if (kind === "income") {
-    const data = { source: label, amount, date, recurring: true };
+    const data = { source: label, amount, date, recurring: true, accountId: incomeAccountId };
     if (id) {
       const e = await prisma.personalIncome.findUnique({ where: { id } });
       if (!e || e.memberId !== member.id) return { ok: false, error: "Not found.", n };
@@ -1101,6 +1103,159 @@ export async function renamePersonalLoanParty(formData: FormData) {
   await prisma.personalLoan.updateMany({
     where: { memberId: member.id, direction, counterparty: oldName },
     data: { counterparty: newName },
+  });
+  rev();
+}
+
+// ── Money-Plan steps (the executable monthly choreography) ──────────────────────────────────────
+// Steps are materialised from templates by ensurePlanSteps (lib/personal/planSteps.ts). Here we execute
+// them: ticking performs the real money movement, unticking reverses it exactly. See PersonalPlanStep.
+
+type PlanStepRow = {
+  id: number; kind: string; status: string; amount: number; label: string;
+  templateId: number | null; fromAccountId: number | null; toAccountId: number | null;
+  transferOutId: number | null; transferInId: number | null; savingsId: number | null;
+};
+
+// Resolve a form field to one of the member's OWN active balance accounts (bank/cash/debit/prepaid), or null.
+async function ownBalanceAccountId(memberId: number, raw: FormDataEntryValue | null): Promise<number | null> {
+  const id = Number(raw);
+  if (!id) return null;
+  const a = await prisma.financeAccount.findFirst({ where: { id, memberId, active: true }, select: { id: true, type: true } });
+  return a && BALANCE_ACCOUNT_TYPES.has(a.type) ? a.id : null;
+}
+
+// Undo a done step's ledger effect (shared by untick + deleting a done one-off). Leaves the step row alone.
+async function reversePlanStepEffect(tx: Prisma.TransactionClient, step: PlanStepRow, memberId: number) {
+  if (step.kind === "income") {
+    if (step.templateId) await tx.accountTransaction.deleteMany({ where: { personalIncomeId: step.templateId } });
+    // keep the income row's accountId (the target) so it persists across untick + next month's seeding.
+  } else if (step.kind === "transfer") {
+    const ids = [step.transferOutId, step.transferInId].filter((x): x is number => x != null);
+    if (ids.length) await tx.accountTransaction.deleteMany({ where: { id: { in: ids }, memberId } });
+  } else if (step.kind === "save") {
+    if (step.savingsId) await tx.personalSavings.deleteMany({ where: { id: step.savingsId, memberId } });
+  }
+}
+
+export async function tickPlanStep(formData: FormData) {
+  const member = await me();
+  if (!member) return;
+  const id = Number(formData.get("id"));
+  const step = await prisma.personalPlanStep.findFirst({ where: { id, memberId: member.id } });
+  if (!step || step.status === "done") return;
+  const date = new Date();
+  const amt = Math.round(step.amount * 100) / 100;
+  await prisma.$transaction(async (tx) => {
+    if (step.kind === "income") {
+      // Income received → credit the target account (post the mirror ledger line, keyed by the income row).
+      if (step.templateId && step.toAccountId) {
+        const income = await tx.personalIncome.findFirst({ where: { id: step.templateId, memberId: member.id } });
+        const acct = await tx.financeAccount.findFirst({ where: { id: step.toAccountId, memberId: member.id, active: true }, select: { id: true, type: true } });
+        if (income && acct && BALANCE_ACCOUNT_TYPES.has(acct.type)) {
+          await tx.personalIncome.update({ where: { id: income.id }, data: { accountId: acct.id } });
+          await syncPersonalIncomeLedger(tx, { incomeId: income.id, memberId: member.id, accountId: acct.id, amount: income.amount, source: income.source, date: income.date });
+        }
+      }
+      await tx.personalPlanStep.update({ where: { id: step.id }, data: { status: "done", doneAt: date } });
+    } else if (step.kind === "transfer") {
+      if (!step.fromAccountId || !step.toAccountId) return;
+      const [from, to] = await Promise.all([
+        tx.financeAccount.findFirst({ where: { id: step.fromAccountId, memberId: member.id }, select: { id: true, name: true, type: true } }),
+        tx.financeAccount.findFirst({ where: { id: step.toAccountId, memberId: member.id }, select: { id: true, name: true, type: true } }),
+      ]);
+      if (!from || !to || !BALANCE_ACCOUNT_TYPES.has(from.type) || !BALANCE_ACCOUNT_TYPES.has(to.type)) return;
+      const out = await tx.accountTransaction.create({ data: { memberId: member.id, accountId: from.id, date, merchant: step.label || `Transfer → ${to.name}`, amount: amt, type: "transfer_out", source: "manual" } });
+      const inn = await tx.accountTransaction.create({ data: { memberId: member.id, accountId: to.id, date, merchant: step.label || `Transfer ← ${from.name}`, amount: amt, type: "transfer_in", source: "manual" } });
+      await tx.personalPlanStep.update({ where: { id: step.id }, data: { status: "done", doneAt: date, transferOutId: out.id, transferInId: inn.id } });
+    } else if (step.kind === "save") {
+      const dep = await tx.personalSavings.create({ data: { memberId: member.id, amount: amt, note: step.label || "Recurring saving" } });
+      await tx.personalPlanStep.update({ where: { id: step.id }, data: { status: "done", doneAt: date, savingsId: dep.id } });
+    }
+  });
+  rev();
+}
+
+export async function untickPlanStep(formData: FormData) {
+  const member = await me();
+  if (!member) return;
+  const id = Number(formData.get("id"));
+  const step = await prisma.personalPlanStep.findFirst({ where: { id, memberId: member.id } });
+  if (!step || step.status !== "done") return;
+  await prisma.$transaction(async (tx) => {
+    await reversePlanStepEffect(tx, step, member.id);
+    await tx.personalPlanStep.update({ where: { id: step.id }, data: { status: "pending", doneAt: null, transferOutId: null, transferInId: null, savingsId: null } });
+  });
+  rev();
+}
+
+// Re-date a step within the month (1–28, or blank = anytime). Allowed whether pending or done.
+export async function redatePlanStep(formData: FormData) {
+  const member = await me();
+  if (!member) return;
+  const id = Number(formData.get("id"));
+  const raw = formData.get("dayOfMonth");
+  const day = raw == null || String(raw).trim() === "" ? null : Math.min(28, Math.max(1, Math.round(Number(raw))));
+  const step = await prisma.personalPlanStep.findFirst({ where: { id, memberId: member.id }, select: { id: true } });
+  if (!step) return;
+  await prisma.personalPlanStep.update({ where: { id }, data: { dayOfMonth: day } });
+  rev();
+}
+
+// Skip a step for THIS month only (the template still generates it next month). Un-skip returns it to pending.
+export async function setPlanStepSkipped(formData: FormData) {
+  const member = await me();
+  if (!member) return;
+  const id = Number(formData.get("id"));
+  const skip = formData.get("skip") === "1";
+  const step = await prisma.personalPlanStep.findFirst({ where: { id, memberId: member.id }, select: { id: true, status: true } });
+  if (!step || step.status === "done") return; // untick a done step first
+  await prisma.personalPlanStep.update({ where: { id }, data: { status: skip ? "skipped" : "pending" } });
+  rev();
+}
+
+// Add a one-off step for this month (not from a template). Returns a form state for the modal.
+export async function addPlanStep(prev: PersonalSaveState, formData: FormData): Promise<PersonalSaveState> {
+  const n = (prev?.n ?? 0) + 1;
+  const member = await me();
+  if (!member) return { ok: false, error: "Signed out.", n };
+  const periodId = Number(formData.get("periodId"));
+  const kind = String(formData.get("kind") ?? "");
+  const label = String(formData.get("label") ?? "").trim();
+  const amount = parseAmount(formData.get("amount"));
+  const dayRaw = formData.get("dayOfMonth");
+  const dayOfMonth = dayRaw == null || String(dayRaw).trim() === "" ? null : Math.min(28, Math.max(1, Math.round(Number(dayRaw))));
+  if (!["income", "transfer", "save"].includes(kind)) return { ok: false, error: "Pick a type.", n };
+  if (!label) return { ok: false, error: "Name the step.", n };
+  if (!amount || amount <= 0) return { ok: false, error: "Enter an amount.", n };
+  if (!(await ownsPeriod(member.id, periodId))) return { ok: false, error: "Not your month.", n };
+  const fromAccountId = await ownBalanceAccountId(member.id, formData.get("fromAccountId"));
+  const toAccountId = await ownBalanceAccountId(member.id, formData.get("toAccountId"));
+  if (kind === "transfer") {
+    if (!fromAccountId || !toAccountId) return { ok: false, error: "Pick both accounts.", n };
+    if (fromAccountId === toAccountId) return { ok: false, error: "Pick two different accounts.", n };
+  }
+  await prisma.personalPlanStep.create({
+    data: {
+      memberId: member.id, periodId, kind, label: label.slice(0, 80), amount: Math.round(amount * 100) / 100,
+      dayOfMonth, fromAccountId: kind === "income" ? null : fromAccountId, toAccountId: kind === "save" ? null : toAccountId,
+      note: String(formData.get("note") ?? "").trim().slice(0, 120) || null, templateKind: null, templateId: null,
+    },
+  });
+  rev();
+  return { ok: true, n };
+}
+
+// Delete a step. One-off steps only (a template step uses skip — it would just regenerate). Reverses first if done.
+export async function deletePlanStep(formData: FormData) {
+  const member = await me();
+  if (!member) return;
+  const id = Number(formData.get("id"));
+  const step = await prisma.personalPlanStep.findFirst({ where: { id, memberId: member.id, templateKind: null } });
+  if (!step) return;
+  await prisma.$transaction(async (tx) => {
+    if (step.status === "done") await reversePlanStepEffect(tx, step, member.id);
+    await tx.personalPlanStep.delete({ where: { id: step.id } });
   });
   rev();
 }

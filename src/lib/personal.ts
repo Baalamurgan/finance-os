@@ -28,7 +28,7 @@ async function seedRecurring(
     tx.personalSpend.findMany({ where: { periodId: fromPeriodId, recurring: true } }),
   ]);
   for (const e of incomes) {
-    await tx.personalIncome.create({ data: { memberId, periodId: to.id, source: e.source, amount: e.amount, date: recurDate(to.year, to.month, e.date), recurring: true } });
+    await tx.personalIncome.create({ data: { memberId, periodId: to.id, source: e.source, amount: e.amount, date: recurDate(to.year, to.month, e.date), recurring: true, accountId: e.accountId } });
   }
   for (const e of expenses) {
     await tx.personalExpense.create({ data: { memberId, periodId: to.id, label: e.label, categoryId: e.categoryId, amount: e.amount, note: e.note, recurring: true, cardAccountId: e.cardAccountId, date: recurDate(to.year, to.month, e.date) } });
