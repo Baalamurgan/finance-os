@@ -22,16 +22,27 @@ const tKey = (kind: string | null, id: number | null) => `${kind}:${id}`;
 
 // Pure: given this month's templates and the steps already materialised, decide which steps to create and
 // which stale pending template-steps to prune.
+export type BaseIncome = { periodId: number; amount: number; accountId: number | null };
+
 export function diffPlanSteps(
   incomes: IncomeTemplate[],
   planItems: PlanItemTemplate[],
   expenses: BillTemplate[],
   spends: BillTemplate[],
+  baseIncome: BaseIncome | null,
   existing: ExistingStep[],
 ): { toCreate: NewStepData[]; prunePendingIds: number[] } {
   const have = new Set(existing.filter((e) => e.templateKind).map((e) => tKey(e.templateKind, e.templateId)));
   const toCreate: NewStepData[] = [];
   let order = 0;
+  // Base salary → a "Salary received" step when it names a target account (amount is read live at tick).
+  if (baseIncome && baseIncome.accountId && baseIncome.amount > 0 && !have.has(tKey("baseincome", baseIncome.periodId))) {
+    toCreate.push({
+      kind: "income", label: "Salary", amount: baseIncome.amount, dayOfMonth: null,
+      fromAccountId: null, toAccountId: baseIncome.accountId, note: null,
+      templateKind: "baseincome", templateId: baseIncome.periodId, sortOrder: order++,
+    });
+  }
   for (const inc of incomes) {
     if (!have.has(tKey("income", inc.id))) {
       toCreate.push({
@@ -64,6 +75,7 @@ export function diffPlanSteps(
     }
   }
   const live = new Set<string>([
+    ...(baseIncome && baseIncome.accountId ? [tKey("baseincome", baseIncome.periodId)] : []),
     ...incomes.map((i) => tKey("income", i.id)),
     ...planItems.map((p) => tKey("planitem", p.id)),
     ...expenses.map((e) => tKey("expense", e.id)),
@@ -84,7 +96,7 @@ export function orderSteps<T extends { dayOfMonth: number | null; sortOrder: num
 
 // Idempotently materialise this month's steps from the templates. Safe to call on every plan-page load.
 export async function ensurePlanSteps(memberId: number, periodId: number): Promise<void> {
-  const [incomes, planItems, expenses, spends, existing] = await Promise.all([
+  const [incomes, planItems, expenses, spends, existing, period] = await Promise.all([
     prisma.personalIncome.findMany({
       where: { periodId, recurring: true },
       select: { id: true, source: true, amount: true, date: true, accountId: true },
@@ -107,12 +119,14 @@ export async function ensurePlanSteps(memberId: number, periodId: number): Promi
       where: { periodId },
       select: { id: true, templateKind: true, templateId: true, status: true },
     }),
+    prisma.personalPeriod.findUnique({ where: { id: periodId }, select: { income: true, incomeAccountId: true } }),
   ]);
   const { toCreate, prunePendingIds } = diffPlanSteps(
     incomes.map((i) => ({ id: i.id, source: i.source, amount: i.amount, dayOfMonth: i.date.getDate(), accountId: i.accountId })),
     planItems,
     expenses.map((e) => ({ id: e.id, label: e.label || "Bill", amount: e.amount, dayOfMonth: e.date.getDate(), fromAccountId: e.cardAccountId })),
     spends.map((s) => ({ id: s.id, label: s.note?.trim() || s.category?.name || "Spend", amount: s.amount, dayOfMonth: s.date.getDate(), fromAccountId: s.cardAccountId })),
+    period ? { periodId, amount: period.income, accountId: period.incomeAccountId } : null,
     existing,
   );
   if (toCreate.length === 0 && prunePendingIds.length === 0) return;

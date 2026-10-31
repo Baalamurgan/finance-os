@@ -129,14 +129,27 @@ export default async function PersonalSheet({
 
         {/* salary + carry + extra income */}
         <div className="rounded-xl border border-emerald-200 bg-white p-4">
-          <form action={setPersonalIncome} className="flex items-center justify-between gap-2">
+          <form action={setPersonalIncome} className="space-y-2">
             <input type="hidden" name="periodId" value={period.id} />
-            <span className="text-sm font-medium text-slate-600">Salary</span>
-            <span className="flex items-center gap-1">
-              <span className="text-slate-400">₹</span>
-              <input name="income" type="number" step="0.01" defaultValue={period.income} className="w-32 rounded-md border border-slate-200 px-2 py-1 text-right text-lg font-bold tabular-nums outline-none focus:border-emerald-400" />
-              <button className="rounded-md bg-emerald-600 px-2 py-1 text-xs font-medium text-white hover:bg-emerald-700">Save</button>
-            </span>
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-sm font-medium text-slate-600">Salary</span>
+              <span className="flex items-center gap-1">
+                <span className="text-slate-400">₹</span>
+                <input name="income" type="number" step="0.01" defaultValue={period.income} className="w-32 rounded-md border border-slate-200 px-2 py-1 text-right text-lg font-bold tabular-nums outline-none focus:border-emerald-400" />
+                <button className="rounded-md bg-emerald-600 px-2 py-1 text-xs font-medium text-white hover:bg-emerald-700">Save</button>
+              </span>
+            </div>
+            {incomeAccounts.length > 0 && (
+              <div className="flex items-center justify-between gap-2 border-t border-slate-100 pt-2 text-xs">
+                <span className="text-slate-400">Lands in — a &ldquo;Salary received&rdquo; step credits it</span>
+                <select name="incomeAccountId" defaultValue={period.incomeAccountId ?? ""} className="rounded-md border border-slate-200 px-2 py-1 text-xs text-slate-600 outline-none focus:border-emerald-400">
+                  <option value="">Budget only</option>
+                  {incomeAccounts.map((a) => (
+                    <option key={a.id} value={a.id}>→ {a.name}</option>
+                  ))}
+                </select>
+              </div>
+            )}
           </form>
           {period.carryForward !== 0 && (
             <div className="mt-2 flex items-center justify-between border-t border-slate-100 pt-2 text-sm">

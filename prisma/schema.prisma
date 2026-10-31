@@ -279,6 +279,10 @@ model PersonalPeriod {
   label     String
   status    String   @default("open") // open | closed
   income    Float    @default(0) // the month's salary (single editable number)
+  // The balance account the base salary lands in → generates a "Salary received" plan step that credits
+  // it on tick (a ledger line tagged __baseincome__:<periodId>). null = salary just counts in the budget.
+  incomeAccount   FinanceAccount? @relation("PeriodIncomeAccount", fields: [incomeAccountId], references: [id], onDelete: SetNull)
+  incomeAccountId Int?
   carryForward Float @default(0) // previous month's remaining, carried in
   closedAt  DateTime?
   expenses  PersonalExpense[]
@@ -439,6 +443,7 @@ model FinanceAccount {
   taggedSpends   PersonalSpend[]   @relation("PersonalSpendCard")
   taggedExpenses PersonalExpense[] @relation("PersonalExpenseCard")
   taggedIncome   PersonalIncome[]  @relation("PersonalIncomeAccount")
+  incomePeriods  PersonalPeriod[]  @relation("PeriodIncomeAccount")
   familySpends   Spend[]           @relation("FamilySpendCard")
   peerLoans      PersonalLoan[]    @relation("PeerCardLoan")
   cardBills      PersonalCardBill[]

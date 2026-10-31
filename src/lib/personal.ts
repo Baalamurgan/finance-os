@@ -137,6 +137,7 @@ export async function ensurePersonalMonth(memberId: number, now = new Date()) {
           month,
           label: personalMonthLabel(month, year),
           income: latest?.income ?? 0,
+          incomeAccountId: latest?.incomeAccountId ?? null,
           carryForward,
         },
       });
@@ -173,7 +174,7 @@ export async function ensurePersonalPreview(memberId: number) {
   const carryForward = (await getPersonalCash(latest)).canSpend;
   return prisma.$transaction(async (tx) => {
     const p = await tx.personalPeriod.create({
-      data: { memberId, year, month, label: personalMonthLabel(month, year), status: "draft", income: latest.income, carryForward },
+      data: { memberId, year, month, label: personalMonthLabel(month, year), status: "draft", income: latest.income, incomeAccountId: latest.incomeAccountId, carryForward },
     });
     await seedRecurring(tx, memberId, latest.id, p);
     return p;
@@ -199,6 +200,6 @@ export async function rebuildPersonalPreview(memberId: number, draftId: number) 
       tx.personalSpend.deleteMany({ where: { periodId: draftId, recurring: true } }),
     ]);
     await seedRecurring(tx, memberId, latest.id, draft);
-    await tx.personalPeriod.update({ where: { id: draftId }, data: { income: latest.income, carryForward } });
+    await tx.personalPeriod.update({ where: { id: draftId }, data: { income: latest.income, incomeAccountId: latest.incomeAccountId, carryForward } });
   });
 }

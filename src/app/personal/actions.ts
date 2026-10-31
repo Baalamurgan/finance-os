@@ -401,7 +401,10 @@ export async function setPersonalIncome(formData: FormData) {
   const periodId = Number(formData.get("periodId"));
   const income = parseAmount(formData.get("income")) || 0;
   if (!(await ownsPeriod(member.id, periodId))) return;
-  await prisma.personalPeriod.update({ where: { id: periodId }, data: { income } });
+  const data: { income: number; incomeAccountId?: number | null } = { income };
+  // The income form may carry a target account for the salary (empty = budget-only).
+  if (formData.has("incomeAccountId")) data.incomeAccountId = await ownBalanceAccountId(member.id, formData.get("incomeAccountId"));
+  await prisma.personalPeriod.update({ where: { id: periodId }, data });
   rev();
 }
 
@@ -1122,7 +1125,7 @@ export async function renamePersonalLoanParty(formData: FormData) {
 
 type PlanStepRow = {
   id: number; kind: string; status: string; amount: number; label: string;
-  templateId: number | null; fromAccountId: number | null; toAccountId: number | null;
+  templateKind: string | null; templateId: number | null; fromAccountId: number | null; toAccountId: number | null;
   transferOutId: number | null; transferInId: number | null; savingsId: number | null;
 };
 
@@ -1137,8 +1140,12 @@ async function ownBalanceAccountId(memberId: number, raw: FormDataEntryValue | n
 // Undo a done step's ledger effect (shared by untick + deleting a done one-off). Leaves the step row alone.
 async function reversePlanStepEffect(tx: Prisma.TransactionClient, step: PlanStepRow, memberId: number) {
   if (step.kind === "income") {
-    if (step.templateId) await tx.accountTransaction.deleteMany({ where: { personalIncomeId: step.templateId } });
-    // keep the income row's accountId (the target) so it persists across untick + next month's seeding.
+    if (step.templateKind === "baseincome") {
+      if (step.templateId) await tx.accountTransaction.deleteMany({ where: { memberId, category: `__baseincome__:${step.templateId}` } });
+    } else if (step.templateId) {
+      await tx.accountTransaction.deleteMany({ where: { personalIncomeId: step.templateId } });
+      // keep the income row's accountId (the target) so it persists across untick + next month's seeding.
+    }
   } else if (step.kind === "transfer") {
     const ids = [step.transferOutId, step.transferInId].filter((x): x is number => x != null);
     if (ids.length) await tx.accountTransaction.deleteMany({ where: { id: { in: ids }, memberId } });
@@ -1164,8 +1171,19 @@ export async function tickPlanStep(formData: FormData) {
   const amt = Math.round(step.amount * 100) / 100;
   await prisma.$transaction(async (tx) => {
     if (step.kind === "income") {
-      // Income received → credit the target account (post the mirror ledger line, keyed by the income row).
-      if (step.templateId && step.toAccountId) {
+      if (step.templateKind === "baseincome") {
+        // Base salary received → credit the account with the CURRENT period income (marker-tagged, reversible).
+        if (step.templateId) {
+          const period = await tx.personalPeriod.findFirst({ where: { id: step.templateId, memberId: member.id }, select: { income: true, incomeAccountId: true } });
+          const acctId = period?.incomeAccountId ?? step.toAccountId;
+          if (period && period.income > 0 && acctId) {
+            const marker = `__baseincome__:${step.templateId}`;
+            await tx.accountTransaction.deleteMany({ where: { memberId: member.id, category: marker } });
+            await tx.accountTransaction.create({ data: { memberId: member.id, accountId: acctId, date, merchant: "Salary", amount: Math.round(period.income * 100) / 100, type: "topup", category: marker, source: "manual" } });
+          }
+        }
+      } else if (step.templateId && step.toAccountId) {
+        // Recurring income row → credit the target account (mirror ledger line keyed by the income row).
         const income = await tx.personalIncome.findFirst({ where: { id: step.templateId, memberId: member.id } });
         const acct = await tx.financeAccount.findFirst({ where: { id: step.toAccountId, memberId: member.id, active: true }, select: { id: true, type: true } });
         if (income && acct && BALANCE_ACCOUNT_TYPES.has(acct.type)) {
