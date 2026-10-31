@@ -1,13 +1,14 @@
 // Domain types for the Finance (Wallet) section. Kept dependency-free so both client
 // and server code can import them.
 
-export const ACCOUNT_TYPES = ["credit_card", "debit_card", "prepaid_card", "bank"] as const; // future: loan | investment
+export const ACCOUNT_TYPES = ["credit_card", "debit_card", "prepaid_card", "bank", "cash"] as const; // future: loan | investment
 export type AccountType = (typeof ACCOUNT_TYPES)[number];
 
 // Accounts that hold a spendable balance (money you have) rather than a credit line (money you owe).
 // Debit = bank card; prepaid = meal card / wallet / gift card / FASTag; bank = a plain savings/current
-// account (the accounts the Money Plan moves money between). All derive a running balance the same way.
-export const BALANCE_ACCOUNT_TYPES: ReadonlySet<string> = new Set(["debit_card", "prepaid_card", "bank"]);
+// account (the accounts the Money Plan moves money between); cash = physical cash on hand (a wallet with
+// no institution). All derive a running balance the same way.
+export const BALANCE_ACCOUNT_TYPES: ReadonlySet<string> = new Set(["debit_card", "prepaid_card", "bank", "cash"]);
 
 export const CARD_NETWORKS = ["visa", "mastercard", "rupay", "amex", "diners"] as const;
 export type CardNetwork = (typeof CARD_NETWORKS)[number];

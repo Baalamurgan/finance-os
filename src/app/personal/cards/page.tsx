@@ -36,14 +36,14 @@ export default async function PersonalCardsPage({
         <div className="flex items-start justify-between gap-3">
           <div>
             <h1 className="text-xl font-bold text-slate-900">Cards &amp; accounts</h1>
-            <p className="text-sm text-slate-500">Your credit/debit/prepaid cards and bank accounts — bills, due dates and balances.</p>
+            <p className="text-sm text-slate-500">Your cards, bank &amp; cash accounts — bills, due dates and balances.</p>
           </div>
           <AddAccountModal />
         </div>
 
         <section className="space-y-2">
           {wallet.map(({ account, summary, balance }) => {
-            const typeLabel = account.type === "credit_card" ? "Credit" : account.type === "prepaid_card" ? "Prepaid" : account.type === "bank" ? "Bank" : "Debit";
+            const typeLabel = account.type === "credit_card" ? "Credit" : account.type === "prepaid_card" ? "Prepaid" : account.type === "bank" ? "Bank" : account.type === "cash" ? "Cash" : "Debit";
             const meta = [typeLabel, account.institution, account.last4 && `XX${account.last4}`].filter(Boolean).join(" · ");
             const info = dueByCard.get(account.id);
 

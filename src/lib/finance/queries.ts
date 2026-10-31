@@ -71,7 +71,7 @@ export async function getNetWorth(memberId: number) {
     prisma.netWorthItem.findMany({ where: { memberId }, orderBy: { value: "desc" } }),
     prisma.personalLoan.findMany({ where: { memberId, status: "open" } }),
     prisma.financeAccount.findMany({ where: { memberId, type: "credit_card" }, include: { credit: true } }),
-    prisma.financeAccount.findMany({ where: { memberId, type: { in: ["debit_card", "prepaid_card"] } } }),
+    prisma.financeAccount.findMany({ where: { memberId, type: { in: [...BALANCE_ACCOUNT_TYPES] } } }),
     prisma.accountTransaction.findMany({
       where: { memberId },
       select: { accountId: true, date: true, amount: true, type: true, rewardPoints: true },

@@ -13,6 +13,7 @@ const TYPE_LABEL: Record<AccountType, string> = {
   debit_card: "Debit",
   prepaid_card: "Prepaid",
   bank: "Bank",
+  cash: "Cash",
 };
 
 export function AddAccountModal() {
@@ -38,6 +39,8 @@ export function AddAccountModal() {
 
   const isCredit = type === "credit_card";
   const isBank = type === "bank";
+  const isCash = type === "cash";
+  const isAccount = isBank || isCash; // a plain balance account (no card number / network)
 
   return (
     <>
@@ -52,7 +55,7 @@ export function AddAccountModal() {
         <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/40 p-4 sm:items-center" onClick={() => setOpen(false)}>
           <div className="my-auto flex w-full max-w-md flex-col rounded-2xl bg-white shadow-xl" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between border-b border-slate-100 px-5 py-3">
-              <h2 className="text-lg font-bold text-slate-900">Add {isBank ? "account" : "card"}</h2>
+              <h2 className="text-lg font-bold text-slate-900">Add {isAccount ? "account" : "card"}</h2>
               <button type="button" onClick={() => setOpen(false)} className="rounded-md px-2 text-slate-400 hover:bg-slate-100" aria-label="Close">✕</button>
             </div>
             <form ref={formRef} action={formAction} className="flex flex-col">
@@ -60,8 +63,8 @@ export function AddAccountModal() {
                 <input type="hidden" name="type" value={type} />
 
                 {/* type toggle */}
-                <div className="grid grid-cols-4 gap-2">
-                  {(["credit_card", "debit_card", "prepaid_card", "bank"] as const).map((t) => (
+                <div className="grid grid-cols-5 gap-2">
+                  {(["credit_card", "debit_card", "prepaid_card", "bank", "cash"] as const).map((t) => (
                     <button
                       key={t}
                       type="button"
@@ -73,20 +76,22 @@ export function AddAccountModal() {
                   ))}
                 </div>
 
-                <Field label={isBank ? "Account name *" : "Card name *"}>
-                  <input name="name" required placeholder={isBank ? "e.g. HDFC Savings" : "e.g. SBI SimplyClick"} className="input w-full" />
+                <Field label={isAccount ? "Account name *" : "Card name *"}>
+                  <input name="name" required placeholder={isCash ? "e.g. Cash / Wallet" : isBank ? "e.g. HDFC Savings" : "e.g. SBI SimplyClick"} className="input w-full" />
                 </Field>
-                <div className="grid grid-cols-2 gap-3">
-                  <Field label="Bank / issuer">
-                    <input name="institution" placeholder="HDFC" className="input w-full" />
-                  </Field>
-                  {!isBank && (
-                    <Field label="Last 4 digits">
-                      <input name="last4" inputMode="numeric" maxLength={4} placeholder="1234" className="input w-full" />
+                {!isCash && (
+                  <div className="grid grid-cols-2 gap-3">
+                    <Field label="Bank / issuer">
+                      <input name="institution" placeholder="HDFC" className="input w-full" />
                     </Field>
-                  )}
-                </div>
-                {!isBank && (
+                    {!isAccount && (
+                      <Field label="Last 4 digits">
+                        <input name="last4" inputMode="numeric" maxLength={4} placeholder="1234" className="input w-full" />
+                      </Field>
+                    )}
+                  </div>
+                )}
+                {!isAccount && (
                   <Field label="Network">
                     <select name="network" className="input w-full">
                       <option value="">—</option>
@@ -107,7 +112,7 @@ export function AddAccountModal() {
                       <input name="openingBalance" inputMode="numeric" placeholder="0" className="input w-full" />
                     </Field>
                     <p className="mt-1 text-[11px] text-slate-400">
-                      {isBank ? "Money in the account today. Transfers and payments adjust it from here." : "Money on the card today. Top-ups and spends adjust it from here."}
+                      {isCash ? "Physical cash you have on hand right now. Spends and transfers adjust it from here." : isBank ? "Money in the account today. Transfers and payments adjust it from here." : "Money on the card today. Top-ups and spends adjust it from here."}
                     </p>
                   </div>
                 )}
