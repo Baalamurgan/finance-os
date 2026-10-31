@@ -8,10 +8,13 @@ const planItem = (id: number, over: Partial<{ kind: string; label: string; amoun
   id, kind: over.kind ?? "transfer", label: over.label ?? `Move ${id}`, amount: over.amount ?? 500,
   dayOfMonth: over.dayOfMonth ?? 5, fromAccountId: over.fromAccountId ?? 1, toAccountId: over.toAccountId ?? 2, note: over.note ?? null,
 });
+const bill = (id: number, over: Partial<{ label: string; amount: number; dayOfMonth: number | null; fromAccountId: number | null }> = {}) => ({
+  id, label: over.label ?? `Bill ${id}`, amount: over.amount ?? 1500, dayOfMonth: over.dayOfMonth ?? 1, fromAccountId: over.fromAccountId ?? null,
+});
 
 describe("diffPlanSteps", () => {
   it("creates a step for each income + plan item when none exist", () => {
-    const { toCreate, prunePendingIds } = diffPlanSteps([income(10, { accountId: 7 })], [planItem(20)], []);
+    const { toCreate, prunePendingIds } = diffPlanSteps([income(10, { accountId: 7 })], [planItem(20)], [], [], []);
     expect(prunePendingIds).toEqual([]);
     expect(toCreate).toHaveLength(2);
     const inc = toCreate.find((s) => s.templateKind === "income")!;
@@ -20,18 +23,26 @@ describe("diffPlanSteps", () => {
     expect(mv).toMatchObject({ kind: "transfer", templateId: 20, fromAccountId: 1, toAccountId: 2 });
   });
 
+  it("creates expense + spend steps from pending recurring bills/spends", () => {
+    const { toCreate } = diffPlanSteps([], [], [bill(30, { label: "Rent", fromAccountId: 3 })], [bill(40, { label: "Gym" })], []);
+    expect(toCreate).toHaveLength(2);
+    expect(toCreate.find((s) => s.templateKind === "expense")).toMatchObject({ kind: "expense", templateId: 30, label: "Rent", fromAccountId: 3 });
+    expect(toCreate.find((s) => s.templateKind === "spend")).toMatchObject({ kind: "spend", templateId: 40, label: "Gym" });
+  });
+
   it("does not recreate steps that already exist for a template", () => {
     const existing: ExistingStep[] = [
       { id: 1, templateKind: "income", templateId: 10, status: "done" },
       { id: 2, templateKind: "planitem", templateId: 20, status: "pending" },
+      { id: 3, templateKind: "expense", templateId: 30, status: "pending" },
     ];
-    const { toCreate } = diffPlanSteps([income(10)], [planItem(20)], existing);
+    const { toCreate } = diffPlanSteps([income(10)], [planItem(20)], [bill(30)], [], existing);
     expect(toCreate).toEqual([]);
   });
 
   it("only creates the missing ones", () => {
     const existing: ExistingStep[] = [{ id: 2, templateKind: "planitem", templateId: 20, status: "pending" }];
-    const { toCreate } = diffPlanSteps([income(10)], [planItem(20)], existing);
+    const { toCreate } = diffPlanSteps([income(10)], [planItem(20)], [], [], existing);
     expect(toCreate).toHaveLength(1);
     expect(toCreate[0]).toMatchObject({ templateKind: "income", templateId: 10 });
   });
@@ -39,11 +50,11 @@ describe("diffPlanSteps", () => {
   it("prunes a stale PENDING template-step whose template is gone, keeps done/skipped and one-offs", () => {
     const existing: ExistingStep[] = [
       { id: 1, templateKind: "planitem", templateId: 99, status: "pending" }, // template gone → prune
-      { id: 2, templateKind: "planitem", templateId: 98, status: "done" }, // gone but done → keep
+      { id: 2, templateKind: "expense", templateId: 98, status: "done" }, // gone but done → keep
       { id: 3, templateKind: "income", templateId: 97, status: "skipped" }, // gone but skipped → keep
       { id: 4, templateKind: null, templateId: null, status: "pending" }, // one-off → never pruned
     ];
-    const { toCreate, prunePendingIds } = diffPlanSteps([], [], existing);
+    const { toCreate, prunePendingIds } = diffPlanSteps([], [], [], [], existing);
     expect(toCreate).toEqual([]);
     expect(prunePendingIds).toEqual([1]);
   });

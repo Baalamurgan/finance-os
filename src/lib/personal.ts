@@ -31,10 +31,10 @@ async function seedRecurring(
     await tx.personalIncome.create({ data: { memberId, periodId: to.id, source: e.source, amount: e.amount, date: recurDate(to.year, to.month, e.date), recurring: true, accountId: e.accountId } });
   }
   for (const e of expenses) {
-    await tx.personalExpense.create({ data: { memberId, periodId: to.id, label: e.label, categoryId: e.categoryId, amount: e.amount, note: e.note, recurring: true, cardAccountId: e.cardAccountId, date: recurDate(to.year, to.month, e.date) } });
+    await tx.personalExpense.create({ data: { memberId, periodId: to.id, label: e.label, categoryId: e.categoryId, amount: e.amount, note: e.note, recurring: true, pending: true, cardAccountId: e.cardAccountId, date: recurDate(to.year, to.month, e.date) } });
   }
   for (const e of spends) {
-    await tx.personalSpend.create({ data: { memberId, periodId: to.id, categoryId: e.categoryId, amount: e.amount, note: e.note, recurring: true, cardAccountId: e.cardAccountId, date: recurDate(to.year, to.month, e.date) } });
+    await tx.personalSpend.create({ data: { memberId, periodId: to.id, categoryId: e.categoryId, amount: e.amount, note: e.note, recurring: true, pending: true, cardAccountId: e.cardAccountId, date: recurDate(to.year, to.month, e.date) } });
   }
 }
 
@@ -119,6 +119,16 @@ export async function ensurePersonalMonth(memberId: number, now = new Date()) {
         where: { id: existing.id },
         data: { status: "open", carryForward },
       });
+      // Plan-driven cutover: a promoted draft's recurring bills/spends become pending plan steps — but
+      // never un-tick one the user already executed in the preview (keep rows with a done step).
+      const doneSteps = await tx.personalPlanStep.findMany({
+        where: { periodId: existing.id, status: "done", templateKind: { in: ["expense", "spend"] } },
+        select: { templateKind: true, templateId: true },
+      });
+      const doneExp = doneSteps.filter((s) => s.templateKind === "expense").map((s) => s.templateId!).filter(Boolean);
+      const doneSpd = doneSteps.filter((s) => s.templateKind === "spend").map((s) => s.templateId!).filter(Boolean);
+      await tx.personalExpense.updateMany({ where: { periodId: existing.id, recurring: true, id: { notIn: doneExp.length ? doneExp : [0] } }, data: { pending: true } });
+      await tx.personalSpend.updateMany({ where: { periodId: existing.id, recurring: true, id: { notIn: doneSpd.length ? doneSpd : [0] } }, data: { pending: true } });
     } else {
       p = await tx.personalPeriod.create({
         data: {

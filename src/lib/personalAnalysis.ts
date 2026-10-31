@@ -12,8 +12,8 @@ export async function getPersonalAnalysis(memberId: number, periodId: number, ra
   const [periods, cats, exps, spends, extraByPeriod] = await Promise.all([
     prisma.personalPeriod.findMany({ where: { memberId }, orderBy: [{ year: "asc" }, { month: "asc" }] }),
     prisma.personalCategory.findMany({ where: { memberId } }),
-    prisma.personalExpense.findMany({ where: { memberId }, select: { periodId: true, categoryId: true, amount: true } }),
-    prisma.personalSpend.findMany({ where: { memberId }, select: { periodId: true, categoryId: true, amount: true } }),
+    prisma.personalExpense.findMany({ where: { memberId, pending: false }, select: { periodId: true, categoryId: true, amount: true } }),
+    prisma.personalSpend.findMany({ where: { memberId, pending: false }, select: { periodId: true, categoryId: true, amount: true } }),
     prisma.personalIncome.groupBy({ by: ["periodId"], where: { memberId }, _sum: { amount: true } }),
   ]);
 

@@ -40,7 +40,7 @@ export default async function PersonalExpenses({
     getPersonalCash(period),
     getCardDues(c.member.id),
     getBalanceCards(c.member.id),
-    prisma.personalSpend.findMany({ where: { periodId: period.id }, orderBy: [{ date: "desc" }, { id: "desc" }], include: { splitLoans: true } }),
+    prisma.personalSpend.findMany({ where: { periodId: period.id, pending: false }, orderBy: [{ date: "desc" }, { id: "desc" }], include: { splitLoans: true } }),
     getPersonalLending(c.member.id),
   ]);
   const { personalExpense, netSpent, canSpend } = cash;

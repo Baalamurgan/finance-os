@@ -47,7 +47,7 @@ export default async function PersonalPlanPage({
     getCardDues(c.member.id),
     getPersonalCash({ id: c.selected.id, income: c.selected.income, carryForward: c.selected.carryForward }),
     getPersonalSavings(c.member.id),
-    prisma.personalExpense.findMany({ where: { periodId: c.selected.id }, select: { amount: true, cardAccountId: true } }),
+    prisma.personalExpense.findMany({ where: { periodId: c.selected.id, pending: false }, select: { amount: true, cardAccountId: true } }),
     prisma.personalLoan.findMany({
       where: { memberId: c.member.id, direction: "borrowed", status: "open" },
       select: { id: true, counterparty: true, outstanding: true },

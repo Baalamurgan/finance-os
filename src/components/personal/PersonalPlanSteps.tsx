@@ -14,12 +14,13 @@ export type PlanStepView = {
 };
 type Acct = { id: number; name: string };
 
-const KIND_ICON: Record<string, string> = { income: "💰", transfer: "🔁", save: "🐷" };
+const KIND_ICON: Record<string, string> = { income: "💰", transfer: "🔁", save: "🐷", expense: "🧾", spend: "🛒" };
 
 function flow(s: PlanStepView): string {
   if (s.kind === "income") return s.toName ? `received → ${s.toName}` : "received";
   if (s.kind === "transfer") return `${s.fromName ?? "?"} → ${s.toName ?? "?"}`;
   if (s.kind === "save") return `${s.fromName ? `${s.fromName} ` : ""}→ savings pot`;
+  if (s.kind === "expense" || s.kind === "spend") return s.fromName ? `from ${s.fromName}` : "from cash / UPI";
   return "";
 }
 

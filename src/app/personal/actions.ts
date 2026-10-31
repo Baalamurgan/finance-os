@@ -1135,6 +1135,13 @@ async function reversePlanStepEffect(tx: Prisma.TransactionClient, step: PlanSte
     if (ids.length) await tx.accountTransaction.deleteMany({ where: { id: { in: ids }, memberId } });
   } else if (step.kind === "save") {
     if (step.savingsId) await tx.personalSavings.deleteMany({ where: { id: step.savingsId, memberId } });
+  } else if (step.kind === "expense") {
+    if (step.templateId) await tx.personalExpense.updateMany({ where: { id: step.templateId, memberId }, data: { pending: true } });
+  } else if (step.kind === "spend") {
+    if (step.templateId) {
+      await tx.personalSpend.updateMany({ where: { id: step.templateId, memberId }, data: { pending: true } });
+      await tx.accountTransaction.deleteMany({ where: { personalSpendId: step.templateId } });
+    }
   }
 }
 
@@ -1171,6 +1178,26 @@ export async function tickPlanStep(formData: FormData) {
     } else if (step.kind === "save") {
       const dep = await tx.personalSavings.create({ data: { memberId: member.id, amount: amt, note: step.label || "Recurring saving" } });
       await tx.personalPlanStep.update({ where: { id: step.id }, data: { status: "done", doneAt: date, savingsId: dep.id } });
+    } else if (step.kind === "expense") {
+      // Bill executed → the recurring row now counts in Can-spend.
+      if (step.templateId) await tx.personalExpense.updateMany({ where: { id: step.templateId, memberId: member.id }, data: { pending: false } });
+      await tx.personalPlanStep.update({ where: { id: step.id }, data: { status: "done", doneAt: date } });
+    } else if (step.kind === "spend") {
+      // Spend executed → counts in Can-spend; if on a card/balance account, post the ledger mirror.
+      if (step.templateId) {
+        const spend = await tx.personalSpend.findFirst({ where: { id: step.templateId, memberId: member.id } });
+        if (spend) {
+          await tx.personalSpend.update({ where: { id: spend.id }, data: { pending: false } });
+          if (spend.cardAccountId) {
+            await tx.accountTransaction.upsert({
+              where: { personalSpendId: spend.id },
+              update: { amount: spend.amount, merchant: step.label, accountId: spend.cardAccountId },
+              create: { memberId: member.id, accountId: spend.cardAccountId, date, merchant: step.label, amount: spend.amount, type: "spend", category: null, source: "personal", personalSpendId: spend.id },
+            });
+          }
+        }
+      }
+      await tx.personalPlanStep.update({ where: { id: step.id }, data: { status: "done", doneAt: date } });
     }
   });
   rev();

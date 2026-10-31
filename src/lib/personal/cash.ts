@@ -31,12 +31,13 @@ export async function getPersonalCash(period: {
   carryForward: number;
 }): Promise<PersonalCash> {
   const [fixedCashAgg, fixedCardAgg, cashSpendAgg, cardSpendAgg, extraAgg, sharedOthersAgg] = await Promise.all([
-    prisma.personalExpense.aggregate({ where: { periodId: period.id, cardAccountId: null }, _sum: { amount: true } }),
-    prisma.personalExpense.aggregate({ where: { periodId: period.id, cardAccountId: { not: null } }, _sum: { amount: true } }),
-    prisma.personalSpend.aggregate({ where: { periodId: period.id, cardAccountId: null }, _sum: { amount: true } }),
-    prisma.personalSpend.aggregate({ where: { periodId: period.id, cardAccountId: { not: null } }, _sum: { amount: true } }),
+    // pending rows are plan steps not yet executed — excluded from Can-spend until their step is ticked.
+    prisma.personalExpense.aggregate({ where: { periodId: period.id, cardAccountId: null, pending: false }, _sum: { amount: true } }),
+    prisma.personalExpense.aggregate({ where: { periodId: period.id, cardAccountId: { not: null }, pending: false }, _sum: { amount: true } }),
+    prisma.personalSpend.aggregate({ where: { periodId: period.id, cardAccountId: null, pending: false }, _sum: { amount: true } }),
+    prisma.personalSpend.aggregate({ where: { periodId: period.id, cardAccountId: { not: null }, pending: false }, _sum: { amount: true } }),
     prisma.personalIncome.aggregate({ where: { periodId: period.id }, _sum: { amount: true } }),
-    prisma.personalSpend.aggregate({ where: { periodId: period.id }, _sum: { sharedOthers: true } }),
+    prisma.personalSpend.aggregate({ where: { periodId: period.id, pending: false }, _sum: { sharedOthers: true } }),
   ]);
   const fixedCash = fixedCashAgg._sum.amount ?? 0;
   const fixedCard = fixedCardAgg._sum.amount ?? 0;
@@ -164,8 +165,8 @@ export async function getCardDues(memberId: number): Promise<CardDue[]> {
   const cardIds = cards.map((c) => c.id);
   const member = await prisma.member.findUnique({ where: { id: memberId }, select: { householdId: true } });
   const [spends, fixed, bills, categories, familyTxns, famBudgetedCats] = await Promise.all([
-    prisma.personalSpend.findMany({ where: { memberId, cardAccountId: { not: null } }, select: { cardAccountId: true, amount: true, date: true, note: true, categoryId: true } }),
-    prisma.personalExpense.findMany({ where: { memberId, cardAccountId: { not: null } }, select: { cardAccountId: true, amount: true, date: true, label: true } }),
+    prisma.personalSpend.findMany({ where: { memberId, cardAccountId: { not: null }, pending: false }, select: { cardAccountId: true, amount: true, date: true, note: true, categoryId: true } }),
+    prisma.personalExpense.findMany({ where: { memberId, cardAccountId: { not: null }, pending: false }, select: { cardAccountId: true, amount: true, date: true, label: true } }),
     prisma.personalCardBill.findMany({ where: { memberId }, select: { id: true, cardAccountId: true, cycleEnd: true, amount: true, paidAt: true } }),
     prisma.personalCategory.findMany({ where: { memberId }, select: { id: true, name: true } }),
     // Mirrored spends this member's cards FRONT for someone else — the family (source "family", owner

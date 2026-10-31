@@ -43,7 +43,7 @@ export default async function PersonalSheet({
   const incomeAccounts = c.spendCards.filter((a) => a.mine && BALANCE_ACCOUNT_TYPES.has(a.type ?? ""));
 
   const [expenses, extraIncomes, cash, unpaidCardDues, lending] = await Promise.all([
-    prisma.personalExpense.findMany({ where: { periodId: period.id }, orderBy: { amount: "desc" } }),
+    prisma.personalExpense.findMany({ where: { periodId: period.id, pending: false }, orderBy: { amount: "desc" } }),
     prisma.personalIncome.findMany({ where: { periodId: period.id }, orderBy: { id: "desc" } }),
     getPersonalCash(period),
     getUnpaidCardDues(c.member.id),

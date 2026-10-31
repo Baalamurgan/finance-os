@@ -307,6 +307,9 @@ model PersonalExpense {
   note       String?
   date       DateTime @default(now())
   recurring  Boolean  @default(false)
+  // Plan-driven: a recurring bill starts pending — generated as a plan step, NOT counted in Can-spend —
+  // until its step is ticked (done). Ad-hoc bills are false (count immediately). Only seedRecurring sets true.
+  pending    Boolean  @default(false)
   // Fixed bill paid by a credit card → deferred from cash like a CC spend (settles at
   // the card's bill). null = paid from cash. Carries when the line clones next month.
   cardAccount   FinanceAccount? @relation("PersonalExpenseCard", fields: [cardAccountId], references: [id], onDelete: SetNull)
@@ -329,6 +332,9 @@ model PersonalSpend {
   // Recurring spend template (set in Personal setup): clones into each new month on `date`'s day-of-month,
   // carrying its category + card. A normal daily spend leaves this false.
   recurring  Boolean  @default(false)
+  // Plan-driven: a recurring spend starts pending — generated as a plan step, NOT counted in Can-spend —
+  // until its step is ticked (done). Ad-hoc spends are false (count immediately). Only seedRecurring sets true.
+  pending    Boolean  @default(false)
   date       DateTime @default(now())
   // Paid by a credit card → the cash leaves when that card's bill is paid, but the spend
   // still counts against this month at spend time. null = cash/UPI.

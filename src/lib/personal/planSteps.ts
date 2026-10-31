@@ -10,6 +10,7 @@ import { prisma } from "@/lib/prisma";
 
 export type IncomeTemplate = { id: number; source: string; amount: number; dayOfMonth: number | null; accountId: number | null };
 export type PlanItemTemplate = { id: number; kind: string; label: string; amount: number; dayOfMonth: number | null; fromAccountId: number | null; toAccountId: number | null; note: string | null };
+export type BillTemplate = { id: number; label: string; amount: number; dayOfMonth: number | null; fromAccountId: number | null };
 export type ExistingStep = { id: number; templateKind: string | null; templateId: number | null; status: string };
 export type NewStepData = {
   kind: string; label: string; amount: number; dayOfMonth: number | null;
@@ -24,6 +25,8 @@ const tKey = (kind: string | null, id: number | null) => `${kind}:${id}`;
 export function diffPlanSteps(
   incomes: IncomeTemplate[],
   planItems: PlanItemTemplate[],
+  expenses: BillTemplate[],
+  spends: BillTemplate[],
   existing: ExistingStep[],
 ): { toCreate: NewStepData[]; prunePendingIds: number[] } {
   const have = new Set(existing.filter((e) => e.templateKind).map((e) => tKey(e.templateKind, e.templateId)));
@@ -47,9 +50,24 @@ export function diffPlanSteps(
       });
     }
   }
+  // Pending recurring bills/spends → expense/spend steps. fromAccountId is the paid-from account (the
+  // bill/spend's cardAccountId) for display; ticking the step marks the row executed (counts in Can-spend).
+  for (const [kind, bills] of [["expense", expenses], ["spend", spends]] as const) {
+    for (const b of bills) {
+      if (!have.has(tKey(kind, b.id))) {
+        toCreate.push({
+          kind, label: b.label, amount: b.amount, dayOfMonth: b.dayOfMonth,
+          fromAccountId: b.fromAccountId, toAccountId: null, note: null,
+          templateKind: kind, templateId: b.id, sortOrder: order++,
+        });
+      }
+    }
+  }
   const live = new Set<string>([
     ...incomes.map((i) => tKey("income", i.id)),
     ...planItems.map((p) => tKey("planitem", p.id)),
+    ...expenses.map((e) => tKey("expense", e.id)),
+    ...spends.map((s) => tKey("spend", s.id)),
   ]);
   const prunePendingIds = existing
     .filter((e) => e.templateKind && e.status === "pending" && !live.has(tKey(e.templateKind, e.templateId)))
@@ -66,7 +84,7 @@ export function orderSteps<T extends { dayOfMonth: number | null; sortOrder: num
 
 // Idempotently materialise this month's steps from the templates. Safe to call on every plan-page load.
 export async function ensurePlanSteps(memberId: number, periodId: number): Promise<void> {
-  const [incomes, planItems, existing] = await Promise.all([
+  const [incomes, planItems, expenses, spends, existing] = await Promise.all([
     prisma.personalIncome.findMany({
       where: { periodId, recurring: true },
       select: { id: true, source: true, amount: true, date: true, accountId: true },
@@ -74,6 +92,16 @@ export async function ensurePlanSteps(memberId: number, periodId: number): Promi
     prisma.personalPlanItem.findMany({
       where: { memberId, active: true },
       select: { id: true, kind: true, label: true, amount: true, dayOfMonth: true, fromAccountId: true, toAccountId: true, note: true },
+    }),
+    // Only PENDING recurring bills/spends become steps — executed (ticked) ones already count, and
+    // pre-cutover months (pending defaulted false) stay on the old model.
+    prisma.personalExpense.findMany({
+      where: { periodId, recurring: true, pending: true },
+      select: { id: true, label: true, amount: true, date: true, cardAccountId: true },
+    }),
+    prisma.personalSpend.findMany({
+      where: { periodId, recurring: true, pending: true },
+      select: { id: true, note: true, amount: true, date: true, cardAccountId: true, category: { select: { name: true } } },
     }),
     prisma.personalPlanStep.findMany({
       where: { periodId },
@@ -83,6 +111,8 @@ export async function ensurePlanSteps(memberId: number, periodId: number): Promi
   const { toCreate, prunePendingIds } = diffPlanSteps(
     incomes.map((i) => ({ id: i.id, source: i.source, amount: i.amount, dayOfMonth: i.date.getDate(), accountId: i.accountId })),
     planItems,
+    expenses.map((e) => ({ id: e.id, label: e.label || "Bill", amount: e.amount, dayOfMonth: e.date.getDate(), fromAccountId: e.cardAccountId })),
+    spends.map((s) => ({ id: s.id, label: s.note?.trim() || s.category?.name || "Spend", amount: s.amount, dayOfMonth: s.date.getDate(), fromAccountId: s.cardAccountId })),
     existing,
   );
   if (toCreate.length === 0 && prunePendingIds.length === 0) return;
