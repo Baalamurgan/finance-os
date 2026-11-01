@@ -307,12 +307,15 @@ function ExpenseRow({
     tags.push({ key: "phase", priority: "high", node: <IncentiveTag full={e.category.billAmount ?? undefined} save={save} />, label: `💰 Incentive${save != null && save > 0.005 ? ` · save ${formatINR(save)}` : ""}` });
   } else if (billMonthDue) {
     tags.push({ key: "phase", priority: "high", node: <BillTag />, label: "🧾 Bill due now" });
-  } else if (trimmedBy != null) {
-    tags.push({ key: "phase", priority: "high", label: `✂️ Trimmed −${formatINR(trimmedBy)}`, node: (
-      <span className="shrink-0 whitespace-nowrap rounded-full bg-amber-100 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-amber-700" title={`Trimmed by ${formatINR(trimmedBy)} — last month went over budget, so this is less than the usual ${formatINR(e.category.monthlyBudget ?? 0)}.`}>✂️ Trimmed</span>
-    ) });
   } else if (paidCard) {
     tags.push({ key: "phase", priority: "high", node: <CardTag name={paidCard.name} last4={paidCard.last4} color={paidCard.color} />, label: `💳 ${paidCard.name}${paidCard.last4 ? ` ••${paidCard.last4}` : ""}` });
+  }
+  // ✂️ Trimmed is independent of the phase tag above (a trimmed budget that is also e.g. on a card still shows
+  // it) — always inline on a laptop, in the ⓘ on a phone.
+  if (trimmedBy != null) {
+    tags.push({ key: "trim", priority: "high", label: `✂️ Trimmed −${formatINR(trimmedBy)}`, node: (
+      <span className="shrink-0 whitespace-nowrap rounded-full bg-amber-100 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-amber-700" title={`Trimmed by ${formatINR(trimmedBy)} — last month went over budget, so this is less than the usual ${formatINR(e.category.monthlyBudget ?? 0)}.`}>✂️ Trimmed</span>
+    ) });
   }
   if (periodic && cad) tags.push({ key: "cadence", priority: "low", node: <CadencePill label={cad} />, label: `🔁 ${cad}` });
   if (isNew) tags.push({ key: "new", priority: "high", node: <NewBadge />, label: "✨ New this month" });
