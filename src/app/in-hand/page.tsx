@@ -239,6 +239,7 @@ export default async function InHandPage({
           open={open}
           datesEditable={open || c.selected.status === "draft"}
           generalPiggy={inHand.generalPiggy}
+          spendCategories={c.categories.filter((cat) => cat.tracked).map((cat) => ({ id: cat.id, name: cat.name }))}
           billCategories={c.categories
             .filter((cat) => !cat.tracked && cat.fundingStyle == null && !cat.isAllowance)
             .map((cat) => ({ id: cat.id, name: cat.name, section: cat.section }))}

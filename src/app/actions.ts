@@ -1293,6 +1293,25 @@ export async function editSpendAction(
   return { ok: true, n: prev.n + 1 };
 }
 
+// ── Card-bill side entries (the real-bank side of paying a family card bill) ───────────────────────
+// Paying debits the STATEMENT total from the owner's family account (e.g. SBI). The difference to what was
+// actually paid is booked where the payer chose: an EXTRA (fees / fuel surcharge) becomes a family spend in a
+// category this month; a SAVING (cashback) goes to the owner's personal income, the Piggy, or back to a
+// category (a negative spend). Spends ride the normal Cash/UPI → family-account mirror, so the bank side
+// nets to exactly what was paid. All of it is found again by these markers/labels and removed on undo/re-pay.
+const famCardPayMark = (cardId: number, cycleISO: string) => `__famcardpay__:${cardId}:${cycleISO}`;
+const famCardCbMark = (cardId: number, cycleISO: string) => `__famcardcb__:${cardId}:${cycleISO}`;
+const cardChargeLabel = (name: string) => `${name} bill charges`;
+const cardCashbackLabel = (name: string) => `${name} bill cashback`;
+
+async function clearCardBillExtras(tx: Prisma.TransactionClient, a: { cardId: number; cardName: string; ownerId: number; cycleEnd: Date; cycleISO: string }) {
+  await tx.accountTransaction.deleteMany({ where: { memberId: a.ownerId, category: { in: [famCardPayMark(a.cardId, a.cycleISO), famCardCbMark(a.cardId, a.cycleISO)] } } });
+  // spends cascade their family-account mirror (familySpendId FK)
+  await tx.spend.deleteMany({ where: { memberId: a.ownerId, label: { in: [cardChargeLabel(a.cardName), cardCashbackLabel(a.cardName)] }, createdAt: { gte: a.cycleEnd } } });
+  await tx.piggyEntry.deleteMany({ where: { note: { contains: famCardCbMark(a.cardId, a.cycleISO) } } });
+  await tx.personalIncome.deleteMany({ where: { memberId: a.ownerId, source: cardCashbackLabel(a.cardName), createdAt: { gte: a.cycleEnd } } });
+}
+
 // ── Family credit-card bill: one owner-only payment settles the whole cycle ──────────────────────
 // A family card bill combines family spends (funded from the owner's held budget / in-hand) + the
 // owner's own personal spends (from their Can-spend) + any annual fee — but it's ONE real payment.
@@ -1324,7 +1343,22 @@ export async function payFamilyCardBill(formData: FormData) {
   const diffMarker = `__cardbilldiff__:${cycleEnd.toISOString()}`;
   // The payment leaves cash in the OWNER's current personal month (mirrors the personal markCardBillPaid).
   const period = await ensurePersonalMonth(card.memberId);
+  // Where the difference goes (from the Pay modal). Absent (e.g. paid from the personal plan) → card ledger only.
+  const skipBank = formData.get("skipBankDebit") === "1";
+  const diffCategoryId = Number(formData.get("diffCategoryId")) || 0;
+  const cashbackTo = String(formData.get("cashbackTo") ?? ""); // "personal" | "piggy" | "category"
+  const household = await prisma.household.findFirst({ select: { id: true } });
+  const diffCat = diffCategoryId && household
+    ? await prisma.category.findFirst({ where: { id: diffCategoryId, householdId: household.id, tracked: true }, select: { id: true, name: true } })
+    : null;
+  if (difference > 0.005 && !skipBank && formData.has("diffCategoryId") && !diffCat) return { ok: false, error: "Pick the category the extra charges go to." };
+  if (difference < -0.005 && cashbackTo === "category" && !diffCat) return { ok: false, error: "Pick the category the cashback goes to." };
+  const famOpen = await prisma.period.findFirst({ where: { status: "open", ...(household ? { householdId: household.id } : {}) }, orderBy: [{ year: "desc" }, { month: "desc" }], select: { id: true } });
+  const primaryId = await familyPrimaryAccountId(card.memberId);
+  const cycleISO = cycleEnd.toISOString();
+  const statement = expected;
   await prisma.$transaction(async (tx) => {
+    await clearCardBillExtras(tx, { cardId: cardAccountId, cardName: card.name, ownerId: card.memberId, cycleEnd, cycleISO });
     await tx.personalCardBill.upsert({
       where: { cardAccountId_cycleEnd: { cardAccountId, cycleEnd } },
       create: { memberId: card.memberId, cardAccountId, cycleEnd, paidPeriodId: period.id, amount },
@@ -1342,6 +1376,36 @@ export async function payFamilyCardBill(formData: FormData) {
           category: diffMarker, source: "manual",
         },
       });
+    }
+    if (skipBank) return; // the personal plan's card step books its own account debit
+    // Real bank: the statement total leaves the owner's family account (SBI).
+    if (primaryId != null && statement > 0.005) {
+      await tx.accountTransaction.create({ data: { memberId: card.memberId, accountId: primaryId, date: new Date(), merchant: `Paid ${card.name} bill`, amount: Math.round(statement * 100) / 100, type: "transfer_out", category: famCardPayMark(cardAccountId, cycleISO), source: "manual" } });
+    }
+    const mirror = async (spendId: number, label: string, amt: number, catName: string) => {
+      if (primaryId == null) return;
+      await tx.accountTransaction.create({ data: { memberId: card.memberId, accountId: primaryId, date: new Date(), merchant: label, amount: amt, type: "spend", category: catName, source: "family", familySpendId: spendId } });
+    };
+    if (difference > 0.005 && diffCat && famOpen) {
+      // EXTRA (fees / surcharge) → a family spend in the chosen category, this month, out of the family account.
+      const sp = await tx.spend.create({ data: { periodId: famOpen.id, categoryId: diffCat.id, memberId: card.memberId, label: cardChargeLabel(card.name), amount: difference, loggedById: selfId } });
+      await mirror(sp.id, sp.label, difference, diffCat.name);
+    } else if (difference < -0.005) {
+      const saved = -difference;
+      if (cashbackTo === "category" && diffCat && famOpen) {
+        // back to the category: a negative spend (a credit) — raises its budget left and In-Hand; the mirror
+        // puts the same amount back on the family account.
+        const sp = await tx.spend.create({ data: { periodId: famOpen.id, categoryId: diffCat.id, memberId: card.memberId, label: cardCashbackLabel(card.name), amount: -saved, loggedById: selfId } });
+        await mirror(sp.id, sp.label, -saved, diffCat.name);
+      } else if (cashbackTo === "piggy" || cashbackTo === "personal") {
+        // the saving stayed in the family account (less was paid) — put it back there, then route it
+        if (primaryId != null) await tx.accountTransaction.create({ data: { memberId: card.memberId, accountId: primaryId, date: new Date(), merchant: `${card.name} bill cashback`, amount: saved, type: "topup", category: famCardCbMark(cardAccountId, cycleISO), source: "manual" } });
+        if (cashbackTo === "piggy" && household && famOpen) {
+          await tx.piggyEntry.create({ data: { householdId: household.id, periodId: famOpen.id, kind: "piggy", amount: saved, note: `${cardCashbackLabel(card.name)} ${famCardCbMark(cardAccountId, cycleISO)}` } });
+        } else if (cashbackTo === "personal") {
+          await tx.personalIncome.create({ data: { memberId: card.memberId, periodId: period.id, source: cardCashbackLabel(card.name), amount: saved, date: new Date() } });
+        }
+      }
     }
   });
   log.info("payFamilyCardBill", "ok", { outcome: "ok", cardAccountId, amount, difference });
@@ -1366,10 +1430,12 @@ export async function unpayFamilyCardBill(formData: FormData) {
   const cycleEnd = new Date(cycleEndISO);
   if (isNaN(cycleEnd.getTime())) return { ok: false, error: "Bad cycle." };
   const diffMarker = `__cardbilldiff__:${cycleEnd.toISOString()}`;
-  await prisma.$transaction([
-    prisma.personalCardBill.deleteMany({ where: { cardAccountId, cycleEnd } }),
-    prisma.accountTransaction.deleteMany({ where: { accountId: cardAccountId, category: diffMarker } }),
-  ]);
+  const cardName = (await prisma.financeAccount.findUnique({ where: { id: cardAccountId }, select: { name: true } }))?.name ?? card.name;
+  await prisma.$transaction(async (tx) => {
+    await clearCardBillExtras(tx, { cardId: cardAccountId, cardName, ownerId: card.memberId, cycleEnd, cycleISO: cycleEnd.toISOString() });
+    await tx.personalCardBill.deleteMany({ where: { cardAccountId, cycleEnd } });
+    await tx.accountTransaction.deleteMany({ where: { accountId: cardAccountId, category: diffMarker } });
+  });
   log.info("unpayFamilyCardBill", "ok", { outcome: "ok", cardAccountId });
   const famPeriod = await prisma.period.findFirst({ where: { status: "open" }, orderBy: [{ year: "desc" }, { month: "desc" }], select: { id: true } });
   await logActivity("cardbill", "deleted", `Undid ${card.name} bill payment`, famPeriod?.id ?? null);

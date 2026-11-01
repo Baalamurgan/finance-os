@@ -25,7 +25,7 @@ import { canActOnStep, canActInMonth } from "@/lib/planAuth";
 // Refresh re-pulls due dates + amounts from Setup into this month, then re-orders the plan.
 export function MoneyPlan({
   plan, householdId, periodId, isHead, currentMemberId, canEdit, open, datesEditable = false, generalPiggy,
-  billCategories, members, monthBalance, cardsByMember = {}, currentDay = null,
+  billCategories, spendCategories = [], members, monthBalance, cardsByMember = {}, currentDay = null,
 }: {
   plan: MoneyPlanResult;
   householdId: number;
@@ -39,6 +39,7 @@ export function MoneyPlan({
   datesEditable?: boolean;
   generalPiggy: number;
   billCategories: { id: number; name: string; section?: string }[];
+  spendCategories?: { id: number; name: string }[]; // tracked family categories — where a card bill's extra charge / cashback is booked
   members: { id: number; name: string }[];
   monthBalance: number;
   // Each member's own credit cards → the "Paid with" picker on their bills' Pay modals.
@@ -562,6 +563,7 @@ export function MoneyPlan({
                           familyMisc={s.cardFamilyMisc ?? 0}
                           personalAmount={s.cardPersonal ?? 0}
                           annualFee={s.cardAnnualFee ?? 0}
+                          categories={spendCategories}
                         />
                       )
                     ) : s.done ? (

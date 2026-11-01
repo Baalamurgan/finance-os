@@ -1618,6 +1618,7 @@ export async function payCardBillStep(prev: PersonalSaveState, formData: FormDat
   fd.set("cardId", String(cardId));
   fd.set("cycleEnd", cyc.cycleEndISO);
   fd.set("amount", String(amount));
+  fd.set("skipBankDebit", "1"); // this step debits the account picked in its own modal
   const res = await payFamilyCardBill(fd);
   if (!res.ok) return { ok: false, error: ("error" in res && res.error) || "Couldn't record the payment.", n };
 

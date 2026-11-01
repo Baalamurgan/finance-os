@@ -32,6 +32,7 @@ export function PayCardBillModal({
   familyMisc,
   personalAmount,
   annualFee,
+  categories = [],
 }: {
   cardId: number;
   cardName: string;
@@ -43,6 +44,9 @@ export function PayCardBillModal({
   familyMisc: number; // family misc/other spends → funded from the owner's in-hand
   personalAmount: number;
   annualFee: number;
+  // Family spend categories for booking the difference (extra charges / cashback). Empty → the difference
+  // stays on the card's own ledger only (the old behaviour).
+  categories?: { id: number; name: string }[];
 }) {
   const withToast = useToastAction();
   const [open, setOpen] = useState(false);
@@ -51,6 +55,10 @@ export function PayCardBillModal({
   const [amount, setAmount] = useState(String(Math.round(suggested)));
   const amountNum = Number(amount) || 0;
   const difference = Math.round((amountNum - suggested) * 100) / 100; // + = extra fees/charges, − = cashback/savings
+  // An RBL-style fuel card's extra is almost always fuel surcharge → pre-pick a Fuel/Petrol category if there is one.
+  const defaultCat = categories.find((c) => /fuel|petrol|diesel/i.test(c.name))?.id ?? "";
+  const [cashbackTo, setCashbackTo] = useState<"personal" | "piggy" | "category">("personal");
+  const booksDiff = categories.length > 0;
   const due = new Date(dueISO).toLocaleDateString("en-IN", { day: "numeric", month: "short" });
   // Show the budgeted portion split by month only when the cycle genuinely straddles two+ budget months.
   const budgetedMonths = familyBudgetedByMonth.filter((m) => m.amount > 0.005);
@@ -121,6 +129,38 @@ export function PayCardBillModal({
                   </p>
                 )}
               </div>
+
+              {booksDiff && difference > 0.005 && (
+                <div className="rounded-xl border border-amber-200 bg-amber-50/60 p-3">
+                  <label className="text-sm font-medium text-slate-700">The extra {formatINR(difference)} is spent from</label>
+                  <select name="diffCategoryId" required defaultValue={defaultCat} className="input mt-1.5 w-full">
+                    <option value="" disabled>Pick a category</option>
+                    {categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                  </select>
+                  <p className="mt-1 text-[11px] text-slate-500">Booked as a family spend this month (&ldquo;{cardName} bill charges&rdquo;) — it lowers that budget and your In-Hand, and comes out of your family account.</p>
+                </div>
+              )}
+              {booksDiff && difference < -0.005 && (
+                <div className="rounded-xl border border-emerald-200 bg-emerald-50/60 p-3">
+                  <p className="text-sm font-medium text-slate-700">The {formatINR(-difference)} saved goes to</p>
+                  <input type="hidden" name="cashbackTo" value={cashbackTo} />
+                  <div className="mt-1.5 grid grid-cols-3 gap-1.5">
+                    {([["personal", "👤 My personal income"], ["piggy", "🐷 Piggy"], ["category", "🗂 A category"]] as const).map(([k, l]) => (
+                      <button key={k} type="button" onClick={() => setCashbackTo(k)}
+                        className={`rounded-lg border-2 px-1.5 py-2 text-[11px] font-medium ${cashbackTo === k ? "border-emerald-500 bg-white text-emerald-700" : "border-slate-200 bg-white text-slate-500"}`}>{l}</button>
+                    ))}
+                  </div>
+                  {cashbackTo === "category" && (
+                    <select name="diffCategoryId" required defaultValue={defaultCat} className="input mt-2 w-full">
+                      <option value="" disabled>Pick a category</option>
+                      {categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                    </select>
+                  )}
+                  <p className="mt-1 text-[11px] text-slate-500">
+                    {cashbackTo === "personal" ? "Added as income in your personal month." : cashbackTo === "piggy" ? "Added to the general Piggy." : "Credited back to that category this month (raises what's left in it)."}
+                  </p>
+                </div>
+              )}
 
               <div className="flex items-center gap-3 pt-1">
                 <button type="button" onClick={() => setOpen(false)} className="min-h-12 flex-1 rounded-xl border-2 border-slate-200 px-4 py-3 text-base font-medium text-slate-600">Cancel</button>
