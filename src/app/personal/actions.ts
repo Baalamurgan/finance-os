@@ -542,14 +542,14 @@ export async function upsertPersonalRecurring(prev: PersonalSaveState, formData:
       const e = await prisma.personalExpense.findUnique({ where: { id } });
       if (!e || e.memberId !== member.id) return { ok: false, error: "Not found.", n };
       await prisma.personalExpense.update({ where: { id }, data });
-    } else await prisma.personalExpense.create({ data: { memberId: member.id, periodId, ...data } });
+    } else await prisma.personalExpense.create({ data: { memberId: member.id, periodId, ...data, pending: true } }); // planned: it's a step this month too
   } else {
     const data = { categoryId, amount, note: label, date, recurring: true, cardAccountId, payAccountId };
     if (id) {
       const e = await prisma.personalSpend.findUnique({ where: { id } });
       if (!e || e.memberId !== member.id) return { ok: false, error: "Not found.", n };
       await prisma.personalSpend.update({ where: { id }, data });
-    } else await prisma.personalSpend.create({ data: { memberId: member.id, periodId, ...data } });
+    } else await prisma.personalSpend.create({ data: { memberId: member.id, periodId, ...data, pending: true } });
   }
   if (id) {
     // Editing the template in Setup supersedes any month-only edit: drop the step's snapshot (next month

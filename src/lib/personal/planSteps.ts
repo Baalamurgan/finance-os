@@ -1,6 +1,6 @@
 import { prisma } from "@/lib/prisma";
 import { getCardDues } from "@/lib/personal/cash";
-import { revertAutoBills } from "@/lib/personal/autoBills";
+import { revertAutoBills, replanUnplanned } from "@/lib/personal/autoBills";
 
 // Generation + ordering for the personal Money-Plan steps. A month's steps are materialised from two
 // template sources — recurring income rows (recurring = true PersonalIncome in the month) and the member's
@@ -129,7 +129,8 @@ export function orderSteps<T extends { dayOfMonth: number | null; sortOrder: num
 
 // Idempotently materialise this month's steps from the templates. Safe to call on every plan-page load.
 export async function ensurePlanSteps(memberId: number, periodId: number): Promise<void> {
-  await revertAutoBills(memberId); // undo any silent due-day auto-debit from the earlier version, then plan as normal
+  await revertAutoBills(memberId); // undo any silent due-day auto-debit from the earlier version…
+  await replanUnplanned(memberId, periodId); // …and bring back the bills/spends it marked paid without a trace, then plan as normal
   const [incomes, planItems, expenses, spends, existing, period, dues, paidBills] = await Promise.all([
     prisma.personalIncome.findMany({
       where: { periodId, recurring: true },
