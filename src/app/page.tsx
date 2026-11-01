@@ -176,6 +176,13 @@ function taxSkipMsg(e: ExpRow): string {
   );
 }
 
+// Every Sheet list is ALPHABETICAL (the primary sort, always) by the name shown on the row — numeric-aware,
+// case-insensitive, ignoring the "(monthly share)" suffix the row hides.
+const nameOf = (x: { label: string } | { source: string }): string =>
+  ("label" in x ? x.label : x.source).replace(/\s*\(monthly share\)$/, "").trim();
+const byName = <T extends { label: string } | { source: string }>(a: T, b: T): number =>
+  nameOf(a).localeCompare(nameOf(b), "en", { sensitivity: "base", numeric: true });
+
 function monthLabel(month: number, year: number) {
   return `${new Date(year, month - 1, 1)
     .toLocaleString("en-US", { month: "short" })
@@ -560,7 +567,7 @@ export default async function SheetPage({
   // group expenses by their DISPLAY section (sheetSection: shares → Monthly, periodic
   // bills → Yearly) in the fixed section order
   const grouped = SECTION_ORDER.map((section) => {
-    const rows = rollup.expenses.filter((e) => sheetSection(e) === section);
+    const rows = rollup.expenses.filter((e) => sheetSection(e) === section).sort(byName);
     return { section, rows, subtotal: rows.reduce((s, e) => s + e.amount, 0) };
   }).filter((g) => g.rows.length > 0);
 
@@ -584,17 +591,17 @@ export default async function SheetPage({
   // always-shown Yearly/periodic-bills block, and miscellaneous/extra (Misc).
   const FIXED_SECTIONS = ["Loans", "Chits", "Monthly", "PiggyBudget"];
   const fixedGroups = grouped.filter((g) => FIXED_SECTIONS.includes(g.section));
-  const yearlyRows = rollup.expenses.filter((e) => sheetSection(e) === "Yearly");
+  const yearlyRows = rollup.expenses.filter((e) => sheetSection(e) === "Yearly").sort(byName);
   const yearlySubtotal = yearlyRows.reduce((s, e) => s + e.amount, 0);
   // Misc / extra: this-month's KEPT lines (planned/added, survive a refresh) on top, then the previous
-  // month's carried spends (CARRY_NOTE, "AUG · …") below. Each group newest-first.
+  // month's carried spends (CARRY_NOTE, "AUG · …") below. Each group alphabetical.
   const miscRows = rollup.expenses
     .filter((e) => sheetSection(e) === "Misc")
     .sort((a, b) => {
       const ac = a.note === CARRY_NOTE ? 1 : 0;
       const bc = b.note === CARRY_NOTE ? 1 : 0;
       if (ac !== bc) return ac - bc; // kept/this-month (0) before carried (1)
-      return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime() || b.id - a.id;
+      return byName(a, b);
     });
   const fixedSubtotal = fixedGroups.reduce((s, g) => s + g.subtotal, 0);
   const miscSubtotal = miscRows.reduce((s, e) => s + e.amount, 0);
@@ -772,7 +779,7 @@ export default async function SheetPage({
               </span>
             </summary>
             <div className="divide-y divide-slate-100 px-4 py-1">
-              {rollup.incomes.map((i) => {
+              {[...rollup.incomes].sort(byName).map((i) => {
                 const incomeTags: RowTag[] = [];
                 if (newIncomeIds.has(i.id)) incomeTags.push({ key: "new", priority: "high", node: <NewBadge />, label: "✨ New this month" });
                 if (i.pinned) incomeTags.push({ key: "pin", priority: "high", node: <PinnedBadge kind="income" id={i.id} canEdit={canEditHere} />, label: "📌 Pinned (hand-edited)" });
