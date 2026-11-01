@@ -2,6 +2,7 @@ import { formatINR } from "@/lib/format";
 import { prisma } from "@/lib/prisma";
 import { loadPersonal } from "@/lib/loadPersonal";
 import { personalMonthLabel } from "@/lib/personal";
+import { PlannedSpends } from "@/components/personal/PlannedSpends";
 import { PersonalNav } from "@/components/personal/PersonalNav";
 import { PersonalSpendFab } from "@/components/personal/PersonalSpendFab";
 import { PersonalSpendsView } from "@/components/personal/PersonalSpendsView";
@@ -36,6 +37,19 @@ export default async function PersonalExpenses({
   const cats = new Map(c.categories.map((cat) => [cat.id, cat]));
   const catList = c.categories.map((cat) => ({ id: cat.id, name: cat.name, icon: cat.icon }));
 
+  // Planned recurring spends (copied from Setup, not paid yet) — minus any removed from this month's plan.
+  const removedSpends = await prisma.personalPlanStep.findMany({ where: { periodId: period.id, status: "skipped", templateKind: "spend" }, select: { templateId: true } });
+  const removedSpendIds = removedSpends.map((r) => r.templateId as number);
+  const [planned, myAccounts] = await Promise.all([
+    prisma.personalSpend.findMany({ where: { periodId: period.id, pending: true, id: { notIn: removedSpendIds.length ? removedSpendIds : [0] } }, orderBy: [{ date: "asc" }, { id: "asc" }] }),
+    prisma.financeAccount.findMany({ where: { memberId: c.member.id, active: true }, orderBy: [{ sortOrder: "asc" }, { id: "asc" }], select: { id: true, name: true, type: true } }),
+  ]);
+  const acctName = new Map(myAccounts.map((a) => [a.id, a.name]));
+  const plannedItems = planned.map((p) => {
+    const payId = p.cardAccountId ?? p.payAccountId;
+    const cat = cats.get(p.categoryId);
+    return { id: p.id, label: p.note?.trim() || cat?.name || "Spend", icon: cat?.icon ?? null, category: cat?.name ?? "Spend", amount: p.amount, day: p.date.getDate(), payId, payName: payId != null ? acctName.get(payId) ?? null : null };
+  });
   const [cash, cardDues, balanceCards, spends, lending] = await Promise.all([
     getPersonalCash(period),
     getCardDues(c.member.id),
@@ -148,6 +162,8 @@ export default async function PersonalExpenses({
             <MoneyFlowDonut segments={segments} centerLabel="Spent" centerValue={formatINR(netSpent)} />
           </div>
         )}
+
+        <PlannedSpends items={plannedItems} accounts={myAccounts} />
 
         <PersonalSpendsView spends={spendsForClient} categories={catList} cards={c.spendCards} periodId={period.id} />
 

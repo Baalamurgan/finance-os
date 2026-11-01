@@ -43,24 +43,18 @@ export default async function PersonalSheet({
   const incomeAccounts = c.spendCards.filter((a) => a.mine && BALANCE_ACCOUNT_TYPES.has(a.type ?? ""));
 
   // Steps removed for this month (plan "skipped") are out of the budget, so out of this list too.
-  const removedBills = await prisma.personalPlanStep.findMany({ where: { periodId: period.id, status: "skipped", templateKind: { in: ["expense", "income", "spend"] } }, select: { templateKind: true, templateId: true } });
+  const removedBills = await prisma.personalPlanStep.findMany({ where: { periodId: period.id, status: "skipped", templateKind: { in: ["expense", "income"] } }, select: { templateKind: true, templateId: true } });
   const removedExpenseIds = removedBills.filter((r) => r.templateKind === "expense").map((r) => r.templateId as number);
   const removedIncomeIds = removedBills.filter((r) => r.templateKind === "income").map((r) => r.templateId as number);
-  const removedSpendIds = removedBills.filter((r) => r.templateKind === "spend").map((r) => r.templateId as number);
-  const [expenses, recurringSpends, extraIncomes, cash, unpaidCardDues, lending] = await Promise.all([
+  const [expenses, extraIncomes, cash, unpaidCardDues, lending] = await Promise.all([
     // ALL planned bills copied from Setup (paid or not) — the Money Plan is the budget.
     prisma.personalExpense.findMany({ where: { periodId: period.id, id: { notIn: removedExpenseIds.length ? removedExpenseIds : [0] } }, orderBy: { amount: "desc" } }),
-    // Recurring spends from Setup (gym, chai, fuel…) — listed here too so this section shows EVERYTHING that
-    // repeats each month. They stay spends for the maths: they reduce Can-spend when paid, not up front.
-    prisma.personalSpend.findMany({ where: { periodId: period.id, recurring: true, id: { notIn: removedSpendIds.length ? removedSpendIds : [0] } }, orderBy: { amount: "desc" } }),
     prisma.personalIncome.findMany({ where: { periodId: period.id, id: { notIn: removedIncomeIds.length ? removedIncomeIds : [0] } }, orderBy: { id: "desc" } }),
     getPersonalCash(period),
     getUnpaidCardDues(c.member.id),
     getPersonalLending(c.member.id),
   ]);
-  const billsTotal = expenses.reduce((s, e) => s + e.amount, 0); // fixed bills — these are the ones set aside in the budget
-  const recurringSpendsTotal = recurringSpends.reduce((s, e) => s + e.amount, 0); // repeat monthly, count against Can-spend when paid
-  const monthlyExpenses = billsTotal + recurringSpendsTotal; // everything recurring (display total)
+  const monthlyExpenses = expenses.reduce((s, e) => s + e.amount, 0); // the recurring expenses (bills) from Setup, set aside from day one
   // Every spend counts at spend time. Key figures (see the money model in lib/personal/cash.ts):
   //  Can spend      = personalExpense − your NET spend (splits net out others' shares)
   //  In account now = actual bank balance: can-spend + card cash still there (dues) − money lent out
@@ -82,12 +76,6 @@ export default async function PersonalSheet({
     byCat.set(key, g);
   }
   const groups = [...byCat.entries()].map(([id, g]) => ({ cat: cats.get(id), ...g })).sort((a, b) => b.total - a.total); // bills only — feeds the chart
-  // The visible list: bills AND recurring spends, grouped by category.
-  type Shown = { kind: "bill"; e: (typeof expenses)[number] } | { kind: "spend"; s: (typeof recurringSpends)[number] };
-  const shownByCat = new Map<number, { total: number; items: Shown[] }>();
-  for (const e of expenses) { const g = shownByCat.get(e.categoryId ?? 0) ?? { total: 0, items: [] }; g.total += e.amount; g.items.push({ kind: "bill", e }); shownByCat.set(e.categoryId ?? 0, g); }
-  for (const sp of recurringSpends) { const g = shownByCat.get(sp.categoryId) ?? { total: 0, items: [] }; g.total += sp.amount; g.items.push({ kind: "spend", s: sp }); shownByCat.set(sp.categoryId, g); }
-  const shownGroups = [...shownByCat.entries()].map(([id, g]) => ({ cat: cats.get(id), ...g })).sort((a, b) => b.total - a.total);
 
   const segments = [
     ...groups.map((g, i) => ({ name: g.cat ? `${g.cat.icon ?? ""} ${g.cat.name}`.trim() : "Uncategorised", value: g.total, color: COLORS[i % COLORS.length] })),
@@ -195,7 +183,7 @@ export default async function PersonalSheet({
         {/* stats (stack on mobile) */}
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
           <Stat label="Total in" value={formatINR(totalIn)} />
-          <Stat label="Monthly expenses" value={formatINR(monthlyExpenses)} sub={recurringSpendsTotal > 0 ? `bills ${formatINR(billsTotal)} + recurring spends ${formatINR(recurringSpendsTotal)}` : "from your Setup"} />
+          <Stat label="Monthly expenses" value={formatINR(monthlyExpenses)} sub="from your Setup" />
           <Stat label="Personal expense" value={formatINR(personalExpense)} accent={personalExpense >= 0} danger={personalExpense < 0} sub="you can spend this" />
         </div>
 
@@ -245,10 +233,10 @@ export default async function PersonalSheet({
             <span className="text-lg font-extrabold tabular-nums text-red-700">{formatINR(monthlyExpenses)}</span>
           </summary>
           <div className="px-2 py-1">
-            {shownGroups.length === 0 ? (
+            {groups.length === 0 ? (
               <p className="px-2 py-3 text-sm text-slate-400">No fixed expenses yet — add rent, bills, subscriptions…</p>
             ) : (
-              shownGroups.map((g) => (
+              groups.map((g) => (
                 <details key={g.cat?.id ?? 0} open className="border-b border-slate-100 last:border-0">
                   <summary className="flex cursor-pointer list-none items-center justify-between rounded-lg px-2 py-2 hover:bg-slate-50 [&::-webkit-details-marker]:hidden">
                     <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">
@@ -257,23 +245,7 @@ export default async function PersonalSheet({
                     <span className="text-sm font-bold tabular-nums text-slate-700">{formatINR(g.total)}</span>
                   </summary>
                   <div className="divide-y divide-slate-100 px-2 pb-1">
-                    {g.items.map((it) => {
-                      if (it.kind === "spend") {
-                        const sp = it.s;
-                        const card = sp.cardAccountId != null ? cardMap.get(sp.cardAccountId) : undefined;
-                        return (
-                          <div key={`s${sp.id}`} className="flex items-center justify-between py-2 text-sm">
-                            <span className="flex items-center gap-1.5 text-slate-700">
-                              {sp.note?.trim() || g.cat?.name || "Spend"}
-                              <span className="rounded-full bg-sky-50 px-1.5 py-0.5 text-[10px] font-medium text-sky-700" title="A recurring spend — counts against Can-spend when you mark it paid in your Money Plan">spend</span>
-                              <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-medium ${sp.pending ? "bg-amber-50 text-amber-700" : "bg-emerald-50 text-emerald-700"}`}>{sp.pending ? "planned" : "paid"}</span>
-                              {card && <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-500"><span className="h-1.5 w-1.5 rounded-full" style={{ background: card.color }} />💳</span>}
-                            </span>
-                            <span className="tabular-nums text-slate-700">{formatINR(sp.amount)}</span>
-                          </div>
-                        );
-                      }
-                      const e = it.e;
+                    {g.items.map((e) => {
                       const card = e.cardAccountId != null ? cardMap.get(e.cardAccountId) : undefined;
                       return (
                       <div key={e.id} className="flex items-center justify-between py-2 text-sm">

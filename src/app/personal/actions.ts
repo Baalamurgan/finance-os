@@ -17,7 +17,7 @@ import { isPersonalUnlocked } from "@/lib/personal-lock";
 import { ensurePersonalMonth, ensurePersonalPreview, rebuildPersonalPreview, seedPersonalCategories } from "@/lib/personal";
 import { getCardBillReminders, getCardDues } from "@/lib/personal/cash";
 import { resetAutoBill, billAutoMarker } from "@/lib/personal/autoBills";
-import { orderSteps, cardBillTemplateId, decodeCardBillTemplateId } from "@/lib/personal/planSteps";
+import { ensurePlanSteps, orderSteps, cardBillTemplateId, decodeCardBillTemplateId } from "@/lib/personal/planSteps";
 import { payFamilyCardBill, unpayFamilyCardBill } from "@/app/actions";
 import { currentCycle } from "@/lib/finance/cycle";
 import { BALANCE_ACCOUNT_TYPES } from "@/lib/finance/types";
@@ -1420,6 +1420,28 @@ export async function untickPlanStep(formData: FormData) {
     await tx.personalPlanStep.update({ where: { id: step.id }, data: { status: "pending", doneAt: null, transferOutId: null, transferInId: null, savingsId: null } });
   });
   rev();
+}
+
+// Mark a PLANNED recurring spend paid from the Spends tab. It is the same entry as the Money-Plan step, so this
+// finds (creating if the plan hasn't been opened yet) that step and ticks it — optionally with the Cash/UPI or
+// card the member just picked — and the spend becomes a normal one, lowering Can-spend. Paying it in either
+// place pays the one entry.
+export async function payPlannedSpend(formData: FormData) {
+  const member = await me();
+  if (!member) return;
+  const spendId = Number(formData.get("spendId"));
+  const spend = await prisma.personalSpend.findFirst({ where: { id: spendId, memberId: member.id, pending: true }, select: { id: true, periodId: true } });
+  if (!spend) return;
+  await ensurePlanSteps(member.id, spend.periodId);
+  const step = await prisma.personalPlanStep.findFirst({ where: { memberId: member.id, periodId: spend.periodId, templateKind: "spend", templateId: spend.id }, select: { id: true, status: true } });
+  if (!step || step.status !== "pending") return;
+  const fd = new FormData();
+  fd.set("id", String(step.id));
+  if (formData.has("fromAccountId") || formData.has("method")) {
+    fd.set("method", String(formData.get("method") ?? ""));
+    fd.set("fromAccountId", String(formData.get("fromAccountId") ?? ""));
+  }
+  await tickPlanStep(fd);
 }
 
 // ── Clumped transfers ─────────────────────────────────────────────────────────────────────────────
