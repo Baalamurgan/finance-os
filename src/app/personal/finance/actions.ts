@@ -95,6 +95,24 @@ export async function updateAccount(formData: FormData) {
   rev();
 }
 
+// Mark (or unmark) a balance account as THE member's family account — the one that physically holds their
+// family In-Hand (e.g. SBI). One per member: choosing it clears the flag on their other accounts. Family
+// Cash/UPI spends then post to it, and the In-Hand card shows its balance beside the holding figure.
+export async function setFamilyPrimary(formData: FormData) {
+  const member = await me();
+  if (!member) return;
+  const id = Number(formData.get("id"));
+  const on = formData.get("on") === "1";
+  const account = await prisma.financeAccount.findFirst({ where: { id, memberId: member.id, active: true } });
+  if (!account || !BALANCE_ACCOUNT_TYPES.has(account.type)) return;
+  await prisma.$transaction([
+    prisma.financeAccount.updateMany({ where: { memberId: member.id }, data: { familyPrimary: false } }),
+    ...(on ? [prisma.financeAccount.update({ where: { id }, data: { familyPrimary: true } })] : []),
+  ]);
+  rev();
+  revalidatePath("/", "layout"); // family In-Hand + Add-spend read it too
+}
+
 // Load money onto a debit/prepaid card — a "topup" ledger line that raises its balance.
 export async function topUpCard(formData: FormData) {
   const member = await me();
@@ -218,6 +236,12 @@ export async function updatePlanItem(prev: PlanItemState, formData: FormData): P
   const r = await readPlanItem(member.id, formData);
   if (r.error) return { ok: false, error: r.error, n };
   await prisma.personalPlanItem.update({ where: { id }, data: r.data! });
+  // Setup is the template: show the edit on this month's still-pending step (a done step already happened).
+  const d = r.data!;
+  await prisma.personalPlanStep.updateMany({
+    where: { memberId: member.id, templateKind: "planitem", templateId: id, status: "pending" },
+    data: { label: d.label, amount: d.amount, dayOfMonth: d.dayOfMonth, fromAccountId: d.fromAccountId, toAccountId: d.toAccountId, note: d.note },
+  });
   rev();
   return { ok: true, n };
 }

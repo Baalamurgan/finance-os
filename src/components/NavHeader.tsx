@@ -256,14 +256,14 @@ export function NavHeader({
         </div>
       </div>
     )}
-    {windDownReminder && <WindDownBanner daysUntil={windDownReminder.daysUntil} monthLabel={windDownReminder.monthLabel} />}
+    {windDownReminder && <WindDownBanner />}
     <DueTodayBanner />
     {provisional && periodId && <ProvisionalBanner workingLabel={provisional.workingLabel} periodId={periodId} canEdit={!!canEdit} />}
     </div>
 
     {/* high-alert popups (once/day, post-unlock): wind-down window (family) + a member's
         own credit-card bill due within 3 days (shown in family view too, amount-free). */}
-    {windDownReminder && <WindDownPopup daysUntil={windDownReminder.daysUntil} day={windDownReminder.day} monthLabel={windDownReminder.monthLabel} q={q} />}
+    {windDownReminder && <WindDownPopup q={q} />}
     <CardDueHighAlert context="family" />
     <BillDueHighAlert />
 

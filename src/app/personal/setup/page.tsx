@@ -23,7 +23,8 @@ export default async function PersonalSetup({
   const nav = <PersonalNav active="setup" name={c.account.name} selYear={c.selYear} selMonth={c.selMonth} financeDue={c.cardReminders.length > 0} />;
 
   const catList = c.categories.map((cat) => ({ id: cat.id, name: cat.name, icon: cat.icon }));
-  const cardOpts = c.creditCards.map((k) => ({ id: k.id, name: k.name, color: k.color }));
+  // Every active account of the member: bank, cash, debit/prepaid and credit cards (the "Paid from" picker).
+  const payAccounts = await prisma.financeAccount.findMany({ where: { memberId: c.member.id, active: true }, orderBy: [{ sortOrder: "asc" }, { id: "asc" }], select: { id: true, name: true, type: true } });
   const periodId = c.selected?.id ?? null;
   // Recurring templates live as `recurring: true` rows in the current month (they clone forward each month,
   // dated to their day). One list per kind for the three setup sections.
@@ -31,8 +32,8 @@ export default async function PersonalSetup({
   const recExpense = c.selected ? await prisma.personalExpense.findMany({ where: { periodId: c.selected.id, recurring: true }, orderBy: { amount: "desc" } }) : [];
   const recSpend = c.selected ? await prisma.personalSpend.findMany({ where: { periodId: c.selected.id, recurring: true }, orderBy: { amount: "desc" } }) : [];
   const incomeItems = recIncome.map((e) => ({ id: e.id, label: e.source, amount: e.amount, day: e.date.getDate(), categoryId: null, cardAccountId: null, accountId: e.accountId }));
-  const expenseItems = recExpense.map((e) => ({ id: e.id, label: e.label, amount: e.amount, day: e.date.getDate(), categoryId: e.categoryId, cardAccountId: e.cardAccountId, accountId: null }));
-  const spendItems = recSpend.map((e) => ({ id: e.id, label: e.note ?? "", amount: e.amount, day: e.date.getDate(), categoryId: e.categoryId, cardAccountId: e.cardAccountId, accountId: null }));
+  const expenseItems = recExpense.map((e) => ({ id: e.id, label: e.label, amount: e.amount, day: e.date.getDate(), categoryId: e.categoryId, cardAccountId: e.cardAccountId ?? e.payAccountId, accountId: null }));
+  const spendItems = recSpend.map((e) => ({ id: e.id, label: e.note ?? "", amount: e.amount, day: e.date.getDate(), categoryId: e.categoryId, cardAccountId: e.cardAccountId ?? e.payAccountId, accountId: null }));
   // Balance accounts (for the income "deposited into" picker + the recurring transfers) and the member's
   // active transfer/save templates.
   const wallet = await getWalletAccounts(c.member.id);
@@ -63,7 +64,7 @@ export default async function PersonalSetup({
           items={incomeItems}
           periodId={periodId}
           categories={catList}
-          cards={cardOpts}
+          payAccounts={payAccounts}
           accounts={acctOpts}
         />
         <PersonalRecurringSection
@@ -73,7 +74,7 @@ export default async function PersonalSetup({
           items={expenseItems}
           periodId={periodId}
           categories={catList}
-          cards={cardOpts}
+          payAccounts={payAccounts}
           accounts={acctOpts}
         />
         <PersonalRecurringSection
@@ -83,7 +84,7 @@ export default async function PersonalSetup({
           items={spendItems}
           periodId={periodId}
           categories={catList}
-          cards={cardOpts}
+          payAccounts={payAccounts}
           accounts={acctOpts}
         />
 

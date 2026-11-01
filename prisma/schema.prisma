@@ -318,6 +318,9 @@ model PersonalExpense {
   // the card's bill). null = paid from cash. Carries when the line clones next month.
   cardAccount   FinanceAccount? @relation("PersonalExpenseCard", fields: [cardAccountId], references: [id], onDelete: SetNull)
   cardAccountId Int?
+  // Bank / cash account a (recurring) bill is paid from — a plain id (cards use cardAccountId above). The
+  // Money-Plan step's "paid from"; ticking it debits this account.
+  payAccountId  Int?
   createdAt  DateTime @default(now())
 }
 
@@ -344,6 +347,8 @@ model PersonalSpend {
   // still counts against this month at spend time. null = cash/UPI.
   cardAccount   FinanceAccount? @relation("PersonalSpendCard", fields: [cardAccountId], references: [id], onDelete: SetNull)
   cardAccountId Int?
+  // Bank / cash account a (recurring) spend is paid from — plain id (cards use cardAccountId above).
+  payAccountId  Int?
   // Shared spend: `amount` is the FULL amount paid (so card dues stay correct); sharedOthers
   // is the portion OTHERS owe, so your NET spend = amount − sharedOthers. null = not shared.
   sharedOthers  Float?
@@ -434,6 +439,10 @@ model FinanceAccount {
   // are EXCLUDED from In-Hand and shown under "On cards · settles next month". Credit cards behave this
   // way inherently regardless of this flag; it's mainly for debit/prepaid benefit cards.
   reimbursed  Boolean  @default(false)
+  // The member's FAMILY account (e.g. SBI): the bank/cash/debit/prepaid account that physically holds their
+  // family In-Hand. At most one per member. Family Cash/UPI spends post to it (lowering its balance), and
+  // the In-Hand card shows its balance beside the holding figure so the two can be matched.
+  familyPrimary Boolean @default(false)
   sortOrder   Int      @default(0)
   // Debit/prepaid only: the balance when tracking started. Current balance = openingBalance + top-ups
   // + refunds − spends − fees (see src/lib/finance/balance.ts). Null/0 for credit cards.

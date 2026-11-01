@@ -1,5 +1,6 @@
 "use client";
 
+import { PAY_GROUPS, payTypeLabel, payTypeIcon } from "@/lib/accountLabels";
 import { useActionState, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { addSpendAction, getSpendAssist, type AddSpendState } from "@/app/actions";
@@ -12,7 +13,7 @@ type Cat = { id: number; name: string; misc?: boolean; oneMonth?: boolean }; // 
 type Mem = { id: number; name: string };
 
 type Chip = { icon: string | null; label: string; categoryId: number; cardId?: number | null; frequent?: boolean };
-type Card = { id: number; name: string; ownerId: number; ownerName: string; last4: string | null; type: string; color: string };
+type Card = { id: number; name: string; ownerId: number; ownerName: string; last4: string | null; type: string; color: string; familyPrimary?: boolean };
 
 export function AddSpendModal({
   periodId,
@@ -58,7 +59,9 @@ export function AddSpendModal({
   // "Paid with": Cash + the one most-used card as quick chips; every other card lives in a dropdown.
   const featuredCard = cards.find((c) => c.id === topCardId) ?? cards[0];
   const otherCards = cards.filter((c) => c.id !== featuredCard?.id);
-  const cardLabel = (c: Card) => `${c.name}${c.last4 ? ` XX${c.last4}` : ""} — ${c.ownerName} · ${c.type === "credit_card" ? "credit" : "debit"}`;
+  const cardLabel = (c: Card) => `${c.name}${c.last4 ? ` XX${c.last4}` : ""} — ${c.ownerName} · ${payTypeLabel(c.type)}`;
+  // Cash / UPI posts to the spender's family account (if they set one), lowering its balance as well as In-Hand.
+  const myFamilyAccount = cards.find((c) => c.ownerId === currentMemberId && c.familyPrimary);
   // Misc (Personal/Misc) spends must carry a reporting sub-category (Food, Travel…).
   const selectedCat = fixedCategory ?? categories?.find((c) => c.id === categoryId);
   const isMiscSelected = !!selectedCat?.misc && !!subCategories?.length;
@@ -465,9 +468,9 @@ export function AddSpendModal({
                           >
                             <span className="flex items-center gap-1.5 text-sm font-medium text-slate-700">
                               <span className="inline-block h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: featuredCard.color }} />
-                              <span className="truncate">💳 {featuredCard.name}{featuredCard.last4 ? ` XX${featuredCard.last4}` : ""}</span>
+                              <span className="truncate">{payTypeIcon(featuredCard.type)} {featuredCard.name}{featuredCard.last4 ? ` XX${featuredCard.last4}` : ""}</span>
                             </span>
-                            <span className="mt-0.5 block truncate text-[11px] text-slate-400">{featuredCard.ownerName} · {featuredCard.type === "credit_card" ? "credit" : "debit"}</span>
+                            <span className="mt-0.5 block truncate text-[11px] text-slate-400">{featuredCard.ownerName} · {payTypeLabel(featuredCard.type)}</span>
                           </button>
                         )}
                       </div>
@@ -478,11 +481,19 @@ export function AddSpendModal({
                           onChange={(e) => setCardId(e.target.value ? Number(e.target.value) : null)}
                           className={`mt-2 w-full rounded-xl border-2 px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-indigo-100 ${cardId != null && cardId !== featuredCard?.id ? "border-indigo-500 bg-indigo-50 text-indigo-700" : "border-slate-200 text-slate-600"}`}
                         >
-                          <option value="">More cards…</option>
-                          {otherCards.map((c) => (
-                            <option key={c.id} value={c.id}>💳 {cardLabel(c)}</option>
-                          ))}
+                          <option value="">More accounts…</option>
+                          {PAY_GROUPS.map((g) => {
+                            const list = otherCards.filter((c) => g.types.includes(c.type));
+                            return list.length === 0 ? null : (
+                              <optgroup key={g.key} label={g.label}>
+                                {list.map((c) => <option key={c.id} value={c.id}>{payTypeIcon(c.type)} {cardLabel(c)}</option>)}
+                              </optgroup>
+                            );
+                          })}
                         </select>
+                      )}
+                      {cardId === null && myFamilyAccount && (
+                        <p className="mt-1.5 text-xs text-emerald-700">Comes out of your {myFamilyAccount.name} balance too.</p>
                       )}
                       {selectedCard && (
                         <p className="mt-1.5 text-xs text-violet-600">Counts as {selectedCard.ownerName}&apos;s spend (card owner).</p>

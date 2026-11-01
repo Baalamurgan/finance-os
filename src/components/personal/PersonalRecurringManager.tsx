@@ -6,17 +6,24 @@ import { useToast } from "@/components/Toast";
 import { formatINR } from "@/lib/format";
 
 type Cat = { id: number; name: string; icon: string | null };
-type Card = { id: number; name: string; color: string };
+type PayAcct = { id: number; name: string; type: string };
+const PAY_GROUPS: { label: string; types: string[] }[] = [
+  { label: "Bank / UPI", types: ["bank"] },
+  { label: "Cash", types: ["cash"] },
+  { label: "Debit / prepaid cards", types: ["debit_card", "prepaid_card"] },
+  { label: "Credit cards — pay at card bill", types: ["credit_card"] },
+];
 type Acct = { id: number; name: string };
 export type RecurringKind = "income" | "expense" | "spend";
+// cardAccountId = the account a bill/spend is PAID FROM (any bank, cash or card); accountId = where an income lands.
 export type RecurringItem = { id: number; label: string; amount: number; day: number; categoryId: number | null; cardAccountId: number | null; accountId: number | null };
 const INIT: PersonalSaveState = { ok: false, n: 0 };
 const NOUN: Record<RecurringKind, string> = { income: "income", expense: "expense", spend: "spend" };
 
 // Add / edit one recurring template. The same server action (upsertPersonalRecurring) handles every kind;
 // `kind` decides which fields show — income has no category/card, expense & spend do.
-function RecurringModal({ kind, periodId, categories, cards, accounts, initial, open, setOpen }: {
-  kind: RecurringKind; periodId: number; categories: Cat[]; cards: Card[]; accounts: Acct[];
+function RecurringModal({ kind, periodId, categories, payAccounts, accounts, initial, open, setOpen }: {
+  kind: RecurringKind; periodId: number; categories: Cat[]; payAccounts: PayAcct[]; accounts: Acct[];
   initial?: RecurringItem; open: boolean; setOpen: (v: boolean) => void;
 }) {
   const isEdit = !!initial;
@@ -81,13 +88,21 @@ function RecurringModal({ kind, periodId, categories, cards, accounts, initial, 
                 <p className="mt-1 text-[11px] text-slate-400">Shows on your plan as an &ldquo;income received&rdquo; step; ticking it credits this account.</p>
               </div>
             )}
-            {kind !== "income" && cards.length > 0 && (
+            {kind !== "income" && payAccounts.length > 0 && (
               <div>
-                <label className="text-xs font-medium text-slate-500">💳 Paid with</label>
-                <select name="cardAccountId" defaultValue={initial?.cardAccountId ? String(initial.cardAccountId) : ""} className="input mt-1 w-full">
-                  <option value="">Cash / UPI</option>
-                  {cards.map((c) => <option key={c.id} value={c.id}>{c.name} — pay at card bill</option>)}
+                <label className="text-xs font-medium text-slate-500">Paid from</label>
+                <select name="payAccountId" defaultValue={initial?.cardAccountId ? String(initial.cardAccountId) : ""} className="input mt-1 w-full">
+                  <option value="">Not set — ask me when I mark it paid</option>
+                  {PAY_GROUPS.map((g) => {
+                    const list = payAccounts.filter((a) => g.types.includes(a.type));
+                    return list.length === 0 ? null : (
+                      <optgroup key={g.label} label={g.label}>
+                        {list.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+                      </optgroup>
+                    );
+                  })}
                 </select>
+                <p className="mt-1 text-[11px] text-slate-400">Any of your accounts. Marking the step done in your plan debits it (a credit card settles at its bill).</p>
               </div>
             )}
           </div>
@@ -103,9 +118,9 @@ function RecurringModal({ kind, periodId, categories, cards, accounts, initial, 
 
 // One setup section for a recurring kind: the list (with edit/delete) + an "add" button. `day` is shown as
 // a chip so you can see when each lands. A read-only list shows when there's no open month to add into.
-export function PersonalRecurringSection({ kind, title, hint, items, periodId, categories, cards, accounts }: {
+export function PersonalRecurringSection({ kind, title, hint, items, periodId, categories, payAccounts, accounts }: {
   kind: RecurringKind; title: string; hint: string; items: RecurringItem[];
-  periodId: number | null; categories: Cat[]; cards: Card[]; accounts: Acct[];
+  periodId: number | null; categories: Cat[]; payAccounts: PayAcct[]; accounts: Acct[];
 }) {
   const [adding, setAdding] = useState(false);
   const [editing, setEditing] = useState<RecurringItem | null>(null);
@@ -145,9 +160,9 @@ export function PersonalRecurringSection({ kind, title, hint, items, periodId, c
           <button type="button" onClick={() => setAdding(true)} className="mt-3 w-full rounded-lg border border-dashed border-emerald-300 px-3 py-2 text-sm font-medium text-emerald-700 hover:bg-emerald-50">
             + Add recurring {NOUN[kind]}
           </button>
-          <RecurringModal kind={kind} periodId={periodId} categories={categories} cards={cards} accounts={accounts} open={adding} setOpen={setAdding} />
+          <RecurringModal kind={kind} periodId={periodId} categories={categories} payAccounts={payAccounts} accounts={accounts} open={adding} setOpen={setAdding} />
           {editing && (
-            <RecurringModal key={editing.id} kind={kind} periodId={periodId} categories={categories} cards={cards} accounts={accounts} initial={editing} open setOpen={(v) => { if (!v) setEditing(null); }} />
+            <RecurringModal key={editing.id} kind={kind} periodId={periodId} categories={categories} payAccounts={payAccounts} accounts={accounts} initial={editing} open setOpen={(v) => { if (!v) setEditing(null); }} />
           )}
         </>
       )}

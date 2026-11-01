@@ -235,7 +235,11 @@ function StepRow({ s, accounts, isFirst, isLast }: { s: PlanStepView; accounts: 
           )}
         </span>
         <span className="shrink-0 text-right">
-          <span className={`block tabular-nums text-sm font-semibold ${s.kind === "income" ? "text-emerald-700" : "text-slate-800"}`}>{formatINR(s.amount)}</span>
+          {canEdit ? (
+            <button type="button" onClick={() => setPanel("edit")} title="Tap to edit this month's amount, name and day" className={`block w-full text-right tabular-nums text-sm font-semibold underline decoration-dotted underline-offset-2 ${s.kind === "income" ? "text-emerald-700" : "text-slate-800"}`}>{formatINR(s.amount)}</button>
+          ) : (
+            <span className={`block tabular-nums text-sm font-semibold ${s.kind === "income" ? "text-emerald-700" : "text-slate-800"}`}>{formatINR(s.amount)}</span>
+          )}
           {canEdit ? <DayEdit id={s.id} day={s.dayOfMonth} /> : s.dayOfMonth != null && <span className="block text-[11px] text-slate-400">day {s.dayOfMonth}</span>}
         </span>
         <span className="flex shrink-0 flex-col items-end gap-0.5 text-[11px]">

@@ -141,15 +141,15 @@ export async function ensurePlanSteps(memberId: number, periodId: number): Promi
     // pre-cutover months (rows default pending=false) stay on the old model. The budget counts them either way.
     prisma.personalExpense.findMany({
       where: { periodId, pending: true },
-      select: { id: true, label: true, amount: true, date: true, cardAccountId: true },
+      select: { id: true, label: true, amount: true, date: true, cardAccountId: true, payAccountId: true },
     }),
     prisma.personalSpend.findMany({
       where: { periodId, pending: true },
-      select: { id: true, note: true, amount: true, date: true, cardAccountId: true, category: { select: { name: true } } },
+      select: { id: true, note: true, amount: true, date: true, cardAccountId: true, payAccountId: true, category: { select: { name: true } } },
     }),
     prisma.personalPlanStep.findMany({
       where: { periodId },
-      select: { id: true, templateKind: true, templateId: true, status: true, amount: true },
+      select: { id: true, templateKind: true, templateId: true, status: true, amount: true, label: true, toAccountId: true, fromAccountId: true, snapshot: true },
     }),
     prisma.personalPeriod.findUnique({ where: { id: periodId }, select: { income: true, incomeAccountId: true, year: true, month: true } }),
     getCardDues(memberId),
@@ -182,8 +182,8 @@ export async function ensurePlanSteps(memberId: number, periodId: number): Promi
   const { toCreate, prunePendingIds: pruneCandidates } = diffPlanSteps(
     incomes.map((i) => ({ id: i.id, source: i.source, amount: i.amount, dayOfMonth: i.date.getDate(), accountId: i.accountId })),
     planItems,
-    expenses.map((e) => ({ id: e.id, label: e.label || "Bill", amount: e.amount, dayOfMonth: e.date.getDate(), fromAccountId: e.cardAccountId })),
-    spends.map((s) => ({ id: s.id, label: s.note?.trim() || s.category?.name || "Spend", amount: s.amount, dayOfMonth: s.date.getDate(), fromAccountId: s.cardAccountId })),
+    expenses.map((e) => ({ id: e.id, label: e.label || "Bill", amount: e.amount, dayOfMonth: e.date.getDate(), fromAccountId: e.cardAccountId ?? e.payAccountId })),
+    spends.map((s) => ({ id: s.id, label: s.note?.trim() || s.category?.name || "Spend", amount: s.amount, dayOfMonth: s.date.getDate(), fromAccountId: s.cardAccountId ?? s.payAccountId })),
     period ? { periodId, amount: period.income, accountId: period.incomeAccountId } : null,
     existing,
     cardBills,
@@ -204,11 +204,40 @@ export async function ensurePlanSteps(memberId: number, periodId: number): Promi
   const liveAmount = new Map(cardBills.map((c) => [c.templateId, c.amount]));
   const refresh = existing.filter((e) => e.templateKind === "cardbill" && e.status === "pending" && e.templateId != null && liveAmount.has(e.templateId) && Math.abs((liveAmount.get(e.templateId) ?? 0) - e.amount) > 0.005);
 
-  if (toCreate.length === 0 && prunePendingIds.length === 0 && markDoneIds.length === 0 && refresh.length === 0) return;
+  // Keep a still-pending, never-edited-this-month step in step with its Setup row: change the amount / name /
+  // account in Setup and the plan shows it. A month-only edit leaves a snapshot on the step, so those are
+  // left alone (the day is never synced — re-dating a step is its own month-only choice).
+  const synced: { id: number; data: { label?: string; amount?: number; fromAccountId?: number | null; toAccountId?: number | null } }[] = [];
+  for (const e of existing) {
+    if (e.status !== "pending" || e.templateId == null || e.snapshot != null) continue;
+    let want: { label: string; amount: number; fromAccountId?: number | null; toAccountId?: number | null } | null = null;
+    if (e.templateKind === "income") {
+      const r = incomes.find((x) => x.id === e.templateId);
+      if (r) want = { label: r.source, amount: r.amount, toAccountId: r.accountId };
+    } else if (e.templateKind === "baseincome" && period && e.templateId === periodId) {
+      want = { label: e.label, amount: period.income, toAccountId: period.incomeAccountId };
+    } else if (e.templateKind === "expense") {
+      const r = expenses.find((x) => x.id === e.templateId);
+      if (r) want = { label: r.label || "Bill", amount: r.amount, fromAccountId: r.cardAccountId ?? r.payAccountId };
+    } else if (e.templateKind === "spend") {
+      const r = spends.find((x) => x.id === e.templateId);
+      if (r) want = { label: r.note?.trim() || r.category?.name || "Spend", amount: r.amount, fromAccountId: r.cardAccountId ?? r.payAccountId };
+    }
+    if (!want) continue;
+    const data: { label?: string; amount?: number; fromAccountId?: number | null; toAccountId?: number | null } = {};
+    if (want.label !== e.label) data.label = want.label;
+    if (Math.abs(want.amount - e.amount) > 0.005) data.amount = want.amount;
+    if (want.fromAccountId !== undefined && want.fromAccountId !== e.fromAccountId) data.fromAccountId = want.fromAccountId;
+    if (want.toAccountId !== undefined && want.toAccountId !== e.toAccountId) data.toAccountId = want.toAccountId;
+    if (Object.keys(data).length) synced.push({ id: e.id, data });
+  }
+
+  if (toCreate.length === 0 && prunePendingIds.length === 0 && markDoneIds.length === 0 && refresh.length === 0 && synced.length === 0) return;
   await prisma.$transaction([
     ...toCreate.map((s) => prisma.personalPlanStep.create({ data: { memberId, periodId, ...s } })),
     ...(prunePendingIds.length ? [prisma.personalPlanStep.deleteMany({ where: { id: { in: prunePendingIds } } })] : []),
     ...(markDoneIds.length ? [prisma.personalPlanStep.updateMany({ where: { id: { in: markDoneIds } }, data: { status: "done", doneAt: new Date() } })] : []),
     ...refresh.map((e) => prisma.personalPlanStep.update({ where: { id: e.id }, data: { amount: liveAmount.get(e.templateId!)! } })),
+    ...synced.map((u) => prisma.personalPlanStep.update({ where: { id: u.id }, data: u.data })),
   ]);
 }

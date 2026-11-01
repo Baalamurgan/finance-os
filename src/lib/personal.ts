@@ -44,11 +44,11 @@ async function seedRecurring(
   }
   for (const e of expenses) {
     const o = snap.get(`expense:${e.id}`) ?? {};
-    await tx.personalExpense.create({ data: { memberId, periodId: to.id, label: str(o.label, e.label) ?? e.label, categoryId: e.categoryId, amount: num(o.amount, e.amount), note: e.note, recurring: true, pending: true, cardAccountId: idOrNull(o.cardAccountId, e.cardAccountId), date: recurDate(to.year, to.month, e.date) } });
+    await tx.personalExpense.create({ data: { memberId, periodId: to.id, label: str(o.label, e.label) ?? e.label, categoryId: e.categoryId, amount: num(o.amount, e.amount), note: e.note, recurring: true, pending: true, cardAccountId: idOrNull(o.cardAccountId, e.cardAccountId), payAccountId: idOrNull(o.payAccountId, e.payAccountId), date: recurDate(to.year, to.month, e.date) } });
   }
   for (const e of spends) {
     const o = snap.get(`spend:${e.id}`) ?? {};
-    await tx.personalSpend.create({ data: { memberId, periodId: to.id, categoryId: e.categoryId, amount: num(o.amount, e.amount), note: str(o.note, e.note), recurring: true, pending: true, cardAccountId: idOrNull(o.cardAccountId, e.cardAccountId), date: recurDate(to.year, to.month, e.date) } });
+    await tx.personalSpend.create({ data: { memberId, periodId: to.id, categoryId: e.categoryId, amount: num(o.amount, e.amount), note: str(o.note, e.note), recurring: true, pending: true, cardAccountId: idOrNull(o.cardAccountId, e.cardAccountId), payAccountId: idOrNull(o.payAccountId, e.payAccountId), date: recurDate(to.year, to.month, e.date) } });
   }
 }
 

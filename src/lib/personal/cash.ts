@@ -22,46 +22,44 @@ export type PersonalCash = {
   personalExpense: number; // totalIn − all fixed bills (the month's total to spend = "Y")
   grossSpent: number; // cashSpends + cardSpends — total money paid out as spends
   netSpent: number; // grossSpent − others' shares of splits — what YOU actually consumed
-  plannedSpends: number; // recurring spends from Setup not yet paid — set aside up front
-  plannedUnpaid: number; // planned bills + spends not yet paid (still sitting in your account)
-  canSpend: number; // personalExpense − netSpent − plannedSpends (the headline "left to spend")
+  plannedUnpaid: number; // planned bills not yet paid (already out of Can-spend, still sitting in your account)
+  canSpend: number; // personalExpense − netSpent (the headline "left to spend")
 };
 
-// The Money Plan IS the budget: every planned bill and recurring spend copied from Setup counts from day
-// one, so "Can spend" is what's left after the whole plan. Ticking a step PAID only moves the real account
-// balance; it never changes this figure. A step REMOVED for the month (status "skipped") leaves the budget
-// — the Setup template is untouched and the item returns next month.
+// The Money Plan's BILLS are the budget: every planned bill copied from Setup counts from day one, so
+// "Can spend" is what's left after them; ticking a bill PAID only moves the real account balance. A recurring
+// SPEND is just a spend: it reduces Can-spend when its step is marked done, like any other spend. A step
+// REMOVED for the month (status "skipped") leaves the budget — the Setup template is untouched and the item
+// returns next month.
 export async function getPersonalCash(period: {
   id: number;
   income: number;
   carryForward: number;
 }): Promise<PersonalCash> {
   const removed = await prisma.personalPlanStep.findMany({
-    where: { periodId: period.id, status: "skipped", templateKind: { in: ["income", "expense", "spend"] }, templateId: { not: null } },
+    where: { periodId: period.id, status: "skipped", templateKind: { in: ["income", "expense"] }, templateId: { not: null } },
     select: { templateKind: true, templateId: true },
   });
   const ids = (k: string) => {
     const a = removed.filter((r) => r.templateKind === k).map((r) => r.templateId as number);
     return a.length ? a : [0];
   };
-  const [fixedCashAgg, fixedCardAgg, cashSpendAgg, cardSpendAgg, extraAgg, sharedOthersAgg, pendingFixedAgg, plannedSpendAgg] = await Promise.all([
+  const [fixedCashAgg, fixedCardAgg, cashSpendAgg, cardSpendAgg, extraAgg, sharedOthersAgg, pendingFixedAgg] = await Promise.all([
     prisma.personalExpense.aggregate({ where: { periodId: period.id, cardAccountId: null, id: { notIn: ids("expense") } }, _sum: { amount: true } }),
     prisma.personalExpense.aggregate({ where: { periodId: period.id, cardAccountId: { not: null }, id: { notIn: ids("expense") } }, _sum: { amount: true } }),
-    // pending recurring spends are PLANNED, not yet spent — they are set aside separately below.
+    // pending recurring spends haven't happened yet — they count once their step is marked done.
     prisma.personalSpend.aggregate({ where: { periodId: period.id, cardAccountId: null, pending: false }, _sum: { amount: true } }),
     prisma.personalSpend.aggregate({ where: { periodId: period.id, cardAccountId: { not: null }, pending: false }, _sum: { amount: true } }),
     prisma.personalIncome.aggregate({ where: { periodId: period.id, id: { notIn: ids("income") } }, _sum: { amount: true } }),
     prisma.personalSpend.aggregate({ where: { periodId: period.id, pending: false }, _sum: { sharedOthers: true } }),
     prisma.personalExpense.aggregate({ where: { periodId: period.id, pending: true, id: { notIn: ids("expense") } }, _sum: { amount: true } }),
-    prisma.personalSpend.aggregate({ where: { periodId: period.id, pending: true, id: { notIn: ids("spend") } }, _sum: { amount: true } }),
   ]);
   const fixedCash = fixedCashAgg._sum.amount ?? 0;
   const fixedCard = fixedCardAgg._sum.amount ?? 0;
   const cashSpends = cashSpendAgg._sum.amount ?? 0;
   const cardSpends = cardSpendAgg._sum.amount ?? 0;
   const sharedOthers = sharedOthersAgg._sum.sharedOthers ?? 0;
-  const plannedSpends = plannedSpendAgg._sum.amount ?? 0;
-  const plannedUnpaid = (pendingFixedAgg._sum.amount ?? 0) + plannedSpends;
+  const plannedUnpaid = pendingFixedAgg._sum.amount ?? 0;
   const totalIn = period.income + period.carryForward + (extraAgg._sum.amount ?? 0);
   const personalExpense = totalIn - fixedCash - fixedCard;
   const grossSpent = cashSpends + cardSpends;
@@ -75,9 +73,8 @@ export async function getPersonalCash(period: {
     personalExpense,
     grossSpent,
     netSpent,
-    plannedSpends,
     plannedUnpaid,
-    canSpend: personalExpense - netSpent - plannedSpends,
+    canSpend: personalExpense - netSpent,
   };
 }
 

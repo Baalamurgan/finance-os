@@ -60,11 +60,11 @@ export default async function PersonalSheet({
   //  In account now = actual bank balance: can-spend + card cash still there (dues) − money lent out
   //                   (owed) + money you've borrowed that's in your account (borrowed)
   //  Spent          = net spend (your share only)
-  const { totalIn, personalExpense, netSpent, canSpend, plannedSpends, plannedUnpaid } = cash;
+  const { totalIn, personalExpense, netSpent, canSpend, plannedUnpaid } = cash;
   const owed = lending.owed;
   const borrowed = lending.borrowed;
   const inAccount = canSpend + plannedUnpaid + unpaidCardDues - owed + borrowed;
-  const spentPct = personalExpense > 0 ? Math.min(100, ((netSpent + plannedSpends) / personalExpense) * 100) : 0;
+  const spentPct = personalExpense > 0 ? Math.min(100, (netSpent / personalExpense) * 100) : 0;
 
   // group monthly expenses by category (collapsible)
   const byCat = new Map<number, { total: number; items: typeof expenses }>();
@@ -183,7 +183,7 @@ export default async function PersonalSheet({
         {/* stats (stack on mobile) */}
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
           <Stat label="Total in" value={formatINR(totalIn)} />
-          <Stat label="Monthly expenses" value={formatINR(monthlyExpenses)} sub={plannedSpends > 0 ? `+ ${formatINR(plannedSpends)} planned spends` : "from your Setup"} />
+          <Stat label="Monthly expenses" value={formatINR(monthlyExpenses)} sub="from your Setup" />
           <Stat label="Personal expense" value={formatINR(personalExpense)} accent={personalExpense >= 0} danger={personalExpense < 0} sub="you can spend this" />
         </div>
 
@@ -197,7 +197,7 @@ export default async function PersonalSheet({
             </span>
           </div>
           <div className="mt-2 h-2.5 overflow-hidden rounded-full bg-slate-100">
-            <div className={`h-full rounded-full ${netSpent + plannedSpends > personalExpense ? "bg-red-500" : "bg-emerald-500"}`} style={{ width: `${spentPct}%` }} />
+            <div className={`h-full rounded-full ${netSpent > personalExpense ? "bg-red-500" : "bg-emerald-500"}`} style={{ width: `${spentPct}%` }} />
           </div>
           <div className="mt-2 grid grid-cols-2 gap-3 border-t border-slate-100 pt-2 text-sm">
             <div>

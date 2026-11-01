@@ -521,7 +521,12 @@ export async function upsertPersonalRecurring(prev: PersonalSaveState, formData:
   if (!period) return { ok: false, error: "Not your month.", n };
   // `day` → a real date in this month, clamped to its length (so "28" is always valid).
   const date = new Date(period.year, period.month - 1, Math.min(day, new Date(period.year, period.month, 0).getDate()));
-  const cardAccountId = kind === "income" ? null : await ccCardId(member.id, formData);
+  // "Paid from" can be ANY of the member's accounts: a card (credit/debit/prepaid) goes on cardAccountId
+  // (card-deferred accounting), a bank/cash account on payAccountId (debited when the step is ticked).
+  const payAcct = kind === "income" ? null : await ownAccount(member.id, formData.get("payAccountId"));
+  const isCardAcct = payAcct != null && payAcct.type !== "bank" && payAcct.type !== "cash";
+  const cardAccountId = isCardAcct ? payAcct!.id : null;
+  const payAccountId = payAcct != null && !isCardAcct ? payAcct.id : null;
   // Recurring income can name a target balance account (where it lands) → becomes the income step's account.
   const incomeAccountId = kind === "income" ? await ownBalanceAccountId(member.id, formData.get("accountId")) : null;
   if (kind === "income") {
@@ -532,14 +537,14 @@ export async function upsertPersonalRecurring(prev: PersonalSaveState, formData:
       await prisma.personalIncome.update({ where: { id }, data });
     } else await prisma.personalIncome.create({ data: { memberId: member.id, periodId, ...data } });
   } else if (kind === "expense") {
-    const data = { label, categoryId, amount, date, recurring: true, cardAccountId };
+    const data = { label, categoryId, amount, date, recurring: true, cardAccountId, payAccountId };
     if (id) {
       const e = await prisma.personalExpense.findUnique({ where: { id } });
       if (!e || e.memberId !== member.id) return { ok: false, error: "Not found.", n };
       await prisma.personalExpense.update({ where: { id }, data });
     } else await prisma.personalExpense.create({ data: { memberId: member.id, periodId, ...data } });
   } else {
-    const data = { categoryId, amount, note: label, date, recurring: true, cardAccountId };
+    const data = { categoryId, amount, note: label, date, recurring: true, cardAccountId, payAccountId };
     if (id) {
       const e = await prisma.personalSpend.findUnique({ where: { id } });
       if (!e || e.memberId !== member.id) return { ok: false, error: "Not found.", n };
@@ -550,7 +555,12 @@ export async function upsertPersonalRecurring(prev: PersonalSaveState, formData:
     // Editing the template in Setup supersedes any month-only edit: drop the step's snapshot (next month
     // clones this row) and refresh the month's still-pending step so the plan shows the new details.
     await prisma.personalPlanStep.updateMany({ where: { memberId: member.id, templateKind: kind, templateId: id }, data: { snapshot: Prisma.DbNull } });
-    await prisma.personalPlanStep.updateMany({ where: { memberId: member.id, templateKind: kind, templateId: id, status: "pending" }, data: { label: label.slice(0, 80), amount, dayOfMonth: day } });
+    await prisma.personalPlanStep.updateMany({
+      where: { memberId: member.id, templateKind: kind, templateId: id, status: "pending" },
+      data: kind === "income"
+        ? { label: label.slice(0, 80), amount, dayOfMonth: day, toAccountId: incomeAccountId }
+        : { label: label.slice(0, 80), amount, dayOfMonth: day, fromAccountId: payAcct?.id ?? null },
+    });
   }
   rev();
   return { ok: true, n };
@@ -1174,7 +1184,7 @@ async function isOneOffRow(tx: Prisma.TransactionClient, memberId: number, step:
 // template stashes its original Setup values on the step's snapshot so next month still clones them.
 async function editStepRow(
   tx: Prisma.TransactionClient, memberId: number, step: PlanStepRow,
-  patch: { label?: string; amount?: number; cardAccountId?: number | null; accountId?: number | null },
+  patch: { label?: string; amount?: number; cardAccountId?: number | null; payAccountId?: number | null; accountId?: number | null },
 ) {
   if (!step.templateId) return;
   const fresh = await tx.personalPlanStep.findUnique({ where: { id: step.id }, select: { snapshot: true } });
@@ -1182,15 +1192,15 @@ async function editStepRow(
   if (step.kind === "expense") {
     const row = await tx.personalExpense.findFirst({ where: { id: step.templateId, memberId } });
     if (!row) return;
-    const changed = (patch.label !== undefined && patch.label !== row.label) || (patch.amount !== undefined && patch.amount !== row.amount) || (patch.cardAccountId !== undefined && patch.cardAccountId !== row.cardAccountId);
-    if (row.recurring && !hasSnap && changed) await tx.personalPlanStep.update({ where: { id: step.id }, data: { snapshot: { label: row.label, amount: row.amount, cardAccountId: row.cardAccountId } } });
-    await tx.personalExpense.update({ where: { id: row.id }, data: { ...(patch.label !== undefined ? { label: patch.label } : {}), ...(patch.amount !== undefined ? { amount: patch.amount } : {}), ...(patch.cardAccountId !== undefined ? { cardAccountId: patch.cardAccountId } : {}) } });
+    const changed = (patch.label !== undefined && patch.label !== row.label) || (patch.amount !== undefined && patch.amount !== row.amount) || (patch.cardAccountId !== undefined && patch.cardAccountId !== row.cardAccountId) || (patch.payAccountId !== undefined && patch.payAccountId !== row.payAccountId);
+    if (row.recurring && !hasSnap && changed) await tx.personalPlanStep.update({ where: { id: step.id }, data: { snapshot: { label: row.label, amount: row.amount, cardAccountId: row.cardAccountId, payAccountId: row.payAccountId } } });
+    await tx.personalExpense.update({ where: { id: row.id }, data: { ...(patch.label !== undefined ? { label: patch.label } : {}), ...(patch.amount !== undefined ? { amount: patch.amount } : {}), ...(patch.cardAccountId !== undefined ? { cardAccountId: patch.cardAccountId } : {}), ...(patch.payAccountId !== undefined ? { payAccountId: patch.payAccountId } : {}) } });
   } else if (step.kind === "spend") {
     const row = await tx.personalSpend.findFirst({ where: { id: step.templateId, memberId } });
     if (!row) return;
-    const changed = (patch.label !== undefined && patch.label !== row.note) || (patch.amount !== undefined && patch.amount !== row.amount) || (patch.cardAccountId !== undefined && patch.cardAccountId !== row.cardAccountId);
-    if (row.recurring && !hasSnap && changed) await tx.personalPlanStep.update({ where: { id: step.id }, data: { snapshot: { note: row.note, amount: row.amount, cardAccountId: row.cardAccountId } } });
-    await tx.personalSpend.update({ where: { id: row.id }, data: { ...(patch.label !== undefined ? { note: patch.label } : {}), ...(patch.amount !== undefined ? { amount: patch.amount } : {}), ...(patch.cardAccountId !== undefined ? { cardAccountId: patch.cardAccountId } : {}) } });
+    const changed = (patch.label !== undefined && patch.label !== row.note) || (patch.amount !== undefined && patch.amount !== row.amount) || (patch.cardAccountId !== undefined && patch.cardAccountId !== row.cardAccountId) || (patch.payAccountId !== undefined && patch.payAccountId !== row.payAccountId);
+    if (row.recurring && !hasSnap && changed) await tx.personalPlanStep.update({ where: { id: step.id }, data: { snapshot: { note: row.note, amount: row.amount, cardAccountId: row.cardAccountId, payAccountId: row.payAccountId } } });
+    await tx.personalSpend.update({ where: { id: row.id }, data: { ...(patch.label !== undefined ? { note: patch.label } : {}), ...(patch.amount !== undefined ? { amount: patch.amount } : {}), ...(patch.cardAccountId !== undefined ? { cardAccountId: patch.cardAccountId } : {}), ...(patch.payAccountId !== undefined ? { payAccountId: patch.payAccountId } : {}) } });
   } else if (step.kind === "income" && step.templateKind === "income") {
     const row = await tx.personalIncome.findFirst({ where: { id: step.templateId, memberId } });
     if (!row) return;
@@ -1230,8 +1240,8 @@ async function applyStepRoute(
   }
   await tx.personalPlanStep.update({ where: { id: step.id }, data: { method: input.method, fromAccountId: fromId, toAccountId: toId } });
   if (step.kind === "expense" || step.kind === "spend") {
-    const cardId = from && from.type !== "bank" && from.type !== "cash" ? from.id : null; // credit / debit / prepaid card
-    await editStepRow(tx, memberId, step, { cardAccountId: cardId });
+    const isCard = from != null && from.type !== "bank" && from.type !== "cash"; // credit / debit / prepaid card
+    await editStepRow(tx, memberId, step, { cardAccountId: isCard ? from!.id : null, payAccountId: from != null && !isCard ? from.id : null });
   } else if (step.kind === "income" && step.templateKind === "income") {
     await editStepRow(tx, memberId, step, { accountId: toId });
   }
@@ -1580,16 +1590,18 @@ export async function addPlanStep(prev: PersonalSaveState, formData: FormData): 
   const afterId = afterRaw === "top" ? null : Number(afterRaw) || undefined;
   const amt = Math.round(amount * 100) / 100;
   const rowDate = new Date(period.year, period.month - 1, dayOfMonth ?? 1);
-  const card = fromAcct && "type" in fromAcct && fromAcct.type !== "bank" && fromAcct.type !== "cash" ? fromAccountId : null;
+  const isCardFrom = fromAcct != null && "type" in fromAcct && fromAcct.type !== "bank" && fromAcct.type !== "cash";
+  const card = isCardFrom ? fromAccountId : null;
+  const payBank = !isCardFrom && fromAccountId ? fromAccountId : null;
 
   await prisma.$transaction(async (tx) => {
     let templateKind: string | null = null;
     let templateId: number | null = null;
     if (kind === "expense") {
-      const row = await tx.personalExpense.create({ data: { memberId: member.id, periodId, label: label.slice(0, 80), categoryId, amount: amt, recurring: false, pending: true, cardAccountId: card, date: rowDate } });
+      const row = await tx.personalExpense.create({ data: { memberId: member.id, periodId, label: label.slice(0, 80), categoryId, amount: amt, recurring: false, pending: true, cardAccountId: card, payAccountId: payBank, date: rowDate } });
       templateKind = "expense"; templateId = row.id;
     } else if (kind === "spend") {
-      const row = await tx.personalSpend.create({ data: { memberId: member.id, periodId, categoryId: categoryId!, amount: amt, note: label.slice(0, 80), recurring: false, pending: true, cardAccountId: card, date: rowDate } });
+      const row = await tx.personalSpend.create({ data: { memberId: member.id, periodId, categoryId: categoryId!, amount: amt, note: label.slice(0, 80), recurring: false, pending: true, cardAccountId: card, payAccountId: payBank, date: rowDate } });
       templateKind = "spend"; templateId = row.id;
     }
     const created = await tx.personalPlanStep.create({

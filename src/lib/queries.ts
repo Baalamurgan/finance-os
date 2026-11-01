@@ -11,6 +11,7 @@ import { suggestCategoryName, normalizeItem, resolveCategoryId } from "@/lib/spe
 import { withShareCount } from "@/lib/format";
 import { getCardDues, type MonthAmount } from "@/lib/personal/cash";
 import { currentCycle } from "@/lib/finance/cycle";
+import { computeBalance } from "@/lib/finance/balance";
 import { istTodayStartMs, istDateParts } from "@/lib/time";
 
 // Keywords that drive the on-save category suggestion: the household's LEARNED words
@@ -223,7 +224,7 @@ export async function getFamilyCards(householdId: number, activeOnly = true) {
     where: { member: { householdId }, ...(activeOnly ? { active: true } : {}) },
     select: {
       id: true, name: true, type: true, institution: true, network: true, last4: true, color: true,
-      active: true, memberId: true, openingBalance: true, member: { select: { name: true } },
+      active: true, memberId: true, openingBalance: true, familyPrimary: true, member: { select: { name: true } },
       credit: { select: { creditLimit: true, statementDay: true, dueOffsetDays: true } },
     },
     orderBy: [{ memberId: "asc" }, { sortOrder: "asc" }, { name: "asc" }],
@@ -1819,6 +1820,18 @@ export async function _getInHand(householdId: number, periodId: number, settleme
 
   // Show EVERY member's In-Hand card — even at ₹0 — so the family sees a complete picture (the
   // total is "what they hold right now", and 0 is a real, meaningful answer).
+  // Each member's FAMILY account (e.g. SBI): the real bank balance that should line up with their In-Hand.
+  // Derived exactly like any balance account (opening + ledger), so family Cash/UPI spends already lowered it.
+  const famAccts = await prisma.financeAccount.findMany({
+    where: { familyPrimary: true, active: true, member: { householdId } },
+    select: { id: true, name: true, memberId: true, openingBalance: true },
+  });
+  const famTxns = famAccts.length
+    ? await prisma.accountTransaction.findMany({ where: { accountId: { in: famAccts.map((a) => a.id) } }, select: { accountId: true, date: true, amount: true, type: true } })
+    : [];
+  const familyAccountByMember = new Map(
+    famAccts.map((a) => [a.memberId, { name: a.name, balance: computeBalance(a.openingBalance, famTxns.filter((t) => t.accountId === a.id)) }]),
+  );
   const byPerson = members.map((m) => {
     const g = build(m.id, m.name);
     const handovers = poolHandovers
@@ -1827,7 +1840,7 @@ export async function _getInHand(householdId: number, periodId: number, settleme
     const ph = poolHeldByMember.get(m.id);
     // openingCarry = last month's close (null when there's no prior closed month — the first tracked
     // month opens at its own computed figure, i.e. effectively ₹0 baseline + this month's flows).
-    return { ...g, handovers, poolHeld: ph?.amount ?? 0, poolHeldVendors: ph?.vendors ?? [], openingCarry: openingByMember.get(m.id) ?? null, carryParts: carryPartsByMember.get(m.id) ?? null };
+    return { ...g, handovers, poolHeld: ph?.amount ?? 0, poolHeldVendors: ph?.vendors ?? [], openingCarry: openingByMember.get(m.id) ?? null, carryParts: carryPartsByMember.get(m.id) ?? null, familyAccount: familyAccountByMember.get(m.id) ?? null };
   });
   const shared = build(null, "Shared / pool");
   const piggyTotal = piggy.generalTotal + piggy.sinking.reduce((s, x) => s + x.hold, 0);

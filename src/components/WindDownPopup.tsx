@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
+import { monthEndInfo, MONTH_END_WINDOW_DAYS, type MonthEndInfo } from "@/lib/monthEnd";
 
 /**
  * A once-a-day modal nudge in the 5 days before the calendar month ends. Shows on the
@@ -9,28 +10,29 @@ import { useEffect, useState } from "react";
  * any pending spends + adds remaining-balance expenses before the month auto-closes on the
  * 1st. Separate per-day key from the banner's dismiss, so dismissing one doesn't suppress
  * the other. Push notifications are a later layer; this is the in-app cue.
+ *
+ * The countdown, month name and end date are all computed HERE from the device clock — never from
+ * server props — so a stale cached page (service worker offline fallback) can't show last month's
+ * "September ends in 4 days" in November. The server's reminder only decides whether to mount it.
  */
-export function WindDownPopup({ daysUntil, day, monthLabel, q }: { daysUntil: number; day: number; monthLabel: string; q: string }) {
-  const [show, setShow] = useState(false);
+export function WindDownPopup({ q }: { q: string }) {
+  const [info, setInfo] = useState<MonthEndInfo | null>(null);
 
   useEffect(() => {
+    const i = monthEndInfo(Date.now());
+    if (i.daysUntil > MONTH_END_WINDOW_DAYS) return; // not actually near month end on this device
     const key = `wd-popup-shown:${new Date().toDateString()}`;
-    if (localStorage.getItem(key) !== "1") setShow(true);
+    if (localStorage.getItem(key) !== "1") setInfo(i);
   }, []);
 
   const close = () => {
     localStorage.setItem(`wd-popup-shown:${new Date().toDateString()}`, "1");
-    setShow(false);
+    setInfo(null);
   };
 
-  if (!show) return null;
+  if (!info) return null;
 
-  // Month-end date = the last `day` (28–31) of the current month — a concrete date shown
-  // alongside the countdown (e.g. "on 31 Aug").
-  const now = new Date();
-  const endDate = new Date(now.getFullYear(), now.getMonth(), day);
-  const dateStr = endDate.toLocaleDateString("en-IN", { day: "numeric", month: "short" });
-
+  const { daysUntil, monthLabel, dateStr } = info;
   const due = daysUntil <= 0;
   const headline = due
     ? `${monthLabel} ends today (${dateStr})`

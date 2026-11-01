@@ -747,6 +747,14 @@ async function doAddSpend(formData: FormData): Promise<SpendResult> {
         familySpendId: spend.id,
       },
     });
+  } else {
+    // Cash / UPI: post it to the spender's family account (if they set one) so its balance drops with In-Hand.
+    const primaryId = await familyPrimaryAccountId(memberId);
+    if (primaryId != null) {
+      await prisma.accountTransaction.create({
+        data: { memberId: memberId!, accountId: primaryId, date: spend.createdAt, merchant: label, amount, type: "spend", category: cat?.name ?? null, source: "family", familySpendId: spend.id },
+      });
+    }
   }
   // Learn the item→category so future entries of the same thing get suggested. Only
   // deliberate tracked (non-misc) categorisations teach the app — misc is ambiguous
@@ -773,6 +781,14 @@ async function learnSpendItem(householdId: number, label: string, categoryId: nu
   }
 }
 
+// The member's FAMILY account (FinanceAccount.familyPrimary — e.g. their SBI): where a family Cash / UPI spend
+// physically leaves from. null when they haven't set one, so Cash/UPI stays a budget-only entry.
+async function familyPrimaryAccountId(memberId: number | null): Promise<number | null> {
+  if (memberId == null) return null;
+  const a = await prisma.financeAccount.findFirst({ where: { memberId, familyPrimary: true, active: true, type: { in: ["bank", "cash", "debit_card", "prepaid_card"] } }, select: { id: true } });
+  return a?.id ?? null;
+}
+
 // Everything the Add-Spend modal needs, fetched lazily on open (so no page has to thread
 // it through): the quick chips (head-curated shortcuts, or the most-frequent items when
 // none are set up) + the keyword rows that drive the on-save suggestion.
@@ -781,7 +797,7 @@ export type SpendAssist = {
   // the rest are head-curated item shortcuts (also fill the item). `cardId` is the preset payment method.
   chips: { icon: string | null; label: string; categoryId: number; cardId?: number | null; frequent?: boolean }[];
   keywords: { keyword: string; category: string; hits: number }[];
-  cards: { id: number; name: string; ownerId: number; ownerName: string; last4: string | null; type: string; color: string }[];
+  cards: { id: number; name: string; ownerId: number; ownerName: string; last4: string | null; type: string; color: string; familyPrimary: boolean }[];
   topCardId: number | null; // most-used card family-wide → featured as a quick chip in "Paid with"
 };
 export async function getSpendAssist(): Promise<SpendAssist> {
@@ -810,7 +826,7 @@ export async function getSpendAssist(): Promise<SpendAssist> {
   const combos = session.user.memberId ? await getFrequentSpendCombos(household.id, session.user.memberId) : [];
   const mfu: SpendAssist["chips"] = combos.map((c) => ({ icon: c.icon, label: c.label, categoryId: c.categoryId, cardId: c.cardId, frequent: true }));
   const chips = [...curated, ...mfu];
-  const cards = cardRows.map((c) => ({ id: c.id, name: c.name, ownerId: c.memberId, ownerName: c.member.name, last4: c.last4, type: c.type, color: c.color }));
+  const cards = cardRows.map((c) => ({ id: c.id, name: c.name, ownerId: c.memberId, ownerName: c.member.name, last4: c.last4, type: c.type, color: c.color, familyPrimary: c.familyPrimary }));
   // Only feature it if it's still an active card in the list; else fall back to the first card.
   const rawTop = topCard[0]?.cardAccountId ?? null;
   const topCardId = cards.some((c) => c.id === rawTop) ? rawTop : (cards[0]?.id ?? null);
@@ -1260,7 +1276,17 @@ export async function editSpendAction(
       create: { memberId: cardOwnerId, accountId: cardAccountId, date: spend.createdAt, merchant: label, amount, type: "spend", category: spend.category?.name ?? null, source: "family", familySpendId: id },
     });
   } else {
-    await prisma.accountTransaction.deleteMany({ where: { familySpendId: id } });
+    // Cash / UPI: mirror to the spender's family account if set (re-pointed when the spender changes), else none.
+    const primaryId = await familyPrimaryAccountId(memberId);
+    if (primaryId != null && memberId != null) {
+      await prisma.accountTransaction.upsert({
+        where: { familySpendId: id },
+        update: { amount, merchant: label, accountId: primaryId, memberId, category: spend.category?.name ?? null },
+        create: { memberId, accountId: primaryId, date: spend.createdAt, merchant: label, amount, type: "spend", category: spend.category?.name ?? null, source: "family", familySpendId: id },
+      });
+    } else {
+      await prisma.accountTransaction.deleteMany({ where: { familySpendId: id } });
+    }
   }
   await logActivity("spend", "updated", `Edited spend “${label}” ${formatINR(amount)}`, spend.periodId);
   revalidateFamily();

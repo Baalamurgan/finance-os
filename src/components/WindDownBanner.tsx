@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
+import { monthEndInfo, MONTH_END_WINDOW_DAYS, type MonthEndInfo } from "@/lib/monthEnd";
 
 /**
  * Dismissible in-app reminder shown in the 5 days before the calendar month ends.
@@ -9,19 +10,22 @@ import { useEffect, useState } from "react";
  * add any remaining-balance expenses. Dismissal is per-day (re-appears the next day)
  * so nobody misses it. Push notifications are a later layer; this is the in-app cue.
  */
-export function WindDownBanner({ daysUntil, monthLabel }: { daysUntil: number; monthLabel: string }) {
-  const [show, setShow] = useState(false);
+export function WindDownBanner() {
+  // Computed from the device clock (never server props) so a stale cached page can't show an old month.
+  const [info, setInfo] = useState<MonthEndInfo | null>(null);
 
   useEffect(() => {
+    const i = monthEndInfo(Date.now());
     const key = `wd-banner-dismissed:${new Date().toDateString()}`;
-    setShow(localStorage.getItem(key) !== "1");
+    setInfo(i.daysUntil <= MONTH_END_WINDOW_DAYS && localStorage.getItem(key) !== "1" ? i : null);
   }, []);
 
-  if (!show) return null;
+  if (!info) return null;
+  const { daysUntil, monthLabel } = info;
 
   const dismiss = () => {
     localStorage.setItem(`wd-banner-dismissed:${new Date().toDateString()}`, "1");
-    setShow(false);
+    setInfo(null);
   };
 
   const msg =
