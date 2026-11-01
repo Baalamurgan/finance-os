@@ -1,5 +1,7 @@
 import { formatINR } from "@/lib/format";
 import { loadCommon } from "@/lib/load";
+import { prisma } from "@/lib/prisma";
+import { CARRY_NOTE, DEFERRED_NOTE, REMOVED_NOTE } from "@/lib/notes";
 import { getTrackedExpenses, getMiscReview, getSpendActivity, getFamilyCards } from "@/lib/queries";
 import { NavHeader } from "@/components/NavHeader";
 import { SpendActivity } from "@/components/SpendActivity";
@@ -87,6 +89,20 @@ export default async function ExpensesPage({
   const cards = rawCards.map((card) => ({ ...card, spends: orderSpends(card.spends) }));
   const budgetedCards = cards.filter((card) => card.allocation > 0);
   const miscCards = cards.filter((card) => card.allocation === 0);
+  // Planned Sheet lines (bills / one-offs / pool-funded items like a cot) for the month — surfaced in a
+  // collapsible section so they're VISIBLE here and not re-logged as a daily spend (the G704-cot
+  // duplicate bug). Excludes the daily-budget cards above (already shown) and carried/removed/deferred
+  // tombstones. Read-only pointer — edits happen on the Sheet.
+  const budgetedCatIds = new Set(budgetedCards.map((card) => card.id));
+  const TOMBSTONE_NOTES = new Set<string>([CARRY_NOTE, REMOVED_NOTE, DEFERRED_NOTE]);
+  const plannedRows = (
+    await prisma.expenseEntry.findMany({
+      where: { periodId: c.selected.id },
+      include: { category: { select: { name: true } }, member: { select: { name: true } } },
+      orderBy: [{ amount: "desc" }],
+    })
+  ).filter((e) => e.amount > 0.005 && !(e.note && TOMBSTONE_NOTES.has(e.note)) && !budgetedCatIds.has(e.categoryId));
+  const plannedTotal = plannedRows.reduce((s, e) => s + e.amount, 0);
   // When filtered to a member, the summary reflects only THAT member's spends ("everything they
   // spent") — allocation/remaining don't apply to one person, so we show budgeted-spend + misc.
   const sumSpends = (cs: typeof cards) => cs.reduce((s, c) => s + c.spends.reduce((a, x) => a + x.amount, 0), 0);
@@ -201,6 +217,41 @@ export default async function ExpensesPage({
               ✕ Clear filter
             </a>
           </div>
+        )}
+
+        {/* Planned this month — the Sheet's bill/one-off/pool-funded lines, collapsed so they're visible
+            here (don't re-log them as a daily spend) without crowding the daily cards. */}
+        {plannedRows.length > 0 && (
+          <details className="rounded-xl border border-slate-200 bg-white">
+            <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 hover:bg-slate-50 [&::-webkit-details-marker]:hidden">
+              <span className="flex items-center gap-2 text-sm font-semibold text-slate-800">
+                📋 Planned this month
+                <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-500">{plannedRows.length} on the Sheet</span>
+              </span>
+              <span className="flex items-center gap-2 text-sm">
+                <span className="tabular-nums font-semibold text-slate-700">{formatINR(plannedTotal)}</span>
+                <span className="text-slate-300">▾</span>
+              </span>
+            </summary>
+            <div className="border-t border-slate-100 px-4 py-2">
+              <p className="mb-1.5 text-[11px] text-slate-400">
+                Bills, one-offs &amp; pool-funded items already planned on the Sheet — shown here so they
+                aren&apos;t logged again as a daily spend. Edit them on the Sheet.
+              </p>
+              <ul className="divide-y divide-slate-100">
+                {plannedRows.map((e) => (
+                  <li key={e.id} className="flex items-center justify-between gap-3 py-1.5 text-sm">
+                    <span className="min-w-0 truncate text-slate-700">{e.label}</span>
+                    <span className="flex shrink-0 items-center gap-2">
+                      <span className="text-[11px] text-slate-400">{e.category.name}{e.member ? ` · ${e.member.name}` : ""}</span>
+                      <span className="tabular-nums font-medium text-slate-800">{formatINR(e.amount)}</span>
+                      {e.paid && <span className="flex h-4 w-4 items-center justify-center rounded-full bg-emerald-500 text-[9px] font-bold leading-none text-white" title="Paid">✓</span>}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          </details>
         )}
 
         {/* budgeted categories (count toward Spent / Allocated above) */}
