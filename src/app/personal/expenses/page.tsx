@@ -43,7 +43,7 @@ export default async function PersonalExpenses({
     prisma.personalSpend.findMany({ where: { periodId: period.id, pending: false }, orderBy: [{ date: "desc" }, { id: "desc" }], include: { splitLoans: true } }),
     getPersonalLending(c.member.id),
   ]);
-  const { personalExpense, netSpent, canSpend } = cash;
+  const { personalExpense, netSpent, canSpend, plannedUnpaid } = cash;
   const unpaidCardDues = cardDues.reduce((s, d) => s + d.unpaidTotal, 0);
   const owed = lending.owed;
   const borrowed = lending.borrowed;
@@ -55,7 +55,8 @@ export default async function PersonalExpenses({
   //                borrowed is sitting in your account (+ borrowed) until you repay it.
   //  afterSettle = what you keep once every card is paid AND every due/lend/borrow is settled. The card
   //                cash, the receivables and the borrowings all reverse out, landing back on canSpend.
-  const inAccount = canSpend + unpaidCardDues - owed + borrowed;
+  // plannedUnpaid: planned bills/spends already set aside from Can-spend but not yet paid — still in the account.
+  const inAccount = canSpend + plannedUnpaid + unpaidCardDues - owed + borrowed;
   const afterSettle = canSpend;
 
   // The category donut reflects your NET spend (your share of splits) — the exact spend you did.

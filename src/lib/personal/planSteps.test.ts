@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { diffPlanSteps, orderSteps, type ExistingStep } from "./planSteps";
+import { diffPlanSteps, orderSteps, cardBillTemplateId, decodeCardBillTemplateId, type ExistingStep } from "./planSteps";
 
 const income = (id: number, over: Partial<{ source: string; amount: number; dayOfMonth: number | null; accountId: number | null }> = {}) => ({
   id, source: over.source ?? `Income ${id}`, amount: over.amount ?? 1000, dayOfMonth: over.dayOfMonth ?? 1, accountId: over.accountId ?? null,
@@ -79,5 +79,40 @@ describe("orderSteps", () => {
       { id: 4, dayOfMonth: 1, sortOrder: 9 },
     ];
     expect(orderSteps(rows).map((r) => r.id)).toEqual([4, 2, 1, 3]);
+  });
+});
+
+describe("orderSteps — manual position", () => {
+  const st = (id: number, day: number | null, position: number | null = null, sortOrder = 0) => ({ id, dayOfMonth: day, sortOrder, position });
+  it("falls back to day order when nothing has a position", () => {
+    expect(orderSteps([st(1, 20), st(2, 5), st(3, null)]).map((s) => s.id)).toEqual([2, 1, 3]);
+  });
+  it("a manual position beats day order; unpositioned steps follow, by day", () => {
+    const out = orderSteps([st(1, 1, 2), st(2, 28, 0), st(3, 5, 1), st(4, 3), st(5, 2)]);
+    expect(out.map((s) => s.id)).toEqual([2, 3, 1, 5, 4]);
+  });
+});
+
+describe("card-bill steps", () => {
+  it("packs card + statement date into a stable id that decodes back", () => {
+    const end = new Date(2026, 9, 15); // 15 Oct 2026, local midnight
+    const id = cardBillTemplateId(7, end);
+    const back = decodeCardBillTemplateId(id);
+    expect(back.cardId).toBe(7);
+    expect(back.cycleEnd.getFullYear()).toBe(2026);
+    expect(back.cycleEnd.getMonth()).toBe(9);
+    expect(back.cycleEnd.getDate()).toBe(15);
+  });
+  it("different cycles of one card get different ids", () => {
+    expect(cardBillTemplateId(7, new Date(2026, 9, 15))).not.toBe(cardBillTemplateId(7, new Date(2026, 10, 15)));
+  });
+  it("creates one cardbill step per due cycle, once, and prunes a pending one that is no longer due", () => {
+    const cb = { templateId: cardBillTemplateId(7, new Date(2026, 9, 15)), cardId: 7, label: "HDFC bill", amount: 4200, dayOfMonth: 5, dueNote: "due 5 Nov" };
+    const first = diffPlanSteps([], [], [], [], null, [], [cb]);
+    expect(first.toCreate).toHaveLength(1);
+    expect(first.toCreate[0]).toMatchObject({ kind: "cardbill", templateKind: "cardbill", templateId: cb.templateId, amount: 4200, dayOfMonth: 5 });
+    const existing: ExistingStep[] = [{ id: 9, templateKind: "cardbill", templateId: cb.templateId, status: "pending" }];
+    expect(diffPlanSteps([], [], [], [], null, existing, [cb])).toEqual({ toCreate: [], prunePendingIds: [] });
+    expect(diffPlanSteps([], [], [], [], null, existing, []).prunePendingIds).toEqual([9]);
   });
 });

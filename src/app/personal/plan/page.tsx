@@ -5,11 +5,10 @@ import { prisma } from "@/lib/prisma";
 import { getWalletAccounts } from "@/lib/finance/queries";
 import { getCardDues, getPersonalCash } from "@/lib/personal/cash";
 import { getPersonalSavings } from "@/lib/personal/savings";
-import { ensurePlanSteps, orderSteps } from "@/lib/personal/planSteps";
+import { ensurePlanSteps, orderSteps, cardBillTemplateId, decodeCardBillTemplateId } from "@/lib/personal/planSteps";
 import { PersonalNav } from "@/components/personal/PersonalNav";
 import { TransferModal } from "@/components/personal/TransferModal";
 import { PersonalPlanSteps, type PlanStepView } from "@/components/personal/PersonalPlanSteps";
-import { CardBillStep } from "@/components/personal/CardBillStep";
 
 const fmtDate = (iso: string | null) =>
   iso ? new Date(iso).toLocaleDateString("en-IN", { day: "numeric", month: "short" }) : "—";
@@ -48,7 +47,7 @@ export default async function PersonalPlanPage({
     getCardDues(c.member.id),
     getPersonalCash({ id: c.selected.id, income: c.selected.income, carryForward: c.selected.carryForward }),
     getPersonalSavings(c.member.id),
-    prisma.personalExpense.findMany({ where: { periodId: c.selected.id, pending: false }, select: { amount: true, cardAccountId: true } }),
+    prisma.personalExpense.findMany({ where: { periodId: c.selected.id }, select: { amount: true, cardAccountId: true } }),
     prisma.personalLoan.findMany({
       where: { memberId: c.member.id, direction: "borrowed", status: "open" },
       select: { id: true, counterparty: true, outstanding: true },
@@ -62,7 +61,7 @@ export default async function PersonalPlanPage({
     }),
     prisma.personalPlanStep.findMany({
       where: { periodId: c.selected.id },
-      select: { id: true, kind: true, label: true, amount: true, dayOfMonth: true, status: true, templateKind: true, method: true, fromAccountId: true, toAccountId: true, sortOrder: true },
+      select: { id: true, kind: true, label: true, amount: true, dayOfMonth: true, status: true, templateKind: true, templateId: true, method: true, note: true, position: true, fromAccountId: true, toAccountId: true, sortOrder: true },
     }),
     prisma.financeAccount.findMany({
       where: { memberId: c.member.id, active: true },
@@ -79,12 +78,44 @@ export default async function PersonalPlanPage({
 
   // This month's executable plan steps (generated from templates + one-offs), account names resolved.
   const accountNameById = new Map(allAccts.map((a) => [a.id, a.name]));
-  const stepViews: PlanStepView[] = orderSteps(steps).map((s) => ({
-    id: s.id, kind: s.kind, label: s.label, amount: s.amount, dayOfMonth: s.dayOfMonth, status: s.status,
-    templateKind: s.templateKind, method: s.method, fromId: s.fromAccountId, toId: s.toAccountId,
-    fromName: s.fromAccountId == null ? null : accountNameById.get(s.fromAccountId) ?? null,
-    toName: s.toAccountId == null ? null : accountNameById.get(s.toAccountId) ?? null,
-  }));
+  // Which expense/spend steps sit on a one-off row (added in the plan) rather than a Setup recurring template.
+  const bills0 = steps.filter((x) => x.kind === "expense" && x.templateId != null).map((x) => x.templateId as number);
+  const spends0 = steps.filter((x) => x.kind === "spend" && x.templateId != null).map((x) => x.templateId as number);
+  const [oneOffExp, oneOffSpd] = await Promise.all([
+    prisma.personalExpense.findMany({ where: { id: { in: bills0 }, recurring: false }, select: { id: true } }),
+    prisma.personalSpend.findMany({ where: { id: { in: spends0 }, recurring: false }, select: { id: true } }),
+  ]);
+  const oneOffExpIds = new Set(oneOffExp.map((r) => r.id));
+  const oneOffSpdIds = new Set(oneOffSpd.map((r) => r.id));
+  // Card-bill steps carry the statement breakdown (personal vs family) straight from the card's cycle, so the
+  // pay modal shows the same figures as the family In-Hand "held for this card".
+  const cardInfo = new Map<number, { cardName: string; color: string; dueISO: string | null; personal: number; annualFee: number; family: number; familyBudgeted: number; familyMisc: number }>();
+  for (const d of dues) {
+    for (const cyc of d.cycles) {
+      cardInfo.set(cardBillTemplateId(d.cardId, new Date(cyc.cycleEndISO)), {
+        cardName: d.cardName, color: d.color, dueISO: cyc.dueISO,
+        personal: Math.round(cyc.total * 100) / 100, annualFee: cyc.annualFee, family: Math.round(cyc.familyTotal * 100) / 100,
+        familyBudgeted: Math.round(cyc.familyBudgeted * 100) / 100, familyMisc: Math.round((cyc.familyTotal - cyc.familyBudgeted) * 100) / 100,
+      });
+    }
+  }
+  const cardNameById = new Map(dues.map((d) => [d.cardId, { name: d.cardName, color: d.color }]));
+  const stepViews: PlanStepView[] = orderSteps(steps).map((s) => {
+    const oneOff = s.templateKind == null || (s.kind === "expense" && s.templateId != null && oneOffExpIds.has(s.templateId)) || (s.kind === "spend" && s.templateId != null && oneOffSpdIds.has(s.templateId));
+    let card = s.kind === "cardbill" && s.templateId != null ? cardInfo.get(s.templateId) ?? null : null;
+    if (s.kind === "cardbill" && !card && s.templateId != null) {
+      // a paid cycle no longer appears in the card's unpaid cycles — keep a minimal header for the done row
+      const meta = cardNameById.get(decodeCardBillTemplateId(s.templateId).cardId);
+      card = { cardName: meta?.name ?? "Card", color: meta?.color ?? "#6366f1", dueISO: null, personal: s.amount, annualFee: 0, family: 0, familyBudgeted: 0, familyMisc: 0 };
+    }
+    return {
+      id: s.id, kind: s.kind, label: s.label, amount: s.amount, dayOfMonth: s.dayOfMonth, status: s.status,
+      templateKind: s.templateKind, method: s.method, note: s.note, fromId: s.fromAccountId, toId: s.toAccountId,
+      fromName: s.fromAccountId == null ? null : accountNameById.get(s.fromAccountId) ?? null,
+      toName: s.toAccountId == null ? null : accountNameById.get(s.toAccountId) ?? null,
+      oneOff, card,
+    };
+  });
 
   // Card bills still to pay (your personal dues + any family/peer spends the card fronts), soonest first.
   const cardBills = dues
@@ -155,18 +186,14 @@ export default async function PersonalPlanPage({
         </section>
 
         {/* This month's executable plan steps (income · transfers · saves), ticked as they happen */}
-        <PersonalPlanSteps steps={stepViews} accounts={allAccts} periodId={c.selected.id} />
+        <PersonalPlanSteps steps={stepViews} accounts={allAccts} categories={c.categories.map((k) => ({ id: k.id, name: k.name, icon: k.icon }))} periodId={c.selected.id} />
 
         {/* Still to pay this month (flow) */}
         <section className="rounded-2xl border border-slate-200 bg-white p-4">
-          <h2 className="mb-3 text-sm font-semibold text-slate-800">Still to pay this month</h2>
-          {cardBills.length > 0 || owed.length > 0 ? (
+          <h2 className="mb-1 text-sm font-semibold text-slate-800">Still to pay this month</h2>
+          <p className="mb-3 text-[11px] text-slate-400">Credit-card bills due this month are steps in the plan above.</p>
+          {owed.length > 0 ? (
             <ul className="space-y-2">
-              {cardBills.map((d) => (
-                <li key={`c${d.cardId}`}>
-                  <CardBillStep bill={d} accounts={balAccts.map((a) => ({ id: a.id, name: a.name }))} />
-                </li>
-              ))}
               {owed.map((l) => (
                 <li key={`l${l.id}`}>
                   <Link href="/personal/loans" className="flex items-center justify-between gap-3 rounded-lg border border-slate-100 p-3 hover:bg-slate-50">

@@ -542,6 +542,13 @@ model PersonalPlanStep {
   // How the money moves: upi | cash | card | other (null = unspecified). Narrows which accounts the
   // sender/receiver pickers offer (UPI → bank accounts, cash → cash, card → cards).
   method      String?
+  // Manual order within the month (move up/down / insert between). Null = fall back to the derived
+  // day order; a move renumbers every step of the month so the set stays consistent.
+  position    Float?
+  // A month-only edit of a template-derived income/bill/spend step rewrites the underlying row for this
+  // month; this keeps the ORIGINAL template values ({label|source, amount, cardAccountId|accountId}) so
+  // next month still clones the Setup template, not this month's edit.
+  snapshot    Json?
   note        String?
   // Provenance so monthly generation is idempotent. templateKind "income" → templateId = PersonalIncome.id;
   // "planitem" → templateId = PersonalPlanItem.id. Both null = a one-off step added this month.

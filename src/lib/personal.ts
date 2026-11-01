@@ -22,19 +22,33 @@ async function seedRecurring(
   fromPeriodId: number,
   to: { id: number; year: number; month: number },
 ) {
-  const [incomes, expenses, spends] = await Promise.all([
+  const [incomes, expenses, spends, edited] = await Promise.all([
     tx.personalIncome.findMany({ where: { periodId: fromPeriodId, recurring: true } }),
     tx.personalExpense.findMany({ where: { periodId: fromPeriodId, recurring: true } }),
     tx.personalSpend.findMany({ where: { periodId: fromPeriodId, recurring: true } }),
+    // Month-only edits made in the Money Plan keep the ORIGINAL Setup values on the step's snapshot — clone
+    // from those, so an edit (or a removal) in one month never leaks into the next.
+    tx.personalPlanStep.findMany({
+      where: { periodId: fromPeriodId, templateKind: { in: ["income", "expense", "spend"] }, snapshot: { not: Prisma.DbNull } },
+      select: { templateKind: true, templateId: true, snapshot: true },
+    }),
   ]);
+  const snap = new Map<string, Record<string, unknown>>();
+  for (const st of edited) if (st.snapshot && typeof st.snapshot === "object") snap.set(`${st.templateKind}:${st.templateId}`, st.snapshot as Record<string, unknown>);
+  const num = (v: unknown, d: number) => (typeof v === "number" ? v : d);
+  const str = <T extends string | null>(v: unknown, d: T): T | string => (typeof v === "string" ? v : v === null ? null as T : d);
+  const idOrNull = (v: unknown, d: number | null) => (typeof v === "number" ? v : v === null ? null : d);
   for (const e of incomes) {
-    await tx.personalIncome.create({ data: { memberId, periodId: to.id, source: e.source, amount: e.amount, date: recurDate(to.year, to.month, e.date), recurring: true, accountId: e.accountId } });
+    const o = snap.get(`income:${e.id}`) ?? {};
+    await tx.personalIncome.create({ data: { memberId, periodId: to.id, source: str(o.source, e.source) ?? e.source, amount: num(o.amount, e.amount), date: recurDate(to.year, to.month, e.date), recurring: true, accountId: idOrNull(o.accountId, e.accountId) } });
   }
   for (const e of expenses) {
-    await tx.personalExpense.create({ data: { memberId, periodId: to.id, label: e.label, categoryId: e.categoryId, amount: e.amount, note: e.note, recurring: true, pending: true, cardAccountId: e.cardAccountId, date: recurDate(to.year, to.month, e.date) } });
+    const o = snap.get(`expense:${e.id}`) ?? {};
+    await tx.personalExpense.create({ data: { memberId, periodId: to.id, label: str(o.label, e.label) ?? e.label, categoryId: e.categoryId, amount: num(o.amount, e.amount), note: e.note, recurring: true, pending: true, cardAccountId: idOrNull(o.cardAccountId, e.cardAccountId), date: recurDate(to.year, to.month, e.date) } });
   }
   for (const e of spends) {
-    await tx.personalSpend.create({ data: { memberId, periodId: to.id, categoryId: e.categoryId, amount: e.amount, note: e.note, recurring: true, pending: true, cardAccountId: e.cardAccountId, date: recurDate(to.year, to.month, e.date) } });
+    const o = snap.get(`spend:${e.id}`) ?? {};
+    await tx.personalSpend.create({ data: { memberId, periodId: to.id, categoryId: e.categoryId, amount: num(o.amount, e.amount), note: str(o.note, e.note), recurring: true, pending: true, cardAccountId: idOrNull(o.cardAccountId, e.cardAccountId), date: recurDate(to.year, to.month, e.date) } });
   }
 }
 

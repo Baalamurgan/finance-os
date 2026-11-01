@@ -11,7 +11,7 @@ import { PersonalSpendFab } from "@/components/personal/PersonalSpendFab";
 import { PersonalEmpty } from "@/components/personal/PersonalEmpty";
 import { CardBillReminderBanner } from "@/components/personal/CardBillReminderBanner";
 import { MoneyFlowDonut } from "@/components/Charts";
-import { setPersonalIncome, addPersonalIncome, deletePersonalIncome, createPersonalPreview, rebuildPersonalPreviewAction, discardPersonalPreview } from "@/app/personal/actions";
+import { addPersonalIncome, deletePersonalIncome, createPersonalPreview, rebuildPersonalPreviewAction, discardPersonalPreview } from "@/app/personal/actions";
 
 const COLORS = ["#0ea5e9", "#f59e0b", "#8b5cf6", "#ef4444", "#14b8a6", "#ec4899", "#84cc16", "#6366f1", "#f97316", "#06b6d4"];
 
@@ -42,9 +42,14 @@ export default async function PersonalSheet({
   // into — a tagged income posts a ledger line that raises that account's balance.
   const incomeAccounts = c.spendCards.filter((a) => a.mine && BALANCE_ACCOUNT_TYPES.has(a.type ?? ""));
 
+  // Steps removed for this month (plan "skipped") are out of the budget, so out of this list too.
+  const removedBills = await prisma.personalPlanStep.findMany({ where: { periodId: period.id, status: "skipped", templateKind: { in: ["expense", "income"] } }, select: { templateKind: true, templateId: true } });
+  const removedExpenseIds = removedBills.filter((r) => r.templateKind === "expense").map((r) => r.templateId as number);
+  const removedIncomeIds = removedBills.filter((r) => r.templateKind === "income").map((r) => r.templateId as number);
   const [expenses, extraIncomes, cash, unpaidCardDues, lending] = await Promise.all([
-    prisma.personalExpense.findMany({ where: { periodId: period.id, pending: false }, orderBy: { amount: "desc" } }),
-    prisma.personalIncome.findMany({ where: { periodId: period.id }, orderBy: { id: "desc" } }),
+    // ALL planned bills copied from Setup (paid or not) — the Money Plan is the budget.
+    prisma.personalExpense.findMany({ where: { periodId: period.id, id: { notIn: removedExpenseIds.length ? removedExpenseIds : [0] } }, orderBy: { amount: "desc" } }),
+    prisma.personalIncome.findMany({ where: { periodId: period.id, id: { notIn: removedIncomeIds.length ? removedIncomeIds : [0] } }, orderBy: { id: "desc" } }),
     getPersonalCash(period),
     getUnpaidCardDues(c.member.id),
     getPersonalLending(c.member.id),
@@ -55,11 +60,11 @@ export default async function PersonalSheet({
   //  In account now = actual bank balance: can-spend + card cash still there (dues) − money lent out
   //                   (owed) + money you've borrowed that's in your account (borrowed)
   //  Spent          = net spend (your share only)
-  const { totalIn, personalExpense, netSpent, canSpend } = cash;
+  const { totalIn, personalExpense, netSpent, canSpend, plannedSpends, plannedUnpaid } = cash;
   const owed = lending.owed;
   const borrowed = lending.borrowed;
-  const inAccount = canSpend + unpaidCardDues - owed + borrowed;
-  const spentPct = personalExpense > 0 ? Math.min(100, (netSpent / personalExpense) * 100) : 0;
+  const inAccount = canSpend + plannedUnpaid + unpaidCardDues - owed + borrowed;
+  const spentPct = personalExpense > 0 ? Math.min(100, ((netSpent + plannedSpends) / personalExpense) * 100) : 0;
 
   // group monthly expenses by category (collapsible)
   const byCat = new Map<number, { total: number; items: typeof expenses }>();
@@ -127,30 +132,17 @@ export default async function PersonalSheet({
           )}
         </div>
 
-        {/* salary + carry + extra income */}
+        {/* money in: previous month's remainder + every income (Setup's recurring income, e.g. Salary, plus extras) */}
         <div className="rounded-xl border border-emerald-200 bg-white p-4">
-          <form action={setPersonalIncome} className="space-y-2">
-            <input type="hidden" name="periodId" value={period.id} />
-            <div className="flex items-center justify-between gap-2">
-              <span className="text-sm font-medium text-slate-600">Salary</span>
-              <span className="flex items-center gap-1">
-                <span className="text-slate-400">₹</span>
-                <input name="income" type="number" step="0.01" defaultValue={period.income} className="w-32 rounded-md border border-slate-200 px-2 py-1 text-right text-lg font-bold tabular-nums outline-none focus:border-emerald-400" />
-                <button className="rounded-md bg-emerald-600 px-2 py-1 text-xs font-medium text-white hover:bg-emerald-700">Save</button>
-              </span>
-            </div>
-            {incomeAccounts.length > 0 && (
-              <div className="flex items-center justify-between gap-2 border-t border-slate-100 pt-2 text-xs">
-                <span className="text-slate-400">Lands in — a &ldquo;Salary received&rdquo; step credits it</span>
-                <select name="incomeAccountId" defaultValue={period.incomeAccountId ?? ""} className="rounded-md border border-slate-200 px-2 py-1 text-xs text-slate-600 outline-none focus:border-emerald-400">
-                  <option value="">Budget only</option>
-                  {incomeAccounts.map((a) => (
-                    <option key={a.id} value={a.id}>→ {a.name}</option>
-                  ))}
-                </select>
-              </div>
-            )}
-          </form>
+          <div className="flex items-baseline justify-between">
+            <span className="text-[11px] font-medium uppercase tracking-wide text-slate-400">Money in</span>
+            <span className="text-lg font-bold tabular-nums text-emerald-700">{formatINR(totalIn)}</span>
+          </div>
+          {extraIncomes.length === 0 && period.carryForward === 0 && (
+            <p className="mt-2 text-xs text-slate-500">
+              No income yet — add your salary as a <a href="/personal/setup" className="font-medium text-emerald-700 underline">recurring income in Setup</a> and it appears here every month.
+            </p>
+          )}
           {period.carryForward !== 0 && (
             <div className="mt-2 flex items-center justify-between border-t border-slate-100 pt-2 text-sm">
               <span className="text-slate-500">Previous month remaining</span>
@@ -191,7 +183,7 @@ export default async function PersonalSheet({
         {/* stats (stack on mobile) */}
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
           <Stat label="Total in" value={formatINR(totalIn)} />
-          <Stat label="Monthly expenses" value={formatINR(monthlyExpenses)} />
+          <Stat label="Monthly expenses" value={formatINR(monthlyExpenses)} sub={plannedSpends > 0 ? `+ ${formatINR(plannedSpends)} planned spends` : "from your Setup"} />
           <Stat label="Personal expense" value={formatINR(personalExpense)} accent={personalExpense >= 0} danger={personalExpense < 0} sub="you can spend this" />
         </div>
 
@@ -205,7 +197,7 @@ export default async function PersonalSheet({
             </span>
           </div>
           <div className="mt-2 h-2.5 overflow-hidden rounded-full bg-slate-100">
-            <div className={`h-full rounded-full ${netSpent > personalExpense ? "bg-red-500" : "bg-emerald-500"}`} style={{ width: `${spentPct}%` }} />
+            <div className={`h-full rounded-full ${netSpent + plannedSpends > personalExpense ? "bg-red-500" : "bg-emerald-500"}`} style={{ width: `${spentPct}%` }} />
           </div>
           <div className="mt-2 grid grid-cols-2 gap-3 border-t border-slate-100 pt-2 text-sm">
             <div>
@@ -260,6 +252,7 @@ export default async function PersonalSheet({
                         <span className="flex items-center gap-1.5 text-slate-700">
                           {e.label}
                           {!e.recurring && <span className="text-[10px] text-slate-400">(one-off)</span>}
+                          {e.pending && <span className="rounded-full bg-amber-50 px-1.5 py-0.5 text-[10px] font-medium text-amber-700" title="Planned in your Money Plan — tick it there when paid">planned</span>}
                           {card && (
                             <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-500" title={`On ${card.name} — counts now; pay the cash at the card's bill`}>
                               <span className="h-1.5 w-1.5 rounded-full" style={{ background: card.color }} />💳
