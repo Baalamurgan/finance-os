@@ -901,6 +901,31 @@ describe("buildMoneyPlan", () => {
     expect(plan.steps.some((s) => s.kind === "transfer-in" && s.fromId === 4)).toBe(false);
   });
 
+  it("a paid direct piece is not re-offered while the bill it funded is still unpaid", () => {
+    // Harish is owed 150 overall; his BOB bill (100, day 20) was funded by Lakshmi paying him 100 directly — ticked.
+    // The BOB bill itself is not ticked yet. The plan must keep the one done Lakshmi → Harish line and NOT emit a
+    // second pending Lakshmi → Harish 100 for the same need; only the remaining 50 is still owed to Harish.
+    const pay = { id: 9, amount: 100, key: "disb-3-4-20-100", fromId: 4, toId: 3 };
+    const plan = buildMoneyPlan({
+      treasurerId: T,
+      treasurerName: "Arumugam",
+      transfers: [
+        xfer({ fromId: 4, from: "Lakshmi", toId: T, amount: 100, settled: true, paidAmount: 100, payments: [pay] }),
+        xfer({ fromId: 5, from: "Baala", toId: T, amount: 50 }),
+        xfer({ fromId: T, from: "Arumugam", toId: 3, to: "Harish", amount: 150, settled: false, paidAmount: 100, payments: [pay] }),
+      ],
+      bills: [bill({ payerId: 3, payerName: "Harish", vendor: "BOB", amount: 100, day: 20 })],
+      incomeDayByMember: { 4: 20, 5: 1 },
+      incomeArrivals: [{ memberId: 4, day: 20, amount: 100 }, { memberId: 5, day: 1, amount: 50 }],
+    });
+    const toHarish = plan.steps.filter((s) => s.kind === "transfer-out" && s.toId === 3);
+    expect(toHarish.filter((s) => s.done)).toHaveLength(1);
+    expect(toHarish.some((s) => !s.done && s.fromId === 4)).toBe(false); // no duplicate Lakshmi → Harish
+    expect(Math.round(toHarish.filter((s) => !s.done).reduce((a, s) => a + s.amount, 0))).toBe(50); // just the rest
+    expect(plan.steps.some((s) => s.kind === "transfer-in" && s.fromId === 4)).toBe(false);
+    expect(plan.steps.find((s) => s.kind === "bill" && s.vendor === "BOB")!.senderShort ?? 0).toBe(0); // the paid 100 funds BOB
+  });
+
   it("direct routing: with NO creditor need that day, the debtor's cash goes to the hub (not direct)", () => {
     // Baala (2) collects day 1, but no creditor needs money day 1 (C's bill is later, self-funded). His
     // net must go to the hub as a normal collection, NOT direct to anyone.

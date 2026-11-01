@@ -327,7 +327,7 @@ export function MoneyPlan({
                       // A hub funding disbursement ("funds <name> ↓"): re-datable to an EARLIER affordable day
                       // (picker goes up to the bill day; the server rejects a day the hub can't cover or that's
                       // past the bill). Keyed per creditor, so all the hub's funding to them moves together.
-                      if (s.kind === "transfer-out" && s.fundsMember && !s.budgetLoan && !s.reroute && s.toId != null)
+                      if (s.kind === "transfer-out" && s.fundsMember && !s.done && !s.budgetLoan && !s.reroute && s.toId != null)
                         return <StepDayEditor kind="override" id={periodId} stepKey={`disbday-${s.id}`} day={s.day} minDay={plan.minEditDay} maxDay={s.disbMaxDay ?? s.day ?? undefined}>{tag}</StepDayEditor>;
                       // Everything else (collections) derives its date — read-only.
                       return tag;

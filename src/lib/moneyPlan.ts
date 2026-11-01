@@ -122,6 +122,23 @@ export function buildMoneyPlan(input: {
   // What's already been paid to each creditor (any partial counts, not just fully-settled ones) — used
   // to net down the reimbursement need so an already-paid slice isn't scheduled again.
   const paidByCreditor = new Map<number, number>(outbound.filter((o) => paidOf(o) > 0.005).map((o) => [o.toId, paidOf(o)]));
+  // DIRECT payments (debtor → creditor, skipping the hub). Settlement counts each on both legs it replaces, so:
+  //  • paidDirectBy: what a debtor already paid creditors directly — no longer owed to (or collected by) the hub;
+  //  • hubPaidOf: the part of a creditor's paid total that actually left the HUB (direct money never did).
+  const paidDirectBy = new Map<number, number>();
+  for (const t of inbound) {
+    const v = Math.round((t.payments ?? []).filter((p) => p.toId != null && p.toId !== t.toId).reduce((a, p) => a + p.amount, 0) * 100) / 100;
+    if (v > 0.005) paidDirectBy.set(t.fromId, v);
+  }
+  const inboundLeft = (t: PlanTransfer) => Math.max(0, Math.round((t.amount - (paidDirectBy.get(t.fromId) ?? 0)) * 100) / 100);
+  const hubPaidOf = (o: PlanTransfer) => Math.min(o.amount, (o.payments ?? []).filter((p) => p.fromId == null || p.fromId === treasurerId).reduce((a, p) => a + p.amount, 0));
+  // Payments a creditor has already RECEIVED (from the hub or direct), on the day they were scheduled — they
+  // fund the creditor's upcoming bills, so those bills mustn't generate the same need (and piece) again.
+  const keyDayOf = (key?: string | null) => { const d = key ? Number(key.split("-")[3]) : NaN; return Number.isFinite(d) ? d : 0; };
+  const receivedBy = (creditorId: number) =>
+    // Only KEYED payments (ticked plan pieces) carry the day they were scheduled for; a legacy key-less payment
+    // keeps the old behaviour (shown at the payout slot, not counted toward earlier bills).
+    outbound.filter((o) => o.toId === creditorId).flatMap((o) => (o.payments ?? []).filter((p) => p.key).map((p) => ({ day: keyDayOf(p.key), amount: p.amount })));
   // Disbursements happen only after everything has been collected AND the bills paid, so anchor
   // undated/residual outbound transfers to the latest inbound-income day OR bill due-day, whichever
   // is later. Undated bills contribute 0 here — a bill with no due date shouldn't push the payout later.
@@ -179,8 +196,8 @@ export function buildMoneyPlan(input: {
   for (const t of inbound) {
     // What the debtor still owes the hub: their net less anything already paid — including any part they
     // paid a creditor DIRECTLY (that money never comes to the hub, so it must not be collected again).
-    const paidDirect = Math.round((t.payments ?? []).filter((p) => p.toId != null && p.toId !== t.toId).reduce((a, p) => a + p.amount, 0) * 100) / 100;
-    const remaining = Math.max(0, Math.round((t.amount - paidDirect) * 100) / 100);
+    const paidDirect = paidDirectBy.get(t.fromId) ?? 0;
+    const remaining = inboundLeft(t);
     if (paidDirect > 0.005 && remaining <= 0.005) continue; // all of it went direct — the debtor → creditor done line is the record
     steps.push({
       id: `xfer-${t.fromId}-${t.toId}`, kind: "transfer-in", day: inboundDay.get(t.fromId) ?? null,
@@ -204,6 +221,8 @@ export function buildMoneyPlan(input: {
         // A direct payment shows as the debtor → creditor line it was (not hub → creditor).
         fromId: p.fromId ?? t.fromId, toId: t.toId, fromName: p.fromId != null && p.fromId !== t.fromId ? nameById.get(p.fromId) ?? t.from : t.from, toName: t.to, recordId: p.id,
         ...(p.fromId != null && p.fromId !== t.fromId ? { reroute: true } : {}),
+        // a paid FUNDING piece (disb-…) keeps its place just before the bill it funded, as when it was pending
+        ...(p.key?.startsWith("disb-") ? { fundsMember: true } : {}),
       });
     }
   }
@@ -323,6 +342,7 @@ export function buildMoneyPlan(input: {
       ...incomeOf(creditorId).map((e) => ({ ...e, in: true, done: false, key: undefined as string | undefined })),
       // Tagged funding lands as an inflow to the payer right before the funded bill, shrinking its need.
       ...(fundingEventsByPayer.get(creditorId) ?? []).map((e) => ({ day: e.day, amount: e.amount, in: true, done: false, key: undefined as string | undefined })),
+      ...receivedBy(creditorId).map((e) => ({ day: e.day, amount: e.amount, in: true, done: false, key: undefined as string | undefined })),
       ...cashBillsOf(creditorId).map((e) => ({ ...e, in: false })),
     ].sort((a, b) => a.day - b.day || (a.in === b.in ? 0 : a.in ? -1 : 1)); // income lands before you pay, same day
     let self = 0;
@@ -340,11 +360,11 @@ export function buildMoneyPlan(input: {
   // minus the treasurer's own cash bills and any already-settled disbursements.
   const hubCashBy = cashBy([
     ...incomeOf(treasurerId ?? -1),
-    ...inbound.map((t) => ({ day: inboundDay.get(t.fromId) ?? null, amount: t.amount })),
+    ...inbound.map((t) => ({ day: inboundDay.get(t.fromId) ?? null, amount: inboundLeft(t) })), // less what went direct to a creditor
     // An UNDATED bill has no deadline, so it can't pull the hub's cash early — treat it as month-end
     // (matches cashBillsOf and the "no date sorts last" display). Without this it counted at day 0.
     ...bills.filter((b) => !b.fund && !b.cardBill && b.payerId === treasurerId).map((b) => ({ day: b.day ?? lastDay, amount: -b.amount })),
-    ...outbound.filter((o) => o.settled).map((o) => ({ day: 0 as number | null, amount: -paidOf(o) })), // only what actually left the hub
+    ...outbound.filter((o) => o.settled).map((o) => ({ day: 0 as number | null, amount: -hubPaidOf(o) })), // only what actually left the hub (not direct payments)
   ]);
   // A debtor's collection that is instead paid DIRECT to a creditor (see the direct-match pass) never
   // reaches the hub — so the hub's available cash from a given day on must EXCLUDE it. Keyed by the
@@ -361,7 +381,7 @@ export function buildMoneyPlan(input: {
   // cash in hand then − ALL their own cash bills (never leave them short) − what they've already lent,
   // capped by the net they owe the hub anyway (lending replaces that payment).
   const debtorState = inbound.map((t) => ({
-    id: t.fromId, name: t.from, netRemaining: t.amount,
+    id: t.fromId, name: t.from, netRemaining: inboundLeft(t), // less what they already paid creditors directly
     cashBy: cashBy(incomeOf(t.fromId)), ownBills: cashBillsOf(t.fromId).filter((b) => !b.done).reduce((s, b) => s + b.amount, 0), // negative sum, unpaid only
     // The day this debtor's cash is COLLECTED to the hub. Reroute only draws cash they still hold —
     // once collected (need.day ≥ this), the money is the hub's and step 1 already funds from it. Without
