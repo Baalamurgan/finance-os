@@ -1,4 +1,4 @@
-import { piggyHeldParts } from "@/lib/piggyHeld";
+import { piggyHeldParts, splitPiggyLump } from "@/lib/piggyHeld";
 import { unstable_cache } from "next/cache";
 import { prisma } from "@/lib/prisma";
 import { FAMILY_TAG } from "@/lib/revalidate";
@@ -877,15 +877,35 @@ export async function getMoneyPlan(householdId: number, periodId: number, inhand
     const ordered = [...batches.values()].sort((a, b) => a.earliest.getTime() - b.earliest.getTime());
     const holderName = nameById.get(piggyHolderId) ?? "Piggy holder";
     const treasName = nameById.get(inhand.treasurerId) ?? "treasurer";
+    // Part of the OPEN batch that came out of the pending lump the owners still hold goes owner → treasurer
+    // directly (see getInHand); the holder only hands over what is genuinely in their own hands.
+    const fromOwners = inhand.piggyIncomeFromOwners ?? [];
+    const ownersTotal = Math.round(fromOwners.reduce((t, o) => t + o.amount, 0) * 100) / 100;
     ordered.forEach((g, idx) => {
       if (g.amount <= 0.005) return;
       const refDate = g.at ?? g.earliest; // done batch dated when handed over; open batch dated its earliest withdrawal
       const day = istDay(refDate);
       const st = dayStatus(day);
+      const isOpen = g.at == null;
+      const viaOwners = isOpen ? Math.min(ownersTotal, g.amount) : 0;
+      if (isOpen) {
+        for (const o of fromOwners) {
+          if (o.amount <= 0.005 || o.id === inhand.treasurerId) continue;
+          piggyBatchHandovers.push({
+            key: `piggyincome-open-from-${o.id}`,
+            fromId: o.id, fromName: o.name, toId: inhand.treasurerId as number, toName: treasName,
+            amount: o.amount, detail: "last month's Piggy → income",
+            recordIds: [], piggyIncomeIds: g.ids, done: false,
+            day, status: st?.status ?? null, days: st?.days ?? null,
+          });
+        }
+      }
+      const holderAmt = Math.round((g.amount - viaOwners) * 100) / 100;
+      if (holderAmt <= 0.005) return;
       piggyBatchHandovers.push({
         key: `piggyincome-${g.at ? g.at.getTime() : "open"}`,
         fromId: piggyHolderId, fromName: holderName, toId: inhand.treasurerId as number, toName: treasName,
-        amount: g.amount, detail: `from Piggy${ordered.length > 1 ? ` · batch ${idx + 1}` : ""}`,
+        amount: holderAmt, detail: `from Piggy${ordered.length > 1 ? ` · batch ${idx + 1}` : ""}`,
         recordIds: [], piggyIncomeIds: g.ids, done: g.at != null,
         day, status: st?.status ?? null, days: st?.days ?? null,
       });
@@ -1680,7 +1700,7 @@ export async function _getInHand(householdId: number, periodId: number, settleme
     const personal = Math.round((netHeld + sinkingHeld) * 100) / 100;
     return {
       memberId: key, name, cats, unpaidBills, paidBills, earmarked, unpaidPeriodic, paidPeriodic, carried, carriedDue,
-      sinkingFunds, sinkingHeld, pendingPiggyHeld, pendingCardBills: pendingCards,
+      sinkingFunds, sinkingHeld, pendingPiggyHeld, pendingPiggyToPool: key != null ? (piggyToPoolByOwner.get(key) ?? 0) : 0, pendingCardBills: pendingCards,
       budgetRemaining, unpaidTotal, earmarkedTotal, miscSpent,
       cashSpent: key != null ? cashSpentByMember.get(key) ?? 0 : 0, // real cash spent this month (non-credit) — for the holding-now ledger
       // Itemised cash/prepaid spends by category (Σ === cashSpent) for the v2 cash-flow ledger — one-offs
@@ -1750,10 +1770,27 @@ export async function _getInHand(householdId: number, periodId: number, settleme
     piggyOwnerSlices.set(owner, Math.round(((piggyOwnerSlices.get(owner) ?? 0) + e.amount) * 100) / 100);
   }
   const piggyHandedOver = priorPeriod?.piggyHandedOverAt != null;
-  // Balance-affecting: the owners physically hold the slice only until it's handed over (then it's the
-  // holder's). So once handed over this is empty — keeping every in-hand balance / lump exactly as before.
-  const pendingByOwner = piggyHandedOver ? new Map<number, number>() : piggyOwnerSlices;
-  const pendingPiggyLump = Math.round([...pendingByOwner.values()].reduce((s, v) => s + v, 0) * 100) / 100;
+  const r2 = (n: number) => Math.round(n * 100) / 100;
+  // PIGGY TAKEN AS INCOME this month (Use Piggy → a "From Piggy" income row): that cash has to reach the
+  // treasurer. But if it was drawn against the PENDING lump — the balance the owners still physically hold,
+  // not yet handed to the Piggy holder — it never passes through the holder at all: the OWNER hands it
+  // straight to the treasurer. Counting that lump as still "to hand to the holder" after the balance has
+  // already dropped is what drove the holder's General Piggy negative (−₹3,310) and scheduled a pointless
+  // owner → holder → treasurer chain. The part of the lump not backed by the remaining Piggy balance is
+  // therefore "consumed": routed owner → treasurer; only the rest is still handed to the holder.
+  const piggyIncomeRows = await prisma.incomeEntry.findMany({ where: { periodId, note: PIGGY_INCOME_NOTE }, select: { amount: true, receivedAt: true } });
+  const piggyIncomeAll = r2(piggyIncomeRows.reduce((t, r) => t + r.amount, 0));
+  const piggyIncomeOpen = r2(piggyIncomeRows.filter((r) => r.receivedAt == null).reduce((t, r) => t + r.amount, 0));
+  const split = splitPiggyLump({ slices: piggyOwnerSlices, handedOver: piggyHandedOver, piggyBalance: piggy.generalTotal, incomeAll: piggyIncomeAll, incomeOpen: piggyIncomeOpen });
+  // owner → still to hand to the Piggy holder / consumed as income (to the treasurer, still held)
+  const piggyToHolderByOwner = split.toHolder;
+  const piggyToPoolByOwner = split.toPool;
+  // Balance-affecting: what each owner physically HOLDS of it — the part still going to the holder plus the
+  // consumed part not yet received by the treasurer. Handed over → empty, exactly as before.
+  const pendingByOwner = split.held;
+  // The lump still owed to the HOLDER (excludes the consumed part) — drives the holder's General Piggy and the
+  // owner → holder hand-over step.
+  const pendingPiggyLump = split.lumpToHolder;
 
   // Prior-month cash a member still HOLDS that became this month's pool income (their budget leftover
   // routed to income, and/or the general Piggy taken as income) — each must be handed to the treasurer.
@@ -1889,7 +1926,7 @@ export async function _getInHand(householdId: number, periodId: number, settleme
   })();
   // Owners still holding a slice of last month's leftover — each hands their bit to the Piggy holder.
   // Exposed so the Money-plan hand-over step can read "<owner> → <holder>" (not just the holder).
-  const pendingOwners = [...pendingByOwner.entries()].map(([id, amount]) => ({ id, name: nameOf(id), amount }));
+  const pendingOwners = [...piggyToHolderByOwner.entries()].filter(([, amount]) => amount > 0.005).map(([id, amount]) => ({ id, name: nameOf(id), amount }));
   const pendingPiggyHandover =
     priorPeriod && !piggyHandedOver && pendingPiggyLump > 0.005
       ? { priorPeriodId: priorPeriod.id, lump: pendingPiggyLump, day: handoverDay, owners: pendingOwners }
@@ -1897,13 +1934,15 @@ export async function _getInHand(householdId: number, periodId: number, settleme
   // The hand-over STEP descriptor — present whether still pending OR already handed over (done), so the
   // Money-Plan row stays visible and strikes through when ticked, rather than disappearing. Built from the
   // full slices (not the balance-gated pendingByOwner); purely a display driver (piggy steps move no cash).
-  const handoverOwners = [...piggyOwnerSlices.entries()].map(([id, amount]) => ({ id, name: nameOf(id), amount }));
-  const handoverLump = Math.round([...piggyOwnerSlices.values()].reduce((s, v) => s + v, 0) * 100) / 100;
+  const handoverOwners = [...piggyOwnerSlices.entries()].map(([id, amount]) => ({ id, name: nameOf(id), amount: piggyHandedOver ? amount : piggyToHolderByOwner.get(id) ?? amount })).filter((o) => o.amount > 0.005);
+  const handoverLump = r2(handoverOwners.reduce((t, o) => t + o.amount, 0));
+  // The consumed part: handed by the OWNER straight to the treasurer as this month's income (no holder in between).
+  const piggyIncomeFromOwners = [...piggyToPoolByOwner.entries()].map(([id, amount]) => ({ id, name: nameOf(id), amount }));
   const piggyHandoverStep =
     priorPeriod && handoverLump > 0.005
       ? { priorPeriodId: priorPeriod.id, lump: handoverLump, day: handoverDay, owners: handoverOwners, done: piggyHandedOver }
       : null;
-  return { byPerson, shared, allowances, piggyTotal, generalPiggy: piggy.generalTotal, treasurerId, piggyHolderId, monthBalance, treasurerPool, poolHoldsForMembers, pendingPiggyHandover, piggyHandoverStep, poolHandovers, poolIncoming, treasurerOwnLeftover };
+  return { byPerson, shared, allowances, piggyTotal, generalPiggy: piggy.generalTotal, treasurerId, piggyHolderId, monthBalance, treasurerPool, poolHoldsForMembers, pendingPiggyHandover, piggyHandoverStep, piggyIncomeFromOwners, poolHandovers, poolIncoming, treasurerOwnLeftover };
 }
 
 /**

@@ -89,6 +89,7 @@ export function InHandPersonGroup({
   // double-counting — exactly as it already is for the treasurer.
   ownerChargeActive?: boolean;
 }) {
+  const piggyToPool = group.pendingPiggyToPool ?? 0; // part of pendingPiggyHeld that was taken as income → goes to the treasurer, not the holder
   const { name, cats, unpaidBills, paidBills, earmarked, earmarkedTotal, sinkingFunds, sinkingHeld, unpaidPeriodic, paidPeriodic, carried, carriedDue, miscSpent, net, pendingPiggyHeld, pendingCardBills, cashSpent, cardSpent, yetToReceive, selfFundsBills } = group;
   // Family/others' spends the member fronted on their OWN CREDIT card. NOT subtracted from the headline —
   // the bank fronts the cash, so no money left their hand (they owe the card AND are owed by the family =
@@ -320,7 +321,8 @@ export function InHandPersonGroup({
                   {carriedFreeHeld > 0.005 && <li className="flex items-center justify-between gap-2"><a href="/piggy" title="This goes to the Piggy — open the Piggy tab" className={piggyLink}>🐷 Free → Piggy{carr} ↗</a><span className="shrink-0 tabular-nums text-pink-700">{formatINR(carriedFreeHeld)}</span></li>}
                   {sinkingFunds.map((f) => <li key={`v3cs${f.name}`} className="flex items-center justify-between gap-2"><span className="truncate text-indigo-600">🏦 Sinking for {f.name}</span><span className="shrink-0 tabular-nums text-indigo-700">{formatINR(f.amount)}</span></li>)}
                   {isPiggyHolder && Math.abs(piggyAmt) > 0.005 && <li className="flex items-center justify-between gap-2"><a href="/piggy" title="Open the Piggy tab" className={piggyLink}>🐷 General Piggy <span className="text-slate-400">· role money ↗</span></a><span className="shrink-0 tabular-nums text-pink-700">{formatINR(piggyAmt)}</span></li>}
-                  {pendingPiggyHeld > 0.005 && <li className="flex items-center justify-between gap-2"><a href="/piggy" title="Open the Piggy tab" className={piggyLink}>🐷 Piggy to hand over <span className="text-slate-400">· held ↗</span></a><span className="shrink-0 tabular-nums text-pink-700">{formatINR(pendingPiggyHeld)}</span></li>}
+                  {pendingPiggyHeld - piggyToPool > 0.005 && <li className="flex items-center justify-between gap-2"><a href="/piggy" title="Open the Piggy tab" className={piggyLink}>🐷 Piggy to hand over <span className="text-slate-400">· held ↗</span></a><span className="shrink-0 tabular-nums text-pink-700">{formatINR(pendingPiggyHeld - piggyToPool)}</span></li>}
+                  {piggyToPool > 0.005 && <li className="flex items-center justify-between gap-2"><a href="/piggy" title="Taken from the Piggy as this month's income" className={piggyLink}>🐷 Piggy used as income <span className="text-slate-400">· → treasurer ↗</span></a><span className="shrink-0 tabular-nums text-pink-700">{formatINR(piggyToPool)}</span></li>}
                   {incomeReceived && cats.map((cat) => (
                     <Fragment key={`v3hb${cat.id}`}>
                       <li className="flex items-center justify-between gap-2"><span className="truncate text-slate-500">{cat.name}</span><span className="shrink-0 tabular-nums text-slate-400">spent {formatINR(cat.spent)}/{formatINR(cat.allocation)} · <b className={cat.remaining < 0 ? "text-red-600" : "text-slate-600"}>{formatINR(cat.remaining)}</b></span></li>
@@ -463,8 +465,11 @@ export function InHandPersonGroup({
             {sinkingHeld > 0.005 && (
               <li className="flex items-center justify-between gap-2 text-xs"><span className="truncate text-indigo-600">🏦 Sinking / set-asides held</span><span className="shrink-0 tabular-nums text-indigo-700">{money(sinkingHeld)}</span></li>
             )}
-            {pendingPiggyHeld > 0.005 && (
-              <li className="flex items-center justify-between gap-2 text-xs"><span className="truncate text-pink-600">🐷 Last month&apos;s Piggy held</span><span className="shrink-0 tabular-nums text-pink-700">{money(pendingPiggyHeld)}</span></li>
+            {pendingPiggyHeld - piggyToPool > 0.005 && (
+              <li className="flex items-center justify-between gap-2 text-xs"><span className="truncate text-pink-600">🐷 Last month&apos;s Piggy held</span><span className="shrink-0 tabular-nums text-pink-700">{money(pendingPiggyHeld - piggyToPool)}</span></li>
+            )}
+            {piggyToPool > 0.005 && (
+              <li className="flex items-center justify-between gap-2 text-xs"><span className="truncate text-pink-600">🐷 Piggy used as income <span className="text-[10px] text-slate-400">→ treasurer</span></span><span className="shrink-0 tabular-nums text-pink-700">{money(piggyToPool)}</span></li>
             )}
             {selfFundsBills && shownBills.map((b) => (
               <li key={`shb${b.id}`} className="flex items-center justify-between gap-2 text-xs"><span className="truncate text-slate-500">Held for {b.name}</span><span className="shrink-0 tabular-nums text-slate-600">{money(b.amount)}</span></li>
@@ -683,10 +688,16 @@ export function InHandPersonGroup({
           </li>
         )}
         {/* Owner still holding last month's Piggy leftover, to hand to the holder (this IS in their total). */}
-        {pendingPiggyHeld > 0.005 && (
+        {pendingPiggyHeld - piggyToPool > 0.005 && (
           <li className="flex items-center justify-between gap-2 text-xs">
             <span className="truncate text-amber-600">🐷 holding for Piggy <span className="text-[10px] text-slate-400">hand to the holder</span></span>
-            <span className="shrink-0 tabular-nums font-medium text-amber-700">{formatINR(pendingPiggyHeld)}</span>
+            <span className="shrink-0 tabular-nums font-medium text-amber-700">{formatINR(pendingPiggyHeld - piggyToPool)}</span>
+          </li>
+        )}
+        {piggyToPool > 0.005 && (
+          <li className="flex items-center justify-between gap-2 text-xs">
+            <span className="truncate text-amber-600">🐷 Piggy taken as income <span className="text-[10px] text-slate-400">hand to the treasurer</span></span>
+            <span className="shrink-0 tabular-nums font-medium text-amber-700">{formatINR(piggyToPool)}</span>
           </li>
         )}
         {/* Prior-month cash this member still HOLDS that became this month's pool income — their budget

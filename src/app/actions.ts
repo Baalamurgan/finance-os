@@ -1446,7 +1446,10 @@ export async function togglePiggyHandover(formData: FormData) {
   const householdId = incs[0].period.householdId;
   const hh = await prisma.household.findUnique({ where: { id: householdId }, select: { piggyHolderMemberId: true } });
   const isHolder = memberId != null && hh?.piggyHolderMemberId != null && memberId === hh.piggyHolderMemberId;
-  if (!(await canEdit()) && !isHolder) { log.warn("togglePiggyHandover", "blocked", { outcome: "blocked", reason: "not-allowed", memberId, periodId }); return; }
+  // An owner still holding last month's Piggy leftover that was taken as income hands it to the treasurer
+  // directly, so a category owner may tick their own hand-over too.
+  const isOwner = memberId != null && (await prisma.category.count({ where: { householdId, responsibleMemberId: memberId } })) > 0;
+  if (!(await canEdit()) && !isHolder && !isOwner) { log.warn("togglePiggyHandover", "blocked", { outcome: "blocked", reason: "not-allowed", memberId, periodId }); return; }
   if (!(await canEdit()) && !(await periodOpen(periodId))) { log.warn("togglePiggyHandover", "blocked", { outcome: "blocked", reason: "period-locked", memberId, periodId }); return; }
   const allDone = incs.every((i) => i.receivedAt != null);
   await prisma.incomeEntry.updateMany({ where: { id: { in: ids } }, data: { receivedAt: allDone ? null : new Date() } });
