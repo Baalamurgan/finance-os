@@ -43,7 +43,7 @@ export default async function PersonalPlanPage({
 
   // Materialise this month's plan steps from the templates (idempotent), then load them.
   await ensurePlanSteps(c.member.id, c.selected.id);
-  const [wallet, dues, cash, savings, bills, owed, transfers, steps] = await Promise.all([
+  const [wallet, dues, cash, savings, bills, owed, transfers, steps, allAccts] = await Promise.all([
     getWalletAccounts(c.member.id),
     getCardDues(c.member.id),
     getPersonalCash({ id: c.selected.id, income: c.selected.income, carryForward: c.selected.carryForward }),
@@ -62,7 +62,12 @@ export default async function PersonalPlanPage({
     }),
     prisma.personalPlanStep.findMany({
       where: { periodId: c.selected.id },
-      select: { id: true, kind: true, label: true, amount: true, dayOfMonth: true, status: true, templateKind: true, fromAccountId: true, toAccountId: true, sortOrder: true },
+      select: { id: true, kind: true, label: true, amount: true, dayOfMonth: true, status: true, templateKind: true, method: true, fromAccountId: true, toAccountId: true, sortOrder: true },
+    }),
+    prisma.financeAccount.findMany({
+      where: { memberId: c.member.id, active: true },
+      orderBy: [{ sortOrder: "asc" }, { id: "asc" }],
+      select: { id: true, name: true, type: true },
     }),
   ]);
 
@@ -73,10 +78,10 @@ export default async function PersonalPlanPage({
   const totalInAccounts = balAccts.reduce((s, a) => s + a.balance, 0);
 
   // This month's executable plan steps (generated from templates + one-offs), account names resolved.
-  const accountNameById = new Map(wallet.map((w) => [w.account.id, w.account.name]));
+  const accountNameById = new Map(allAccts.map((a) => [a.id, a.name]));
   const stepViews: PlanStepView[] = orderSteps(steps).map((s) => ({
     id: s.id, kind: s.kind, label: s.label, amount: s.amount, dayOfMonth: s.dayOfMonth, status: s.status,
-    templateKind: s.templateKind,
+    templateKind: s.templateKind, method: s.method, fromId: s.fromAccountId, toId: s.toAccountId,
     fromName: s.fromAccountId == null ? null : accountNameById.get(s.fromAccountId) ?? null,
     toName: s.toAccountId == null ? null : accountNameById.get(s.toAccountId) ?? null,
   }));
@@ -150,7 +155,7 @@ export default async function PersonalPlanPage({
         </section>
 
         {/* This month's executable plan steps (income · transfers · saves), ticked as they happen */}
-        <PersonalPlanSteps steps={stepViews} accounts={balAccts.map((a) => ({ id: a.id, name: a.name }))} periodId={c.selected.id} />
+        <PersonalPlanSteps steps={stepViews} accounts={allAccts} periodId={c.selected.id} />
 
         {/* Still to pay this month (flow) */}
         <section className="rounded-2xl border border-slate-200 bg-white p-4">

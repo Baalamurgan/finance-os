@@ -1137,6 +1137,16 @@ async function ownBalanceAccountId(memberId: number, raw: FormDataEntryValue | n
   return a && BALANCE_ACCOUNT_TYPES.has(a.type) ? a.id : null;
 }
 
+const PLAN_METHODS = new Set(["upi", "cash", "card", "other"]);
+const STEP_MARK = (stepId: number) => `__planstep__:${stepId}`;
+
+// Resolve a form field to ANY of the member's own active accounts (bank, cash, debit/prepaid/credit card).
+async function ownAccount(memberId: number, raw: FormDataEntryValue | null): Promise<{ id: number; type: string } | null> {
+  const id = Number(raw);
+  if (!id) return null;
+  return prisma.financeAccount.findFirst({ where: { id, memberId, active: true }, select: { id: true, type: true } });
+}
+
 // Undo a done step's ledger effect (shared by untick + deleting a done one-off). Leaves the step row alone.
 async function reversePlanStepEffect(tx: Prisma.TransactionClient, step: PlanStepRow, memberId: number) {
   if (step.kind === "income") {
@@ -1153,12 +1163,24 @@ async function reversePlanStepEffect(tx: Prisma.TransactionClient, step: PlanSte
     if (step.savingsId) await tx.personalSavings.deleteMany({ where: { id: step.savingsId, memberId } });
   } else if (step.kind === "expense") {
     if (step.templateId) await tx.personalExpense.updateMany({ where: { id: step.templateId, memberId }, data: { pending: true } });
+    await tx.accountTransaction.deleteMany({ where: { memberId, category: STEP_MARK(step.id) } });
   } else if (step.kind === "spend") {
+    await tx.accountTransaction.deleteMany({ where: { memberId, category: STEP_MARK(step.id) } });
     if (step.templateId) {
       await tx.personalSpend.updateMany({ where: { id: step.templateId, memberId }, data: { pending: true } });
       await tx.accountTransaction.deleteMany({ where: { personalSpendId: step.templateId } });
     }
   }
+}
+
+// A bill/spend paid from a bank or cash account (not a card — card rows post their own mirror): debit that
+// account with a step-marked ledger line so the balance moves; untick deletes it by the marker.
+async function postStepOutflow(tx: Prisma.TransactionClient, memberId: number, step: PlanStepRow, date: Date, amount: number) {
+  if (!step.fromAccountId) return;
+  const from = await tx.financeAccount.findFirst({ where: { id: step.fromAccountId, memberId, active: true }, select: { id: true, type: true } });
+  if (!from || (from.type !== "bank" && from.type !== "cash")) return;
+  await tx.accountTransaction.deleteMany({ where: { memberId, category: STEP_MARK(step.id) } });
+  await tx.accountTransaction.create({ data: { memberId, accountId: from.id, date, merchant: step.label, amount, type: "spend", category: STEP_MARK(step.id), source: "manual" } });
 }
 
 export async function tickPlanStep(formData: FormData) {
@@ -1208,6 +1230,7 @@ export async function tickPlanStep(formData: FormData) {
     } else if (step.kind === "expense") {
       // Bill executed → the recurring row now counts in Can-spend.
       if (step.templateId) await tx.personalExpense.updateMany({ where: { id: step.templateId, memberId: member.id }, data: { pending: false } });
+      await postStepOutflow(tx, member.id, step, date, amt);
       await tx.personalPlanStep.update({ where: { id: step.id }, data: { status: "done", doneAt: date } });
     } else if (step.kind === "spend") {
       // Spend executed → counts in Can-spend; if on a card/balance account, post the ledger mirror.
@@ -1221,6 +1244,8 @@ export async function tickPlanStep(formData: FormData) {
               update: { amount: spend.amount, merchant: step.label, accountId: spend.cardAccountId },
               create: { memberId: member.id, accountId: spend.cardAccountId, date, merchant: step.label, amount: spend.amount, type: "spend", category: null, source: "personal", personalSpendId: spend.id },
             });
+          } else {
+            await postStepOutflow(tx, member.id, step, date, Math.round(spend.amount * 100) / 100);
           }
         }
       }
@@ -1241,6 +1266,47 @@ export async function untickPlanStep(formData: FormData) {
     await tx.personalPlanStep.update({ where: { id: step.id }, data: { status: "pending", doneAt: null, transferOutId: null, transferInId: null, savingsId: null } });
   });
   rev();
+}
+
+// Set HOW a step moves and WHICH accounts it runs between (sender = from, receiver = to). Allowed until it is
+// done (untick first to change a done one). Transfers need two own balance accounts; an income's receiver must
+// be a balance account; a bill/spend's sender can be any own account — a card sender is written onto the
+// underlying row's cardAccountId (card-deferred accounting), a bank/cash sender is posted at tick.
+export async function setPlanStepRoute(prev: PersonalSaveState, formData: FormData): Promise<PersonalSaveState> {
+  const n = (prev?.n ?? 0) + 1;
+  const member = await me();
+  if (!member) return { ok: false, error: "Signed out.", n };
+  const id = Number(formData.get("id"));
+  const step = await prisma.personalPlanStep.findFirst({ where: { id, memberId: member.id } });
+  if (!step) return { ok: false, error: "Step not found.", n };
+  if (step.status === "done") return { ok: false, error: "Untick it first to change accounts.", n };
+  const methodRaw = String(formData.get("method") ?? "");
+  const method = PLAN_METHODS.has(methodRaw) ? methodRaw : null;
+  const from = await ownAccount(member.id, formData.get("fromAccountId"));
+  const to = await ownAccount(member.id, formData.get("toAccountId"));
+  let fromId: number | null = from?.id ?? null;
+  let toId: number | null = to?.id ?? null;
+  if (step.kind === "transfer") {
+    if (fromId && !BALANCE_ACCOUNT_TYPES.has(from!.type)) return { ok: false, error: "A transfer's sender must be a bank, cash or wallet account.", n };
+    if (toId && !BALANCE_ACCOUNT_TYPES.has(to!.type)) return { ok: false, error: "A transfer's receiver must be a bank, cash or wallet account.", n };
+    if (fromId && toId && fromId === toId) return { ok: false, error: "Pick two different accounts.", n };
+  } else if (step.kind === "income") {
+    fromId = null;
+    if (toId && !BALANCE_ACCOUNT_TYPES.has(to!.type)) return { ok: false, error: "Income can only be received into a bank, cash or wallet account.", n };
+  } else {
+    toId = null; // save / bill / spend: the receiver is the savings pot / the biller, not one of your accounts
+  }
+  await prisma.$transaction(async (tx) => {
+    await tx.personalPlanStep.update({ where: { id: step.id }, data: { method, fromAccountId: fromId, toAccountId: toId } });
+    if (step.templateId && (step.kind === "expense" || step.kind === "spend")) {
+      const isCard = from != null && from.type !== "bank" && from.type !== "cash"; // credit / debit / prepaid card
+      const cardId = isCard ? fromId : null;
+      if (step.kind === "expense") await tx.personalExpense.updateMany({ where: { id: step.templateId, memberId: member.id }, data: { cardAccountId: cardId } });
+      else await tx.personalSpend.updateMany({ where: { id: step.templateId, memberId: member.id }, data: { cardAccountId: cardId } });
+    }
+  });
+  rev();
+  return { ok: true, n };
 }
 
 // Re-date a step within the month (1–28, or blank = anytime). Allowed whether pending or done.
@@ -1283,7 +1349,9 @@ export async function addPlanStep(prev: PersonalSaveState, formData: FormData): 
   if (!label) return { ok: false, error: "Name the step.", n };
   if (!amount || amount <= 0) return { ok: false, error: "Enter an amount.", n };
   if (!(await ownsPeriod(member.id, periodId))) return { ok: false, error: "Not your month.", n };
-  const fromAccountId = await ownBalanceAccountId(member.id, formData.get("fromAccountId"));
+  const methodRaw = String(formData.get("method") ?? "");
+  const method = PLAN_METHODS.has(methodRaw) ? methodRaw : null;
+  const fromAccountId = kind === "transfer" ? await ownBalanceAccountId(member.id, formData.get("fromAccountId")) : (await ownAccount(member.id, formData.get("fromAccountId")))?.id ?? null;
   const toAccountId = await ownBalanceAccountId(member.id, formData.get("toAccountId"));
   if (kind === "transfer") {
     if (!fromAccountId || !toAccountId) return { ok: false, error: "Pick both accounts.", n };
@@ -1292,7 +1360,7 @@ export async function addPlanStep(prev: PersonalSaveState, formData: FormData): 
   await prisma.personalPlanStep.create({
     data: {
       memberId: member.id, periodId, kind, label: label.slice(0, 80), amount: Math.round(amount * 100) / 100,
-      dayOfMonth, fromAccountId: kind === "income" ? null : fromAccountId, toAccountId: kind === "save" ? null : toAccountId,
+      dayOfMonth, method, fromAccountId: kind === "income" ? null : fromAccountId, toAccountId: kind === "save" ? null : toAccountId,
       note: String(formData.get("note") ?? "").trim().slice(0, 120) || null, templateKind: null, templateId: null,
     },
   });

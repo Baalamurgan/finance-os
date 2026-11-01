@@ -2,7 +2,7 @@
 
 import { useActionState, useEffect, useRef, useState } from "react";
 import {
-  tickPlanStep, untickPlanStep, redatePlanStep, setPlanStepSkipped, addPlanStep, deletePlanStep,
+  tickPlanStep, untickPlanStep, redatePlanStep, setPlanStepRoute, setPlanStepSkipped, addPlanStep, deletePlanStep,
   type PersonalSaveState,
 } from "@/app/personal/actions";
 import { useToast } from "@/components/Toast";
@@ -10,17 +10,36 @@ import { formatINR } from "@/lib/format";
 
 export type PlanStepView = {
   id: number; kind: string; label: string; amount: number; dayOfMonth: number | null;
-  status: string; templateKind: string | null; fromName: string | null; toName: string | null;
+  status: string; templateKind: string | null; method: string | null;
+  fromId: number | null; toId: number | null; fromName: string | null; toName: string | null;
 };
-type Acct = { id: number; name: string };
+type Acct = { id: number; name: string; type: string };
+
+const METHODS = [
+  { key: "upi", label: "UPI / bank", icon: "📲", types: ["bank", "debit_card", "prepaid_card"] },
+  { key: "cash", label: "Cash", icon: "💵", types: ["cash"] },
+  { key: "card", label: "Card", icon: "💳", types: ["credit_card", "debit_card", "prepaid_card"] },
+  { key: "other", label: "Other", icon: "•••", types: [] as string[] }, // [] = every account
+] as const;
+const methodLabel = (m: string | null) => METHODS.find((x) => x.key === m)?.label ?? null;
+const BALANCE_TYPES = new Set(["bank", "cash", "debit_card", "prepaid_card"]);
+
+// Accounts a picker should offer for a method. Receivers can never be a credit card.
+function offered(accounts: Acct[], method: string | null, receiver: boolean): Acct[] {
+  const m = METHODS.find((x) => x.key === method);
+  const byMethod = !m || m.types.length === 0 ? accounts : accounts.filter((a) => (m.types as readonly string[]).includes(a.type));
+  return receiver ? byMethod.filter((a) => BALANCE_TYPES.has(a.type)) : byMethod;
+}
 
 const KIND_ICON: Record<string, string> = { income: "💰", transfer: "🔁", save: "🐷", expense: "🧾", spend: "🛒" };
 
 function flow(s: PlanStepView): string {
-  if (s.kind === "income") return s.toName ? `received → ${s.toName}` : "received";
-  if (s.kind === "transfer") return `${s.fromName ?? "?"} → ${s.toName ?? "?"}`;
-  if (s.kind === "save") return `${s.fromName ? `${s.fromName} ` : ""}→ savings pot`;
-  if (s.kind === "expense" || s.kind === "spend") return s.fromName ? `from ${s.fromName}` : "from cash / UPI";
+  const via = methodLabel(s.method);
+  const pre = via ? `${via} · ` : "";
+  if (s.kind === "income") return `${pre}${s.toName ? `received → ${s.toName}` : "received · pick an account"}`;
+  if (s.kind === "transfer") return `${pre}${s.fromName ?? "?"} → ${s.toName ?? "?"}`;
+  if (s.kind === "save") return `${pre}${s.fromName ? `${s.fromName} ` : ""}→ savings pot`;
+  if (s.kind === "expense" || s.kind === "spend") return `${pre}${s.fromName ? `from ${s.fromName}` : via ? "" : "pick how you pay"}`.replace(/ · $/, "");
   return "";
 }
 
@@ -49,14 +68,14 @@ export function PersonalPlanSteps({ steps, accounts, periodId }: { steps: PlanSt
         </p>
       ) : (
         <ul className="mt-3 space-y-1.5">
-          {active.map((s) => <StepRow key={s.id} s={s} />)}
+          {active.map((s) => <StepRow key={s.id} s={s} accounts={accounts} />)}
         </ul>
       )}
 
       {skipped.length > 0 && (
         <details className="mt-2">
           <summary className="cursor-pointer text-xs text-slate-400">{skipped.length} skipped this month</summary>
-          <ul className="mt-1.5 space-y-1.5">{skipped.map((s) => <StepRow key={s.id} s={s} />)}</ul>
+          <ul className="mt-1.5 space-y-1.5">{skipped.map((s) => <StepRow key={s.id} s={s} accounts={accounts} />)}</ul>
         </details>
       )}
 
@@ -72,19 +91,24 @@ export function PersonalPlanSteps({ steps, accounts, periodId }: { steps: PlanSt
   );
 }
 
-function StepRow({ s }: { s: PlanStepView }) {
+function StepRow({ s, accounts }: { s: PlanStepView; accounts: Acct[] }) {
+  const [routing, setRouting] = useState(false);
   const done = s.status === "done";
   const skipped = s.status === "skipped";
   const isOneOff = s.templateKind == null;
+  const needsAccounts = s.kind === "transfer" && (s.fromId == null || s.toId == null);
+  const canEditRoute = !done && !skipped;
   return (
-    <li className={`flex items-center gap-2.5 rounded-lg border p-2.5 ${done ? "border-emerald-100 bg-emerald-50/60" : skipped ? "border-slate-100 bg-slate-50 opacity-70" : "border-slate-100"}`}>
+    <li className="space-y-2"><div className={`flex items-center gap-2.5 rounded-lg border p-2.5 ${done ? "border-emerald-100 bg-emerald-50/60" : skipped ? "border-slate-100 bg-slate-50 opacity-70" : "border-slate-100"}`}>
       {!skipped && (
         <form action={done ? untickPlanStep : tickPlanStep}>
           <input type="hidden" name="id" value={s.id} />
           <button
             type="submit"
+            disabled={!done && needsAccounts}
+            title={!done && needsAccounts ? "Pick the sender and receiver account first" : undefined}
             aria-label={done ? "Mark not done" : "Mark done"}
-            className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full border text-xs transition-colors ${done ? "border-emerald-500 bg-emerald-500 text-white" : "border-slate-300 text-transparent hover:border-emerald-400"}`}
+            className={`flex disabled:cursor-not-allowed disabled:opacity-40 h-6 w-6 shrink-0 items-center justify-center rounded-full border text-xs transition-colors ${done ? "border-emerald-500 bg-emerald-500 text-white" : "border-slate-300 text-transparent hover:border-emerald-400"}`}
           >
             ✓
           </button>
@@ -95,7 +119,13 @@ function StepRow({ s }: { s: PlanStepView }) {
           <span className="shrink-0">{KIND_ICON[s.kind] ?? "•"}</span>
           <span className={`truncate text-sm ${done ? "text-slate-500" : "text-slate-800"}`}>{s.label}</span>
         </span>
-        <span className="block truncate text-[11px] text-slate-400">{flow(s)}</span>
+        {canEditRoute ? (
+          <button type="button" onClick={() => setRouting((v) => !v)} className={`block max-w-full truncate text-left text-[11px] underline decoration-dotted underline-offset-2 ${needsAccounts ? "text-amber-600" : "text-slate-400 hover:text-slate-700"}`}>
+            {flow(s) || "set accounts"} ✎
+          </button>
+        ) : (
+          <span className="block truncate text-[11px] text-slate-400">{flow(s)}</span>
+        )}
       </span>
       <span className="shrink-0 text-right">
         <span className={`block tabular-nums text-sm font-semibold ${s.kind === "income" ? "text-emerald-700" : "text-slate-800"}`}>{formatINR(s.amount)}</span>
@@ -120,7 +150,65 @@ function StepRow({ s }: { s: PlanStepView }) {
           </form>
         )}
       </span>
+    </div>
+    {routing && canEditRoute && <RouteEditor s={s} accounts={accounts} onClose={() => setRouting(false)} />}
     </li>
+  );
+}
+
+// Pick HOW the money moves (UPI / cash / card / other) and the sender + receiver accounts for one step.
+function RouteEditor({ s, accounts, onClose }: { s: PlanStepView; accounts: Acct[]; onClose: () => void }) {
+  const toast = useToast();
+  const prevN = useRef(0);
+  const [method, setMethod] = useState<string | null>(s.method);
+  const [state, formAction] = useActionState(setPlanStepRoute, { ok: false, n: 0 } as PersonalSaveState);
+  useEffect(() => {
+    if (state.n > prevN.current) {
+      prevN.current = state.n;
+      if (state.ok) { toast("Accounts saved", "success"); onClose(); } else toast(state.error ?? "Couldn't save", "error");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.n]);
+  const hasFrom = s.kind !== "income";
+  const hasTo = s.kind === "income" || s.kind === "transfer";
+  const fromOpts = offered(accounts, method, false);
+  const toOpts = offered(accounts, method, true);
+  const fromLabel = s.kind === "transfer" ? "Sender account" : s.kind === "save" ? "Paid from (optional)" : "Paid from";
+  return (
+    <form action={formAction} className="space-y-2.5 rounded-lg border border-emerald-100 bg-emerald-50/40 p-3">
+      <input type="hidden" name="id" value={s.id} />
+      <input type="hidden" name="method" value={method ?? ""} />
+      <div className="grid grid-cols-4 gap-1.5">
+        {METHODS.map((m) => (
+          <button key={m.key} type="button" onClick={() => setMethod(method === m.key ? null : m.key)}
+            className={`rounded-lg border px-1 py-1.5 text-[11px] font-medium ${method === m.key ? "border-emerald-500 bg-white text-emerald-700" : "border-slate-200 bg-white text-slate-500"}`}>
+            <span className="block">{m.icon}</span>{m.label}
+          </button>
+        ))}
+      </div>
+      <div className={`grid gap-2 ${hasFrom && hasTo ? "sm:grid-cols-2" : ""}`}>
+        {hasFrom && (
+          <label className="block text-[11px] font-medium text-slate-500">{fromLabel}
+            <select key={`f${method}`} name="fromAccountId" defaultValue={fromOpts.some((a) => a.id === s.fromId) ? s.fromId ?? "" : ""} className="input mt-1 w-full">
+              <option value="">{method === "cash" ? "Cash (no account)" : "— not set —"}</option>
+              {fromOpts.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+            </select>
+          </label>
+        )}
+        {hasTo && (
+          <label className="block text-[11px] font-medium text-slate-500">{s.kind === "income" ? "Received into" : "Receiver account"}
+            <select key={`t${method}`} name="toAccountId" defaultValue={toOpts.some((a) => a.id === s.toId) ? s.toId ?? "" : ""} className="input mt-1 w-full">
+              <option value="">{s.kind === "income" ? "— budget only —" : "— not set —"}</option>
+              {toOpts.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+            </select>
+          </label>
+        )}
+      </div>
+      <div className="flex justify-end gap-2">
+        <button type="button" onClick={onClose} className="rounded-lg border border-slate-200 bg-white px-3 py-1 text-xs text-slate-600">Cancel</button>
+        <button type="submit" className="rounded-lg bg-emerald-600 px-3 py-1 text-xs font-semibold text-white hover:bg-emerald-700">Save</button>
+      </div>
+    </form>
   );
 }
 
@@ -203,7 +291,7 @@ function AddStepModal({ periodId, accounts, onClose }: { periodId: number; accou
                 <label className="text-xs font-medium text-slate-500">{kind === "save" ? "From account (optional)" : "From account"}</label>
                 <select name="fromAccountId" defaultValue="" className="input mt-1 w-full">
                   <option value="">{kind === "save" ? "— (unspecified)" : "Pick an account"}</option>
-                  {accounts.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+                  {(kind === "save" ? accounts : accounts.filter((a) => BALANCE_TYPES.has(a.type))).map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
                 </select>
               </div>
             )}
@@ -212,7 +300,7 @@ function AddStepModal({ periodId, accounts, onClose }: { periodId: number; accou
                 <label className="text-xs font-medium text-slate-500">{kind === "income" ? "Into account (optional)" : "To account"}</label>
                 <select name="toAccountId" defaultValue="" className="input mt-1 w-full">
                   <option value="">{kind === "income" ? "— (budget only)" : "Pick an account"}</option>
-                  {accounts.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+                  {accounts.filter((a) => BALANCE_TYPES.has(a.type)).map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
                 </select>
               </div>
             )}

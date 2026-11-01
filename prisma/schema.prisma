@@ -539,6 +539,9 @@ model PersonalPlanStep {
   dayOfMonth  Int?     // 1–28: when it's due this month (re-dateable); null = anytime
   fromAccountId Int?   // transfer source / save source (raw id; a deleted account is handled in code)
   toAccountId   Int?   // income target / transfer destination
+  // How the money moves: upi | cash | card | other (null = unspecified). Narrows which accounts the
+  // sender/receiver pickers offer (UPI → bank accounts, cash → cash, card → cards).
+  method      String?
   note        String?
   // Provenance so monthly generation is idempotent. templateKind "income" → templateId = PersonalIncome.id;
   // "planitem" → templateId = PersonalPlanItem.id. Both null = a one-off step added this month.
