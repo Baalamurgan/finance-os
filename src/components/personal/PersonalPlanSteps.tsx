@@ -196,10 +196,14 @@ export function PersonalPlanSteps({ steps, accounts, categories, periodId, setup
 
 type PlanItem = { type: "step"; s: PlanStepView } | { type: "clump"; key: string; steps: PlanStepView[] };
 
-// Transfers that share the same sender, receiver, day and state collapse into ONE clump (shown as a single
-// "A → B ₹total" step with its lines inside). The clump sits where its first line sat.
+// Same-route steps collapse into ONE clump (shown as a single step with its lines inside), sitting where its
+// first line sat: transfers with the same sender → receiver, and bills paid from the same account (or all with
+// no account yet), each on the same day and in the same state.
 function clumpSteps(active: PlanStepView[]): PlanItem[] {
-  const keyOf = (s: PlanStepView) => (s.kind === "transfer" && s.fromId != null && s.toId != null ? `${s.fromId}|${s.toId}|${s.dayOfMonth ?? "x"}|${s.status}` : null);
+  const keyOf = (s: PlanStepView) =>
+    s.kind === "transfer" && s.fromId != null && s.toId != null ? `t|${s.fromId}|${s.toId}|${s.dayOfMonth ?? "x"}|${s.status}`
+    : s.kind === "expense" && (s.status === "pending" || s.status === "done") ? `b|${s.fromId ?? "none"}|${s.dayOfMonth ?? "x"}|${s.status}`
+    : null;
   const groups = new Map<string, PlanStepView[]>();
   for (const s of active) { const k = keyOf(s); if (k) groups.set(k, [...(groups.get(k) ?? []), s]); }
   const out: PlanItem[] = [];
@@ -216,26 +220,34 @@ function clumpSteps(active: PlanStepView[]): PlanItem[] {
   return out;
 }
 
-// One step for several same-route transfers: tick once and the real total moves; open it to see, edit or
-// remove the individual lines (gold, APY, FD…).
+// One step for several same-route lines: tick once and the real total moves; open it to see, edit or remove the
+// individual lines (gold, APY, FD, rent…). A bills clump with no account yet asks which account paid it.
 function ClumpRow({ steps, accounts, isFirst, isLast }: { steps: PlanStepView[]; accounts: Acct[]; isFirst: boolean; isLast: boolean }) {
   const [open, setOpen] = useState(false);
+  const [asking, setAsking] = useState(false);
   const first = steps[0];
   const done = first.status === "done";
+  const isBills = first.kind === "expense";
   const total = Math.round(steps.reduce((t, s) => t + s.amount, 0) * 100) / 100;
   const ids = steps.map((s) => s.id).join(",");
+  const needsAcct = isBills && !done && first.fromId == null;
+  const title = isBills ? `Bills · ${first.fromName ? `from ${first.fromName}` : "no account yet"}` : `${first.fromName ?? "?"} → ${first.toName ?? "?"}`;
+  const tickCls = `flex h-6 w-6 shrink-0 items-center justify-center rounded-full border text-xs transition-colors ${done ? "border-emerald-500 bg-emerald-500 text-white" : "border-slate-300 text-transparent hover:border-emerald-400"}`;
   return (
     <div className="space-y-1.5">
       <div className={`flex items-center gap-2.5 rounded-lg border p-2.5 ${done ? "border-emerald-100 bg-emerald-50/60" : "border-slate-100"}`}>
-        <form action={done ? untickPlanStepGroup : tickPlanStepGroup}>
-          <input type="hidden" name="ids" value={ids} />
-          <button type="submit" aria-label={done ? "Mark all not done" : "Mark all done"} title={done ? "Undo — reverses every line" : `Move ${formatINR(total)} — marks every line done`}
-            className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full border text-xs transition-colors ${done ? "border-emerald-500 bg-emerald-500 text-white" : "border-slate-300 text-transparent hover:border-emerald-400"}`}>✓</button>
-        </form>
+        {needsAcct ? (
+          <button type="button" onClick={() => setAsking(true)} aria-label="Mark all paid" title={`Pay ${formatINR(total)} — asks which account`} className={tickCls}>✓</button>
+        ) : (
+          <form action={done ? untickPlanStepGroup : tickPlanStepGroup}>
+            <input type="hidden" name="ids" value={ids} />
+            <button type="submit" aria-label={done ? "Mark all not done" : "Mark all done"} title={done ? "Undo — reverses every line" : `Move ${formatINR(total)} — marks every line done`} className={tickCls}>✓</button>
+          </form>
+        )}
         <button type="button" onClick={() => setOpen((v) => !v)} className="min-w-0 flex-1 text-left" aria-expanded={open}>
           <span className="flex items-center gap-1.5">
-            <span className="shrink-0">🔁</span>
-            <span className={`truncate text-sm font-medium ${done ? "text-slate-500" : "text-slate-800"}`}>{first.fromName ?? "?"} → {first.toName ?? "?"}</span>
+            <span className="shrink-0">{isBills ? "🧾" : "🔁"}</span>
+            <span className={`truncate text-sm font-medium ${done ? "text-slate-500" : "text-slate-800"}`}>{title}</span>
             <span className="shrink-0 rounded-full bg-slate-100 px-1.5 text-[9px] font-medium text-slate-500">{steps.length} items</span>
           </span>
           <span className="block truncate text-[11px] text-slate-400">{steps.map((s) => `${s.label} ${formatINR(s.amount)}`).join(" · ")} <span className="text-slate-300">{open ? "▴" : "▾"}</span></span>
@@ -255,6 +267,23 @@ function ClumpRow({ steps, accounts, isFirst, isLast }: { steps: PlanStepView[];
         <ul className="ml-4 space-y-1.5 border-l-2 border-slate-100 pl-2">
           {steps.map((s) => <li key={s.id}><StepRow s={s} accounts={accounts} isFirst isLast /></li>)}
         </ul>
+      )}
+      {asking && (
+        <Overlay onClose={() => setAsking(false)} title={`Paid: ${steps.length} bills`}>
+          <form action={tickPlanStepGroup} onSubmit={() => setTimeout(() => setAsking(false), 0)} className="space-y-4 px-5 py-4">
+            <input type="hidden" name="ids" value={ids} />
+            <input type="hidden" name="method" value="other" />
+            <p className="text-sm text-slate-500">{formatINR(total)} across {steps.length} bills — which account did you pay from? Each bill is debited from it.</p>
+            <select name="fromAccountId" defaultValue="" className="input w-full">
+              <option value="">No account (just mark paid)</option>
+              {accounts.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+            </select>
+            <div className="flex justify-end gap-2 border-t border-slate-100 pt-3">
+              <button type="button" onClick={() => setAsking(false)} className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm text-slate-600">Cancel</button>
+              <button type="submit" className="rounded-lg bg-emerald-600 px-4 py-1.5 text-sm font-semibold text-white hover:bg-emerald-700">Mark paid</button>
+            </div>
+          </form>
+        </Overlay>
       )}
     </div>
   );

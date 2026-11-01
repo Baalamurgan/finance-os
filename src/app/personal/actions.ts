@@ -1532,7 +1532,8 @@ export async function rebuildPlanSteps(formData: FormData) {
 }
 
 // ── Clumped transfers ─────────────────────────────────────────────────────────────────────────────
-// Several Setup transfers with the same sender, receiver and day are shown as ONE step ("HDFC → SBI ₹22,204")
+// Several Setup transfers with the same sender, receiver and day — or several bills paid from the same account
+// on the same day — are shown as ONE step ("HDFC → SBI ₹22,204")
 // with their lines inside. Ticking / unticking / moving the clump acts on every line in it; each line still
 // posts its own ledger pair (so the account history keeps "gold", "APY", "FD"…), and the balance moves by the sum.
 const idList = (raw: FormDataEntryValue | null) => String(raw ?? "").split(",").map((x) => Number(x.trim())).filter((x) => x > 0);
@@ -1541,6 +1542,11 @@ export async function tickPlanStepGroup(formData: FormData) {
   for (const id of idList(formData.get("ids"))) {
     const fd = new FormData();
     fd.set("id", String(id));
+    // A clump of bills with no account yet is paid through one "paid from?" prompt: apply it to every line.
+    if (formData.has("fromAccountId")) {
+      fd.set("fromAccountId", String(formData.get("fromAccountId") ?? ""));
+      fd.set("method", String(formData.get("method") ?? ""));
+    }
     await tickPlanStep(fd);
   }
 }
