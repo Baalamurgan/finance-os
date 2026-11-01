@@ -5,7 +5,7 @@
 // family can execute it step by step. Completion is written through to the underlying records
 // (SettlementRecord / bill paid) elsewhere, so this stays a projection, never a second ledger.
 
-export type PlanTransfer = { fromId: number; from: string; toId: number; to: string; amount: number; paidAmount?: number | null; settled: boolean; recordId: number | null; payments?: { id: number; amount: number; settledAt?: Date | string | null; key?: string | null }[]; status?: "overdue" | "soon" | "normal" | null; days?: number | null };
+export type PlanTransfer = { fromId: number; from: string; toId: number; to: string; amount: number; paidAmount?: number | null; settled: boolean; recordId: number | null; payments?: { id: number; amount: number; settledAt?: Date | string | null; key?: string | null; fromId?: number; toId?: number }[]; status?: "overdue" | "soon" | "normal" | null; days?: number | null };
 export type PlanBill = {
   key: string; payerId: number | null; payerName: string; vendor: string; amount: number; done: boolean;
   day: number | null; status: "overdue" | "soon" | "normal" | null; days?: number | null; billId?: number; categoryId?: number; fund?: boolean; fundAvail?: number;
@@ -173,10 +173,18 @@ export function buildMoneyPlan(input: {
 
   const steps: PlanStep[] = [];
   // Inbound collections: a debtor pays their net to the hub once their income covers it.
+  // Names for payment lines whose sender isn't the transfer's own (a debtor paying a creditor directly).
+  const nameById = new Map<number, string>();
+  for (const t of transfers) { nameById.set(t.fromId, t.from); nameById.set(t.toId, t.to); }
   for (const t of inbound) {
+    // What the debtor still owes the hub: their net less anything already paid — including any part they
+    // paid a creditor DIRECTLY (that money never comes to the hub, so it must not be collected again).
+    const paidDirect = Math.round((t.payments ?? []).filter((p) => p.toId != null && p.toId !== t.toId).reduce((a, p) => a + p.amount, 0) * 100) / 100;
+    const remaining = Math.max(0, Math.round((t.amount - paidDirect) * 100) / 100);
+    if (paidDirect > 0.005 && remaining <= 0.005) continue; // all of it went direct — the debtor → creditor done line is the record
     steps.push({
       id: `xfer-${t.fromId}-${t.toId}`, kind: "transfer-in", day: inboundDay.get(t.fromId) ?? null,
-      amount: t.amount, done: t.settled, fromId: t.fromId, toId: t.toId, fromName: t.from, toName: t.to,
+      amount: paidDirect > 0.005 ? remaining : t.amount, done: t.settled, fromId: t.fromId, toId: t.toId, fromName: t.from, toName: t.to,
       recordId: t.recordId, status: t.status ?? null, days: t.days ?? null, feedsBills: hasHubBills,
     });
   }
@@ -193,7 +201,9 @@ export function buildMoneyPlan(input: {
       const keyDay = p.key ? Number(p.key.split("-")[3]) : NaN;
       steps.push({
         id: `paid-${t.toId}-${p.id}`, kind: "transfer-out", day: Number.isFinite(keyDay) ? keyDay : lastDay, amount: Math.round(p.amount * 100) / 100, done: true,
-        fromId: t.fromId, toId: t.toId, fromName: t.from, toName: t.to, recordId: p.id,
+        // A direct payment shows as the debtor → creditor line it was (not hub → creditor).
+        fromId: p.fromId ?? t.fromId, toId: t.toId, fromName: p.fromId != null && p.fromId !== t.fromId ? nameById.get(p.fromId) ?? t.from : t.from, toName: t.to, recordId: p.id,
+        ...(p.fromId != null && p.fromId !== t.fromId ? { reroute: true } : {}),
       });
     }
   }

@@ -118,9 +118,18 @@ export function computeSettlement(opts: {
           // Per-payment model: a pair can have SEVERAL payment rows (one per ticked Money-Plan piece).
           // Paid = their sum; the transfer is "settled" only once that sum covers the net. Each payment
           // is carried through so the plan can show it as its own persistent done line with its own undo.
+          // A DIRECT payment — the plan routed a debtor's cash straight to a creditor (debtor → creditor,
+          // skipping the hub) — settles BOTH legs it replaces: the creditor is paid (counts on hub → creditor)
+          // and the debtor has paid that much of what they owe (counts on debtor → hub). Matching only the
+          // exact pair missed it on both sides, so the plan re-showed the same step as unpaid after the tick.
+          const hubId = treasurer.id;
+          const counts = (s: SettleRecord) =>
+            base.fromId === hubId
+              ? s.toMemberId === base.toId && s.fromMemberId !== base.toId // hub → creditor: from the hub, or direct from a debtor
+              : s.fromMemberId === base.fromId && s.toMemberId !== base.fromId; // debtor → hub: to the hub, or direct to a creditor
           const recs = records
-            .filter((s) => s.fromMemberId === base.fromId && s.toMemberId === base.toId)
-            .map((s) => ({ id: s.id, amount: s.amount, settledAt: s.settledAt, key: s.key ?? null }))
+            .filter(counts)
+            .map((s) => ({ id: s.id, amount: s.amount, settledAt: s.settledAt, key: s.key ?? null, fromId: s.fromMemberId, toId: s.toMemberId }))
             .sort((a, b) => (a.settledAt?.getTime() ?? 0) - (b.settledAt?.getTime() ?? 0));
           const paid = Math.round(recs.reduce((s, x) => s + x.amount, 0) * 100) / 100;
           return {

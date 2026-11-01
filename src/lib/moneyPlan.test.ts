@@ -879,6 +879,28 @@ describe("buildMoneyPlan", () => {
     expect(bob.senderShort ?? 0).toBe(0); // funded on time
   });
 
+  it("a TICKED direct payment (Lakshmi → Harish) strikes through and is not re-offered", () => {
+    // Same setup as above, after Lakshmi marks her direct ₹100 to Harish paid. The settlement counts that one
+    // record on BOTH legs (hub → Harish paid, Lakshmi → hub paid), so the plan must show it as a done
+    // Lakshmi → Harish line — not a fresh pending piece with the same key — and no Lakshmi → hub collection.
+    const pay = { id: 9, amount: 100, key: "disb-3-4-20-100", fromId: 4, toId: 3 };
+    const plan = buildMoneyPlan({
+      treasurerId: T,
+      treasurerName: "Arumugam",
+      transfers: [
+        xfer({ fromId: 4, from: "Lakshmi", toId: T, amount: 100, settled: true, paidAmount: 100, payments: [pay] }),
+        xfer({ fromId: T, from: "Arumugam", toId: 3, to: "Harish", amount: 100, settled: true, paidAmount: 100, payments: [pay] }),
+      ],
+      bills: [bill({ payerId: 3, payerName: "Harish", vendor: "BOB", amount: 100, day: 20 })],
+      incomeDayByMember: { 4: 20 },
+      incomeArrivals: [{ memberId: 4, day: 20, amount: 100 }],
+    });
+    const lines = plan.steps.filter((s) => s.kind === "transfer-out" && s.toId === 3);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatchObject({ done: true, fromId: 4, fromName: "Lakshmi", amount: 100, day: 20 });
+    expect(plan.steps.some((s) => s.kind === "transfer-in" && s.fromId === 4)).toBe(false);
+  });
+
   it("direct routing: with NO creditor need that day, the debtor's cash goes to the hub (not direct)", () => {
     // Baala (2) collects day 1, but no creditor needs money day 1 (C's bill is later, self-funded). His
     // net must go to the hub as a normal collection, NOT direct to anyone.
