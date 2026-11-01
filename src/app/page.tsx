@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 import { formatINR, withShareCount } from "@/lib/format";
 import { categoryEmoji } from "@/lib/categoryEmoji";
 import { loadCommon } from "@/lib/load";
+import { isBudgetLikeCard, sheetSection } from "@/lib/sheetSection";
 import { istYearMonth } from "@/lib/time";
 import { getRollup, getWindDownPreview, getSkippedSetAsides, getProjectedPiggy, getInHand, getNewSheetLineIds, getBillPaymentCards } from "@/lib/queries";
 import { NavHeader } from "@/components/NavHeader";
@@ -136,53 +137,6 @@ const SECTION_LABEL: Record<string, string> = {
   Planned: "Planned expenses",
   Misc: "Miscellaneous",
 };
-
-// A tracked monthly budget whose unspent leftover rolls into the general Piggy — a
-// "sinking-fund-like" envelope. These are grouped apart from flat fixed bills so you can
-// see at a glance what's budgeted (and would accrue to Piggy if unused).
-function isPiggyBudget(cat: ExpRow["category"]): boolean {
-  return (
-    cat.section === "Monthly" &&
-    cat.tracked &&
-    !cat.sinking &&
-    cat.fundingStyle == null &&
-    (cat.billEveryMonths == null || cat.billEveryMonths <= 1)
-  );
-}
-
-// A tracked monthly budget (Veg/Fuel/Non-Veg/LPG/Provision/Milk) or a planned-misc spend card
-// (G704, Ayudha Pooja, a wedding gift): its money goes out as daily Spends, not a single "mark paid".
-// So the Sheet row reads "done" (✓) the instant ANY spend is logged against its category — mirroring
-// the Money-Plan step (done = ≥1 spend), by anyone, even ₹1. Unlike a one-off bill, the HEAD keeps the
-// ⋯ to adjust the amount even after it's done (the budget may still need tuning); everyone else loses
-// the controls, exactly like a paid bill.
-function isBudgetLikeCard(cat: ExpRow["category"]): boolean {
-  return cat.tracked && !cat.sinking && !cat.onHold && cat.fundingStyle == null && (cat.miscCard || isPiggyBudget(cat));
-}
-
-// Which Sheet section an expense line DISPLAYS under (independent of its category's tab):
-// every line of a periodic bill — its set-aside/share, the due-month bill, the fund credit —
-// sits together under Yearly / periodic bills; tracked leftover→Piggy budgets get their own
-// section; everything else follows its category's section.
-function sheetSection(e: ExpRow): string {
-  // Any bill-with-a-fund (EB, YouTube, Brio insurance…) — its share, due-month bill and fund credit —
-  // sits under Yearly / periodic bills, so a periodic bill is never buried in "Monthly" (even a monthly
-  // one, billEveryMonths 1). Plain multi-month bills (no fund) go there too.
-  if (e.category.fundingStyle != null) return "Yearly";
-  if (e.category.billEveryMonths != null && e.category.billEveryMonths > 1) return "Yearly";
-  // Planned-for-THIS-month items live under Misc, so Fixed Monthly stays the stable recurring set
-  // (same entries every month unless added to Setup / "repeats monthly"). Two kinds qualify: a misc
-  // spend card (a dated, dynamic budget like G704 advance / Ayudha Pooja), and ANY one-off line (a
-  // hand-added reward, a pool-funded tax, last month's carried misc). Its money-plan step still opens
-  // the add-spend modal on pay — that's a step property, independent of where it shows on the Sheet.
-  if (e.category.miscCard) return "Misc";
-  // A "removed" tombstone (struck-through) stays in its category's HOME section — a removed Monthly
-  // expense shows under Monthly, not pulled into Misc by the one-off rule below.
-  if (e.oneOff && e.note !== REMOVED_NOTE) return "Misc";
-  // Recurring tracked budgets (Veg/Fuel/Non-Veg/LPG/Provision) get their own Budgeted section.
-  if (isPiggyBudget(e.category)) return "PiggyBudget";
-  return e.category.section;
-}
 
 // True when this fund-bill line falls on its DUE (bill) month — the full bill is due now, not a
 // saving. Drives the 🧾 Bill tag + the plain label (strip "(monthly share)") so the bill month reads
@@ -361,7 +315,7 @@ function ExpenseRow({
   // Money-Plan step). Fixed bills stay on the explicit paid flag. When done, a budget card lets the
   // HEAD keep the ⋯ to adjust the amount; every other kind removes its controls like a paid bill.
   const budgetLike = isBudgetLikeCard(e.category);
-  const done = e.paid || (budgetLike && (spentCats?.has(e.categoryId) ?? false));
+  const done = e.paid || e.vendorPaid || (budgetLike && (spentCats?.has(e.categoryId) ?? false));
   return (
     <Row
       label={displayLabel}

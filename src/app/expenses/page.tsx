@@ -1,8 +1,9 @@
 import { formatINR } from "@/lib/format";
+import { sheetSection, isBudgetLikeCard } from "@/lib/sheetSection";
+import { istYearMonth } from "@/lib/time";
 import { loadCommon } from "@/lib/load";
-import { prisma } from "@/lib/prisma";
-import { CARRY_NOTE, DEFERRED_NOTE, REMOVED_NOTE } from "@/lib/notes";
-import { getTrackedExpenses, getMiscReview, getSpendActivity, getFamilyCards } from "@/lib/queries";
+import { CARRY_NOTE } from "@/lib/notes";
+import { getRollup, getTrackedExpenses, getMiscReview, getSpendActivity, getFamilyCards } from "@/lib/queries";
 import { NavHeader } from "@/components/NavHeader";
 import { SpendActivity } from "@/components/SpendActivity";
 import { AddSpendModal } from "@/components/AddSpendModal";
@@ -89,19 +90,20 @@ export default async function ExpensesPage({
   const cards = rawCards.map((card) => ({ ...card, spends: orderSpends(card.spends) }));
   const budgetedCards = cards.filter((card) => card.allocation > 0);
   const miscCards = cards.filter((card) => card.allocation === 0);
-  // Planned Sheet lines (bills / one-offs / pool-funded items like a cot) for the month — surfaced in a
-  // collapsible section so they're VISIBLE here and not re-logged as a daily spend (the G704-cot
-  // duplicate bug). Excludes the daily-budget cards above (already shown) and carried/removed/deferred
-  // tombstones. Read-only pointer — edits happen on the Sheet.
-  const budgetedCatIds = new Set(budgetedCards.map((card) => card.id));
-  const TOMBSTONE_NOTES = new Set<string>([CARRY_NOTE, REMOVED_NOTE, DEFERRED_NOTE]);
-  const plannedRows = (
-    await prisma.expenseEntry.findMany({
-      where: { periodId: c.selected.id },
-      include: { category: { select: { name: true } }, member: { select: { name: true } } },
-      orderBy: [{ amount: "desc" }],
-    })
-  ).filter((e) => e.amount > 0.005 && !(e.note && TOMBSTONE_NOTES.has(e.note)) && !budgetedCatIds.has(e.categoryId));
+  // "Planned this month" = EXACTLY the Sheet tab's "Planned expenses" section: this month's Misc-section
+  // lines (misc spend-cards + one-offs, incl. the loan prepay), minus carried-over spends. Same source
+  // (getRollup) and same grouping (sheetSection) as the Sheet, so the count, rows, ✓ and total match.
+  // Current month onward only (past months have no Planned section on the Sheet). Read-only pointer.
+  const { year: curY, month: curM } = istYearMonth();
+  const showPlanned = c.selected.year * 12 + c.selected.month >= curY * 12 + curM;
+  const rollup = showPlanned ? await getRollup(c.selected.id) : null;
+  const spentCats = new Set(rollup?.spentCatIds ?? []);
+  const plannedRows = (rollup?.expenses ?? [])
+    .filter((e) => sheetSection(e) === "Misc" && e.note !== CARRY_NOTE)
+    .sort((a, b) => b.amount - a.amount);
+  // Same "done" rule as the Sheet row: paid, vendor leg paid, or a budget-like card with ≥1 spend.
+  const plannedDone = (e: (typeof plannedRows)[number]) =>
+    e.paid || e.vendorPaid || (isBudgetLikeCard(e.category) && spentCats.has(e.categoryId));
   const plannedTotal = plannedRows.reduce((s, e) => s + e.amount, 0);
   // When filtered to a member, the summary reflects only THAT member's spends ("everything they
   // spent") — allocation/remaining don't apply to one person, so we show budgeted-spend + misc.
@@ -235,8 +237,8 @@ export default async function ExpensesPage({
             </summary>
             <div className="border-t border-slate-100 px-4 py-2">
               <p className="mb-1.5 text-[11px] text-slate-400">
-                Bills, one-offs &amp; pool-funded items already planned on the Sheet — shown here so they
-                aren&apos;t logged again as a daily spend. Edit them on the Sheet.
+                The Sheet&apos;s Planned expenses — shown here so they aren&apos;t logged again as a daily
+                spend. Edit them on the Sheet.
               </p>
               <ul className="divide-y divide-slate-100">
                 {plannedRows.map((e) => (
@@ -245,7 +247,7 @@ export default async function ExpensesPage({
                     <span className="flex shrink-0 items-center gap-2">
                       <span className="text-[11px] text-slate-400">{e.category.name}{e.member ? ` · ${e.member.name}` : ""}</span>
                       <span className="tabular-nums font-medium text-slate-800">{formatINR(e.amount)}</span>
-                      {e.paid && <span className="flex h-4 w-4 items-center justify-center rounded-full bg-emerald-500 text-[9px] font-bold leading-none text-white" title="Paid">✓</span>}
+                      {plannedDone(e) && <span className="flex h-4 w-4 items-center justify-center rounded-full bg-emerald-500 text-[9px] font-bold leading-none text-white" title="Paid">✓</span>}
                     </span>
                   </li>
                 ))}
