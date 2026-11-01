@@ -786,6 +786,7 @@ export async function deletePersonalSpend(formData: FormData) {
     // member-split mirror AND single-sided split/reimbursement receivables (all carry this spendId, both
     // sides) — and the card-ledger line (cascades via the personalSpendId FK). Nothing left dangling.
     await tx.personalLoan.deleteMany({ where: { spendId: id } });
+    await tx.accountTransaction.deleteMany({ where: { memberId: member.id, category: SPEND_PAY_MARK(id) } }); // bank/cash debit from a Mark-paid
     await tx.personalSpend.delete({ where: { id } });
   });
   rev();
@@ -1427,26 +1428,69 @@ export async function untickPlanStep(formData: FormData) {
   rev();
 }
 
-// Mark a PLANNED recurring spend paid from the Spends tab. It is the same entry as the Money-Plan step, so this
-// finds (creating if the plan hasn't been opened yet) that step and ticks it — optionally with the Cash/UPI or
-// card the member just picked — and the spend becomes a normal one, lowering Can-spend. Paying it in either
-// place pays the one entry.
+// ── Planned recurring spends live in the SPENDS tab ──────────────────────────────────────────────
+// Setup's recurring spends are copied into each month as planned entries (pending). They are not Money-Plan
+// steps: marking one paid HERE is what turns it into a real spend and lowers Can-spend. Paid from a bank/cash
+// account → that account is debited (a marker-tagged line, removed again if the spend is deleted); on a card →
+// the card ledger mirror, like any card spend; Cash/UPI with no account → nothing posts.
+const SPEND_PAY_MARK = (spendId: number) => `__spendpay__:${spendId}`;
+
 export async function payPlannedSpend(formData: FormData) {
   const member = await me();
   if (!member) return;
   const spendId = Number(formData.get("spendId"));
-  const spend = await prisma.personalSpend.findFirst({ where: { id: spendId, memberId: member.id, pending: true }, select: { id: true, periodId: true } });
+  const spend = await prisma.personalSpend.findFirst({ where: { id: spendId, memberId: member.id, pending: true } });
   if (!spend) return;
-  await ensurePlanSteps(member.id, spend.periodId);
-  const step = await prisma.personalPlanStep.findFirst({ where: { memberId: member.id, periodId: spend.periodId, templateKind: "spend", templateId: spend.id }, select: { id: true, status: true } });
-  if (!step || step.status !== "pending") return;
-  const fd = new FormData();
-  fd.set("id", String(step.id));
-  if (formData.has("fromAccountId") || formData.has("method")) {
-    fd.set("method", String(formData.get("method") ?? ""));
-    fd.set("fromAccountId", String(formData.get("fromAccountId") ?? ""));
+  let cardAccountId = spend.cardAccountId;
+  let payAccountId = spend.payAccountId;
+  if (formData.has("fromAccountId")) {
+    // The account picked in the "how did you pay?" prompt (blank = Cash/UPI, no account).
+    const a = await ownAccount(member.id, formData.get("fromAccountId"));
+    const isCard = a != null && a.type !== "bank" && a.type !== "cash";
+    cardAccountId = isCard ? a!.id : null;
+    payAccountId = a != null && !isCard ? a.id : null;
   }
-  await tickPlanStep(fd);
+  const date = new Date();
+  await prisma.$transaction(async (tx) => {
+    await tx.personalSpend.update({ where: { id: spend.id }, data: { pending: false, cardAccountId, payAccountId } });
+    const label = spend.note?.trim() || "Spend";
+    if (cardAccountId) {
+      await tx.accountTransaction.upsert({
+        where: { personalSpendId: spend.id },
+        update: { amount: spend.amount, merchant: label, accountId: cardAccountId },
+        create: { memberId: member.id, accountId: cardAccountId, date, merchant: label, amount: spend.amount, type: "spend", category: null, source: "personal", personalSpendId: spend.id },
+      });
+    } else if (payAccountId) {
+      const acct = await tx.financeAccount.findFirst({ where: { id: payAccountId, memberId: member.id, active: true }, select: { id: true, type: true } });
+      if (acct && (acct.type === "bank" || acct.type === "cash")) {
+        await tx.accountTransaction.deleteMany({ where: { memberId: member.id, category: SPEND_PAY_MARK(spend.id) } });
+        await tx.accountTransaction.create({ data: { memberId: member.id, accountId: acct.id, date, merchant: label, amount: Math.round(spend.amount * 100) / 100, type: "spend", category: SPEND_PAY_MARK(spend.id), source: "manual" } });
+      }
+    }
+  });
+  rev();
+}
+
+// Take a planned recurring spend out of THIS month only (Setup keeps it, next month it returns). A hidden
+// "skipped" marker records it; Restore deletes the marker.
+export async function removePlannedSpend(formData: FormData) {
+  const member = await me();
+  if (!member) return;
+  const spendId = Number(formData.get("spendId"));
+  const spend = await prisma.personalSpend.findFirst({ where: { id: spendId, memberId: member.id, pending: true }, select: { id: true, periodId: true, note: true, amount: true } });
+  if (!spend) return;
+  const existing = await prisma.personalPlanStep.findFirst({ where: { memberId: member.id, periodId: spend.periodId, templateKind: "spend", templateId: spend.id }, select: { id: true } });
+  if (existing) await prisma.personalPlanStep.update({ where: { id: existing.id }, data: { status: "skipped" } });
+  else await prisma.personalPlanStep.create({ data: { memberId: member.id, periodId: spend.periodId, kind: "spend", label: spend.note?.trim() || "Spend", amount: spend.amount, templateKind: "spend", templateId: spend.id, status: "skipped" } });
+  rev();
+}
+
+export async function restorePlannedSpend(formData: FormData) {
+  const member = await me();
+  if (!member) return;
+  const spendId = Number(formData.get("spendId"));
+  await prisma.personalPlanStep.deleteMany({ where: { memberId: member.id, kind: "spend", templateKind: "spend", templateId: spendId, status: "skipped" } });
+  rev();
 }
 
 // SYNC WITH SETUP: bring this month's plan back in line with Setup. Missing steps are created, stale pending
@@ -1460,17 +1504,15 @@ export async function rebuildPlanSteps(formData: FormData) {
   const periodId = Number(formData.get("periodId"));
   if (!(await ownsPeriod(member.id, periodId))) return;
   await ensurePlanSteps(member.id, periodId);
-  const [steps, incomes, items, bills, spends] = await Promise.all([
+  const [steps, incomes, items, bills] = await Promise.all([
     prisma.personalPlanStep.findMany({ where: { periodId, memberId: member.id, status: "pending", snapshot: { equals: Prisma.DbNull }, templateId: { not: null } } }),
     prisma.personalIncome.findMany({ where: { periodId, recurring: true } }),
     prisma.personalPlanItem.findMany({ where: { memberId: member.id, active: true } }),
     prisma.personalExpense.findMany({ where: { periodId, pending: true } }),
-    prisma.personalSpend.findMany({ where: { periodId, pending: true }, include: { category: { select: { name: true } } } }),
   ]);
   const inc = new Map(incomes.map((r) => [r.id, r]));
   const itm = new Map(items.map((r) => [r.id, r]));
   const bil = new Map(bills.map((r) => [r.id, r]));
-  const spd = new Map(spends.map((r) => [r.id, r]));
   const ops: Prisma.PrismaPromise<unknown>[] = [];
   for (const st of steps) {
     const id = st.templateId as number;
@@ -1483,9 +1525,6 @@ export async function rebuildPlanSteps(formData: FormData) {
     } else if (st.templateKind === "expense") {
       const r = bil.get(id);
       if (r) ops.push(prisma.personalPlanStep.update({ where: { id: st.id }, data: { label: r.label || "Bill", amount: r.amount, dayOfMonth: r.date.getDate(), fromAccountId: r.cardAccountId ?? r.payAccountId } }));
-    } else if (st.templateKind === "spend") {
-      const r = spd.get(id);
-      if (r) ops.push(prisma.personalPlanStep.update({ where: { id: st.id }, data: { label: r.note?.trim() || r.category?.name || "Spend", amount: r.amount, dayOfMonth: r.date.getDate(), fromAccountId: r.cardAccountId ?? r.payAccountId } }));
     }
   }
   if (ops.length) await prisma.$transaction(ops);
@@ -1703,7 +1742,7 @@ export async function addPlanStep(prev: PersonalSaveState, formData: FormData): 
   const label = String(formData.get("label") ?? "").trim();
   const amount = parseAmount(formData.get("amount"));
   const dayOfMonth = clampDay(formData.get("dayOfMonth"));
-  if (!["income", "transfer", "save", "expense", "spend"].includes(kind)) return { ok: false, error: "Pick a type.", n };
+  if (!["income", "transfer", "save", "expense"].includes(kind)) return { ok: false, error: "Pick a type.", n }; // spends live in the Spends tab
   if (!label) return { ok: false, error: "Name the step.", n };
   if (!amount || amount <= 0) return { ok: false, error: "Enter an amount.", n };
   const period = await ownsPeriod(member.id, periodId);

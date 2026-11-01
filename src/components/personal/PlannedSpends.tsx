@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { payPlannedSpend } from "@/app/personal/actions";
+import { payPlannedSpend, removePlannedSpend, restorePlannedSpend } from "@/app/personal/actions";
 import { formatINR } from "@/lib/format";
 
 export type PlannedSpend = { id: number; label: string; icon: string | null; category: string; amount: number; day: number; payId: number | null; payName: string | null };
@@ -16,9 +16,11 @@ const GROUPS: { label: string; types: string[] }[] = [
 
 // This month's recurring spends from Setup, waiting to be paid. Marking one paid turns it into a normal spend
 // (so it lowers Can-spend), from the Cash/UPI or card you pick. It is the same entry as the Money-Plan step.
-export function PlannedSpends({ items, accounts }: { items: PlannedSpend[]; accounts: Acct[] }) {
+export type RemovedSpend = { id: number; label: string; amount: number };
+
+export function PlannedSpends({ items, accounts, removed = [] }: { items: PlannedSpend[]; accounts: Acct[]; removed?: RemovedSpend[] }) {
   const [asking, setAsking] = useState<PlannedSpend | null>(null);
-  if (items.length === 0) return null;
+  if (items.length === 0 && removed.length === 0) return null;
   const total = items.reduce((t, i) => t + i.amount, 0);
   return (
     <section className="rounded-xl border border-sky-200 bg-sky-50/40 p-4">
@@ -26,7 +28,7 @@ export function PlannedSpends({ items, accounts }: { items: PlannedSpend[]; acco
         <h2 className="text-sm font-semibold text-slate-900">Planned this month</h2>
         <span className="text-xs text-slate-500">{items.length} recurring spend{items.length > 1 ? "s" : ""} · {formatINR(total)}</span>
       </div>
-      <p className="mt-0.5 text-[11px] text-slate-500">Copied from your Setup. Mark one paid and it becomes a spend — it comes out of Can-spend.</p>
+      <p className="mt-0.5 text-[11px] text-slate-500">Copied from your Setup every month. Mark one paid and it becomes a spend — that is what lowers Can-spend.</p>
       <ul className="mt-2 divide-y divide-sky-100">
         {items.map((it) => (
           <li key={it.id} className="flex items-center justify-between gap-2 py-2 text-sm">
@@ -44,10 +46,27 @@ export function PlannedSpends({ items, accounts }: { items: PlannedSpend[]; acco
               ) : (
                 <button type="button" onClick={() => setAsking(it)} className="rounded-lg bg-emerald-600 px-2.5 py-1 text-xs font-semibold text-white hover:bg-emerald-700">Mark paid</button>
               )}
+              <form action={removePlannedSpend}>
+                <input type="hidden" name="spendId" value={it.id} />
+                <button type="submit" title="Skip this one for this month only — Setup keeps it and it returns next month" aria-label="Remove for this month" className="text-xs text-slate-300 hover:text-red-600">✕</button>
+              </form>
             </span>
           </li>
         ))}
       </ul>
+      {removed.length > 0 && (
+        <details className="mt-1">
+          <summary className="cursor-pointer text-xs text-slate-400">{removed.length} removed this month — restore</summary>
+          <ul className="mt-1.5 space-y-1">
+            {removed.map((r) => (
+              <li key={r.id} className="flex items-center justify-between gap-2 text-xs text-slate-500">
+                <span className="truncate">{r.label} · {formatINR(r.amount)}</span>
+                <form action={restorePlannedSpend}><input type="hidden" name="spendId" value={r.id} /><button className="font-medium text-emerald-700 hover:underline">↩ restore</button></form>
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
       {asking && (
         <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 sm:items-center sm:p-4" onClick={() => setAsking(null)}>
           <div className="w-full max-w-md rounded-t-3xl bg-white shadow-xl sm:rounded-2xl" onClick={(e) => e.stopPropagation()} style={{ paddingBottom: "env(safe-area-inset-bottom)" }}>

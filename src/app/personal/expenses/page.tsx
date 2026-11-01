@@ -38,8 +38,9 @@ export default async function PersonalExpenses({
   const catList = c.categories.map((cat) => ({ id: cat.id, name: cat.name, icon: cat.icon }));
 
   // Planned recurring spends (copied from Setup, not paid yet) — minus any removed from this month's plan.
-  const removedSpends = await prisma.personalPlanStep.findMany({ where: { periodId: period.id, status: "skipped", templateKind: "spend" }, select: { templateId: true } });
+  const removedSpends = await prisma.personalPlanStep.findMany({ where: { periodId: period.id, status: "skipped", templateKind: "spend" }, select: { templateId: true, label: true, amount: true } });
   const removedSpendIds = removedSpends.map((r) => r.templateId as number);
+  const removedList = removedSpends.map((r) => ({ id: r.templateId as number, label: r.label, amount: r.amount }));
   const [planned, myAccounts] = await Promise.all([
     prisma.personalSpend.findMany({ where: { periodId: period.id, pending: true, id: { notIn: removedSpendIds.length ? removedSpendIds : [0] } }, orderBy: [{ date: "asc" }, { id: "asc" }] }),
     prisma.financeAccount.findMany({ where: { memberId: c.member.id, active: true }, orderBy: [{ sortOrder: "asc" }, { id: "asc" }], select: { id: true, name: true, type: true } }),
@@ -163,7 +164,7 @@ export default async function PersonalExpenses({
           </div>
         )}
 
-        <PlannedSpends items={plannedItems} accounts={myAccounts} />
+        <PlannedSpends items={plannedItems} accounts={myAccounts} removed={removedList} />
 
         <PersonalSpendsView spends={spendsForClient} categories={catList} cards={c.spendCards} periodId={period.id} />
 

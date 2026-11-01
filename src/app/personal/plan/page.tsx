@@ -2,6 +2,7 @@ import Link from "next/link";
 import { formatINR } from "@/lib/format";
 import { loadPersonal } from "@/lib/loadPersonal";
 import { prisma } from "@/lib/prisma";
+import { BALANCE_ACCOUNT_TYPES as BALANCE_TYPES } from "@/lib/finance/types";
 import { getWalletAccounts } from "@/lib/finance/queries";
 import { getCardDues, getPersonalCash } from "@/lib/personal/cash";
 import { getPersonalSavings } from "@/lib/personal/savings";
@@ -9,6 +10,7 @@ import { ensurePlanSteps, orderSteps, cardBillTemplateId, decodeCardBillTemplate
 import { PersonalNav } from "@/components/personal/PersonalNav";
 import { TransferModal } from "@/components/personal/TransferModal";
 import { PersonalPlanSteps, type PlanStepView } from "@/components/personal/PersonalPlanSteps";
+import { AccountFlowCheck, type AccountFlow } from "@/components/personal/AccountFlowCheck";
 
 const fmtDate = (iso: string | null) =>
   iso ? new Date(iso).toLocaleDateString("en-IN", { day: "numeric", month: "short" }) : "—";
@@ -105,7 +107,9 @@ export default async function PersonalPlanPage({
     }
   }
   const cardNameById = new Map(dues.map((d) => [d.cardId, { name: d.cardName, color: d.color }]));
-  const stepViews: PlanStepView[] = orderSteps(steps).map((s) => {
+  // Recurring spends live in the Spends tab — any spend step (old done ones, hidden removal markers) stays out of the plan.
+  const planSteps = steps.filter((x) => x.kind !== "spend");
+  const stepViews: PlanStepView[] = orderSteps(planSteps).map((s) => {
     const oneOff = s.templateKind == null || (s.kind === "expense" && s.templateId != null && oneOffExpIds.has(s.templateId)) || (s.kind === "spend" && s.templateId != null && oneOffSpdIds.has(s.templateId));
     let card = s.kind === "cardbill" && s.templateId != null ? cardInfo.get(s.templateId) ?? null : null;
     if (s.kind === "cardbill" && !card && s.templateId != null) {
@@ -121,6 +125,35 @@ export default async function PersonalPlanPage({
       oneOff, card,
     };
   });
+
+  // ACCOUNT CHECK: per account, what this month's plan moves in and out (income received, transfers, savings,
+  // bills — not spends or card bills), and where the balance lands after the steps still pending.
+  const acctType = new Map(allAccts.map((a) => [a.id, a.type]));
+  const acctColor = new Map(wallet.map((w) => [w.account.id, w.account.color]));
+  const flowOf = new Map<number, { inTotal: number; outTotal: number; pendIn: number; pendOut: number }>();
+  const touch = (id: number | null, dir: "in" | "out", amt: number, pending: boolean) => {
+    if (id == null || !BALANCE_TYPES.has(acctType.get(id) ?? "")) return;
+    const f = flowOf.get(id) ?? { inTotal: 0, outTotal: 0, pendIn: 0, pendOut: 0 };
+    if (dir === "in") { f.inTotal += amt; if (pending) f.pendIn += amt; } else { f.outTotal += amt; if (pending) f.pendOut += amt; }
+    flowOf.set(id, f);
+  };
+  let unassignedBills = 0;
+  for (const st of planSteps) {
+    if (st.status === "skipped") continue;
+    const pending = st.status === "pending";
+    if (st.kind === "income") touch(st.toAccountId, "in", st.amount, pending);
+    else if (st.kind === "transfer") { touch(st.fromAccountId, "out", st.amount, pending); touch(st.toAccountId, "in", st.amount, pending); }
+    else if (st.kind === "save") touch(st.fromAccountId, "out", st.amount, pending);
+    else if (st.kind === "expense") {
+      if (st.fromAccountId == null) { if (pending) unassignedBills += st.amount; }
+      else touch(st.fromAccountId, "out", st.amount, pending);
+    }
+  }
+  const balById = new Map(balAccts.map((a) => [a.id, a.balance]));
+  const flows: AccountFlow[] = [...flowOf.entries()].map(([id, f]) => {
+    const balance = balById.get(id) ?? 0;
+    return { id, name: accountNameById.get(id) ?? "Account", color: acctColor.get(id) ?? "#64748b", balance, inTotal: f.inTotal, outTotal: f.outTotal, after: Math.round((balance + f.pendIn - f.pendOut) * 100) / 100 };
+  }).sort((a, b) => a.after - b.after);
 
   // Card bills still to pay (your personal dues + any family/peer spends the card fronts), soonest first.
   const cardBills = dues
@@ -191,7 +224,10 @@ export default async function PersonalPlanPage({
         </section>
 
         {/* This month's executable plan steps (income · transfers · saves), ticked as they happen */}
-        <PersonalPlanSteps steps={stepViews} accounts={allAccts} categories={c.categories.map((k) => ({ id: k.id, name: k.name, icon: k.icon }))} periodId={c.selected.id} setup={{ incomes: setupIncomes, moves: setupMoves, bills: setupBills, spends: setupSpends, removed: steps.filter((x) => x.status === "skipped").length }} />
+        <PersonalPlanSteps steps={stepViews} accounts={allAccts} categories={c.categories.map((k) => ({ id: k.id, name: k.name, icon: k.icon }))} periodId={c.selected.id} setup={{ incomes: setupIncomes, moves: setupMoves, bills: setupBills, spends: setupSpends, removed: planSteps.filter((x) => x.status === "skipped").length }} />
+
+        {/* Account check — you define the transfers in Setup; this checks they cover what each account pays */}
+        <AccountFlowCheck flows={flows} unassignedBills={unassignedBills} />
 
         {/* Still to pay this month (flow) */}
         <section className="rounded-2xl border border-slate-200 bg-white p-4">

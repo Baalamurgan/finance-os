@@ -30,14 +30,9 @@ export async function replanUnplanned(memberId: number, periodId: number): Promi
   const period = await prisma.personalPeriod.findFirst({ where: { id: periodId, memberId }, select: { status: true } });
   if (!period || period.status === "closed") return;
   const steps = await prisma.personalPlanStep.findMany({
-    where: { periodId, memberId, templateKind: { in: ["expense", "spend"] }, templateId: { not: null } },
-    select: { templateKind: true, templateId: true },
+    where: { periodId, memberId, templateKind: "expense", templateId: { not: null } },
+    select: { templateId: true },
   });
-  const has = (kind: string) => steps.filter((s) => s.templateKind === kind).map((s) => s.templateId as number);
-  const exp = has("expense");
-  const spd = has("spend");
-  await prisma.$transaction([
-    prisma.personalExpense.updateMany({ where: { periodId, memberId, recurring: true, pending: false, id: { notIn: exp.length ? exp : [0] } }, data: { pending: true } }),
-    prisma.personalSpend.updateMany({ where: { periodId, memberId, recurring: true, pending: false, id: { notIn: spd.length ? spd : [0] } }, data: { pending: true } }),
-  ]);
+  const exp = steps.map((s) => s.templateId as number);
+  await prisma.personalExpense.updateMany({ where: { periodId, memberId, recurring: true, pending: false, id: { notIn: exp.length ? exp : [0] } }, data: { pending: true } });
 }

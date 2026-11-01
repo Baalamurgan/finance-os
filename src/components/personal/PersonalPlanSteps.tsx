@@ -139,7 +139,7 @@ export function PersonalPlanSteps({ steps, accounts, categories, periodId, setup
       <div className="flex items-center justify-between gap-3">
         <div>
           <h2 className="text-sm font-semibold text-slate-800">This month&apos;s plan</h2>
-          <p className="text-[11px] text-slate-400">Copied from Setup every month: income, bills, transfers, savings, recurring spends and card bills. Mark each paid as it happens — it moves the real money.</p>
+          <p className="text-[11px] text-slate-400">Copied from Setup every month: income, bills, transfers, savings and card bills. (Recurring spends are in the Spends tab.) Mark each paid as it happens — it moves the real money.</p>
         </div>
         <div className="flex shrink-0 flex-col items-end gap-1">
           {active.length > 0 && <span className="text-[11px] font-medium text-slate-400">{doneCount}/{active.length} done</span>}
@@ -154,8 +154,8 @@ export function PersonalPlanSteps({ steps, accounts, categories, periodId, setup
         <div className="mt-3 rounded-lg border border-dashed border-slate-300 p-3 text-sm text-slate-500">
           <p>No steps this month.</p>
           <p className="mt-1 text-xs">
-            Setup has <b>{setup.incomes}</b> recurring income{setup.incomes === 1 ? "" : "s"}, <b>{setup.moves}</b> transfer/saving{setup.moves === 1 ? "" : "s"}, <b>{setup.bills}</b> recurring bill{setup.bills === 1 ? "" : "s"} and <b>{setup.spends}</b> recurring spend{setup.spends === 1 ? "" : "s"} waiting to be paid this month
-            {setup.incomes + setup.moves + setup.bills + setup.spends > 0 ? " — press ↻ Sync with Setup to bring them in." : "."}
+            Setup has <b>{setup.incomes}</b> recurring income{setup.incomes === 1 ? "" : "s"}, <b>{setup.moves}</b> transfer/saving{setup.moves === 1 ? "" : "s"}, and <b>{setup.bills}</b> recurring bill{setup.bills === 1 ? "" : "s"} waiting to be paid this month
+            {setup.incomes + setup.moves + setup.bills > 0 ? " — press ↻ Sync with Setup to bring them in." : "."}
           </p>
           <p className="mt-1 text-xs">
             Add them in <a className="font-medium text-emerald-700 underline" href="/personal/setup">Setup</a>, or add a step below.
@@ -579,8 +579,8 @@ function AddStepModal({ periodId, accounts, categories, after, onClose }: { peri
           <p className="rounded-lg bg-slate-50 px-3 py-2 text-[11px] text-slate-500">
             {after === "top" ? "Goes at the top of" : "Goes right after the chosen row in"} this month&apos;s plan — this month only.
           </p>
-          <div className="grid grid-cols-5 gap-1.5">
-            {(["income", "expense", "spend", "transfer", "save"] as const).map((k) => (
+          <div className="grid grid-cols-4 gap-1.5">
+            {(["income", "expense", "transfer", "save"] as const).map((k) => (
               <button key={k} type="button" onClick={() => setKind(k)}
                 className={`rounded-lg border-2 px-1 py-2 text-[11px] font-medium ${kind === k ? "border-emerald-500 bg-emerald-50 text-emerald-700" : "border-slate-200 text-slate-500"}`}>
                 <span className="block">{KIND_ICON[k]}</span>{KIND_NAME[k]}

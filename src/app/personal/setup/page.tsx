@@ -80,7 +80,7 @@ export default async function PersonalSetup({
         <PersonalRecurringSection
           kind="spend"
           title="🛒 Recurring spends"
-          hint="Regular daily-type spends (gym, chai, fuel) that repeat each month on their day. They appear in your Money Plan — mark one paid (pick Cash/UPI or a card) and it comes out of Can-spend."
+          hint="Regular daily-type spends (gym, chai, fuel) that repeat each month on their day. They are copied into your Spends tab each month as planned entries — mark one paid there (pick Cash/UPI or a card) and it comes out of Can-spend."
           items={spendItems}
           periodId={periodId}
           categories={catList}
