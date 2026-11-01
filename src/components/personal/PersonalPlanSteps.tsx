@@ -4,10 +4,11 @@ import { useActionState, useEffect, useRef, useState, type ReactNode } from "rea
 import {
   tickPlanStep, untickPlanStep, redatePlanStep, setPlanStepSkipped, deletePlanStep, movePlanStep,
   addPlanStep, editPlanStep, setPlanStepRoute, payCardBillStep,
-  tickPlanStepGroup, untickPlanStepGroup, movePlanStepGroup,
+  tickPlanStepGroup, untickPlanStepGroup, movePlanStepGroup, rebuildPlanSteps,
   type PersonalSaveState,
 } from "@/app/personal/actions";
 import { useToast } from "@/components/Toast";
+import { ToastForm } from "@/components/ToastForm";
 import { formatINR } from "@/lib/format";
 
 // A credit-card bill step's statement breakdown — the same figures the family In-Hand ("held for this card")
@@ -124,7 +125,9 @@ function RouteFields({ s, accounts, method, setMethod, requireAll }: { s: PlanSt
 
 // The month's executable choreography: one ordered checklist copied from Setup each month. Per month you can
 // tick (pay) each step, edit it, move it up/down, insert a step between, or remove it — Setup stays untouched.
-export function PersonalPlanSteps({ steps, accounts, categories, periodId }: { steps: PlanStepView[]; accounts: Acct[]; categories: Cat[]; periodId: number }) {
+export type SetupCounts = { incomes: number; moves: number; spends: number; removed: number };
+
+export function PersonalPlanSteps({ steps, accounts, categories, periodId, setup }: { steps: PlanStepView[]; accounts: Acct[]; categories: Cat[]; periodId: number; setup: SetupCounts }) {
   const [adding, setAdding] = useState<{ after: number | "top" } | null>(null);
   const active = steps.filter((s) => s.status !== "skipped");
   const removed = steps.filter((s) => s.status === "skipped");
@@ -138,14 +141,26 @@ export function PersonalPlanSteps({ steps, accounts, categories, periodId }: { s
           <h2 className="text-sm font-semibold text-slate-800">This month&apos;s plan</h2>
           <p className="text-[11px] text-slate-400">Copied from Setup every month: income, transfers, savings, recurring spends and card bills. Recurring bills settle themselves — see Monthly expenses.</p>
         </div>
-        {active.length > 0 && <span className="shrink-0 text-[11px] font-medium text-slate-400">{doneCount}/{active.length} done</span>}
+        <div className="flex shrink-0 flex-col items-end gap-1">
+          {active.length > 0 && <span className="text-[11px] font-medium text-slate-400">{doneCount}/{active.length} done</span>}
+          <ToastForm action={rebuildPlanSteps} successMessage="Plan synced with Setup">
+            <input type="hidden" name="periodId" value={periodId} />
+            <button type="submit" title="Re-create missing steps and reset every step you haven't edited to your Setup. Done, removed and edited steps are left alone." className="rounded-md border border-slate-200 px-2 py-1 text-[11px] font-medium text-slate-600 hover:bg-slate-50">↻ Sync with Setup</button>
+          </ToastForm>
+        </div>
       </div>
 
       {steps.length === 0 ? (
-        <p className="mt-3 rounded-lg border border-dashed border-slate-300 p-3 text-sm text-slate-500">
-          No steps yet. Add recurring income, bills &amp; transfers in{" "}
-          <a className="font-medium text-emerald-700 underline" href="/personal/setup">Setup</a>, or add a step below.
-        </p>
+        <div className="mt-3 rounded-lg border border-dashed border-slate-300 p-3 text-sm text-slate-500">
+          <p>No steps this month.</p>
+          <p className="mt-1 text-xs">
+            Setup has <b>{setup.incomes}</b> recurring income{setup.incomes === 1 ? "" : "s"}, <b>{setup.moves}</b> transfer/saving{setup.moves === 1 ? "" : "s"} and <b>{setup.spends}</b> recurring spend{setup.spends === 1 ? "" : "s"} waiting to be paid this month
+            {setup.incomes + setup.moves + setup.spends > 0 ? " — press ↻ Sync with Setup to bring them in." : "."}
+          </p>
+          <p className="mt-1 text-xs">
+            Add them in <a className="font-medium text-emerald-700 underline" href="/personal/setup">Setup</a> (recurring bills aren&apos;t steps — they sit in Monthly expenses), or add a step below.
+          </p>
+        </div>
       ) : (
         <ul className="mt-2">
           <li><InsertGap onClick={() => setAdding({ after: "top" })} /></li>

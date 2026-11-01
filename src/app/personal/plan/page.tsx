@@ -42,7 +42,7 @@ export default async function PersonalPlanPage({
 
   // Materialise this month's plan steps from the templates (idempotent), then load them.
   await ensurePlanSteps(c.member.id, c.selected.id);
-  const [wallet, dues, cash, savings, bills, owed, transfers, steps, allAccts] = await Promise.all([
+  const [wallet, dues, cash, savings, bills, owed, transfers, steps, allAccts, setupIncomes, setupMoves, setupSpends] = await Promise.all([
     getWalletAccounts(c.member.id),
     getCardDues(c.member.id),
     getPersonalCash({ id: c.selected.id, income: c.selected.income, carryForward: c.selected.carryForward }),
@@ -68,6 +68,10 @@ export default async function PersonalPlanPage({
       orderBy: [{ sortOrder: "asc" }, { id: "asc" }],
       select: { id: true, name: true, type: true },
     }),
+    // What Setup would generate this month — so an empty plan can say why.
+    prisma.personalIncome.count({ where: { periodId: c.selected.id, recurring: true } }),
+    prisma.personalPlanItem.count({ where: { memberId: c.member.id, active: true } }),
+    prisma.personalSpend.count({ where: { periodId: c.selected.id, pending: true } }),
   ]);
 
   // Money you HAVE: balance accounts (bank / debit / prepaid).
@@ -186,7 +190,7 @@ export default async function PersonalPlanPage({
         </section>
 
         {/* This month's executable plan steps (income · transfers · saves), ticked as they happen */}
-        <PersonalPlanSteps steps={stepViews} accounts={allAccts} categories={c.categories.map((k) => ({ id: k.id, name: k.name, icon: k.icon }))} periodId={c.selected.id} />
+        <PersonalPlanSteps steps={stepViews} accounts={allAccts} categories={c.categories.map((k) => ({ id: k.id, name: k.name, icon: k.icon }))} periodId={c.selected.id} setup={{ incomes: setupIncomes, moves: setupMoves, spends: setupSpends, removed: steps.filter((x) => x.status === "skipped").length }} />
 
         {/* Still to pay this month (flow) */}
         <section className="rounded-2xl border border-slate-200 bg-white p-4">

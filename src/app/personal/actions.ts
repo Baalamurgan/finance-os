@@ -1187,6 +1187,18 @@ async function isOneOffRow(tx: Prisma.TransactionClient, memberId: number, step:
   return false;
 }
 
+// A step's `snapshot` is either the ORIGINAL Setup values behind a month-only row edit ({label|source|note,
+// amount, cardAccountId, payAccountId, accountId}) and/or the bare marker {edited: true}: "the member touched
+// this step this month". Marked steps are never overwritten by a Sync with Setup.
+const EDIT_MARK = { edited: true } as const;
+function hasRealSnapshot(v: Prisma.JsonValue | null | undefined): boolean {
+  return v != null && typeof v === "object" && !Array.isArray(v) && Object.keys(v).some((k) => k !== "edited");
+}
+async function markEdited(tx: Prisma.TransactionClient, stepId: number) {
+  const cur = await tx.personalPlanStep.findUnique({ where: { id: stepId }, select: { snapshot: true } });
+  if (cur?.snapshot == null) await tx.personalPlanStep.update({ where: { id: stepId }, data: { snapshot: EDIT_MARK } });
+}
+
 // Rewrite the income / bill / spend ROW behind a template step for THIS month. The first edit of a recurring
 // template stashes its original Setup values on the step's snapshot so next month still clones them.
 async function editStepRow(
@@ -1195,24 +1207,24 @@ async function editStepRow(
 ) {
   if (!step.templateId) return;
   const fresh = await tx.personalPlanStep.findUnique({ where: { id: step.id }, select: { snapshot: true } });
-  const hasSnap = fresh?.snapshot != null;
+  const hasSnap = hasRealSnapshot(fresh?.snapshot);
   if (step.kind === "expense") {
     const row = await tx.personalExpense.findFirst({ where: { id: step.templateId, memberId } });
     if (!row) return;
     const changed = (patch.label !== undefined && patch.label !== row.label) || (patch.amount !== undefined && patch.amount !== row.amount) || (patch.cardAccountId !== undefined && patch.cardAccountId !== row.cardAccountId) || (patch.payAccountId !== undefined && patch.payAccountId !== row.payAccountId);
-    if (row.recurring && !hasSnap && changed) await tx.personalPlanStep.update({ where: { id: step.id }, data: { snapshot: { label: row.label, amount: row.amount, cardAccountId: row.cardAccountId, payAccountId: row.payAccountId } } });
+    if (row.recurring && !hasSnap && changed) await tx.personalPlanStep.update({ where: { id: step.id }, data: { snapshot: { edited: true, label: row.label, amount: row.amount, cardAccountId: row.cardAccountId, payAccountId: row.payAccountId } } });
     await tx.personalExpense.update({ where: { id: row.id }, data: { ...(patch.label !== undefined ? { label: patch.label } : {}), ...(patch.amount !== undefined ? { amount: patch.amount } : {}), ...(patch.cardAccountId !== undefined ? { cardAccountId: patch.cardAccountId } : {}), ...(patch.payAccountId !== undefined ? { payAccountId: patch.payAccountId } : {}) } });
   } else if (step.kind === "spend") {
     const row = await tx.personalSpend.findFirst({ where: { id: step.templateId, memberId } });
     if (!row) return;
     const changed = (patch.label !== undefined && patch.label !== row.note) || (patch.amount !== undefined && patch.amount !== row.amount) || (patch.cardAccountId !== undefined && patch.cardAccountId !== row.cardAccountId) || (patch.payAccountId !== undefined && patch.payAccountId !== row.payAccountId);
-    if (row.recurring && !hasSnap && changed) await tx.personalPlanStep.update({ where: { id: step.id }, data: { snapshot: { note: row.note, amount: row.amount, cardAccountId: row.cardAccountId, payAccountId: row.payAccountId } } });
+    if (row.recurring && !hasSnap && changed) await tx.personalPlanStep.update({ where: { id: step.id }, data: { snapshot: { edited: true, note: row.note, amount: row.amount, cardAccountId: row.cardAccountId, payAccountId: row.payAccountId } } });
     await tx.personalSpend.update({ where: { id: row.id }, data: { ...(patch.label !== undefined ? { note: patch.label } : {}), ...(patch.amount !== undefined ? { amount: patch.amount } : {}), ...(patch.cardAccountId !== undefined ? { cardAccountId: patch.cardAccountId } : {}), ...(patch.payAccountId !== undefined ? { payAccountId: patch.payAccountId } : {}) } });
   } else if (step.kind === "income" && step.templateKind === "income") {
     const row = await tx.personalIncome.findFirst({ where: { id: step.templateId, memberId } });
     if (!row) return;
     const changed = (patch.label !== undefined && patch.label !== row.source) || (patch.amount !== undefined && patch.amount !== row.amount) || (patch.accountId !== undefined && patch.accountId !== row.accountId);
-    if (row.recurring && !hasSnap && changed) await tx.personalPlanStep.update({ where: { id: step.id }, data: { snapshot: { source: row.source, amount: row.amount, accountId: row.accountId } } });
+    if (row.recurring && !hasSnap && changed) await tx.personalPlanStep.update({ where: { id: step.id }, data: { snapshot: { edited: true, source: row.source, amount: row.amount, accountId: row.accountId } } });
     await tx.personalIncome.update({ where: { id: row.id }, data: { ...(patch.label !== undefined ? { source: patch.label } : {}), ...(patch.amount !== undefined ? { amount: patch.amount } : {}), ...(patch.accountId !== undefined ? { accountId: patch.accountId } : {}) } });
   }
 }
@@ -1444,6 +1456,44 @@ export async function payPlannedSpend(formData: FormData) {
   await tickPlanStep(fd);
 }
 
+// SYNC WITH SETUP: bring this month's plan back in line with Setup. Missing steps are created, stale pending
+// ones dropped, and every pending step you have NOT touched this month is reset to its Setup template —
+// name, amount, day and accounts (planned transfers/savings, recurring income and spends alike). Left alone:
+// done steps, steps you removed, steps you edited / re-dated / re-routed (they carry the edited mark), and
+// one-off steps you added.
+export async function rebuildPlanSteps(formData: FormData) {
+  const member = await me();
+  if (!member) return;
+  const periodId = Number(formData.get("periodId"));
+  if (!(await ownsPeriod(member.id, periodId))) return;
+  await ensurePlanSteps(member.id, periodId);
+  const [steps, incomes, items, spends] = await Promise.all([
+    prisma.personalPlanStep.findMany({ where: { periodId, memberId: member.id, status: "pending", snapshot: { equals: Prisma.DbNull }, templateId: { not: null } } }),
+    prisma.personalIncome.findMany({ where: { periodId, recurring: true } }),
+    prisma.personalPlanItem.findMany({ where: { memberId: member.id, active: true } }),
+    prisma.personalSpend.findMany({ where: { periodId, pending: true }, include: { category: { select: { name: true } } } }),
+  ]);
+  const inc = new Map(incomes.map((r) => [r.id, r]));
+  const itm = new Map(items.map((r) => [r.id, r]));
+  const spd = new Map(spends.map((r) => [r.id, r]));
+  const ops: Prisma.PrismaPromise<unknown>[] = [];
+  for (const st of steps) {
+    const id = st.templateId as number;
+    if (st.templateKind === "income") {
+      const r = inc.get(id);
+      if (r) ops.push(prisma.personalPlanStep.update({ where: { id: st.id }, data: { label: r.source, amount: r.amount, dayOfMonth: r.date.getDate(), toAccountId: r.accountId } }));
+    } else if (st.templateKind === "planitem") {
+      const r = itm.get(id);
+      if (r) ops.push(prisma.personalPlanStep.update({ where: { id: st.id }, data: { kind: r.kind, label: r.label, amount: r.amount, dayOfMonth: r.dayOfMonth, fromAccountId: r.fromAccountId, toAccountId: r.toAccountId, note: r.note } }));
+    } else if (st.templateKind === "spend") {
+      const r = spd.get(id);
+      if (r) ops.push(prisma.personalPlanStep.update({ where: { id: st.id }, data: { label: r.note?.trim() || r.category?.name || "Spend", amount: r.amount, dayOfMonth: r.date.getDate(), fromAccountId: r.cardAccountId ?? r.payAccountId } }));
+    }
+  }
+  if (ops.length) await prisma.$transaction(ops);
+  rev();
+}
+
 // ── Clumped transfers ─────────────────────────────────────────────────────────────────────────────
 // Several Setup transfers with the same sender, receiver and day are shown as ONE step ("HDFC → SBI ₹22,204")
 // with their lines inside. Ticking / unticking / moving the clump acts on every line in it; each line still
@@ -1555,6 +1605,7 @@ export async function setPlanStepRoute(prev: PersonalSaveState, formData: FormDa
   let err: string | null = null;
   await prisma.$transaction(async (tx) => {
     err = await applyStepRoute(tx, member.id, step, { method: PLAN_METHODS.has(m) ? m : null, fromRaw: formData.get("fromAccountId"), toRaw: formData.get("toAccountId") });
+    if (!err) await markEdited(tx, step.id);
   });
   if (err) return { ok: false, error: err, n };
   rev();
@@ -1585,6 +1636,7 @@ export async function editPlanStep(prev: PersonalSaveState, formData: FormData):
     }
     await tx.personalPlanStep.update({ where: { id: step.id }, data: { label, amount: amt, dayOfMonth: clampDay(formData.get("dayOfMonth")), note } });
     await editStepRow(tx, member.id, step, { label, amount: amt });
+    await markEdited(tx, step.id);
   });
   rev();
   return { ok: true, n };
@@ -1635,7 +1687,10 @@ export async function redatePlanStep(formData: FormData) {
   const id = Number(formData.get("id"));
   const step = await prisma.personalPlanStep.findFirst({ where: { id, memberId: member.id }, select: { id: true } });
   if (!step) return;
-  await prisma.personalPlanStep.update({ where: { id }, data: { dayOfMonth: clampDay(formData.get("dayOfMonth")) } });
+  await prisma.$transaction(async (tx) => {
+    await tx.personalPlanStep.update({ where: { id }, data: { dayOfMonth: clampDay(formData.get("dayOfMonth")) } });
+    await markEdited(tx, id);
+  });
   rev();
 }
 
