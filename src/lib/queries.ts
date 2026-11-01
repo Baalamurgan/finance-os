@@ -1,3 +1,4 @@
+import { piggyHeldParts } from "@/lib/piggyHeld";
 import { unstable_cache } from "next/cache";
 import { prisma } from "@/lib/prisma";
 import { FAMILY_TAG } from "@/lib/revalidate";
@@ -2457,12 +2458,13 @@ export async function getTransactionLedger(householdId: number, periodId: number
     const piggyAmt = isHolder ? r2(inhand.generalPiggy - pendingPiggyLump) : 0;
     const swept = g.carryParts?.swept ?? 0;
     const piggyGone = g.openingCarry != null && (isHolder ? piggyAmt <= 0.005 : piggyHandedOver);
+    const sweptOut = g.openingCarry != null && piggyHeldParts({ swept, pendingPiggyHeld: 0, isHolder, piggyGone }).sweptOut;
     const opening = g.openingCarry ?? 0;
 
     const raw: { day: number | null; label: string; amount: number; dir: "in" | "out" }[] = [];
     // Boundary rows (day −1 so they sort before any dated October row).
     raw.push({ day: -1, label: "Carried from last month", amount: Math.abs(opening), dir: opening >= 0 ? "in" : "out" });
-    if (piggyGone && Math.abs(swept) > 0.005) raw.push({ day: -1, label: "Last month's free → Piggy", amount: Math.abs(swept), dir: "out" });
+    if (sweptOut && Math.abs(swept) > 0.005) raw.push({ day: -1, label: "Last month's free → Piggy", amount: Math.abs(swept), dir: "out" });
     if (isHolder && Math.abs(piggyAmt) > 0.005) raw.push({ day: -1, label: "🐷 General Piggy held (as holder)", amount: Math.abs(piggyAmt), dir: piggyAmt >= 0 ? "in" : "out" });
     // Done cash moves — mirrors doneCashMoveDetailByMember (so it sums to doneCashMove) plus the step day.
     for (const s of plan.steps) {

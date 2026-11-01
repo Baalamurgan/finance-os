@@ -92,6 +92,8 @@ export default async function InHandPage({
   // hand-over to the treasurer (a line that drops off once they pay it, so the breakdown reconciles
   // in both states).
   const incomeReceivedByMember: Record<number, boolean> = {};
+  const incomeSteps = plan.steps.filter((s) => s.kind === "income" && !s.hidden);
+  const allIncomeReceived = incomeSteps.length > 0 && incomeSteps.every((s) => s.done);
   const toTreasurerPendingByMember: Record<number, number> = {};
   // Routing a PASS-THROUGH conduit still holds to forward: money received via a done MANUAL step minus
   // what they've already forwarded via a done manual step. Only counts when they BOTH received AND sent
@@ -261,6 +263,7 @@ export default async function InHandPage({
                 isPreview={isPreview}
                 pendingCashMove={g.memberId != null ? pendingByMember[g.memberId] ?? 0 : 0}
                 doneCashMove={g.memberId != null ? doneByMember[g.memberId] ?? 0 : 0}
+                allIncomeReceived={allIncomeReceived}
                 incomeReceived={g.memberId != null ? incomeReceivedByMember[g.memberId] ?? false : false}
                 allowancesKept={g.memberId != null ? keptAllowancesByMember[g.memberId] ?? [] : []}
                 toTreasurerPending={g.memberId != null ? toTreasurerPendingByMember[g.memberId] ?? 0 : 0}

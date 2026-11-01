@@ -1,5 +1,6 @@
 "use client";
 
+import { piggyHeldParts } from "@/lib/piggyHeld";
 import { Fragment, useState } from "react";
 import { formatINR } from "@/lib/format";
 import type { InHand } from "@/lib/queries";
@@ -14,6 +15,7 @@ export function InHandPersonGroup({
   pendingCashMove,
   doneCashMove,
   incomeReceived = false,
+  allIncomeReceived = false,
   allowancesKept = [],
   toTreasurerPending = 0,
   routingToForward = 0,
@@ -48,6 +50,8 @@ export function InHandPersonGroup({
   pendingCashMove: number;
   doneCashMove: number;
   incomeReceived?: boolean;
+  // EVERY family income has arrived (the treasurer's pool is only physically there then).
+  allIncomeReceived?: boolean;
   // This member's own expense allowances received & kept this month (e.g. Harish's ₹10k monthly + ₹1k reward).
   allowancesKept?: { label: string; amount: number }[];
   toTreasurerPending?: number;
@@ -142,6 +146,8 @@ export function InHandPersonGroup({
   // no overspend, so swept == net == ₹471 (unaffected).
   const sweptToPiggy = group.carryParts?.swept ?? 0;
   const piggyGone = group.openingCarry != null && !isPreview && (isPiggyHolder ? piggyAmt <= 0.005 : piggyHandedOver);
+  // Each rupee of last month's free→Piggy leftover is counted/listed ONCE (see piggyHeldParts).
+  const piggyParts = piggyHeldParts({ swept: sweptToPiggy, pendingPiggyHeld, isHolder: isPiggyHolder, piggyGone });
   // A MULTI-month bill paid from this month's set-aside (fromSetAside = "no ledger draw") sends real cash
   // to the vendor that the walk never subtracts — it would otherwise linger as phantom "own money" equal
   // to the payment (EB ₹4,000). Subtract it so holding-now reflects the outflow. (Engine already excludes
@@ -149,7 +155,7 @@ export function InHandPersonGroup({
   const setAsideConsumedCash = group.setAsideConsumedCash ?? 0;
   const holdingNow =
     group.openingCarry != null && !isPreview
-      ? Math.round((group.openingCarry + doneCashMove - (cashSpent ?? 0) + piggyAmt - (piggyGone ? sweptToPiggy : 0) - setAsideConsumedCash) * 100) / 100
+      ? Math.round((group.openingCarry + doneCashMove - (cashSpent ?? 0) + piggyAmt - (group.openingCarry != null && !isPreview && piggyParts.sweptOut ? sweptToPiggy : 0) - setAsideConsumedCash) * 100) / 100
       : total;
   // The live carry-walk month shows the clean "Held for" partition only; preview/closed months (no
   // opening carry) keep the detailed carry/pool/in-transit breakdown below.
@@ -251,11 +257,14 @@ export function InHandPersonGroup({
             // old remainder. Drop it from his held-for; the walk already nets it.
             const carriedOthers = (isTreasurer || ownerChargeActive) ? 0 : Math.max(0, (group.carryParts?.others ?? 0) - owedOthersSettled);
             // free→Piggy only still "held" if the Piggy hasn't been handed over/forwarded yet (see piggyGone).
-            const carriedFreeHeld = piggyGone ? 0 : sweptToPiggy;
+            const carriedFreeHeld = piggyParts.carriedFreeHeld;
             const budgetsTotal = cats.reduce((s, c) => s + c.remaining, 0);
             const give = incomeReceived ? toTreasurerPending : 0;
             const bills = incomeReceived ? heldBillsTotal : 0;
-            const monthBal = isTreasurer ? monthBalance : 0;
+            // The family month balance is the pool the treasurer holds only once EVERY income has arrived — before
+            // that he doesn't physically have it, so it must not be listed (it was swamping his card, offset by
+            // a huge "paid out ahead" remainder).
+            const monthBal = isTreasurer && allIncomeReceived ? monthBalance : 0;
             // Allowance money received & kept (e.g. Harish's ₹10k expense + ₹1k reward) is the SOURCE of
             // what an allowance-holder holds — shown "+"; out-of-pocket / misc cash spent is shown "−".
             // So the card reads: allowance in − spends = held, and the remainder collapses to 0 for a pure
