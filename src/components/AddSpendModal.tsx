@@ -112,6 +112,13 @@ export function AddSpendModal({
     setAmountExpr("");
   };
 
+  // Closing by ANY route (Cancel, ✕, backdrop, Esc, or a successful save) wipes the form back to defaults,
+  // so a card / category picked last time never reappears on the next open.
+  const closeModal = () => {
+    resetForm();
+    setOpen(false);
+  };
+
   // Amount field doubles as a calculator: reveal "=" only when there's an operator to compute.
   const amtEval = evalArithmetic(amountExpr);
   const showAmtCalc = hasArithmeticOp(amountExpr) && amtEval != null;
@@ -157,7 +164,7 @@ export function AddSpendModal({
 
   useEffect(() => {
     if (!open) return;
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && closeModal();
     window.addEventListener("keydown", onKey);
     // Lock the page behind the modal so scrolling inside it never bleeds to the background (Android
     // scroll-chaining). overscroll-contain on the scroller is the belt; this is the braces.
@@ -167,6 +174,7 @@ export function AddSpendModal({
       window.removeEventListener("keydown", onKey);
       document.body.style.overflow = prevOverflow;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
   // On a successful save: if "keep adding" is on, clear + stay open (rapid
@@ -176,17 +184,17 @@ export function AddSpendModal({
       prevN.current = state.n;
       toast("Spend added", "success");
       if (keepAdding) {
-        formRef.current?.reset(); // clears uncontrolled amount; category stays (controlled)
-        setSubCategory(""); // controlled — reset for the next item
-        setKindTouched(false); // let the next item auto-fill its kind again
-        setLabelText(""); // controlled — reset the item text
-        setFieldError(null); // clear any prior inline error
+        // Back to the form's defaults — amount, item, category, kind, "Paid with" card and "Who spent" —
+        // so nothing from the last entry carries over. Only the "keep adding" toggle itself stays on.
+        formRef.current?.reset(); // clears the uncontrolled amount + "Who spent"
+        resetForm();
+        setKeepAdding(true);
         setJustSaved(true);
         amountRef.current?.focus();
         const t = setTimeout(() => setJustSaved(false), 2500);
         return () => clearTimeout(t);
       }
-      setOpen(false);
+      closeModal();
     }
   }, [state.n, keepAdding]);
 
@@ -268,7 +276,7 @@ export function AddSpendModal({
         createPortal(
           <div
             className="fixed inset-0 z-50 flex items-end justify-center overflow-y-auto overscroll-contain bg-black/40 sm:items-center sm:p-4"
-            onClick={() => setOpen(false)}
+            onClick={closeModal}
           >
             <div
               className="relative flex max-h-[92vh] w-full max-w-md flex-col rounded-t-3xl bg-white shadow-xl sm:my-auto sm:rounded-2xl"
@@ -282,7 +290,7 @@ export function AddSpendModal({
                 </h2>
                 <button
                   type="button"
-                  onClick={() => setOpen(false)}
+                  onClick={closeModal}
                   className="-mr-2 rounded-lg px-3 py-2 text-2xl leading-none text-slate-400 hover:bg-slate-100 hover:text-slate-700"
                   aria-label="Close"
                 >
@@ -520,7 +528,7 @@ export function AddSpendModal({
                 <div className="flex items-center gap-3 border-t border-slate-100 px-5 py-4">
                   <button
                     type="button"
-                    onClick={() => setOpen(false)}
+                    onClick={closeModal}
                     className="min-h-12 flex-1 rounded-xl border-2 border-slate-200 px-4 py-3 text-base font-medium text-slate-600 active:bg-slate-100"
                   >
                     Cancel
