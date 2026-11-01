@@ -98,6 +98,13 @@ export default async function ExpensesPage({
   const plannedRows = rollup.expenses
     .filter((e) => sheetSection(e) === "Misc" && e.note !== CARRY_NOTE)
     .sort((a, b) => b.amount - a.amount);
+  // Budget-style planned cards (Ayudha Pooja, G704 advance…) live INSIDE the Planned section, not the
+  // standard grid — so the daily-budget grid below keeps only the recurring categories.
+  const plannedCards = budgetedCards.filter((card) => card.miscCard);
+  const plannedCardIds = new Set(plannedCards.map((card) => card.id));
+  const gridCards = budgetedCards.filter((card) => !card.miscCard);
+  // Every other planned line (loan prepay, rewards, taxes…) has no spend card — shown as a status card.
+  const plannedLines = plannedRows.filter((e) => !plannedCardIds.has(e.categoryId) && (filterMemberId == null || e.memberId === filterMemberId));
   // Same "done" rule as the Sheet row: paid, vendor leg paid, or a budget-like card with ≥1 spend.
   const plannedDone = (e: (typeof plannedRows)[number]) =>
     e.paid || e.vendorPaid || (isBudgetLikeCard(e.category) && spentCats.has(e.categoryId));
@@ -218,44 +225,9 @@ export default async function ExpensesPage({
           </div>
         )}
 
-        {/* Planned this month — the Sheet's bill/one-off/pool-funded lines, collapsed so they're visible
-            here (don't re-log them as a daily spend) without crowding the daily cards. */}
-        {plannedRows.length > 0 && (
-          <details className="rounded-xl border border-slate-200 bg-white">
-            <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 hover:bg-slate-50 [&::-webkit-details-marker]:hidden">
-              <span className="flex items-center gap-2 text-sm font-semibold text-slate-800">
-                📋 Planned this month
-                <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-500">{plannedRows.length} on the Sheet</span>
-              </span>
-              <span className="flex items-center gap-2 text-sm">
-                <span className="tabular-nums font-semibold text-slate-700">{formatINR(plannedTotal)}</span>
-                <span className="text-slate-300">▾</span>
-              </span>
-            </summary>
-            <div className="border-t border-slate-100 px-4 py-2">
-              <p className="mb-1.5 text-[11px] text-slate-400">
-                The Sheet&apos;s Planned expenses — shown here so they aren&apos;t logged again as a daily
-                spend. Edit them on the Sheet.
-              </p>
-              <ul className="divide-y divide-slate-100">
-                {plannedRows.map((e) => (
-                  <li key={e.id} className="flex items-center justify-between gap-3 py-1.5 text-sm">
-                    <span className="min-w-0 truncate text-slate-700">{e.label}</span>
-                    <span className="flex shrink-0 items-center gap-2">
-                      <span className="text-[11px] text-slate-400">{e.category.name}{e.member ? ` · ${e.member.name}` : ""}</span>
-                      <span className="tabular-nums font-medium text-slate-800">{formatINR(e.amount)}</span>
-                      {plannedDone(e) && <span className="flex h-4 w-4 items-center justify-center rounded-full bg-emerald-500 text-[9px] font-bold leading-none text-white" title="Paid">✓</span>}
-                    </span>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          </details>
-        )}
-
         {/* budgeted categories (count toward Spent / Allocated above) */}
         <div className="grid grid-cols-1 gap-5 md:grid-cols-2">
-          {budgetedCards.map((card) => (
+          {gridCards.map((card) => (
             <SpendCard
               key={card.id}
               card={card}
@@ -270,6 +242,38 @@ export default async function ExpensesPage({
             />
           ))}
         </div>
+
+        {/* Planned expenses — mirrors the Sheet's section, always expanded: the planned spend cards (same
+            card UI as above, with their spends) first, then every other planned line as a status card. */}
+        {plannedRows.length > 0 && (
+          <section className="space-y-3">
+            <div className="flex items-baseline justify-between border-t-2 border-dashed border-slate-200 pt-4">
+              <h2 className="text-sm font-bold uppercase tracking-wider text-emerald-600">
+                Planned expenses <span className="font-normal normal-case tracking-normal text-slate-400">({plannedRows.length})</span>
+              </h2>
+              <span className="text-sm font-bold tabular-nums text-slate-700">{formatINR(plannedTotal)}</span>
+            </div>
+            <div className="grid grid-cols-1 gap-5 md:grid-cols-2">
+              {plannedCards.map((card) => (
+                <SpendCard
+                  key={card.id}
+                  card={card}
+                  open={open}
+                  periodId={c.selected!.id}
+                  isHead={c.isHead}
+                  members={c.members}
+                  currentMemberId={c.currentMember?.id}
+                  subCats={c.miscSubCategories}
+                  filterMemberName={filterMemberName}
+                  cards={familyCards}
+                />
+              ))}
+              {plannedLines.map((e) => (
+                <PlannedLineCard key={e.id} label={e.label} category={e.category.name} owner={e.member?.name ?? null} amount={e.amount} done={plannedDone(e)} />
+              ))}
+            </div>
+          </section>
+        )}
 
         {/* miscellaneous / unplanned — shown separately, NOT counted in the totals above */}
         {miscCards.length > 0 && (
@@ -328,6 +332,29 @@ export default async function ExpensesPage({
     </>
   );
 }
+// A planned Sheet line with no spend card (loan prepay, reward, tax…): same card frame as a SpendCard,
+// showing the planned amount + paid status (✓ once the Money Plan / Sheet marks it paid) instead of spends.
+function PlannedLineCard({ label, category, owner, amount, done }: { label: string; category: string; owner: string | null; amount: number; done: boolean }) {
+  return (
+    <section className="flex flex-col rounded-xl border border-slate-200 bg-white">
+      <div className="flex items-start justify-between gap-2 border-b border-slate-100 px-4 py-3">
+        <div className="flex min-w-0 flex-1 flex-col gap-1 sm:flex-row sm:items-baseline sm:gap-2">
+          <h2 className="break-words font-semibold leading-tight text-slate-800 sm:truncate">{label}</h2>
+          <span className={`w-fit shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-medium ${owner ? "bg-indigo-50 text-indigo-500" : "bg-slate-100 text-slate-400"}`}>{owner ?? "shared"}</span>
+        </div>
+        {done && <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-emerald-500 text-[10px] font-bold leading-none text-white" title="Paid">✓</span>}
+      </div>
+      <div className="px-4 py-3">
+        <div className="flex items-center justify-between text-sm">
+          <span className="text-slate-500">Planned <b className="text-slate-800">{formatINR(amount)}</b></span>
+          <span className={`text-xs font-medium ${done ? "text-green-600" : "text-slate-400"}`}>{done ? "Paid ✓" : "Not paid yet"}</span>
+        </div>
+        <p className="mt-1.5 text-[11px] text-slate-400">{category} · marked paid from the Money Plan / Sheet — edit it on the Sheet.</p>
+      </div>
+    </section>
+  );
+}
+
 type SpendCardData = Awaited<ReturnType<typeof getTrackedExpenses>>["cards"][number];
 
 function SpendCard({
