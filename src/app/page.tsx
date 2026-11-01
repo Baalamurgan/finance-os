@@ -337,7 +337,8 @@ function ExpenseRow({
   const due = dueDateLabel(e.category);
   // Build the row's tags, in priority order. HIGH priority — phase (🧾 Bill / 💰 Incentive / ✂️ Trimmed /
   // 💳 card), then New, then kept/pinned — sits inline on wide screens and moves into the ⓘ on a phone (so
-  // the name is never squeezed out; mobile row = ✓ · name · ⓘ). LOW priority — just the 🔁 cadence pill —
+  // the name is never squeezed out; mobile row = name · ⓘ, with the done ✓ on the right by the amount).
+  // LOW priority — just the 🔁 cadence pill —
   // lives in the ⓘ popover on every screen (it's also the Recurs detail row).
   const tags: RowTag[] = [];
   if (tPhase === "incentive") {
@@ -1264,17 +1265,6 @@ function Row({
     >
       <div className="min-w-0">
         <div className="flex items-center gap-1.5">
-          {/* ✓ sits beside the name ONLY when the ⋯ stays (head's editable budgeted/planned card). When
-              the ⋯ is removed, the ✓ moves into the ⋯'s slot on the right (below) so the row stays aligned. */}
-          {locked && keepActionsWhenDone && (
-            <span
-              className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-emerald-500 text-[10px] font-bold leading-none text-white"
-              aria-label="done"
-              title="Paid / received"
-            >
-              ✓
-            </span>
-          )}
           {emoji && <span className="shrink-0" aria-hidden>{emoji}</span>}
           <TruncatedName text={baseLabel} className={`font-medium ${locked ? "text-slate-500" : "text-slate-800"}`} />
           {installment && (
@@ -1307,10 +1297,13 @@ function Row({
       </div>
       <div className="flex items-center gap-2 pl-2">
         <span className="tabular-nums text-slate-700">{formatINR(amount)}</span>
-        {/* A done row's edit controls (⋯ / skip / remove) are removed — useless once paid. Rather than let
-            the right edge collapse, the ✓ takes the ⋯'s exact slot (h-9 w-9) so every row's amount stays
-            aligned, done or not. A budgeted / planned-misc card keeps the ⋯ for the HEAD
-            (keepActionsWhenDone) and shows its ✓ beside the name instead. */}
+        {/* The done ✓ always sits on the RIGHT, beside the amount — consistent on every row. When a done
+            row's edit controls (⋯ / skip / remove) are removed, the ✓ takes the ⋯'s exact h-9 w-9 slot so
+            the amount stays aligned. A budgeted / planned-misc card the HEAD can still edit keeps its ⋯, so
+            its ✓ shows as a compact badge just before the ⋯. */}
+        {locked && keepActionsWhenDone && (
+          <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-emerald-500 text-[11px] font-bold leading-none text-white" aria-label="done" title="Paid / received">✓</span>
+        )}
         {!locked || keepActionsWhenDone ? (
           children
         ) : (
