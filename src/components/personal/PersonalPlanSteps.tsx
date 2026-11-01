@@ -127,12 +127,15 @@ function RouteFields({ s, accounts, method, setMethod, requireAll }: { s: PlanSt
 // tick (pay) each step, edit it, move it up/down, insert a step between, or remove it — Setup stays untouched.
 export type SetupCounts = { incomes: number; moves: number; bills: number; spends: number; removed: number };
 
-export function PersonalPlanSteps({ steps, accounts, categories, periodId, setup }: { steps: PlanStepView[]; accounts: Acct[]; categories: Cat[]; periodId: number; setup: SetupCounts }) {
+export function PersonalPlanSteps({ steps, accounts, categories, periodId, setup, currentDay }: { steps: PlanStepView[]; accounts: Acct[]; categories: Cat[]; periodId: number; setup: SetupCounts; currentDay: number | null }) {
   const [adding, setAdding] = useState<{ after: number | "top" } | null>(null);
   const active = steps.filter((s) => s.status !== "skipped");
   const removed = steps.filter((s) => s.status === "skipped");
   const doneCount = active.filter((s) => s.status === "done").length;
   const items = clumpSteps(active);
+  const [toggledDays, setToggledDays] = useState<Set<string>>(new Set());
+  const dayGroups = groupByDay(items);
+  const toggleDay = (k: string) => setToggledDays((prev) => { const n = new Set(prev); if (n.has(k)) n.delete(k); else n.add(k); return n; });
 
   return (
     <section className="rounded-2xl border border-slate-200 bg-white p-4">
@@ -162,17 +165,44 @@ export function PersonalPlanSteps({ steps, accounts, categories, periodId, setup
           </p>
         </div>
       ) : (
-        <ul className="mt-2">
-          <li><InsertGap onClick={() => setAdding({ after: "top" })} /></li>
-          {items.map((it, i) => (
-            <li key={it.type === "step" ? it.s.id : it.key}>
-              {it.type === "step"
-                ? <StepRow s={it.s} accounts={accounts} isFirst={i === 0} isLast={i === items.length - 1} />
-                : <ClumpRow steps={it.steps} accounts={accounts} isFirst={i === 0} isLast={i === items.length - 1} />}
-              <InsertGap onClick={() => setAdding({ after: it.type === "step" ? it.s.id : it.steps[it.steps.length - 1].id })} />
-            </li>
-          ))}
-        </ul>
+        <ol className="mt-2">
+          <li className="list-none"><InsertGap onClick={() => setAdding({ after: "top" })} /></li>
+          {dayGroups.map((g) => {
+            // Like the family plan: a date heading per day with "N pending" / "✓ N done". A day that is fully
+            // done folds away (tap to reopen); today and any day with something still to do stay open.
+            const lines = g.items.flatMap((it) => (it.type === "step" ? [it.s] : it.steps));
+            const doneN = lines.filter((l) => l.status === "done").length;
+            const pendingN = lines.length - doneN;
+            const allDone = lines.length > 0 && pendingN <= 0;
+            const defaultCollapsed = allDone && g.day !== currentDay;
+            const collapsed = defaultCollapsed !== toggledDays.has(g.key);
+            return (
+              <li key={g.key} className="list-none pt-2 first:pt-0">
+                <button type="button" onClick={() => toggleDay(g.key)} aria-expanded={!collapsed} className="flex w-full items-center gap-2 rounded-md py-0.5 text-left hover:bg-slate-50">
+                  <span className="shrink-0 text-[11px] font-bold uppercase tracking-wide text-slate-500">{g.label}</span>
+                  <span className={`shrink-0 rounded-full px-1.5 py-0.5 text-[9px] font-semibold ${allDone ? "bg-emerald-50 text-emerald-600" : "bg-amber-50 text-amber-600"}`}>{allDone ? `✓ ${lines.length} done` : `${pendingN} pending`}</span>
+                  <span className="h-px flex-1 bg-slate-200" />
+                  <svg width="12" height="12" viewBox="0 0 20 20" className={`shrink-0 text-slate-400 transition-transform ${collapsed ? "" : "rotate-90"}`} aria-hidden><path fill="currentColor" d="M7 5l6 5-6 5z" /></svg>
+                </button>
+                {!collapsed && (
+                  <ul className="mt-1">
+                    {g.items.map((it) => {
+                      const flat = items.indexOf(it);
+                      return (
+                        <li key={it.type === "step" ? it.s.id : it.key}>
+                          {it.type === "step"
+                            ? <StepRow s={it.s} accounts={accounts} isFirst={flat === 0} isLast={flat === items.length - 1} />
+                            : <ClumpRow steps={it.steps} accounts={accounts} isFirst={flat === 0} isLast={flat === items.length - 1} />}
+                          <InsertGap onClick={() => setAdding({ after: it.type === "step" ? it.s.id : it.steps[it.steps.length - 1].id })} />
+                        </li>
+                      );
+                    })}
+                  </ul>
+                )}
+              </li>
+            );
+          })}
+        </ol>
       )}
 
       {removed.length > 0 && (
@@ -192,6 +222,23 @@ export function PersonalPlanSteps({ steps, accounts, categories, periodId, setup
       {adding && <AddStepModal periodId={periodId} accounts={accounts} categories={categories} after={adding.after} onClose={() => setAdding(null)} />}
     </section>
   );
+}
+
+const ordinal = (d: number) => `${d}${["th", "st", "nd", "rd"][((d % 100) - 20) % 10] ?? ["th", "st", "nd", "rd"][d % 100] ?? "th"}`;
+type DayGroup = { key: string; day: number | null; label: string; items: PlanItem[] };
+// Consecutive items on the same date share one heading (so a manual re-order that breaks date order simply
+// repeats a heading rather than hiding anything). Undated income reads "Up front", other undated "No set date".
+function groupByDay(items: PlanItem[]): DayGroup[] {
+  const out: DayGroup[] = [];
+  for (const it of items) {
+    const first = it.type === "step" ? it.s : it.steps[0];
+    const day = first.dayOfMonth;
+    const label = day != null ? `📅 ${ordinal(day)}` : first.kind === "income" ? "⬆︎ Up front" : "🗓 No set date";
+    const last = out[out.length - 1];
+    if (last && last.label === label) last.items.push(it);
+    else out.push({ key: `${label}#${out.length}`, day, label, items: [it] });
+  }
+  return out;
 }
 
 type PlanItem = { type: "step"; s: PlanStepView } | { type: "clump"; key: string; steps: PlanStepView[] };

@@ -1264,7 +1264,7 @@ async function applyStepRoute(
 // Place `stepId` right after `afterId` (null = top, undefined = leave where derived) and renumber every step
 // of the month, so the manual order is one consistent sequence.
 async function renumberSteps(tx: Prisma.TransactionClient, periodId: number, moved?: { stepId: number; afterId: number | null }) {
-  const all = await tx.personalPlanStep.findMany({ where: { periodId }, select: { id: true, dayOfMonth: true, sortOrder: true, position: true } });
+  const all = await tx.personalPlanStep.findMany({ where: { periodId }, select: { id: true, kind: true, dayOfMonth: true, sortOrder: true, position: true } });
   let ordered = orderSteps(all).map((s) => s.id);
   if (moved) {
     ordered = ordered.filter((id) => id !== moved.stepId);
@@ -1569,7 +1569,7 @@ export async function movePlanStepGroup(formData: FormData) {
   const first = await prisma.personalPlanStep.findFirst({ where: { id: ids[0], memberId: member.id }, select: { periodId: true } });
   if (!first) return;
   await prisma.$transaction(async (tx) => {
-    const all = await tx.personalPlanStep.findMany({ where: { periodId: first.periodId, memberId: member.id }, select: { id: true, dayOfMonth: true, sortOrder: true, position: true, status: true } });
+    const all = await tx.personalPlanStep.findMany({ where: { periodId: first.periodId, memberId: member.id }, select: { id: true, kind: true, dayOfMonth: true, sortOrder: true, position: true, status: true } });
     const ordered = orderSteps(all);
     const inGroup = new Set(ids);
     const idxs = ordered.map((s, i) => (inGroup.has(s.id) ? i : -1)).filter((i) => i >= 0);
@@ -1694,7 +1694,7 @@ export async function movePlanStep(formData: FormData) {
   const step = await prisma.personalPlanStep.findFirst({ where: { id, memberId: member.id }, select: { id: true, periodId: true } });
   if (!step) return;
   await prisma.$transaction(async (tx) => {
-    const all = await tx.personalPlanStep.findMany({ where: { periodId: step.periodId }, select: { id: true, dayOfMonth: true, sortOrder: true, position: true, status: true } });
+    const all = await tx.personalPlanStep.findMany({ where: { periodId: step.periodId }, select: { id: true, kind: true, dayOfMonth: true, sortOrder: true, position: true, status: true } });
     const ordered = orderSteps(all);
     const visible = ordered.filter((s) => s.status !== "skipped");
     const at = visible.findIndex((s) => s.id === id);

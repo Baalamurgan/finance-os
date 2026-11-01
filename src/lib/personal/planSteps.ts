@@ -118,12 +118,18 @@ export function diffPlanSteps(
   return { toCreate, prunePendingIds };
 }
 
-// Display order: a manual position (move up/down / insert between) wins; steps without one fall back to the
-// derived order — by day (undated last), then the stored sort order, then id — and sit after positioned ones.
-export function orderSteps<T extends { dayOfMonth: number | null; sortOrder: number; id: number; position?: number | null }>(steps: T[]): T[] {
+// Display order, like the family plan: a manual position (move up/down / insert between) wins; otherwise by DAY —
+// undated income sits "up front", other undated steps last — and within a day money MOVES come before BILLS:
+// income, then transfers/savings, then bills, then card bills. Then the stored sort order, then id.
+const KIND_RANK: Record<string, number> = { income: 0, transfer: 1, save: 1, expense: 2, spend: 3, cardbill: 4 };
+export function effectiveDay(s: { dayOfMonth: number | null; kind?: string }): number {
+  return s.dayOfMonth ?? (s.kind === "income" ? 0 : 99);
+}
+export function orderSteps<T extends { dayOfMonth: number | null; sortOrder: number; id: number; position?: number | null; kind?: string }>(steps: T[]): T[] {
   const pos = (s: T) => s.position ?? Number.MAX_SAFE_INTEGER;
+  const rank = (s: T) => KIND_RANK[s.kind ?? ""] ?? 5;
   return [...steps].sort(
-    (a, b) => pos(a) - pos(b) || (a.dayOfMonth ?? 99) - (b.dayOfMonth ?? 99) || a.sortOrder - b.sortOrder || a.id - b.id,
+    (a, b) => pos(a) - pos(b) || effectiveDay(a) - effectiveDay(b) || rank(a) - rank(b) || a.sortOrder - b.sortOrder || a.id - b.id,
   );
 }
 

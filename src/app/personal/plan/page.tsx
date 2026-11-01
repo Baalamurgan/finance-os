@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { formatINR } from "@/lib/format";
+import { istDateParts } from "@/lib/time";
 import { loadPersonal } from "@/lib/loadPersonal";
 import { prisma } from "@/lib/prisma";
 import { BALANCE_ACCOUNT_TYPES as BALANCE_TYPES } from "@/lib/finance/types";
@@ -42,6 +43,7 @@ export default async function PersonalPlanPage({
     );
   }
 
+  const todayIst = istDateParts(); // IST today — keeps today's date open in the dated plan
   // Materialise this month's plan steps from the templates (idempotent), then load them.
   await ensurePlanSteps(c.member.id, c.selected.id);
   const [wallet, dues, cash, savings, bills, owed, transfers, steps, allAccts, setupIncomes, setupMoves, setupBills, setupSpends] = await Promise.all([
@@ -224,7 +226,7 @@ export default async function PersonalPlanPage({
         </section>
 
         {/* This month's executable plan steps (income · transfers · saves), ticked as they happen */}
-        <PersonalPlanSteps steps={stepViews} accounts={allAccts} categories={c.categories.map((k) => ({ id: k.id, name: k.name, icon: k.icon }))} periodId={c.selected.id} setup={{ incomes: setupIncomes, moves: setupMoves, bills: setupBills, spends: setupSpends, removed: planSteps.filter((x) => x.status === "skipped").length }} />
+        <PersonalPlanSteps steps={stepViews} accounts={allAccts} categories={c.categories.map((k) => ({ id: k.id, name: k.name, icon: k.icon }))} periodId={c.selected.id} currentDay={todayIst.year === c.selected.year && todayIst.month === c.selected.month ? todayIst.day : null} setup={{ incomes: setupIncomes, moves: setupMoves, bills: setupBills, spends: setupSpends, removed: planSteps.filter((x) => x.status === "skipped").length }} />
 
         {/* Account check — you define the transfers in Setup; this checks they cover what each account pays */}
         <AccountFlowCheck flows={flows} unassignedBills={unassignedBills} />
