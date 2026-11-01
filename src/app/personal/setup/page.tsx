@@ -70,7 +70,7 @@ export default async function PersonalSetup({
         <PersonalRecurringSection
           kind="expense"
           title="🧾 Recurring expenses"
-          hint="Rent, EMIs, subscriptions — fixed bills each month. Pick a card to put it on the card bill."
+          hint="Rent, EMIs, subscriptions — fixed bills each month. They sit in Monthly expenses (set aside from day one) and pay themselves on their day from the account you pick; a credit card puts it on the card bill."
           items={expenseItems}
           periodId={periodId}
           categories={catList}
@@ -80,7 +80,7 @@ export default async function PersonalSetup({
         <PersonalRecurringSection
           kind="spend"
           title="🛒 Recurring spends"
-          hint="Regular daily-type spends (gym, chai, fuel) that repeat each month on their day."
+          hint="Regular daily-type spends (gym, chai, fuel) that repeat each month on their day. They appear in your Money Plan — mark one paid (pick Cash/UPI or a card) and it comes out of Can-spend."
           items={spendItems}
           periodId={periodId}
           categories={catList}

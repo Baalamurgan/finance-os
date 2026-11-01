@@ -4,6 +4,7 @@ import { prisma } from "@/lib/prisma";
 import { isPersonalUnlocked } from "@/lib/personal-lock";
 import { ensurePersonalMonth, personalAnchor } from "@/lib/personal";
 import { getCardBillReminders } from "@/lib/personal/cash";
+import { settleDueBills } from "@/lib/personal/autoBills";
 
 export type PersonalCommon = NonNullable<Awaited<ReturnType<typeof loadPersonal>>>;
 
@@ -35,6 +36,7 @@ export async function loadPersonal(params?: { y?: string; m?: string }) {
   if (!(await isPersonalUnlocked(member.id))) redirect("/personal/lock");
 
   await ensurePersonalMonth(member.id);
+  await settleDueBills(member.id); // recurring bills reaching their due day debit their account on their own
 
   const periods = await prisma.personalPeriod.findMany({
     where: { memberId: member.id },

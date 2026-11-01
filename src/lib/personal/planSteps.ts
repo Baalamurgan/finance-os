@@ -128,7 +128,7 @@ export function orderSteps<T extends { dayOfMonth: number | null; sortOrder: num
 
 // Idempotently materialise this month's steps from the templates. Safe to call on every plan-page load.
 export async function ensurePlanSteps(memberId: number, periodId: number): Promise<void> {
-  const [incomes, planItems, expenses, spends, existing, period, dues, paidBills] = await Promise.all([
+  const [incomes, planItems, spends, existing, period, dues, paidBills] = await Promise.all([
     prisma.personalIncome.findMany({
       where: { periodId, recurring: true },
       select: { id: true, source: true, amount: true, date: true, accountId: true },
@@ -137,12 +137,9 @@ export async function ensurePlanSteps(memberId: number, periodId: number): Promi
       where: { memberId, active: true },
       select: { id: true, kind: true, label: true, amount: true, dayOfMonth: true, fromAccountId: true, toAccountId: true, note: true },
     }),
-    // Only still-unpaid planned bills/spends (Setup's recurring ones + one-offs added in the plan) become steps — a ticked one keeps its (done) step, and
-    // pre-cutover months (rows default pending=false) stay on the old model. The budget counts them either way.
-    prisma.personalExpense.findMany({
-      where: { periodId, pending: true },
-      select: { id: true, label: true, amount: true, date: true, cardAccountId: true, payAccountId: true },
-    }),
+    // Recurring BILLS are not steps any more — they're budget lines that settle themselves on their due day
+    // (see autoBills.ts). Only recurring SPENDS (and one-off spends added in the plan) are steps: ticking one
+    // pays it from the chosen Cash/UPI or card and draws down Can-spend.
     prisma.personalSpend.findMany({
       where: { periodId, pending: true },
       select: { id: true, note: true, amount: true, date: true, cardAccountId: true, payAccountId: true, category: { select: { name: true } } },
@@ -182,7 +179,7 @@ export async function ensurePlanSteps(memberId: number, periodId: number): Promi
   const { toCreate, prunePendingIds: pruneCandidates } = diffPlanSteps(
     incomes.map((i) => ({ id: i.id, source: i.source, amount: i.amount, dayOfMonth: i.date.getDate(), accountId: i.accountId })),
     planItems,
-    expenses.map((e) => ({ id: e.id, label: e.label || "Bill", amount: e.amount, dayOfMonth: e.date.getDate(), fromAccountId: e.cardAccountId ?? e.payAccountId })),
+    [], // bills: no steps (see above); a pending bill step from before this change is pruned by the diff
     spends.map((s) => ({ id: s.id, label: s.note?.trim() || s.category?.name || "Spend", amount: s.amount, dayOfMonth: s.date.getDate(), fromAccountId: s.cardAccountId ?? s.payAccountId })),
     period ? { periodId, amount: period.income, accountId: period.incomeAccountId } : null,
     existing,
@@ -216,9 +213,6 @@ export async function ensurePlanSteps(memberId: number, periodId: number): Promi
       if (r) want = { label: r.source, amount: r.amount, toAccountId: r.accountId };
     } else if (e.templateKind === "baseincome" && period && e.templateId === periodId) {
       want = { label: e.label, amount: period.income, toAccountId: period.incomeAccountId };
-    } else if (e.templateKind === "expense") {
-      const r = expenses.find((x) => x.id === e.templateId);
-      if (r) want = { label: r.label || "Bill", amount: r.amount, fromAccountId: r.cardAccountId ?? r.payAccountId };
     } else if (e.templateKind === "spend") {
       const r = spends.find((x) => x.id === e.templateId);
       if (r) want = { label: r.note?.trim() || r.category?.name || "Spend", amount: r.amount, fromAccountId: r.cardAccountId ?? r.payAccountId };

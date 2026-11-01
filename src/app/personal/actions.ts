@@ -16,6 +16,7 @@ import { log } from "@/lib/log";
 import { isPersonalUnlocked } from "@/lib/personal-lock";
 import { ensurePersonalMonth, ensurePersonalPreview, rebuildPersonalPreview, seedPersonalCategories } from "@/lib/personal";
 import { getCardBillReminders, getCardDues } from "@/lib/personal/cash";
+import { resetAutoBill, billAutoMarker } from "@/lib/personal/autoBills";
 import { orderSteps, cardBillTemplateId, decodeCardBillTemplateId } from "@/lib/personal/planSteps";
 import { payFamilyCardBill, unpayFamilyCardBill } from "@/app/actions";
 import { currentCycle } from "@/lib/finance/cycle";
@@ -494,7 +495,10 @@ export async function updatePersonalExpense(
   if (!label || !categoryId || !amount || amount <= 0)
     return { ok: false, error: "Enter a name, category and amount.", n };
   const cardAccountId = await ccCardId(member.id, formData);
-  await prisma.personalExpense.update({ where: { id }, data: { label, categoryId, amount, recurring, cardAccountId } });
+  await prisma.$transaction(async (tx) => {
+    await tx.personalExpense.update({ where: { id }, data: { label, categoryId, amount, recurring, cardAccountId } });
+    await resetAutoBill(tx, member.id, id); // re-settles with the new details if it had auto-debited
+  });
   rev();
   return { ok: true, n };
 }
@@ -541,7 +545,10 @@ export async function upsertPersonalRecurring(prev: PersonalSaveState, formData:
     if (id) {
       const e = await prisma.personalExpense.findUnique({ where: { id } });
       if (!e || e.memberId !== member.id) return { ok: false, error: "Not found.", n };
-      await prisma.personalExpense.update({ where: { id }, data });
+      await prisma.$transaction(async (tx) => {
+        await tx.personalExpense.update({ where: { id }, data });
+        await resetAutoBill(tx, member.id, id);
+      });
     } else await prisma.personalExpense.create({ data: { memberId: member.id, periodId, ...data } });
   } else {
     const data = { categoryId, amount, note: label, date, recurring: true, cardAccountId, payAccountId };
@@ -577,7 +584,7 @@ export async function deletePersonalRecurring(formData: FormData) {
     if (e && e.memberId === member.id) await prisma.personalIncome.delete({ where: { id } });
   } else if (kind === "expense") {
     const e = await prisma.personalExpense.findUnique({ where: { id } });
-    if (e && e.memberId === member.id) await prisma.personalExpense.delete({ where: { id } });
+    if (e && e.memberId === member.id) await prisma.$transaction([prisma.accountTransaction.deleteMany({ where: { memberId: member.id, category: billAutoMarker(id) } }), prisma.personalExpense.delete({ where: { id } })]);
   } else if (kind === "spend") {
     const e = await prisma.personalSpend.findUnique({ where: { id } });
     if (e && e.memberId === member.id) await prisma.personalSpend.delete({ where: { id } });
@@ -591,7 +598,7 @@ export async function deletePersonalExpense(formData: FormData) {
   const id = Number(formData.get("id"));
   const e = await prisma.personalExpense.findUnique({ where: { id } });
   if (!e || e.memberId !== member.id) return;
-  await prisma.personalExpense.delete({ where: { id } });
+  await prisma.$transaction([prisma.accountTransaction.deleteMany({ where: { memberId: member.id, category: billAutoMarker(id) } }), prisma.personalExpense.delete({ where: { id } })]);
   rev();
 }
 
@@ -1415,6 +1422,58 @@ export async function untickPlanStep(formData: FormData) {
   rev();
 }
 
+// ── Clumped transfers ─────────────────────────────────────────────────────────────────────────────
+// Several Setup transfers with the same sender, receiver and day are shown as ONE step ("HDFC → SBI ₹22,204")
+// with their lines inside. Ticking / unticking / moving the clump acts on every line in it; each line still
+// posts its own ledger pair (so the account history keeps "gold", "APY", "FD"…), and the balance moves by the sum.
+const idList = (raw: FormDataEntryValue | null) => String(raw ?? "").split(",").map((x) => Number(x.trim())).filter((x) => x > 0);
+
+export async function tickPlanStepGroup(formData: FormData) {
+  for (const id of idList(formData.get("ids"))) {
+    const fd = new FormData();
+    fd.set("id", String(id));
+    await tickPlanStep(fd);
+  }
+}
+
+export async function untickPlanStepGroup(formData: FormData) {
+  for (const id of idList(formData.get("ids"))) {
+    const fd = new FormData();
+    fd.set("id", String(id));
+    await untickPlanStep(fd);
+  }
+}
+
+// Move a clump one place up or down: its lines travel together past the neighbouring visible step.
+export async function movePlanStepGroup(formData: FormData) {
+  const member = await me();
+  if (!member) return;
+  const ids = idList(formData.get("ids"));
+  const dir = formData.get("dir") === "up" ? -1 : 1;
+  if (ids.length === 0) return;
+  const first = await prisma.personalPlanStep.findFirst({ where: { id: ids[0], memberId: member.id }, select: { periodId: true } });
+  if (!first) return;
+  await prisma.$transaction(async (tx) => {
+    const all = await tx.personalPlanStep.findMany({ where: { periodId: first.periodId, memberId: member.id }, select: { id: true, dayOfMonth: true, sortOrder: true, position: true, status: true } });
+    const ordered = orderSteps(all);
+    const inGroup = new Set(ids);
+    const idxs = ordered.map((s, i) => (inGroup.has(s.id) ? i : -1)).filter((i) => i >= 0);
+    if (idxs.length === 0) return;
+    const visible = (s: (typeof ordered)[number]) => s.status !== "skipped" && !inGroup.has(s.id);
+    // nearest visible, non-group neighbour on the side we're moving toward
+    let n = -1;
+    if (dir < 0) { for (let i = idxs[0] - 1; i >= 0; i--) if (visible(ordered[i])) { n = i; break; } }
+    else { for (let i = idxs[idxs.length - 1] + 1; i < ordered.length; i++) if (visible(ordered[i])) { n = i; break; } }
+    if (n < 0) return;
+    const block = idxs.map((i) => ordered[i].id);
+    const rest = ordered.filter((s) => !inGroup.has(s.id)).map((s) => s.id);
+    const at = rest.indexOf(ordered[n].id);
+    rest.splice(dir < 0 ? at : at + 1, 0, ...block);
+    await Promise.all(rest.map((sid, idx) => tx.personalPlanStep.update({ where: { id: sid }, data: { position: idx } })));
+  });
+  rev();
+}
+
 // Pay a credit-card bill step. The cycle's total splits by WHO it is for: the family spends on the card
 // (familyTotal — exactly the "held for this card" figure on the family In-Hand and the family spends shown
 // on the card) are paid out of the family In-Hand, and the rest (your own spends + any annual fee + any ±
@@ -1569,7 +1628,7 @@ export async function addPlanStep(prev: PersonalSaveState, formData: FormData): 
   const label = String(formData.get("label") ?? "").trim();
   const amount = parseAmount(formData.get("amount"));
   const dayOfMonth = clampDay(formData.get("dayOfMonth"));
-  if (!["income", "transfer", "save", "expense", "spend"].includes(kind)) return { ok: false, error: "Pick a type.", n };
+  if (!["income", "transfer", "save", "spend"].includes(kind)) return { ok: false, error: "Pick a type.", n }; // bills are budget lines (Monthly expenses), not steps
   if (!label) return { ok: false, error: "Name the step.", n };
   if (!amount || amount <= 0) return { ok: false, error: "Enter an amount.", n };
   const period = await ownsPeriod(member.id, periodId);

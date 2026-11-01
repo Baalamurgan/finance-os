@@ -4,6 +4,7 @@ import { useActionState, useEffect, useRef, useState, type ReactNode } from "rea
 import {
   tickPlanStep, untickPlanStep, redatePlanStep, setPlanStepSkipped, deletePlanStep, movePlanStep,
   addPlanStep, editPlanStep, setPlanStepRoute, payCardBillStep,
+  tickPlanStepGroup, untickPlanStepGroup, movePlanStepGroup,
   type PersonalSaveState,
 } from "@/app/personal/actions";
 import { useToast } from "@/components/Toast";
@@ -128,13 +129,14 @@ export function PersonalPlanSteps({ steps, accounts, categories, periodId }: { s
   const active = steps.filter((s) => s.status !== "skipped");
   const removed = steps.filter((s) => s.status === "skipped");
   const doneCount = active.filter((s) => s.status === "done").length;
+  const items = clumpSteps(active);
 
   return (
     <section className="rounded-2xl border border-slate-200 bg-white p-4">
       <div className="flex items-center justify-between gap-3">
         <div>
           <h2 className="text-sm font-semibold text-slate-800">This month&apos;s plan</h2>
-          <p className="text-[11px] text-slate-400">Copied from Setup every month. Mark each paid as it happens — it moves the real money.</p>
+          <p className="text-[11px] text-slate-400">Copied from Setup every month: income, transfers, savings, recurring spends and card bills. Recurring bills settle themselves — see Monthly expenses.</p>
         </div>
         {active.length > 0 && <span className="shrink-0 text-[11px] font-medium text-slate-400">{doneCount}/{active.length} done</span>}
       </div>
@@ -147,10 +149,12 @@ export function PersonalPlanSteps({ steps, accounts, categories, periodId }: { s
       ) : (
         <ul className="mt-2">
           <li><InsertGap onClick={() => setAdding({ after: "top" })} /></li>
-          {active.map((s, i) => (
-            <li key={s.id}>
-              <StepRow s={s} accounts={accounts} isFirst={i === 0} isLast={i === active.length - 1} />
-              <InsertGap onClick={() => setAdding({ after: s.id })} />
+          {items.map((it, i) => (
+            <li key={it.type === "step" ? it.s.id : it.key}>
+              {it.type === "step"
+                ? <StepRow s={it.s} accounts={accounts} isFirst={i === 0} isLast={i === items.length - 1} />
+                : <ClumpRow steps={it.steps} accounts={accounts} isFirst={i === 0} isLast={i === items.length - 1} />}
+              <InsertGap onClick={() => setAdding({ after: it.type === "step" ? it.s.id : it.steps[it.steps.length - 1].id })} />
             </li>
           ))}
         </ul>
@@ -172,6 +176,72 @@ export function PersonalPlanSteps({ steps, accounts, categories, periodId }: { s
       </button>
       {adding && <AddStepModal periodId={periodId} accounts={accounts} categories={categories} after={adding.after} onClose={() => setAdding(null)} />}
     </section>
+  );
+}
+
+type PlanItem = { type: "step"; s: PlanStepView } | { type: "clump"; key: string; steps: PlanStepView[] };
+
+// Transfers that share the same sender, receiver, day and state collapse into ONE clump (shown as a single
+// "A → B ₹total" step with its lines inside). The clump sits where its first line sat.
+function clumpSteps(active: PlanStepView[]): PlanItem[] {
+  const keyOf = (s: PlanStepView) => (s.kind === "transfer" && s.fromId != null && s.toId != null ? `${s.fromId}|${s.toId}|${s.dayOfMonth ?? "x"}|${s.status}` : null);
+  const groups = new Map<string, PlanStepView[]>();
+  for (const s of active) { const k = keyOf(s); if (k) groups.set(k, [...(groups.get(k) ?? []), s]); }
+  const out: PlanItem[] = [];
+  const emitted = new Set<string>();
+  for (const s of active) {
+    const k = keyOf(s);
+    const g = k ? groups.get(k)! : null;
+    if (k && g && g.length > 1) {
+      if (emitted.has(k)) continue;
+      emitted.add(k);
+      out.push({ type: "clump", key: `clump:${k}`, steps: g });
+    } else out.push({ type: "step", s });
+  }
+  return out;
+}
+
+// One step for several same-route transfers: tick once and the real total moves; open it to see, edit or
+// remove the individual lines (gold, APY, FD…).
+function ClumpRow({ steps, accounts, isFirst, isLast }: { steps: PlanStepView[]; accounts: Acct[]; isFirst: boolean; isLast: boolean }) {
+  const [open, setOpen] = useState(false);
+  const first = steps[0];
+  const done = first.status === "done";
+  const total = Math.round(steps.reduce((t, s) => t + s.amount, 0) * 100) / 100;
+  const ids = steps.map((s) => s.id).join(",");
+  return (
+    <div className="space-y-1.5">
+      <div className={`flex items-center gap-2.5 rounded-lg border p-2.5 ${done ? "border-emerald-100 bg-emerald-50/60" : "border-slate-100"}`}>
+        <form action={done ? untickPlanStepGroup : tickPlanStepGroup}>
+          <input type="hidden" name="ids" value={ids} />
+          <button type="submit" aria-label={done ? "Mark all not done" : "Mark all done"} title={done ? "Undo — reverses every line" : `Move ${formatINR(total)} — marks every line done`}
+            className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full border text-xs transition-colors ${done ? "border-emerald-500 bg-emerald-500 text-white" : "border-slate-300 text-transparent hover:border-emerald-400"}`}>✓</button>
+        </form>
+        <button type="button" onClick={() => setOpen((v) => !v)} className="min-w-0 flex-1 text-left" aria-expanded={open}>
+          <span className="flex items-center gap-1.5">
+            <span className="shrink-0">🔁</span>
+            <span className={`truncate text-sm font-medium ${done ? "text-slate-500" : "text-slate-800"}`}>{first.fromName ?? "?"} → {first.toName ?? "?"}</span>
+            <span className="shrink-0 rounded-full bg-slate-100 px-1.5 text-[9px] font-medium text-slate-500">{steps.length} items</span>
+          </span>
+          <span className="block truncate text-[11px] text-slate-400">{steps.map((s) => `${s.label} ${formatINR(s.amount)}`).join(" · ")} <span className="text-slate-300">{open ? "▴" : "▾"}</span></span>
+        </button>
+        <span className="shrink-0 text-right">
+          <span className="block tabular-nums text-sm font-semibold text-slate-800">{formatINR(total)}</span>
+          {first.dayOfMonth != null && <span className="block text-[11px] text-slate-400">day {first.dayOfMonth}</span>}
+        </span>
+        <span className="flex shrink-0 items-center text-[11px]">
+          <form action={movePlanStepGroup}><input type="hidden" name="ids" value={ids} /><input type="hidden" name="dir" value="up" />
+            <button type="submit" disabled={isFirst} aria-label="Move up" className="px-1 text-slate-400 hover:text-slate-800 disabled:opacity-25">↑</button></form>
+          <form action={movePlanStepGroup}><input type="hidden" name="ids" value={ids} /><input type="hidden" name="dir" value="down" />
+            <button type="submit" disabled={isLast} aria-label="Move down" className="px-1 text-slate-400 hover:text-slate-800 disabled:opacity-25">↓</button></form>
+        </span>
+      </div>
+      {open && (
+        <ul className="ml-4 space-y-1.5 border-l-2 border-slate-100 pl-2">
+          {steps.map((s) => <li key={s.id}><StepRow s={s} accounts={accounts} isFirst isLast /></li>)}
+        </ul>
+      )}
+    </div>
   );
 }
 
@@ -468,7 +538,7 @@ function DayEdit({ id, day }: { id: number; day: number | null }) {
 function AddStepModal({ periodId, accounts, categories, after, onClose }: { periodId: number; accounts: Acct[]; categories: Cat[]; after: number | "top"; onClose: () => void }) {
   const toast = useToast();
   const prevN = useRef(0);
-  const [kind, setKind] = useState("expense");
+  const [kind, setKind] = useState("spend");
   const [state, formAction] = useActionState(addPlanStep, { ok: false, n: 0 } as PersonalSaveState);
   useEffect(() => {
     if (state.n > prevN.current) {
@@ -494,8 +564,8 @@ function AddStepModal({ periodId, accounts, categories, after, onClose }: { peri
           <p className="rounded-lg bg-slate-50 px-3 py-2 text-[11px] text-slate-500">
             {after === "top" ? "Goes at the top of" : "Goes right after the chosen row in"} this month&apos;s plan — this month only.
           </p>
-          <div className="grid grid-cols-5 gap-1.5">
-            {(["income", "expense", "spend", "transfer", "save"] as const).map((k) => (
+          <div className="grid grid-cols-4 gap-1.5">
+            {(["income", "spend", "transfer", "save"] as const).map((k) => (
               <button key={k} type="button" onClick={() => setKind(k)}
                 className={`rounded-lg border-2 px-1 py-2 text-[11px] font-medium ${kind === k ? "border-emerald-500 bg-emerald-50 text-emerald-700" : "border-slate-200 text-slate-500"}`}>
                 <span className="block">{KIND_ICON[k]}</span>{KIND_NAME[k]}
