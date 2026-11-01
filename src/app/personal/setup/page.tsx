@@ -70,7 +70,7 @@ export default async function PersonalSetup({
         <PersonalRecurringSection
           kind="expense"
           title="🧾 Recurring expenses"
-          hint="Rent, EMIs, subscriptions — fixed bills each month. They sit in Monthly expenses (set aside from day one) and pay themselves on their day from the account you pick; a credit card puts it on the card bill."
+          hint="Rent, EMIs, subscriptions — fixed bills each month. They sit in Monthly expenses (set aside from day one) and come into your Money Plan to tick off when paid, from the account you pick; a credit card puts it on the card bill."
           items={expenseItems}
           periodId={periodId}
           categories={catList}

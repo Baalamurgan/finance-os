@@ -16,7 +16,6 @@ import { log } from "@/lib/log";
 import { isPersonalUnlocked } from "@/lib/personal-lock";
 import { ensurePersonalMonth, ensurePersonalPreview, rebuildPersonalPreview, seedPersonalCategories } from "@/lib/personal";
 import { getCardBillReminders, getCardDues } from "@/lib/personal/cash";
-import { resetAutoBill, billAutoMarker } from "@/lib/personal/autoBills";
 import { ensurePlanSteps, orderSteps, cardBillTemplateId, decodeCardBillTemplateId } from "@/lib/personal/planSteps";
 import { payFamilyCardBill, unpayFamilyCardBill } from "@/app/actions";
 import { currentCycle } from "@/lib/finance/cycle";
@@ -495,10 +494,7 @@ export async function updatePersonalExpense(
   if (!label || !categoryId || !amount || amount <= 0)
     return { ok: false, error: "Enter a name, category and amount.", n };
   const cardAccountId = await ccCardId(member.id, formData);
-  await prisma.$transaction(async (tx) => {
-    await tx.personalExpense.update({ where: { id }, data: { label, categoryId, amount, recurring, cardAccountId } });
-    await resetAutoBill(tx, member.id, id); // re-settles with the new details if it had auto-debited
-  });
+  await prisma.personalExpense.update({ where: { id }, data: { label, categoryId, amount, recurring, cardAccountId } });
   rev();
   return { ok: true, n };
 }
@@ -545,10 +541,7 @@ export async function upsertPersonalRecurring(prev: PersonalSaveState, formData:
     if (id) {
       const e = await prisma.personalExpense.findUnique({ where: { id } });
       if (!e || e.memberId !== member.id) return { ok: false, error: "Not found.", n };
-      await prisma.$transaction(async (tx) => {
-        await tx.personalExpense.update({ where: { id }, data });
-        await resetAutoBill(tx, member.id, id);
-      });
+      await prisma.personalExpense.update({ where: { id }, data });
     } else await prisma.personalExpense.create({ data: { memberId: member.id, periodId, ...data } });
   } else {
     const data = { categoryId, amount, note: label, date, recurring: true, cardAccountId, payAccountId };
@@ -584,7 +577,7 @@ export async function deletePersonalRecurring(formData: FormData) {
     if (e && e.memberId === member.id) await prisma.personalIncome.delete({ where: { id } });
   } else if (kind === "expense") {
     const e = await prisma.personalExpense.findUnique({ where: { id } });
-    if (e && e.memberId === member.id) await prisma.$transaction([prisma.accountTransaction.deleteMany({ where: { memberId: member.id, category: billAutoMarker(id) } }), prisma.personalExpense.delete({ where: { id } })]);
+    if (e && e.memberId === member.id) await prisma.personalExpense.delete({ where: { id } });
   } else if (kind === "spend") {
     const e = await prisma.personalSpend.findUnique({ where: { id } });
     if (e && e.memberId === member.id) await prisma.personalSpend.delete({ where: { id } });
@@ -598,7 +591,7 @@ export async function deletePersonalExpense(formData: FormData) {
   const id = Number(formData.get("id"));
   const e = await prisma.personalExpense.findUnique({ where: { id } });
   if (!e || e.memberId !== member.id) return;
-  await prisma.$transaction([prisma.accountTransaction.deleteMany({ where: { memberId: member.id, category: billAutoMarker(id) } }), prisma.personalExpense.delete({ where: { id } })]);
+  await prisma.personalExpense.delete({ where: { id } });
   rev();
 }
 
@@ -1467,14 +1460,16 @@ export async function rebuildPlanSteps(formData: FormData) {
   const periodId = Number(formData.get("periodId"));
   if (!(await ownsPeriod(member.id, periodId))) return;
   await ensurePlanSteps(member.id, periodId);
-  const [steps, incomes, items, spends] = await Promise.all([
+  const [steps, incomes, items, bills, spends] = await Promise.all([
     prisma.personalPlanStep.findMany({ where: { periodId, memberId: member.id, status: "pending", snapshot: { equals: Prisma.DbNull }, templateId: { not: null } } }),
     prisma.personalIncome.findMany({ where: { periodId, recurring: true } }),
     prisma.personalPlanItem.findMany({ where: { memberId: member.id, active: true } }),
+    prisma.personalExpense.findMany({ where: { periodId, pending: true } }),
     prisma.personalSpend.findMany({ where: { periodId, pending: true }, include: { category: { select: { name: true } } } }),
   ]);
   const inc = new Map(incomes.map((r) => [r.id, r]));
   const itm = new Map(items.map((r) => [r.id, r]));
+  const bil = new Map(bills.map((r) => [r.id, r]));
   const spd = new Map(spends.map((r) => [r.id, r]));
   const ops: Prisma.PrismaPromise<unknown>[] = [];
   for (const st of steps) {
@@ -1485,6 +1480,9 @@ export async function rebuildPlanSteps(formData: FormData) {
     } else if (st.templateKind === "planitem") {
       const r = itm.get(id);
       if (r) ops.push(prisma.personalPlanStep.update({ where: { id: st.id }, data: { kind: r.kind, label: r.label, amount: r.amount, dayOfMonth: r.dayOfMonth, fromAccountId: r.fromAccountId, toAccountId: r.toAccountId, note: r.note } }));
+    } else if (st.templateKind === "expense") {
+      const r = bil.get(id);
+      if (r) ops.push(prisma.personalPlanStep.update({ where: { id: st.id }, data: { label: r.label || "Bill", amount: r.amount, dayOfMonth: r.date.getDate(), fromAccountId: r.cardAccountId ?? r.payAccountId } }));
     } else if (st.templateKind === "spend") {
       const r = spd.get(id);
       if (r) ops.push(prisma.personalPlanStep.update({ where: { id: st.id }, data: { label: r.note?.trim() || r.category?.name || "Spend", amount: r.amount, dayOfMonth: r.date.getDate(), fromAccountId: r.cardAccountId ?? r.payAccountId } }));
@@ -1705,7 +1703,7 @@ export async function addPlanStep(prev: PersonalSaveState, formData: FormData): 
   const label = String(formData.get("label") ?? "").trim();
   const amount = parseAmount(formData.get("amount"));
   const dayOfMonth = clampDay(formData.get("dayOfMonth"));
-  if (!["income", "transfer", "save", "spend"].includes(kind)) return { ok: false, error: "Pick a type.", n }; // bills are budget lines (Monthly expenses), not steps
+  if (!["income", "transfer", "save", "expense", "spend"].includes(kind)) return { ok: false, error: "Pick a type.", n };
   if (!label) return { ok: false, error: "Name the step.", n };
   if (!amount || amount <= 0) return { ok: false, error: "Enter an amount.", n };
   const period = await ownsPeriod(member.id, periodId);

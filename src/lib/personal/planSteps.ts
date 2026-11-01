@@ -1,5 +1,6 @@
 import { prisma } from "@/lib/prisma";
 import { getCardDues } from "@/lib/personal/cash";
+import { revertAutoBills } from "@/lib/personal/autoBills";
 
 // Generation + ordering for the personal Money-Plan steps. A month's steps are materialised from two
 // template sources — recurring income rows (recurring = true PersonalIncome in the month) and the member's
@@ -128,7 +129,8 @@ export function orderSteps<T extends { dayOfMonth: number | null; sortOrder: num
 
 // Idempotently materialise this month's steps from the templates. Safe to call on every plan-page load.
 export async function ensurePlanSteps(memberId: number, periodId: number): Promise<void> {
-  const [incomes, planItems, spends, existing, period, dues, paidBills] = await Promise.all([
+  await revertAutoBills(memberId); // undo any silent due-day auto-debit from the earlier version, then plan as normal
+  const [incomes, planItems, expenses, spends, existing, period, dues, paidBills] = await Promise.all([
     prisma.personalIncome.findMany({
       where: { periodId, recurring: true },
       select: { id: true, source: true, amount: true, date: true, accountId: true },
@@ -137,9 +139,15 @@ export async function ensurePlanSteps(memberId: number, periodId: number): Promi
       where: { memberId, active: true },
       select: { id: true, kind: true, label: true, amount: true, dayOfMonth: true, fromAccountId: true, toAccountId: true, note: true },
     }),
-    // Recurring BILLS are not steps any more — they're budget lines that settle themselves on their due day
-    // (see autoBills.ts). Only recurring SPENDS (and one-off spends added in the plan) are steps: ticking one
-    // pays it from the chosen Cash/UPI or card and draws down Can-spend.
+    // Still-unpaid planned bills (Setup's recurring expenses + one-offs added in the plan) are steps: ticking one
+    // pays it from its account. They count in the month's budget from day one either way. Pre-cutover months
+    // (rows default pending=false) stay on the old model.
+    prisma.personalExpense.findMany({
+      where: { periodId, pending: true },
+      select: { id: true, label: true, amount: true, date: true, cardAccountId: true, payAccountId: true },
+    }),
+    // Still-unpaid planned spends (recurring + one-offs): ticking one pays it from the chosen Cash/UPI or card
+    // and draws down Can-spend.
     prisma.personalSpend.findMany({
       where: { periodId, pending: true },
       select: { id: true, note: true, amount: true, date: true, cardAccountId: true, payAccountId: true, category: { select: { name: true } } },
@@ -179,7 +187,7 @@ export async function ensurePlanSteps(memberId: number, periodId: number): Promi
   const { toCreate, prunePendingIds: pruneCandidates } = diffPlanSteps(
     incomes.map((i) => ({ id: i.id, source: i.source, amount: i.amount, dayOfMonth: i.date.getDate(), accountId: i.accountId })),
     planItems,
-    [], // bills: no steps (see above); a pending bill step from before this change is pruned by the diff
+    expenses.map((e) => ({ id: e.id, label: e.label || "Bill", amount: e.amount, dayOfMonth: e.date.getDate(), fromAccountId: e.cardAccountId ?? e.payAccountId })),
     spends.map((s) => ({ id: s.id, label: s.note?.trim() || s.category?.name || "Spend", amount: s.amount, dayOfMonth: s.date.getDate(), fromAccountId: s.cardAccountId ?? s.payAccountId })),
     period ? { periodId, amount: period.income, accountId: period.incomeAccountId } : null,
     existing,
@@ -213,6 +221,9 @@ export async function ensurePlanSteps(memberId: number, periodId: number): Promi
       if (r) want = { label: r.source, amount: r.amount, toAccountId: r.accountId };
     } else if (e.templateKind === "baseincome" && period && e.templateId === periodId) {
       want = { label: e.label, amount: period.income, toAccountId: period.incomeAccountId };
+    } else if (e.templateKind === "expense") {
+      const r = expenses.find((x) => x.id === e.templateId);
+      if (r) want = { label: r.label || "Bill", amount: r.amount, fromAccountId: r.cardAccountId ?? r.payAccountId };
     } else if (e.templateKind === "spend") {
       const r = spends.find((x) => x.id === e.templateId);
       if (r) want = { label: r.note?.trim() || r.category?.name || "Spend", amount: r.amount, fromAccountId: r.cardAccountId ?? r.payAccountId };
