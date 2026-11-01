@@ -1,6 +1,5 @@
 import { formatINR } from "@/lib/format";
 import { sheetSection, isBudgetLikeCard } from "@/lib/sheetSection";
-import { istYearMonth } from "@/lib/time";
 import { loadCommon } from "@/lib/load";
 import { CARRY_NOTE } from "@/lib/notes";
 import { getRollup, getTrackedExpenses, getMiscReview, getSpendActivity, getFamilyCards } from "@/lib/queries";
@@ -93,12 +92,10 @@ export default async function ExpensesPage({
   // "Planned this month" = EXACTLY the Sheet tab's "Planned expenses" section: this month's Misc-section
   // lines (misc spend-cards + one-offs, incl. the loan prepay), minus carried-over spends. Same source
   // (getRollup) and same grouping (sheetSection) as the Sheet, so the count, rows, ✓ and total match.
-  // Current month onward only (past months have no Planned section on the Sheet). Read-only pointer.
-  const { year: curY, month: curM } = istYearMonth();
-  const showPlanned = c.selected.year * 12 + c.selected.month >= curY * 12 + curM;
-  const rollup = showPlanned ? await getRollup(c.selected.id) : null;
-  const spentCats = new Set(rollup?.spentCatIds ?? []);
-  const plannedRows = (rollup?.expenses ?? [])
+  // Shown for every month (a closed month's planned lines stay visible). Read-only pointer.
+  const rollup = await getRollup(c.selected.id);
+  const spentCats = new Set(rollup.spentCatIds);
+  const plannedRows = rollup.expenses
     .filter((e) => sheetSection(e) === "Misc" && e.note !== CARRY_NOTE)
     .sort((a, b) => b.amount - a.amount);
   // Same "done" rule as the Sheet row: paid, vendor leg paid, or a budget-like card with ≥1 spend.
