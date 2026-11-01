@@ -4,6 +4,7 @@ import { FAMILY_TAG } from "@/lib/revalidate";
 import { MISC_SUBCATEGORIES } from "@/lib/misc";
 import { SURPLUS_NOTE, LEFTOVER_NOTE, CARRY_NOTE, PIGGY_INCOME_NOTE, POOL_NOTE, POOL_BILL_NOTE, REMOVED_NOTE, isPoolNote } from "@/lib/notes";
 import { computeSettlement, ownerChargeActiveFor, type SettleTagged } from "@/lib/settlement-core";
+import { buildAllocation, getMiscCardEnvelopes } from "@/lib/allocation";
 import { planBillMonth, isLumpDue, monthsUntilNextDue, type FundingStyle } from "@/lib/schedule";
 import { suggestCategoryName, normalizeItem, resolveCategoryId } from "@/lib/spendCategorize";
 import { withShareCount } from "@/lib/format";
@@ -367,7 +368,7 @@ export async function getPiggyOverview(householdId: number) {
  * Returns the getPiggyOverview shape plus a projected per-category `sinkingBalances`.
  */
 export async function getProjectedPiggy(householdId: number, sourcePeriodId: number) {
-  const [base, baseBalances, budgets, spends, trackedCats, billSetAsides, billPays] = await Promise.all([
+  const [base, baseBalances, budgets, spends, trackedCats, billSetAsides, billPays, miscEnv] = await Promise.all([
     getPiggyOverview(householdId),
     getSinkingBalances(householdId),
     prisma.budget.findMany({ where: { periodId: sourcePeriodId } }),
@@ -378,8 +379,10 @@ export async function getProjectedPiggy(householdId: number, sourcePeriodId: num
     // any due-month bill paid in the source month: the part it took from that month's set-aside
     // won't accrue (offset model), so subtract it from the projected accrual below.
     prisma.billPayment.findMany({ where: { periodId: sourcePeriodId }, select: { categoryId: true, fromSetAside: true } }),
+    getMiscCardEnvelopes(householdId, sourcePeriodId),
   ]);
-  const budgetOf = (c: number) => budgets.find((b) => b.categoryId === c)?.planned ?? 0;
+  const alloc = buildAllocation(budgets, miscEnv); // Budget row OR a miscCard one-off's envelope (shared basis)
+  const budgetOf = (c: number) => alloc.get(c) ?? 0;
   const spentOf = (c: number) => spends.filter((s) => s.categoryId === c).reduce((a, s) => a + s.amount, 0);
 
   let piggyAccrual = 0;
@@ -457,18 +460,20 @@ export async function getTrends(householdId: number) {
 export async function getWindDownPreview(householdId: number, periodId: number) {
   const period = await prisma.period.findUnique({ where: { id: periodId } });
   if (!period) return null;
-  const [incomes, expenses, budgets, spends, trackedCats, piggy] = await Promise.all([
+  const [incomes, expenses, budgets, spends, trackedCats, piggy, miscEnv] = await Promise.all([
     prisma.incomeEntry.findMany({ where: { periodId } }),
     prisma.expenseEntry.findMany({ where: { periodId } }),
     prisma.budget.findMany({ where: { periodId } }),
     prisma.spend.findMany({ where: { periodId } }),
     prisma.category.findMany({ where: { householdId, tracked: true, onHold: false } }),
     getPiggyOverview(householdId),
+    getMiscCardEnvelopes(householdId, periodId),
   ]);
   const income = incomes.reduce((s, i) => s + i.amount, 0);
   const expense = expenses.reduce((s, e) => s + e.amount, 0);
   const carryOut = period.carryForward + income - expense;
-  const budgetOf = (c: number) => budgets.find((b) => b.categoryId === c)?.planned ?? 0;
+  const alloc = buildAllocation(budgets, miscEnv); // Budget row OR a miscCard one-off's envelope (shared basis)
+  const budgetOf = (c: number) => alloc.get(c) ?? 0;
   const spentOf = (c: number) => spends.filter((s) => s.categoryId === c).reduce((a, s) => a + s.amount, 0);
 
   let piggyAccrual = 0, sinkingAccrual = 0, carried = 0;

@@ -9,6 +9,7 @@ import { generateMonth } from "@/lib/periodClone";
 import { planBillMonth, isLumpDue } from "@/lib/schedule";
 import { budgetShortfallReductions } from "@/lib/budgetCarry";
 import { CARRY_NOTE, SURPLUS_NOTE, LEFTOVER_NOTE } from "@/lib/notes";
+import { buildAllocation, getMiscCardEnvelopes } from "@/lib/allocation";
 
 type Tx = Parameters<Parameters<typeof prisma.$transaction>[0]>[0];
 
@@ -72,7 +73,7 @@ export async function windDownPeriod(periodId: number, opts: { leftoversToIncome
   if (!period || period.status !== "open") return;
   const householdId = period.householdId;
 
-  const [incomes, expenses, budgets, spends, trackedCats, billFundCats, sinkFunds, setAsideSkips, billPays] = await Promise.all([
+  const [incomes, expenses, budgets, spends, trackedCats, billFundCats, sinkFunds, setAsideSkips, billPays, miscEnv] = await Promise.all([
     prisma.incomeEntry.findMany({ where: { periodId } }),
     prisma.expenseEntry.findMany({ where: { periodId } }),
     prisma.budget.findMany({ where: { periodId } }),
@@ -82,6 +83,7 @@ export async function windDownPeriod(periodId: number, opts: { leftoversToIncome
     prisma.piggyEntry.groupBy({ by: ["categoryId"], where: { householdId, kind: "sinking" }, _sum: { amount: true } }),
     prisma.setAsideSkip.findMany({ where: { periodId }, select: { categoryId: true } }),
     prisma.billPayment.findMany({ where: { periodId }, select: { categoryId: true, fromSetAside: true } }),
+    getMiscCardEnvelopes(householdId, periodId),
   ]);
   const fundBalance = (catId: number) => sinkFunds.find((f) => f.categoryId === catId)?._sum.amount ?? 0;
   const skippedSetAside = new Set(setAsideSkips.map((s) => s.categoryId));
@@ -99,8 +101,8 @@ export async function windDownPeriod(periodId: number, opts: { leftoversToIncome
   const income = incomes.reduce((s, i) => s + i.amount, 0);
   const expense = expenses.reduce((s, e) => s + e.amount, 0);
 
-  const budgetOf = (catId: number) =>
-    budgets.find((b) => b.categoryId === catId)?.planned ?? 0;
+  const alloc = buildAllocation(budgets, miscEnv); // Budget row OR a miscCard one-off's envelope (same basis as the In-Hand)
+  const budgetOf = (catId: number) => alloc.get(catId) ?? 0;
   const spentOf = (catId: number) =>
     spends.filter((s) => s.categoryId === catId).reduce((sum, s) => sum + s.amount, 0);
 
