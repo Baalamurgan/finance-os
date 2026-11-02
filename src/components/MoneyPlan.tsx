@@ -17,6 +17,7 @@ import { BridgeBillModal } from "@/components/BridgeBillModal";
 import { useToast, useToastAction } from "@/components/Toast";
 import type { MoneyPlanResult } from "@/lib/queries";
 import { canActOnStep, canActInMonth } from "@/lib/planAuth";
+import { CTA_CLASS, CtaLabel } from "@/components/Cta";
 
 // The shared, everyone-visible Money Plan: the month's transfers + bill payments as one ordered,
 // dated checklist. Ticking a step writes through to the real record (settlement / bill paid) — the
@@ -400,7 +401,7 @@ export function MoneyPlan({
                         <form action={withToast(markPiggyHandedOver, { success: "Reverted" })}>
                           <input type="hidden" name="periodId" value={s.handoverPeriodId} />
                           <input type="hidden" name="undo" value="1" />
-                          <MiniBtn>undo</MiniBtn>
+                          <MiniBtn />
                         </form>
                       )}
                     </div>
@@ -408,7 +409,7 @@ export function MoneyPlan({
                   {isHandover && !s.done && (canEdit || currentMemberId === s.fromId || currentMemberId === s.toId) && (
                     <form action={withToast(markPiggyHandedOver, { success: "Marked handed over" })} className="mt-1">
                       <input type="hidden" name="periodId" value={s.handoverPeriodId} />
-                      <MiniBtn primary>✓ mark handed over</MiniBtn>
+                      <MiniBtn primary>Sent</MiniBtn>
                     </form>
                   )}
                   {/* Pool hand-over: the wide "leftover · … + from Piggy" provenance + a combined tick. */}
@@ -421,7 +422,7 @@ export function MoneyPlan({
                       {(canEdit || currentMemberId === s.fromId) && hoIds.length > 0 && (
                         <form action={withToast(hoAction, { success: "Hand-over undone" })}>
                           <input type="hidden" name="ids" value={hoIds.join(",")} />
-                          <button className="text-[10px] font-medium text-slate-400 underline hover:text-slate-600">undo</button>
+                          <MiniBtn />
                         </form>
                       )}
                     </div>
@@ -429,7 +430,7 @@ export function MoneyPlan({
                   {isPoolHandover && !s.done && (canEdit || currentMemberId === s.fromId) && hoIds.length > 0 && (
                     <form action={withToast(hoAction, { success: "Marked handed over" })} className="mt-1">
                       <input type="hidden" name="ids" value={hoIds.join(",")} />
-                      <MiniBtn primary>✓ mark handed over</MiniBtn>
+                      <MiniBtn primary>Sent</MiniBtn>
                     </form>
                   )}
                   {!s.done && short != null && short > 0.005 && (
@@ -453,7 +454,7 @@ export function MoneyPlan({
                           const laterIncome = plan.steps.some((x) => x.kind === "income" && x.toId === s.payerId && (x.day ?? 0) > (s.day ?? 0));
                           return (
                             <div className="mt-1 flex flex-wrap gap-1">
-                              {open && <button type="button" onClick={() => setFund(s)} className="rounded-full bg-emerald-600 px-2 py-0.5 text-[10px] font-semibold text-white hover:bg-emerald-700">💰 Fund from held cash</button>}
+                              {open && <button type="button" onClick={() => setFund(s)} className={CTA_CLASS.window}><CtaLabel kind="window">💰 Fund from held cash</CtaLabel></button>}
                               {(open || datesEditable) && laterIncome && <button type="button" onClick={() => setBridge(s)} className="rounded-full bg-sky-600 px-2 py-0.5 text-[10px] font-semibold text-white hover:bg-sky-700" title="A member fronts it now; the pool repays them when this payer's income lands">🌉 Bridge &amp; repay</button>}
                             </div>
                           );
@@ -501,17 +502,17 @@ export function MoneyPlan({
                       <form action={withToast(s.done ? unsettleAdvance : markAdvanceSettled, { success: "Updated" })} onSubmit={confirmFront}>
                         <input type="hidden" name="id" value={s.advanceId} />
                         {s.payback && <input type="hidden" name="leg" value="payback" />}
-                        <MiniBtn primary={!s.done}>{s.done ? "undo" : s.payback ? "✓ repaid" : "✓ sent"}</MiniBtn>
+                        <MiniBtn primary={!s.done}>Sent</MiniBtn>
                       </form>
                     ) : null
                   ) : isAllowance ? (
                     s.billId != null && canActAllowance ? (
-                      <form action={withToast(toggleBillPaid, { success: "Updated" })} onSubmit={confirmFront}><input type="hidden" name="id" value={s.billId} /><MiniBtn primary={!s.done}>{s.done ? "undo" : "✓ sent"}</MiniBtn></form>
+                      <form action={withToast(toggleBillPaid, { success: "Updated" })} onSubmit={confirmFront}><input type="hidden" name="id" value={s.billId} /><MiniBtn primary={!s.done}>Sent</MiniBtn></form>
                     ) : null
                   ) : isTransfer ? (
                     s.done ? (
                       canActTransfer && s.recordId != null ? (
-                        <form action={withToast(unsettle, { success: "Updated" })}><input type="hidden" name="id" value={s.recordId} /><MiniBtn>undo</MiniBtn></form>
+                        <form action={withToast(unsettle, { success: "Updated" })}><input type="hidden" name="id" value={s.recordId} /><MiniBtn /></form>
                       ) : null
                     ) : canActTransfer ? (
                       <form action={withToast(markSettled, { success: "Marked done" })} onSubmit={confirmFront}>
@@ -521,16 +522,16 @@ export function MoneyPlan({
                         <input type="hidden" name="toMemberId" value={s.toId} />
                         <input type="hidden" name="amount" value={s.amount} />
                         <input type="hidden" name="key" value={s.id} />
-                        <MiniBtn primary>mark done</MiniBtn>
+                        <MiniBtn primary>Sent</MiniBtn>
                       </form>
                     ) : null
                   ) : isManual ? (
                     s.manualId != null && canActManual ? (
-                      <form action={withToast(toggleManualStepDone, { success: "Updated" })} onSubmit={confirmClosed}><input type="hidden" name="id" value={s.manualId} /><MiniBtn primary={!s.done}>{s.done ? "undo" : "✓ done"}</MiniBtn></form>
+                      <form action={withToast(toggleManualStepDone, { success: "Updated" })} onSubmit={confirmClosed}><input type="hidden" name="id" value={s.manualId} /><MiniBtn primary={!s.done}>Sent</MiniBtn></form>
                     ) : null
                   ) : isIncome ? (
                     s.incomeId != null && canActIncome ? (
-                      <form action={withToast(toggleIncomeReceived, { success: "Updated" })}><input type="hidden" name="id" value={s.incomeId} /><MiniBtn primary={!s.done}>{s.done ? "undo" : "✓ received"}</MiniBtn></form>
+                      <form action={withToast(toggleIncomeReceived, { success: "Updated" })}><input type="hidden" name="id" value={s.incomeId} /><MiniBtn primary={!s.done}>Received</MiniBtn></form>
                     ) : null
                   ) : s.miscCard ? (
                     // Planned-misc spend card: pay it by logging a spend against its category (done once ≥1 exists).
@@ -549,7 +550,7 @@ export function MoneyPlan({
                         <form action={withToast(unpayFamilyCardBill, { success: "Updated" })}>
                           <input type="hidden" name="cardId" value={s.cardId} />
                           <input type="hidden" name="cycleEnd" value={s.cycleEndISO} />
-                          <MiniBtn>undo</MiniBtn>
+                          <MiniBtn />
                         </form>
                       ) : (
                         <PayCardBillModal
@@ -582,7 +583,7 @@ export function MoneyPlan({
                     ) : s.misc && s.billId != null ? (
                       // Planned misc = estimate → actual-amount + Piggy-reconcile popup (undo reverses it).
                       s.done ? (
-                        <form action={withToast(unpayMiscBill, { success: "Updated" })}><input type="hidden" name="id" value={s.billId} /><MiniBtn>undo</MiniBtn></form>
+                        <form action={withToast(unpayMiscBill, { success: "Updated" })}><input type="hidden" name="id" value={s.billId} /><MiniBtn /></form>
                       ) : (
                         <MiscPayModal id={s.billId} name={s.vendor!} estimate={s.amount} generalPiggy={generalPiggy} />
                       )
@@ -590,7 +591,7 @@ export function MoneyPlan({
                       <form action={withToast(toggleBillPaid, { success: "Updated" })} onSubmit={confirmFront}>
                         <input type="hidden" name="id" value={s.billId} />
                         {s.poolVendorLeg && <input type="hidden" name="leg" value="vendor" />}
-                        <MiniBtn primary={!s.done}>{s.done ? "undo" : "✓ paid"}</MiniBtn>
+                        <MiniBtn primary={!s.done}>Pay</MiniBtn>
                       </form>
                     ) : null
                   ) : null}
@@ -906,10 +907,11 @@ function InsertHere({ onClick }: { onClick: () => void }) {
   );
 }
 
-function MiniBtn({ children, primary }: { children: React.ReactNode; primary?: boolean }) {
+// Submit button in the shared action style (see Cta): primary = one-tap "✓ <label>", else "Undo".
+function MiniBtn({ children, primary }: { children?: React.ReactNode; primary?: boolean }) {
   return (
-    <button type="submit" className={`whitespace-nowrap rounded-full px-2 py-0.5 text-[10px] font-medium ${primary ? "bg-emerald-600 text-white hover:bg-emerald-700" : "border border-slate-200 text-slate-400 hover:border-slate-300"}`}>
-      {children}
+    <button type="submit" className={CTA_CLASS[primary ? "tap" : "undo"]}>
+      <CtaLabel kind={primary ? "tap" : "undo"}>{primary ? children : "Undo"}</CtaLabel>
     </button>
   );
 }

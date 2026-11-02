@@ -2,6 +2,7 @@
 
 import { piggyHeldParts } from "@/lib/piggyHeld";
 import { Fragment, useState } from "react";
+import { useToast } from "@/components/Toast";
 import { formatINR } from "@/lib/format";
 import type { InHand } from "@/lib/queries";
 import { toggleBillPaid, unpayPeriodicBill, unpayMiscBill, unhideStep } from "@/app/actions";
@@ -9,6 +10,7 @@ import { PayBillModal } from "@/components/PayBillModal";
 import { MiscPayModal } from "@/components/MiscPayModal";
 import { PayCardBillModal } from "@/components/PayCardBillModal";
 import { InHandCardBlock } from "@/components/InHandCardBlock";
+import { CTA_CLASS, CtaLabel } from "@/components/Cta";
 import { allocate, type Covered, type IncomingItem, type QueueItem, type Waiting } from "@/lib/inHandCoverage";
 
 export function InHandPersonGroup({
@@ -243,8 +245,6 @@ export function InHandPersonGroup({
     const unbilled = (group.cardUnbilled ?? []).map((u) => withOop ? { ...u, amount: Math.round((u.amount + u.oopAmount) * 100) / 100, items: [...u.items, ...u.oopItems] } : u).filter((u) => u.amount > 0.005);
     // Card cash still on its way (a receiver's repayment not arrived yet) — noted under To receive.
     const cardCashComing = withOop ? [] : (group.cardUnbilled ?? []).filter((u) => u.oopAmount > 0.005).map((u) => ({ name: u.cardName, amount: u.oopAmount, dueISO: u.dueISO }));
-    // Last month's budgets that went over — paid from the holder's own pocket (context for lower free cash).
-    const overspent = group.carryParts?.over ?? [];
     const cardIds = [...new Set([...dueCards.map((b) => b.cardId), ...unbilled.map((u) => u.cardId)])];
     const cardBlocks = cardIds.map((id) => {
       const due = dueCards.filter((b) => b.cardId === id);
@@ -266,17 +266,24 @@ export function InHandPersonGroup({
     const waitingSends = items.filter((i): i is Waiting => !i.covered && i.type === "send");
     // To send: the treasurer sees every pending send (covered ones are one aggregated Held-for line);
     // others see only the waiting ones (their covered sends are itemised in Held for).
-    const sendsToList = isTreasurer ? items.filter((i) => i.type === "send") : waitingSends;
+    // Every list sorts by date (undated last; stable, so same-day items keep Money Plan order).
+    const byDate = <T extends { day: number | null }>(a: T, b: T) => (a.day ?? 99) - (b.day ?? 99);
+    const sendsToList = (isTreasurer ? items.filter((i) => i.type === "send") : waitingSends).sort(byDate);
+    const incomingByDate = [...incoming].sort(byDate);
     // Unassigned cash. Negative = paid ahead from own pocket; name when it comes back (the next inflow that
     // isn't earmarked for a bill). Kept short — the laptop card truncates long labels.
     const back = incoming.find((i) => !i.billLinked && !i.income) ?? incoming.find((i) => !i.income) ?? null;
     const waiting = items.filter((i) => !i.covered).length;
+    // The next waiting item (earliest by date) — named in the hover for the "saving toward" lines.
+    const nextWaiting = items.filter((i) => !i.covered).sort((a, b) => (a.day ?? 99) - (b.day ?? 99))[0] ?? null;
     const remLabel = isTreasurer
-      ? unassigned < -0.005 ? "↩ Paid out ahead · nets out" : "Family money in your hands"
+      ? unassigned < -0.005 ? "↩ Paid out ahead · nets out" : waiting > 0 ? (items.some((i) => !i.covered && i.type === "send") ? "⏳ Saving toward waiting sends" : "⏳ Saving toward waiting bills") : "Family money in your hands"
       : unassigned < -0.005
         ? back ? `↩ Paid ahead · back ${back.day != null ? ord(back.day) + " " : ""}${formatINR(back.amount)}` : "↩ Paid ahead · owed back"
-        : waiting > 0 ? `Unassigned · ${waiting} waiting` : "Your own money";
-    const remTitle = unassigned < -0.005 && back
+        : waiting > 0 ? "⏳ Saving toward waiting bills" : "Your own money";
+    const remTitle = unassigned > 0.005 && waiting > 0
+      ? `Cash in hand not yet enough for the next waiting ${nextWaiting?.type === "send" ? "send" : "bill"}${nextWaiting ? ` (${nextWaiting.type === "send" ? `${nextWaiting.toName ?? "?"}` : nextWaiting.label} ${formatINR(nextWaiting.amount)}${nextWaiting.day != null ? ` · ${ord(nextWaiting.day)}` : ""})` : ""} — it goes toward it as the rest arrives.`
+      : unassigned < -0.005 && back
       ? `You paid ${formatINR(Math.abs(unassigned))} more than you've received so far. ${back.fromName ?? "The pool"} sends ${formatINR(back.amount)}${back.day != null ? ` on the ${ord(back.day)}` : ""}.`
       : undefined;
     // One bills list: queue bills (covered / waiting) + fund bills due this month, by day (undated last).
@@ -284,8 +291,8 @@ export function InHandPersonGroup({
     const billRows: BillRow[] = [
       ...items.filter((i) => i.type === "bill").map((it): BillRow => ({ kind: "queue", day: it.day, it })),
       ...shownPeriodic.map((b): BillRow => ({ kind: "fund", day: b.due?.day ?? null, b })),
-    ].sort((a, b) => (a.day ?? 99) - (b.day ?? 99));
-    return { cardCashComing, overspent, carriedOthers, carriedFreeHeld, monthBal, cardBlocks, spentLines, coveredBillsTotal: coveredBills.reduce((s, x) => s + x.amount, 0), coveredSends, coveredSendsTotal: coveredSends.reduce((s, x) => s + x.amount, 0), billRows, sendsToList, unassigned, remLabel, remTitle };
+    ].sort(byDate);
+    return { incomingByDate, cardCashComing, carriedOthers, carriedFreeHeld, monthBal, cardBlocks, spentLines, coveredBillsTotal: coveredBills.reduce((s, x) => s + x.amount, 0), coveredSends, coveredSendsTotal: coveredSends.reduce((s, x) => s + x.amount, 0), billRows, sendsToList, unassigned, remLabel, remTitle };
   })();
   // Live headline, projected + full breakdown on tap. Default collapsed to keep the wall of cards
   // scannable; expanding reveals where the money will land and the bills still to pay.
@@ -366,7 +373,7 @@ export function InHandPersonGroup({
                   ))}
                   {/* Bills the cash in hand covers right now — one summed line; each is listed (with Pay) in Bills below. */}
                   {v3.coveredBillsTotal > 0.005 && (
-                    <li className="flex items-center justify-between gap-2"><span className="truncate text-amber-700">🧾 Bills covered <span className="text-slate-400">· see Bills</span></span><span className="shrink-0 tabular-nums text-amber-800">{formatINR(v3.coveredBillsTotal)}</span></li>
+                    <li className="flex items-center justify-between gap-2"><span className="truncate text-amber-700" title="Bills your cash in hand fully covers right now — each one has a Pay button in Bills below.">🧾 Bills ready to pay <span className="text-slate-400">· see Bills</span></span><span className="shrink-0 tabular-nums text-amber-800">{formatINR(v3.coveredBillsTotal)}</span></li>
                   )}
                   {isTreasurer
                     ? v3.coveredSendsTotal > 0.005 && <li className="flex items-center justify-between gap-2"><span className="truncate text-violet-600">📤 Set aside to send <span className="text-slate-400">· see To send</span></span><span className="shrink-0 tabular-nums text-violet-700">{formatINR(v3.coveredSendsTotal)}</span></li>
@@ -382,11 +389,6 @@ export function InHandPersonGroup({
                   {Math.abs(v3.unassigned) > 0.005 && (
                     <li className="flex items-center justify-between gap-2"><span className="truncate text-slate-500" title={v3.remTitle}>{v3.remLabel}</span><span className={`shrink-0 tabular-nums ${v3.unassigned < 0 ? "text-rose-500" : "text-slate-600"}`}>{v3.unassigned < 0 ? "− " : ""}{formatINR(Math.abs(v3.unassigned))}</span></li>
                   )}
-                  {v3.overspent.map((o) => (
-                    <li key={`v3ov${o.name}`} className="flex items-center justify-between gap-2 pl-3 text-[10px] text-slate-400" title={`Last month ${o.name} went ${formatINR(o.amount)} over its budget (incl. others' spends charged to you as its holder). You paid that from your own pocket, so your free cash is that much lower — it isn't paid back by the settlement.`}>
-                      <span className="truncate"><span className="mr-1 text-slate-300">↳</span>after last month&apos;s {o.name} overspend you paid</span><span className="shrink-0 tabular-nums">{formatINR(o.amount)}</span>
-                    </li>
-                  ))}
                   {v3.spentLines.map((sp, i) => (
                     <li key={`v3sp${i}`} className="flex items-center justify-between gap-2"><span className="truncate text-amber-600">{sp.name} <span className="text-slate-400">· spent</span></span><span className="shrink-0 tabular-nums text-amber-600">− {formatINR(sp.amount)}</span></li>
                   ))}
@@ -403,25 +405,25 @@ export function InHandPersonGroup({
                       if (r.kind === "fund") {
                         const b = r.b;
                         return (
-                          <FlowRow key={`v3fb${b.categoryId}`} dot="bg-teal-400" amount={formatINR(b.bill)} action={canPay && <PayBillModal categoryId={b.categoryId} periodId={periodId} name={b.name} bill={b.bill} fund={b.fund} generalPiggy={generalPiggy} cards={cards} />}>
-                            <span className="text-slate-700">{b.name}</span>{b.due && <span className="text-slate-400"> · {ord(b.due.day)}</span>}
-                            <Tag tone="teal">from fund {formatINR(b.fund)}</Tag>{b.afterWindDown && <span className="text-[10px] text-violet-400"> (after {b.afterWindDown})</span>}
+                          <FlowRow key={`v3fb${b.categoryId}`} dot="bg-teal-400" amount={formatINR(b.bill)} action={canPay && <PayBillModal categoryId={b.categoryId} periodId={periodId} name={b.name} bill={b.bill} fund={b.fund} generalPiggy={generalPiggy} cards={cards} />}
+                            date={b.due && <Tag tone="slate">due {ord(b.due.day)}</Tag>} meta={<><Tag tone="teal">from fund {formatINR(b.fund)}</Tag>{b.afterWindDown && <Tag tone="slate">after {b.afterWindDown}</Tag>}</>}>
+                            <span className="text-slate-700">{b.name}</span>
                           </FlowRow>
                         );
                       }
                       const b = r.it;
                       if (b.covered) {
                         return (
-                          <FlowRow key={`v3cb${b.key}`} dot="bg-emerald-500" amount={formatINR(b.amount)} action={canPay && <QueuePay it={b} generalPiggy={generalPiggy} pendingCardBills={pendingCardBills ?? []} categories={spendCategories} />}>
-                            <span className="text-slate-700">{b.label}</span>{b.day != null && <span className="text-slate-400"> · {ord(b.day)}</span>}
-                            <Tag tone="emerald">✓ in hand</Tag>
+                          <FlowRow key={`v3cb${b.key}`} dot="bg-emerald-500" amount={formatINR(b.amount)} action={canPay && <QueuePay it={b} generalPiggy={generalPiggy} pendingCardBills={pendingCardBills ?? []} categories={spendCategories} />}
+                            date={b.day != null && <Tag tone="slate">due {ord(b.day)}</Tag>} meta={<Tag tone="emerald">✓ in hand</Tag>}>
+                            <span className="text-slate-700">{b.label}</span>
                           </FlowRow>
                         );
                       }
                       return (
-                        <FlowRow key={`v3wb${b.key}`} dot={b.dueNow ? "bg-red-500" : "bg-slate-300"} danger={b.dueNow} title={waitTitle(b)} amount={formatINR(b.amount)} action={b.dueNow && canPay && <QueuePay it={b} generalPiggy={generalPiggy} pendingCardBills={pendingCardBills ?? []} categories={spendCategories} />}>
-                          <span className={b.dueNow ? "text-red-700" : "text-slate-500"}>{b.label}</span>{b.day != null && <span className="text-slate-400"> · {ord(b.day)}</span>}
-                          <Tag tone={b.dueNow ? "red" : "slate"}>{b.dueNow ? `short ${formatINR(b.short)}` : waitShort(b)}</Tag>
+                        <FlowRow key={`v3wb${b.key}`} dot={b.dueNow ? "bg-red-500" : "bg-slate-300"} danger={b.dueNow} title={waitTitle(b)} amount={formatINR(b.amount)} action={b.dueNow && canPay && <QueuePay it={b} generalPiggy={generalPiggy} pendingCardBills={pendingCardBills ?? []} categories={spendCategories} />}
+                          date={b.day != null && <Tag tone={b.dueNow ? "red" : "slate"}>due {ord(b.day)}</Tag>} meta={waitMeta(b)}>
+                          <span className={b.dueNow ? "text-red-700" : "text-slate-600"}>{b.label}</span>
                         </FlowRow>
                       );
                     })}
@@ -429,12 +431,10 @@ export function InHandPersonGroup({
                 )}
                 {incoming.length > 0 && (
                   <FlowSection tone="emerald" icon="📥" title="To receive" hint="not in hand yet" total={incoming.reduce((t, r) => t + r.amount, 0)} sign="+">
-                    {incoming.map((r) => (
-                      <FlowRow key={`rc${r.key}`} dot="bg-emerald-400" amount={`+ ${formatINR(r.amount)}`} amountTone="text-emerald-700">
+                    {v3.incomingByDate.map((r) => (
+                      <FlowRow key={`rc${r.key}`} dot="bg-emerald-400" amount={`+ ${formatINR(r.amount)}`} amountTone="text-emerald-700"
+                        date={r.day != null && <Tag tone="slate">{ord(r.day)}</Tag>} meta={r.income ? <Tag tone="emerald">income</Tag> : r.label && r.label !== "Transfer" ? <Tag tone="slate">{r.label}</Tag> : undefined}>
                         <span className="text-slate-700">{r.income ? r.label : `from ${r.fromName ?? "?"}`}</span>
-                        {!r.income && r.label && r.label !== "Transfer" && <span className="text-slate-400"> · {r.label}</span>}
-                        {r.day != null && <span className="text-slate-400"> · {ord(r.day)}</span>}
-                        {r.income && <Tag tone="emerald">income</Tag>}
                       </FlowRow>
                     ))}
                     {v3.cardCashComing.map((c) => (
@@ -445,9 +445,9 @@ export function InHandPersonGroup({
                 {v3.sendsToList.length > 0 && (
                   <FlowSection tone="rose" icon="📤" title="To send" hint="still owed out" total={v3.sendsToList.reduce((t, x) => t + x.amount, 0)} sign="−">
                     {v3.sendsToList.map((x) => (
-                      <FlowRow key={`sd${x.key}`} dot={x.covered ? "bg-emerald-500" : x.dueNow ? "bg-red-500" : "bg-slate-300"} title={x.covered ? undefined : waitTitle(x)} amount={`− ${formatINR(x.amount)}`} amountTone="text-rose-700">
-                        <span className="text-slate-700">to {x.toName ?? "?"}</span>{x.day != null && <span className="text-slate-400"> · {ord(x.day)}</span>}
-                        <Tag tone={x.covered ? "emerald" : "slate"}>{x.covered ? "✓ in hand" : waitShort(x)}</Tag>
+                      <FlowRow key={`sd${x.key}`} dot={x.covered ? "bg-emerald-500" : x.dueNow ? "bg-red-500" : "bg-slate-300"} title={x.covered ? undefined : waitTitle(x)} amount={`− ${formatINR(x.amount)}`} amountTone="text-rose-700"
+                        date={x.day != null && <Tag tone="slate">{ord(x.day)}</Tag>} meta={x.covered ? <Tag tone="emerald">✓ in hand</Tag> : waitMeta(x)}>
+                        <span className="text-slate-700">to {x.toName ?? "?"}</span>
                       </FlowRow>
                     ))}
                   </FlowSection>
@@ -967,7 +967,7 @@ export function InHandPersonGroup({
                 <span className="flex shrink-0 items-center gap-1.5">
                   <span className="tabular-nums">{formatINR(b.amount)}</span>
                   {canPay && (b.misc
-                    ? <form action={unpayMiscBill}><input type="hidden" name="id" value={b.id} /><button type="submit" title="Undo payment (reverses the Piggy reconciliation)" className="rounded-full border border-slate-200 px-1.5 py-0.5 text-[10px] text-slate-400 hover:text-slate-600">undo</button></form>
+                    ? <form action={unpayMiscBill}><input type="hidden" name="id" value={b.id} /><button type="submit" title="Undo payment (reverses the Piggy reconciliation)" className={CTA_CLASS.undo}>Undo</button></form>
                     : <PaidToggle id={b.id} title="Mark unpaid" label="undo" />)}
                 </span>
               </li>
@@ -981,7 +981,7 @@ export function InHandPersonGroup({
                     <form action={unpayPeriodicBill}>
                       <input type="hidden" name="categoryId" value={b.categoryId} />
                       <input type="hidden" name="periodId" value={periodId} />
-                      <button type="submit" title="Undo payment" className="rounded-full border border-slate-200 px-1.5 py-0.5 text-[10px] text-slate-400 hover:text-slate-600">undo</button>
+                      <button type="submit" title="Undo payment" className={CTA_CLASS.undo}>Undo</button>
                     </form>
                   )}
                 </span>
@@ -1046,31 +1046,49 @@ function DueChip({ due }: { due: { day: number; days: number; status: "overdue" 
 }
 
 function PaidToggle({ id, title, label }: { id: number; title: string; label: string }) {
+  const undo = /undo/i.test(label);
   return (
     <form action={toggleBillPaid}>
       <input type="hidden" name="id" value={id} />
-      <button
-        type="submit"
-        title={title}
-        className="rounded-full border border-slate-200 px-1.5 py-0.5 text-[10px] text-slate-400 hover:border-emerald-300 hover:text-emerald-600"
-      >
-        {label}
+      <button type="submit" title={title} className={CTA_CLASS[undo ? "undo" : "tap"]}>
+        <CtaLabel kind={undo ? "undo" : "tap"}>{undo ? undefined : "Pay"}</CtaLabel>
       </button>
     </form>
   );
 }
 
-// Short "when does the money come" hint for a waiting item (laptop-friendly), full text in the tooltip.
-function waitShort(w: Waiting): string {
-  if (!w.arrives && w.partial) return `${formatINR(w.partial.amount)} arrives ${w.partial.day != null ? ord(w.partial.day) : "later"} · still short ${formatINR(w.partial.stillShort)}`;
-  if (!w.arrives) return "nothing incoming yet";
-  return `${formatINR(w.arrives.amount)} arrives ${w.arrives.day != null ? ord(w.arrives.day) : "later"}`;
+// When the money for a waiting item comes — as chips ("₹767 · 5th", "₹1,679 · 20th"), plus "needs ₹X more"
+// if even every planned inflow falls short. Chips wrap onto the row's second line (never truncated).
+function WaitChips({ w }: { w: Waiting }) {
+  if (w.arrivals.length === 0 && w.stillShort <= 0.005) return null;
+  return (
+    <>
+      {w.arrivals.map((a, i) => (
+        <Tag key={i} tone="slate">{formatINR(a.amount)} · {a.day != null ? ord(a.day) : "later"}{a.fromName ? ` · ${a.fromName}` : ""}</Tag>
+      ))}
+      {w.stillShort > 0.005 && <Tag tone="amber">needs {formatINR(w.stillShort)} more</Tag>}
+      {w.arrivals.length === 0 && w.stillShort <= 0.005 && <Tag tone="slate">nothing incoming yet</Tag>}
+    </>
+  );
+}
+// Line-2 chips for a waiting row; undefined when there's nothing beyond the date (keeps it one line).
+function waitMeta(w: Waiting): React.ReactNode | undefined {
+  const inHand = Math.max(0, Math.round((w.amount - w.short) * 100) / 100);
+  const has = w.dueNow || inHand > 0.005 || w.arrivals.length > 0 || w.stillShort > 0.005;
+  if (!has) return <Tag tone="slate">nothing incoming yet</Tag>;
+  return (
+    <>
+      {w.dueNow && <Tag tone="red">short {formatINR(w.short)}</Tag>}
+      {!w.dueNow && inHand > 0.005 && <Tag tone="slate">{formatINR(inHand)} in hand</Tag>}
+      <WaitChips w={w} />
+    </>
+  );
 }
 function waitTitle(w: Waiting): string {
-  const base = `${formatINR(w.amount)} — only ${formatINR(Math.max(0, w.amount - w.short))} free in hand now (short ${formatINR(w.short)}).`;
-  if (!w.arrives && w.partial) return `${base} ${w.partial.fromName ? `${w.partial.fromName} sends` : w.partial.label + ":"} ${formatINR(w.partial.amount)}${w.partial.day != null ? ` on the ${ord(w.partial.day)}` : ""} — still ${formatINR(w.partial.stillShort)} short after everything planned to come in.`;
-  if (!w.arrives) return `${base} Nothing incoming is planned that covers it yet.`;
-  return `${base} ${w.arrives.fromName ? `${w.arrives.fromName} sends` : w.arrives.label + ":"} ${formatINR(w.arrives.amount)}${w.arrives.day != null ? ` on the ${ord(w.arrives.day)}` : ""}.`;
+  const parts = [`${formatINR(w.amount)} — ${formatINR(Math.max(0, w.amount - w.short))} free in hand now.`];
+  for (const a of w.arrivals) parts.push(`${a.fromName ? `${a.fromName} sends` : a.label + ":"} ${formatINR(a.amount)}${a.day != null ? ` on the ${ord(a.day)}` : ""}.`);
+  if (w.stillShort > 0.005) parts.push(`Still ${formatINR(w.stillShort)} short after everything planned to come in.`);
+  return parts.join(" ");
 }
 
 // The Pay control for a queued bill — same actions as elsewhere (no new behaviour): a plain bill toggles
@@ -1083,17 +1101,33 @@ function QueuePay({ it, generalPiggy, pendingCardBills, categories }: { it: Queu
     return <PayCardBillModal cardId={b.cardId} cardName={b.cardName} color={b.color} cycleEndISO={b.cycleEndISO} dueISO={b.dueISO} familyBudgeted={b.familyBudgeted} familyBudgetedByMonth={b.familyBudgetedByMonth} familyMisc={b.familyMisc} personalAmount={b.personalAmount} annualFee={b.annualFee} categories={categories} />;
   }
   if (it.billId == null) return null;
-  if (it.poolVendorLeg) {
-    return (
-      <form action={toggleBillPaid}>
-        <input type="hidden" name="id" value={it.billId} />
-        <input type="hidden" name="leg" value="vendor" />
-        <button type="submit" title="Mark the vendor paid" className="rounded-full border border-slate-200 px-1.5 py-0.5 text-[10px] text-slate-500 hover:border-emerald-300 hover:text-emerald-600">✓ paid</button>
-      </form>
-    );
-  }
   if (it.misc) return <MiscPayModal id={it.billId} name={it.label} estimate={it.amount} generalPiggy={generalPiggy} />;
-  return <PaidToggle id={it.billId} title="Mark this bill paid" label="✓ paid" />;
+  // Plain bill / pool vendor leg → ONE TAP (solid "✓ Pay") with an Undo toast.
+  return <OneTapPay billId={it.billId} vendorLeg={!!it.poolVendorLeg} label={it.label} />;
+}
+
+// One-tap Pay: marks the bill paid immediately (the same toggle as before), then offers Undo for a few
+// seconds — so a mis-tap is one tap to fix, without a confirm popup slowing every real payment.
+function OneTapPay({ billId, vendorLeg, label }: { billId: number; vendorLeg: boolean; label: string }) {
+  const toast = useToast();
+  const [busy, setBusy] = useState(false);
+  const fd = () => { const f = new FormData(); f.set("id", String(billId)); if (vendorLeg) f.set("leg", "vendor"); return f; };
+  const pay = async () => {
+    setBusy(true);
+    try {
+      await toggleBillPaid(fd());
+      toast(`${label} marked paid`, "success", { label: "Undo", onClick: () => { void toggleBillPaid(fd()).then(() => toast(`${label} back to unpaid`, "success")); } });
+    } catch {
+      toast("Couldn't mark it paid", "error");
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <button type="button" onClick={pay} disabled={busy} title={vendorLeg ? "Mark the vendor paid — one tap (Undo follows)" : "Mark this bill paid — one tap (Undo follows)"} className={CTA_CLASS.tap}>
+      <CtaLabel kind="tap">Pay</CtaLabel>
+    </button>
+  );
 }
 
 // ── Visual building blocks for the Bills / To receive / To send sections ─────────────────────────────
@@ -1127,22 +1161,28 @@ function FlowSection({ tone, icon, title, hint, total, sign = "", children }: { 
   );
 }
 
-function FlowRow({ dot, amount, amountTone, action, danger, title, children }: { dot: string; amount: string; amountTone?: string; action?: React.ReactNode; danger?: boolean; title?: string; children: React.ReactNode }) {
+// Two lines: the name + amount (+ Pay) on top — the name may wrap, never truncate — and a wrapping line of
+// chips (date, status, arrivals) underneath. Larger text so it reads easily at any age.
+// `date`: a lone date chip stays on the name line; it only moves down when other chips need line 2.
+function FlowRow({ dot, amount, amountTone, action, danger, title, date, meta, children }: { dot: string; amount: string; amountTone?: string; action?: React.ReactNode; danger?: boolean; title?: string; date?: React.ReactNode; meta?: React.ReactNode; children: React.ReactNode }) {
   return (
-    <li className={`flex items-center justify-between gap-2 ${danger ? "-mx-1 rounded-md bg-red-100/70 px-1 py-0.5" : ""}`} title={title}>
-      <span className="flex min-w-0 items-center gap-1.5">
-        <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${dot}`} aria-hidden />
-        <span className="truncate">{children}</span>
-      </span>
-      <span className="flex shrink-0 items-center gap-1.5">
-        <span className={`tabular-nums font-medium ${amountTone ?? (danger ? "text-red-700" : "text-slate-700")}`}>{amount}</span>
-        {action}
-      </span>
+    <li className={`${danger ? "-mx-1 rounded-md bg-red-100/70 px-1 py-1" : "py-0.5"}`} title={title}>
+      <div className="flex items-start justify-between gap-2">
+        <span className="flex min-w-0 items-start gap-1.5">
+          <span className={`mt-[7px] h-1.5 w-1.5 shrink-0 rounded-full ${dot}`} aria-hidden />
+          <span className="break-words text-[12.5px] leading-snug">{children}{date && !meta && <span className="ml-1.5 inline-block align-middle">{date}</span>}</span>
+        </span>
+        <span className="flex shrink-0 items-center gap-1.5">
+          <span className={`text-[12.5px] tabular-nums font-semibold ${amountTone ?? (danger ? "text-red-700" : "text-slate-800")}`}>{amount}</span>
+          {action}
+        </span>
+      </div>
+      {meta && <div className="mt-0.5 flex flex-wrap gap-1 pl-3">{date}{meta}</div>}
     </li>
   );
 }
 
-const TAG = { emerald: "bg-emerald-100 text-emerald-700", teal: "bg-teal-100 text-teal-700", slate: "bg-white/80 text-slate-500 ring-1 ring-slate-200", red: "bg-red-100 text-red-700 font-semibold" } as const;
+const TAG = { emerald: "bg-emerald-100 text-emerald-700", teal: "bg-teal-100 text-teal-700", slate: "bg-white text-slate-600 ring-1 ring-slate-200", red: "bg-red-100 text-red-700 font-semibold", amber: "bg-amber-100 text-amber-800" } as const;
 function Tag({ tone, children }: { tone: keyof typeof TAG; children: React.ReactNode }) {
-  return <span className={`ml-1.5 rounded-full px-1.5 py-px text-[9.5px] ${TAG[tone]}`}>{children}</span>;
+  return <span className={`whitespace-nowrap rounded-full px-1.5 py-px text-[10.5px] ${TAG[tone]}`}>{children}</span>;
 }

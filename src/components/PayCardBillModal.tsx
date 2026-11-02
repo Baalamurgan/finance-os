@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { formatINR } from "@/lib/format";
 import { payFamilyCardBill } from "@/app/actions";
 import { useToastAction } from "@/components/Toast";
+import { CTA_CLASS, CtaLabel } from "@/components/Cta";
 
 // One line of the statement breakdown. Hoisted out of the modal so it isn't re-created each render.
 function Row({ label, hint, value, strong }: { label: string; hint?: string; value: number; strong?: boolean }) {
@@ -79,9 +80,10 @@ export function PayCardBillModal({
       <button
         onClick={() => { setAmount(String(Math.round(suggested))); setOpen(true); }}
         style={{ backgroundColor: color }}
-        className="whitespace-nowrap rounded-lg px-3 py-1.5 text-xs font-semibold text-white brightness-100 active:brightness-90"
+        className={`${CTA_CLASS.window} hover:brightness-95`}
+        title="Pay this card bill — opens the pay window"
       >
-        Pay
+        <CtaLabel kind="window">Pay</CtaLabel>
       </button>
 
       {open && (

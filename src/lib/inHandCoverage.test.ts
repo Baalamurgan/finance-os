@@ -13,7 +13,7 @@ describe("allocate", () => {
     expect(r.unassigned).toBe(0);
     const x = r.items[0];
     expect(x.covered).toBe(false);
-    if (!x.covered) expect(x.arrives?.day).toBe(2);
+    if (!x.covered) { expect(x.arrivals.map((a) => a.day)).toEqual([2]); expect(x.stillShort).toBe(0); }
   });
 
   it("fixed holdings are taken first; misc is not part of the plan cash", () => {
@@ -22,15 +22,25 @@ describe("allocate", () => {
     expect(r.items[0].covered).toBe(false);
     expect(r.unassigned).toBeCloseTo(2570.59, 2);
     const w = r.items[0];
-    if (!w.covered) { expect(w.short).toBeCloseTo(1629.41, 2); expect(w.arrives).toBeNull(); }
+    if (!w.covered) { expect(w.short).toBeCloseTo(1629.41, 2); expect(w.arrivals.map((a) => a.amount)).toEqual([767]); expect(w.stillShort).toBeCloseTo(862.41, 2); }
   });
 
   it("a waiting item points at the inflow earmarked for it", () => {
     const r = allocate(-11754, 10000, [q("bill-5450", 5450, 4)], [inc("x", 999, 1), inc("disb", 5450, 4, { fundsBillKey: "bill-5450", billLinked: true })]);
     const w = r.items[0];
     expect(w.covered).toBe(false);
-    if (!w.covered) expect(w.arrives?.amount).toBe(5450);
+    if (!w.covered) expect(w.arrivals.map((a) => a.amount)).toEqual([5450]);
     expect(r.unassigned).toBe(-21754);
+  });
+});
+
+describe("allocate · arrivals", () => {
+  it("lists every inflow a waiting bill needs, in date order", () => {
+    // Baala: ₹1,754 free, bill ₹4,200 on the 21st, ₹767 on the 5th + ₹1,679.41 payback on the 20th.
+    const r = allocate(1753.59, 0, [q("mobile", 4200, 21)], [inc("pay", 1679.41, 20), inc("back", 767, 5)]);
+    const w = r.items[0];
+    expect(w.covered).toBe(false);
+    if (!w.covered) { expect(w.arrivals.map((a) => [a.amount, a.day])).toEqual([[767, 5], [1679.41, 20]]); expect(w.stillShort).toBe(0); }
   });
 });
 

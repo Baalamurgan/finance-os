@@ -4,11 +4,13 @@ import { createContext, useCallback, useContext, useEffect, useState, type React
 import { unstable_rethrow } from "next/navigation";
 
 type ToastType = "success" | "error" | "loading";
-type Toast = { id: number; message: string; type: ToastType };
+type ToastAct = { label: string; onClick: () => void };
+type Toast = { id: number; message: string; type: ToastType; action?: ToastAct };
 
-const ToastCtx = createContext<(message: string, type?: ToastType) => void>(() => {});
+const ToastCtx = createContext<(message: string, type?: ToastType, action?: ToastAct) => void>(() => {});
 
-/** Fire a toast from any client component: const toast = useToast(); toast("Saved"). */
+/** Fire a toast from any client component: const toast = useToast(); toast("Saved").
+ *  Optional action button (e.g. Undo): toast("Marked paid", "success", { label: "Undo", onClick }). */
 export function useToast() {
   return useContext(ToastCtx);
 }
@@ -40,13 +42,14 @@ export function useToastAction() {
 export function ToastProvider({ children }: { children: ReactNode }) {
   const [toasts, setToasts] = useState<Toast[]>([]);
 
-  const show = useCallback((message: string, type: ToastType = "success") => {
+  const show = useCallback((message: string, type: ToastType = "success", action?: ToastAct) => {
     const id = Date.now() + Math.random();
     // A real result (success/error) also clears any lingering "loading" pill, so a slow save shows
     // "Saving…" and is replaced by the outcome — never two stacked or a stuck spinner.
-    setToasts((t) => [...(type === "loading" ? t : t.filter((x) => x.type !== "loading")), { id, message, type }]);
-    // Loading pills linger (a slow round-trip) with a generous failsafe; results auto-dismiss quickly.
-    setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), type === "loading" ? 12000 : 3200);
+    setToasts((t) => [...(type === "loading" ? t : t.filter((x) => x.type !== "loading")), { id, message, type, action }]);
+    // Loading pills linger (a slow round-trip) with a generous failsafe; results auto-dismiss quickly —
+    // one with an action (Undo) stays longer so there's time to tap it.
+    setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), type === "loading" ? 12000 : action ? 6000 : 3200);
   }, []);
 
   return (
@@ -55,14 +58,14 @@ export function ToastProvider({ children }: { children: ReactNode }) {
       {/* bottom-center on mobile, bottom-right on desktop; above the mobile nav */}
       <div className="pointer-events-none fixed inset-x-0 bottom-[calc(env(safe-area-inset-bottom)+5rem)] z-[100] flex flex-col items-center gap-2 px-4 sm:inset-x-auto sm:bottom-5 sm:right-5 sm:items-end">
         {toasts.map((t) => (
-          <ToastPill key={t.id} toast={t} />
+          <ToastPill key={t.id} toast={t} onDone={() => setToasts((x) => x.filter((y) => y.id !== t.id))} />
         ))}
       </div>
     </ToastCtx.Provider>
   );
 }
 
-function ToastPill({ toast }: { toast: Toast }) {
+function ToastPill({ toast, onDone }: { toast: Toast; onDone: () => void }) {
   const [shown, setShown] = useState(false);
   useEffect(() => {
     const r = requestAnimationFrame(() => setShown(true));
@@ -99,6 +102,15 @@ function ToastPill({ toast }: { toast: Toast }) {
         )}
       </span>
       <span className="leading-snug">{toast.message}</span>
+      {toast.action && (
+        <button
+          type="button"
+          onClick={() => { toast.action!.onClick(); onDone(); }}
+          className="ml-1 shrink-0 rounded-full bg-slate-900 px-3 py-1 text-xs font-semibold text-white hover:bg-slate-700"
+        >
+          {toast.action.label}
+        </button>
+      )}
     </div>
   );
 }

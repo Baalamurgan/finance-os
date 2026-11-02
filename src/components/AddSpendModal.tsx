@@ -7,6 +7,7 @@ import { addSpendAction, getSpendAssist, type AddSpendState } from "@/app/action
 import { suggestCategoryName, resolveCategoryId, suggestSpendKind, validateSpendLabel, type LearnedKeyword } from "@/lib/spendCategorize";
 import { evalArithmetic, hasArithmeticOp } from "@/lib/calc";
 import { useToast } from "@/components/Toast";
+import { CTA_CLASS, CtaLabel } from "@/components/Cta";
 
 type Cat = { id: number; name: string; misc?: boolean; oneMonth?: boolean }; // misc = the Personal/Misc bucket; oneMonth = a this-month-only spend card
 
@@ -265,12 +266,19 @@ export function AddSpendModal({
         </button>
       )}
       {trigger === "card" && (
-        <button
-          onClick={openModal}
-          className="rounded-md px-2 py-1 text-xs font-medium text-indigo-600 hover:bg-indigo-50"
-        >
-          {triggerLabel ?? "+ Add spend"}
-        </button>
+        triggerLabel === "Pay" ? (
+          // Paying a planned-spend card = logging its spend in a form → the shared "opens a window" Pay.
+          <button type="button" onClick={openModal} className={CTA_CLASS.window} title="Pay — log the spend for this card">
+            <CtaLabel kind="window">Pay</CtaLabel>
+          </button>
+        ) : (
+          <button
+            onClick={openModal}
+            className="rounded-md px-2 py-1 text-xs font-medium text-indigo-600 hover:bg-indigo-50"
+          >
+            {triggerLabel ?? "+ Add spend"}
+          </button>
+        )
       )}
       {trigger === "fab" && <Fab onOpen={openModal} />}
 

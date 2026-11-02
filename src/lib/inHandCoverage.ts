@@ -74,12 +74,14 @@ export function memberFlows(steps: PlanStep[], memberId: number, treasurerId: nu
 }
 
 export type Covered = QueueItem & { covered: true };
+export type Arrival = { amount: number; day: number | null; fromName: string | null; label: string };
 export type Waiting = QueueItem & {
   covered: false;
-  short: number;
-  arrives: { amount: number; day: number | null; fromName: string | null; label: string } | null; // the inflow that completes it
-  // No planned inflow completes it: the next one that HELPS (if any) and what's still short after all of them.
-  partial: { amount: number; day: number | null; fromName: string | null; label: string; stillShort: number } | null;
+  short: number; // what today's free cash is short of the full amount
+  // Every planned inflow it takes to cover it, in date order (an inflow earmarked for this exact item, or
+  // the free inflows that add up to it). `stillShort` > 0 = even all of them aren't enough.
+  arrivals: Arrival[];
+  stillShort: number;
 };
 
 /**
@@ -104,20 +106,16 @@ export function allocate(planCash: number, fixedTotal: number, queue: QueueItem[
     // A funding piece without an explicit key is matched by amount, landing on/before the bill's day.
     const linked = incoming.find((i) => i.fundsBillKey === q.key)
       ?? (q.type === "bill" ? incoming.find((i) => i.billLinked && !i.fundsBillKey && Math.abs(i.amount - q.amount) < 0.01 && (i.day ?? 99) <= (q.day ?? 99)) : undefined);
-    let arrives: Waiting["arrives"] = linked ? { amount: linked.amount, day: linked.day, fromName: linked.fromName, label: linked.label } : null;
-    let partial: Waiting["partial"] = null;
-    if (!arrives) {
-      let run = free;
-      for (const i of byDay) {
-        run += i.amount;
-        if (run + 0.005 >= q.amount) { arrives = { amount: i.amount, day: i.day, fromName: i.fromName, label: i.label }; break; }
-      }
-      if (!arrives && byDay.length > 0) {
-        const f = byDay[0];
-        partial = { amount: f.amount, day: f.day, fromName: f.fromName, label: f.label, stillShort: Math.round((q.amount - run) * 100) / 100 };
-      }
+    const toArrival = (i: IncomingItem): Arrival => ({ amount: i.amount, day: i.day, fromName: i.fromName, label: i.label });
+    if (linked) return { ...q, covered: false, short, arrivals: [toArrival(linked)], stillShort: 0 };
+    const arrivals: Arrival[] = [];
+    let run = free;
+    for (const i of byDay) {
+      if (run + 0.005 >= q.amount) break;
+      arrivals.push(toArrival(i));
+      run += i.amount;
     }
-    return { ...q, covered: false, short, arrives, partial };
+    return { ...q, covered: false, short, arrivals, stillShort: Math.max(0, Math.round((q.amount - run) * 100) / 100) };
   });
   return { items, unassigned: avail };
 }

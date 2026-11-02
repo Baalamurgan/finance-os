@@ -4,6 +4,7 @@ import { useActionState, useEffect, useState } from "react";
 import { payMiscBill, type MiscPayState } from "@/app/actions";
 import { formatINR } from "@/lib/format";
 import { useToast } from "@/components/Toast";
+import { CTA_CLASS, CtaLabel } from "@/components/Cta";
 
 const INIT: MiscPayState = { ok: false, n: 0 };
 
@@ -55,9 +56,9 @@ export function MiscPayModal({
         type="button"
         onClick={() => setOpen(true)}
         title="Enter what was actually paid"
-        className="rounded-full border border-teal-200 px-2 py-0.5 text-[10px] font-medium text-teal-600 hover:border-teal-400 hover:bg-teal-50"
+        className={CTA_CLASS.window}
       >
-        pay
+        <CtaLabel kind="window">Pay</CtaLabel>
       </button>
 
       {open && (

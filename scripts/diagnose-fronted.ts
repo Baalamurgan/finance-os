@@ -169,7 +169,7 @@ async function main() {
         const q = queue.filter((it) => !(it.cardBill && heldKeys.has(ck(it.cardBill))));
         const { items, unassigned } = allocate(holdingNow + subtractedTotal, fixed, q, incoming);
         console.log(`  NEW ▸ fixed ${inr(fixed)} (cards ${inr(cardTotal)}: ${[...dueCards.map((b) => `${b.cardName} due ${inr(b.familyAmount)}`), ...unb.map((u) => `${u.cardName} next ${inr(u.amount)}`)].join(", ") || "—"})`);
-        for (const it of items) console.log(`    ${it.covered ? "✓ held " : "… wait "} ${it.type} ${it.label}${it.toName ? " → " + it.toName : ""} ${inr(it.amount)} day ${it.day ?? "-"}${!it.covered ? `  short ${inr(it.short)}${it.dueNow ? " DUE" : ""} · ${it.arrives ? `${inr(it.arrives.amount)} arrives ${it.arrives.day}` : it.partial ? `${inr(it.partial.amount)} arrives ${it.partial.day} · still short ${inr(it.partial.stillShort)}` : "nothing incoming"}` : ""}`);
+        for (const it of items) console.log(`    ${it.covered ? "✓ held " : "… wait "} ${it.type} ${it.label}${it.toName ? " → " + it.toName : ""} ${inr(it.amount)} day ${it.day ?? "-"}${!it.covered ? `  short ${inr(it.short)}${it.dueNow ? " DUE" : ""} · ${it.arrivals.map((a) => `${inr(a.amount)} d${a.day}`).join(" + ") || "nothing incoming"}${it.stillShort > 0.005 ? ` · needs ${inr(it.stillShort)} more` : ""}` : ""}`);
         console.log(`    incoming: ${incoming.map((i) => `${i.label} ${inr(i.amount)} d${i.day}`).join(", ") || "—"}`);
         console.log(`    unassigned ${inr(unassigned)} · misc −${inr(subtractedTotal)} ⇒ check: fixed+covered−misc+unassigned = ${inr(fixed + items.filter((i) => i.covered).reduce((t, i) => t + i.amount, 0) - subtractedTotal + unassigned)} vs holding ${inr(holdingNow)}`);
       }
