@@ -563,7 +563,9 @@ export default async function SheetPage({
   // edit a closed (locked) month. Plain members are view-only everywhere.
   // Settlement lock: once a transfer is marked paid, the sheet freezes for non-heads
   // (the head can still edit; daily spends still flow on the Expenses tab).
-  const sheetLocked = c.locked && !c.isHead;
+  // The current (IST) month is never settlement-locked for a manager — they keep full edit of it.
+  const isCurrentMonth = c.selected.year === curY && c.selected.month === curM;
+  const sheetLocked = c.locked && !c.isHead && !(c.canEdit && isCurrentMonth);
   const canEditHere = c.canEdit && (open || c.isHead || isDraft) && !sheetLocked;
   const editingClosed = canEditHere && !open && !isDraft; // head editing a locked month
 
@@ -725,7 +727,7 @@ export default async function SheetPage({
           </div>
         )}
 
-        {c.locked && !isDraft && (
+        {c.locked && !isDraft && (c.isHead || sheetLocked) && (
           <SheetLockNotice isHead={c.isHead} y={c.selYear} m={c.selMonth} />
         )}
 
@@ -796,7 +798,7 @@ export default async function SheetPage({
                   </div>
                 ) : (
                   <Row key={i.id} label={(piggyIncomeNo.get(i.id) ?? 0) > 1 ? `${i.source} (${piggyIncomeNo.get(i.id)})` : i.source} tag={i.owner?.name} amount={i.amount} locked={i.receivedAt != null} tags={incomeTags}>
-                    {c.isHead ? (
+                    {c.isHead || canEditHere ? (
                       <IncomeRowActions
                         members={c.members}
                         periodId={c.selected!.id}

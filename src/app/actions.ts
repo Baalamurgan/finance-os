@@ -185,11 +185,15 @@ async function periodSettlementLocked(periodId: number) {
 }
 
 // May this caller edit sheet entries in this period right now?
-// Head can edit any month (incl. closed / settled); Manager only while the month is
-// open AND not settlement-locked.
+// Head can edit any month (incl. closed / settled); Manager only while the month is open — and
+// the settlement lock doesn't bind the CURRENT (IST) month, so a manager can still add / edit /
+// delete its income & expenses after transfers start. Earlier open months stay settlement-locked.
 async function canEditNow(periodId: number) {
   if (await isHead()) return true;
-  if (!(await periodOpen(periodId))) return false;
+  const p = await prisma.period.findUnique({ where: { id: periodId }, select: { status: true, year: true, month: true } });
+  if (p?.status !== "open") return false;
+  const now = istYearMonth();
+  if (p.year === now.year && p.month === now.month) return true;
   return !(await periodSettlementLocked(periodId));
 }
 
@@ -523,10 +527,9 @@ export async function addIncomeAction(prev: SaveState, formData: FormData): Prom
   return { ok, n: ok ? prev.n + 1 : prev.n };
 }
 
-// Edit an income line (source / amount / owner). HEAD ONLY — income drives
-// settlement, so a single owner edits it (add stays head+manager).
+// Edit an income line (source / amount / owner). Head + Manager (manager within canEditNow's months).
 export async function updateIncome(prev: SaveState, formData: FormData): Promise<SaveState> {
-  if (!(await isHead())) return { ok: false, n: prev.n };
+  if (!(await canEdit())) return { ok: false, n: prev.n };
   const id = Number(formData.get("id"));
   const source = String(formData.get("source") ?? "").trim();
   const amount = parseAmount(formData.get("amount"));
