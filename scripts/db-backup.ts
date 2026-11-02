@@ -7,8 +7,9 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { PrismaClient } from "@prisma/client";
 import { PrismaPg } from "@prisma/adapter-pg";
 
-config({ path: resolve(__dirname, "..", ".env.local") });
-config({ path: resolve(__dirname, "..", ".env") });
+// ENV_FILE=<file> → snapshot exactly that DB (e.g. the prod env file); default = .env.local then .env.
+if (process.env.ENV_FILE) config({ path: resolve(__dirname, "..", process.env.ENV_FILE) });
+else { config({ path: resolve(__dirname, "..", ".env.local") }); config({ path: resolve(__dirname, "..", ".env") }); }
 
 const prisma = new PrismaClient({
   adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL }),
@@ -61,6 +62,8 @@ async function main() {
     integration: await prisma.integration.findMany(),
     personalSavings: await prisma.personalSavings.findMany(),
     personalCardBill: await prisma.personalCardBill.findMany(),
+    personalPlanItem: await prisma.personalPlanItem.findMany(),
+    personalPlanStep: await prisma.personalPlanStep.findMany(),
   };
 
   mkdirSync("backups", { recursive: true });

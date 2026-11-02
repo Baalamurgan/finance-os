@@ -1133,7 +1133,46 @@ export type PendingCardBill = {
   annualFee: number; // the card's annual fee IF this cycle's statement month is its fee month, else 0
   done: boolean; // already settled (a PersonalCardBill exists) — shown as a "✓ paid · undo" pill this month
   paidPriorMonth: boolean; // settled, but the payment happened in a DIFFERENT (earlier) month than this bill's due month — its cash left then, so this month's realized ledger must not subtract it again
+  items: CardSpendItem[]; // the FAMILY spends on this statement (for the In-Hand details popup)
 };
+export type CardSpendItem = { label: string; amount: number; dateISO: string; budgeted: boolean };
+
+// Card cash an owner still HOLDS for a card's LATER statement: family BUDGETED spends from months BEFORE the
+// plan month whose bill is NOT due by the plan month's end (e.g. Baala's RBL spends of 15–31 Oct, billed
+// in Dec). Their budget month has closed, so they're no longer inside any budget's `remaining`, and they're
+// not a pending card bill yet — without this they'd silently drop out of the carry. Counted in the owner's
+// in-hand (personal) until the statement falls due and the cash moves onto the pending card bill.
+// `oopAmount`/`oopItems` = the OTHER family spends from earlier months on the card (Misc / someone else's
+// budget) — the owner's out-of-pocket, reimbursed through the settlement (a sender keeps it from salary), so
+// it's also cash they hold for the bill once reimbursed. Kept apart: the close formula counts only `amount`.
+export type CardUnbilled = { cardId: number; cardName: string; color: string; ownerId: number; cycleEndISO: string; dueISO: string | null; amount: number; items: CardSpendItem[]; oopAmount: number; oopItems: CardSpendItem[] };
+
+// IST calendar (year, month) of an ISO instant — month keys from getCardDues are local-midnight ISO strings.
+const istYm = (iso: string) => { const d = new Date(new Date(iso).getTime() + 330 * 60000); return d.getUTCFullYear() * 12 + d.getUTCMonth() + 1; };
+type RawCardItem = { label: string; amount: number; dateISO: string; family: boolean; budgeted?: boolean; category?: string | null; peer?: boolean };
+// FAMILY spends only = spends entered in the family view on this card. A "peer" line (another member used
+// this card for their OWN purchase) is the card owner's own spend — settled between them via Lending — so
+// it never counts as family here (it rides in the owner's personal share of the bill instead).
+const famItems = (items: RawCardItem[]): CardSpendItem[] =>
+  items.filter((i) => i.family && !i.peer).map((i) => ({ label: i.label, amount: i.amount, dateISO: i.dateISO, budgeted: !!i.budgeted }));
+const r2c = (n: number) => Math.round(n * 100) / 100;
+// The family split of a cycle recomputed from its items (excludes peer lines): total, budgeted part, the
+// budgeted part by budget month (IST month-start ISO, same shape as getCardDues), and the peer amount.
+function familySplit(items: RawCardItem[]) {
+  const fam = items.filter((i) => i.family && !i.peer);
+  const peer = r2c(items.filter((i) => i.family && i.peer).reduce((t, i) => t + i.amount, 0));
+  const familyTotal = r2c(fam.reduce((t, i) => t + i.amount, 0));
+  const budgeted = fam.filter((i) => i.budgeted);
+  const familyBudgeted = r2c(budgeted.reduce((t, i) => t + i.amount, 0));
+  const byMonth = new Map<string, number>();
+  for (const i of budgeted) {
+    const t = new Date(new Date(i.dateISO).getTime() + 330 * 60000);
+    const k = new Date(Date.UTC(t.getUTCFullYear(), t.getUTCMonth(), 1) - 330 * 60000).toISOString(); // IST midnight, 1st
+    byMonth.set(k, (byMonth.get(k) ?? 0) + i.amount);
+  }
+  const familyBudgetedByMonth = [...byMonth].map(([monthISO, amount]) => ({ monthISO, amount: r2c(amount) })).filter((x) => x.amount > 0.005).sort((a, b) => a.monthISO.localeCompare(b.monthISO));
+  return { familyTotal, familyBudgeted, familyBudgetedByMonth, peer };
+}
 
 // The family's active credit cards, grouped by owner — fed to the "Paid with" picker when marking a
 // fund/periodic bill paid (a bill can be swiped on the payer's OWN card; see payPeriodicBill). Null = cash.
@@ -1179,13 +1218,29 @@ export async function getBillPaymentCards(periodId: number): Promise<Map<number,
  * spend month's envelope, not carried yet (avoids double-counting with the live budget).
  */
 export async function getPendingCardBills(householdId: number, period: { year: number; month: number } | null): Promise<PendingCardBill[]> {
-  if (!period) return [];
+  return (await getCardHoldings(householdId, period)).pending;
+}
+
+export async function getCardHoldings(householdId: number, period: { year: number; month: number } | null): Promise<{ pending: PendingCardBill[]; unbilled: CardUnbilled[] }> {
+  if (!period) return { pending: [], unbilled: [] };
   const cards = await prisma.financeAccount.findMany({
     where: { type: "credit_card", member: { householdId } },
     select: { id: true, name: true, color: true, memberId: true, member: { select: { name: true } }, credit: { select: { annualFee: true, annualFeeMonth: true, statementDay: true, dueOffsetDays: true } } },
   });
-  if (cards.length === 0) return [];
+  if (cards.length === 0) return { pending: [], unbilled: [] };
   const monthEnd = new Date(period.year, period.month, 0, 23, 59, 59).getTime(); // last calendar day of the plan month
+  const planYm = period.year * 12 + period.month;
+  const unbilled: CardUnbilled[] = [];
+  // The budgeted family part of a cycle from budget months BEFORE the plan month (closed budgets).
+  // Only the OWNER's own budgets are cash they hold — a family spend on their card in someone ELSE's budget
+  // (e.g. Fuel held by another member) is their out-of-pocket, reimbursed through the settlement instead.
+  const holders = await prisma.category.findMany({ where: { householdId, tracked: true }, select: { name: true, responsibleMemberId: true } });
+  const holderByName = new Map(holders.map((c) => [c.name, c.responsibleMemberId]));
+  const priorItems = (ownerId: number, items: RawCardItem[]) =>
+    famItems(items.filter((i) => i.family && !i.peer && i.budgeted && i.category != null && holderByName.get(i.category) === ownerId && istYm(i.dateISO) < planYm));
+  const sumItems = (its: CardSpendItem[]) => Math.round(its.reduce((t, i) => t + i.amount, 0) * 100) / 100;
+  const priorOop = (ownerId: number, items: RawCardItem[]) =>
+    famItems(items.filter((i) => i.family && !i.peer && istYm(i.dateISO) < planYm && !(i.budgeted && i.category != null && holderByName.get(i.category) === ownerId)));
   const cardById = new Map(cards.map((c) => [c.id, c]));
   const owners = [...new Set(cards.map((c) => c.memberId))];
   // Split the family portion into budgeted (Fuel/provision → from the held budget) vs misc/other (→ from
@@ -1201,29 +1256,49 @@ export async function getPendingCardBills(householdId: number, period: { year: n
       const card = cardById.get(d.cardId);
       if (!card) continue;
       for (const cyc of d.cycles) {
-        if (cyc.familyTotal <= 0.005) continue; // only cycles that carry FAMILY spend
-        if (!cyc.generated) continue; // bill not generated yet (statement date not reached) → can't pay it
-        if (!cyc.dueISO) continue;
-        if (new Date(cyc.dueISO).getTime() > monthEnd) continue; // not due yet → still on the live envelope
+        const fs = familySplit(cyc.items);
+        if (fs.familyTotal <= 0.005) continue; // only cycles that carry FAMILY spend (peer-only → personal view only)
+        // Not due within the plan month (not generated yet, or due later): any budgeted family spend from an
+        // EARLIER (closed) budget month is still cash the owner holds for that later bill → unbilled carry.
+        if (!cyc.generated || !cyc.dueISO || new Date(cyc.dueISO).getTime() > monthEnd) {
+          const its = priorItems(ownerId, cyc.items);
+          const amt = sumItems(its);
+          const oop = priorOop(ownerId, cyc.items);
+          const oopAmt = sumItems(oop);
+          if (amt > 0.005 || oopAmt > 0.005) unbilled.push({ cardId: card.id, cardName: card.name, color: card.color, ownerId, cycleEndISO: cyc.cycleEndISO, dueISO: cyc.dueISO, amount: amt, items: its, oopAmount: oopAmt, oopItems: oop });
+          continue;
+        }
         const annualFee = cyc.annualFee; // computed per-cycle by getCardDues (fee-month only)
         out.push({
           cardId: card.id, cardName: card.name, color: card.color,
           ownerId, ownerName: card.member.name,
           cycleEndISO: cyc.cycleEndISO, dueISO: cyc.dueISO,
-          familyAmount: Math.round(cyc.familyTotal * 100) / 100,
-          ...split(cyc.familyTotal, cyc.familyBudgeted),
-          familyBudgetedByMonth: cyc.familyBudgetedByMonth,
-          personalAmount: Math.round(cyc.total * 100) / 100,
+          familyAmount: fs.familyTotal,
+          ...split(fs.familyTotal, fs.familyBudgeted),
+          familyBudgetedByMonth: fs.familyBudgetedByMonth,
+          personalAmount: r2c(cyc.total + fs.peer), // the owner's own share incl. others' purchases on their card
           annualFee,
           done: false,
           paidPriorMonth: false,
+          items: famItems(cyc.items),
         });
       }
       // Settled FAMILY cycles due THIS plan month → a "✓ paid · undo" pill (kept to the due month so it
       // doesn't linger in later months). familyTotal>0 keeps personal-only paid cycles out of the family view.
       for (const p of d.paid) {
-        if (p.familyTotal <= 0.005 || !p.dueISO) continue;
+        const pfs = familySplit(p.items);
+        if (pfs.familyTotal <= 0.005 || !p.dueISO) continue;
         const due = new Date(p.dueISO);
+        // Paid AFTER the plan month, for a bill due AFTER it: at the plan month's end that cash was still
+        // held for the later bill (keeps a past month's close stable once the bill is later paid).
+        if (due.getTime() > monthEnd && new Date(p.paidAtISO).getTime() > monthEnd) {
+          const its = priorItems(ownerId, p.items);
+          const amt = sumItems(its);
+          const oop = priorOop(ownerId, p.items);
+          const oopAmt = sumItems(oop);
+          if (amt > 0.005 || oopAmt > 0.005) unbilled.push({ cardId: card.id, cardName: card.name, color: card.color, ownerId, cycleEndISO: p.cycleEndISO, dueISO: p.dueISO, amount: amt, items: its, oopAmount: oopAmt, oopItems: oop });
+          continue;
+        }
         if (due.getFullYear() !== period.year || due.getMonth() + 1 !== period.month) continue;
         // Was the payment actually made in a month OTHER than this (due) month? If so its cash left then
         // — it's already in that month's close — so the realized ledger must not re-subtract it here.
@@ -1235,18 +1310,19 @@ export async function getPendingCardBills(householdId: number, period: { year: n
           cardId: card.id, cardName: card.name, color: card.color,
           ownerId, ownerName: card.member.name,
           cycleEndISO: p.cycleEndISO, dueISO: p.dueISO,
-          familyAmount: Math.round(p.familyTotal * 100) / 100,
-          ...split(p.familyTotal, p.familyBudgeted),
+          familyAmount: pfs.familyTotal,
+          ...split(pfs.familyTotal, pfs.familyBudgeted),
           familyBudgetedByMonth: [], // paid → shown as a pill, no pay modal
-          personalAmount: Math.round(p.total * 100) / 100,
+          personalAmount: r2c(p.total + pfs.peer),
           annualFee,
           done: true,
           paidPriorMonth,
+          items: famItems(p.items),
         });
       }
     }
   }
-  return out;
+  return { pending: out, unbilled };
 }
 
 /**
@@ -1691,7 +1767,10 @@ export async function _getInHand(householdId: number, periodId: number, settleme
     // from `net` for closed months (it lives in sinkingHeld there); keep it for open/draft months where
     // it hasn't accrued yet. (This is the ₹769 bug.)
     const earmarkedNet = period?.status === "closed" ? 0 : earmarkedTotal;
-    const netHeld = budgetRemaining + earmarkedNet - miscSpent + pendingPiggyHeld + heldBills + pendingCardHeld;
+    // Card cash held for a LATER statement from closed budget months (see CardUnbilled) — always held.
+    const unbilledCards = (key != null ? cardUnbilledByOwner.get(key) : null) ?? [];
+    const cardUnbilledHeld = Math.round(unbilledCards.reduce((t, u) => t + u.amount, 0) * 100) / 100;
+    const netHeld = budgetRemaining + earmarkedNet - miscSpent + pendingPiggyHeld + heldBills + pendingCardHeld + cardUnbilledHeld;
     // `personal` = this member's OWN in-hand (what their headline should read): budget left + set-asides
     // + sinking they hold − their CASH out-of-pocket (miscSpent). Credit-card out-of-pocket (cardOop) is
     // deliberately NOT subtracted — see the note above (it's no-cash; it nets on next month's realized
@@ -1700,7 +1779,7 @@ export async function _getInHand(householdId: number, periodId: number, settleme
     const personal = Math.round((netHeld + sinkingHeld) * 100) / 100;
     return {
       memberId: key, name, cats, unpaidBills, paidBills, earmarked, unpaidPeriodic, paidPeriodic, carried, carriedDue,
-      sinkingFunds, sinkingHeld, pendingPiggyHeld, pendingPiggyToPool: key != null ? (piggyToPoolByOwner.get(key) ?? 0) : 0, pendingCardBills: pendingCards,
+      sinkingFunds, sinkingHeld, pendingPiggyHeld, pendingPiggyToPool: key != null ? (piggyToPoolByOwner.get(key) ?? 0) : 0, pendingCardBills: pendingCards, cardUnbilled: unbilledCards, cardUnbilledHeld,
       budgetRemaining, unpaidTotal, earmarkedTotal, miscSpent,
       cashSpent: key != null ? cashSpentByMember.get(key) ?? 0 : 0, // real cash spent this month (non-credit) — for the holding-now ledger
       // Itemised cash/prepaid spends by category (Σ === cashSpent) for the v2 cash-flow ledger — one-offs
@@ -1815,7 +1894,9 @@ export async function _getInHand(householdId: number, periodId: number, settleme
   // Family credit-card bills that have come due this month: the owner has been HOLDING their cash since
   // the swipe (credit spends don't leave hand until the bill — see the exclusion above), so once the
   // bill is due it rides as a carried "held for the bill" line on the owner until they pay it.
-  const pendingCardBills = await getPendingCardBills(householdId, period ? { year: period.year, month: period.month } : null);
+  const { pending: pendingCardBills, unbilled: cardUnbilled } = await getCardHoldings(householdId, period ? { year: period.year, month: period.month } : null);
+  const cardUnbilledByOwner = new Map<number, CardUnbilled[]>();
+  for (const u of cardUnbilled) cardUnbilledByOwner.set(u.ownerId, [...(cardUnbilledByOwner.get(u.ownerId) ?? []), u]);
   const pendingCardBillsByOwner = new Map<number, PendingCardBill[]>();
   for (const b of pendingCardBills) {
     const arr = pendingCardBillsByOwner.get(b.ownerId) ?? [];
@@ -1833,7 +1914,7 @@ export async function _getInHand(householdId: number, periodId: number, settleme
   // of its budget remaining (on-card for the card bill / owed to others / free→Piggy). Lets the In-Hand
   // print "carried from last month" as named ↳ lines instead of one lump. (Sinking is shown via the
   // current sinkingHeld; the carried out-of-pocket owed-back nets into the honest remainder.)
-  const carryPartsByMember = new Map<number, { onCard: number; others: number; free: number; swept: number }>();
+  const carryPartsByMember = new Map<number, { onCard: number; others: number; free: number; swept: number; over: { name: string; amount: number }[] }>();
   if (computeOpening && priorPeriod && period?.status !== "closed") {
     // Pass the prior month's settlement explicitly (uncached _getSettlement) so the recursion never
     // calls the cached getSettlement — the per-member net is independent of who the treasurer is, so
@@ -1850,8 +1931,11 @@ export async function _getInHand(householdId: number, periodId: number, settleme
       // budget was overspent). (Verified: Arumugam Sept swept ₹12,465 = Arni 8,075 + G704 2,083 + Non-Veg
       // 2,277 + Vinayagar 30; net free was only ₹9,242 because Provision/Veg overspent.)
       let oc = 0, ot = 0, fr = 0, sw = 0;
-      for (const c of r.cats) { const f = c.remaining - (c.onCard ?? 0) - (c.othersSpent ?? 0); oc += c.onCard ?? 0; ot += c.othersSpent ?? 0; fr += f; sw += Math.max(0, f); }
-      carryPartsByMember.set(r.memberId, { onCard: Math.round(oc * 100) / 100, others: Math.round(ot * 100) / 100, free: Math.round(fr * 100) / 100, swept: Math.round(sw * 100) / 100 });
+      // `over` = each of last month's budgets that went OVER (free < 0): the holder paid that from their own
+      // pocket — shown on In-Hand as context for a lower free cash (no settlement payback exists today).
+      const over: { name: string; amount: number }[] = [];
+      for (const c of r.cats) { const f = c.remaining - (c.onCard ?? 0) - (c.othersSpent ?? 0); oc += c.onCard ?? 0; ot += c.othersSpent ?? 0; fr += f; sw += Math.max(0, f); if (f < -0.005) over.push({ name: c.name, amount: Math.round(-f * 100) / 100 }); }
+      carryPartsByMember.set(r.memberId, { onCard: Math.round(oc * 100) / 100, others: Math.round(ot * 100) / 100, free: Math.round(fr * 100) / 100, swept: Math.round(sw * 100) / 100, over });
     }
   }
 

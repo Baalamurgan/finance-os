@@ -7,6 +7,7 @@ import { NavHeader } from "@/components/NavHeader";
 import { MoneyPlan } from "@/components/MoneyPlan";
 import { InHandPersonGroup } from "@/components/InHandPersonGroup";
 import { ownerChargeActiveFor } from "@/lib/settlement-core";
+import { memberFlows } from "@/lib/inHandCoverage";
 
 // A manual step whose note contains this marker is a member RETURNING the budget cash others spent on their
 // category (owed-others) back to the treasurer/pool. When such a step is done, that much is netted off the
@@ -112,6 +113,9 @@ export default async function InHandPage({
       if (s.fromId != null) manualOutByMember[s.fromId] = (manualOutByMember[s.fromId] ?? 0) + s.amount;
     }
   }
+  // Manual sends to the treasurer that SUPERSEDE a member's canonical pending settlement transfer (the
+  // routing case below) — fed to the coverage queue so that transfer only queues its un-routed remainder.
+  const routedOutByMember: Record<number, number> = {};
   const routingToForwardByMember: Record<number, number> = {};
   for (const g of inHand.byPerson) {
     if (g.memberId == null) continue;
@@ -133,6 +137,7 @@ export default async function InHandPage({
       // ₹1,04,170 → true ₹4,170). Floored at 0; a conduit (handled above) is forwarding others' money,
       // not settling, so it's never netted here.
       toTreasurerPendingByMember[g.memberId] = Math.max(0, Math.round(((toTreasurerPendingByMember[g.memberId] ?? 0) - outAmt) * 100) / 100);
+      routedOutByMember[g.memberId] = outAmt;
     }
   }
   // Each member's OWN expense allowances actually RECEIVED (done) and KEPT — i.e. not a pass-through
@@ -144,46 +149,6 @@ export default async function InHandPage({
     if (!a.done || a.vendorLeg) continue;
     (keptAllowancesByMember[a.recipientId] ??= []).push({ label: a.label, amount: a.amount });
   }
-  // Treasurer's PENDING settlement, for the "To receive" / "To send" sections on his card (shown below
-  // the in-hand splits, not folded into holding). To receive = what members still owe him (the NETTED
-  // toTreasurerPending, so Lakshmi reads her real ₹4,170 not the superseded ₹1,04,170). To send = what he
-  // still owes members (undone transfer-out / allowance / advance / manual from the hub to a member).
-  const memberName = (id: number | null | undefined) => c.members.find((m) => m.id === id)?.name ?? "";
-  // To receive = members' netted settlement (toTreasurerPendingByMember) PLUS any PENDING manual step a
-  // member has queued to the treasurer (e.g. Baala returning the ₹636 others spent on his budget). A
-  // pending manual→treasurer isn't in toTreasurerPendingByMember (page.tsx:98 nets only transfers there) —
-  // fold it in HERE, not into toTreasurerPendingByMember itself, or it would also print a duplicate "to
-  // give treasurer" line on the sender's own card right beside their "owe back" owed-others line.
-  const toTreasurerCombined: Record<number, number> = { ...toTreasurerPendingByMember };
-  if (inHand.treasurerId != null) {
-    for (const s of plan.steps) {
-      if (!s.done && s.kind === "manual" && s.toId === inHand.treasurerId && s.fromId != null && s.fromId !== inHand.treasurerId) {
-        toTreasurerCombined[s.fromId] = Math.round(((toTreasurerCombined[s.fromId] ?? 0) + s.amount) * 100) / 100;
-      }
-    }
-  }
-  const treasurerReceiveItems =
-    inHand.treasurerId == null
-      ? []
-      : Object.entries(toTreasurerCombined)
-          .filter(([mid, amt]) => Number(mid) !== inHand.treasurerId && amt > 0.005)
-          .map(([mid, amt]) => ({ name: memberName(Number(mid)), amount: amt }))
-          .sort((a, b) => b.amount - a.amount);
-  const treasurerSendItems =
-    inHand.treasurerId == null
-      ? []
-      : plan.steps
-          .filter(
-            (s) =>
-              !s.done &&
-              !s.hidden &&
-              s.fromId === inHand.treasurerId &&
-              s.toId != null &&
-              s.toId !== inHand.treasurerId &&
-              (s.kind === "transfer-out" || s.kind === "allowance" || s.kind === "advance" || s.kind === "manual"),
-          )
-          .map((s) => ({ name: memberName(s.toId), label: s.source || s.vendor || null, amount: s.amount }))
-          .sort((a, b) => b.amount - a.amount);
   // How much of each member's carried owed-others they've PAID BACK to the treasurer via a DONE manual
   // step (capped at the owed-others). Drives the netting of their "owe back" held line once they settle.
   // The step MUST carry the OWED_OTHERS_MARKER in its note — a member can have other done manual→treasurer
@@ -207,6 +172,13 @@ export default async function InHandPage({
   // held" line — that would double it. Suppress the held line for those months (the treasurer's is already
   // always suppressed). Before the start month it stays a real held line (nothing collects it yet).
   const ownerChargeActive = ownerChargeActiveFor(c.selYear, c.selMonth);
+  // In-Hand coverage inputs per member: pending bills + sends (one queue, Money Plan order) and pending
+  // inflows (incomes / transfers to them). The card decides what today's cash covers (see inHandCoverage).
+  const flowsByMember: Record<number, ReturnType<typeof memberFlows>> = {};
+  for (const g of inHand.byPerson) {
+    if (g.memberId == null) continue;
+    flowsByMember[g.memberId] = memberFlows(plan.steps, g.memberId, inHand.treasurerId, currentDay, routedOutByMember[g.memberId] ?? 0);
+  }
   const visibleGroups = c.isHead
     ? inHand.byPerson
     : inHand.byPerson.filter((g) => g.memberId === currentMemberId);
@@ -270,10 +242,11 @@ export default async function InHandPage({
                 toTreasurerPending={g.memberId != null ? toTreasurerPendingByMember[g.memberId] ?? 0 : 0}
                 routingToForward={g.memberId != null ? routingToForwardByMember[g.memberId] ?? 0 : 0}
                 isTreasurer={g.memberId === inHand.treasurerId}
-                toReceiveItems={g.memberId === inHand.treasurerId ? treasurerReceiveItems : []}
-                toSendItems={g.memberId === inHand.treasurerId ? treasurerSendItems : []}
                 owedOthersSettled={g.memberId != null ? owedOthersSettledByMember[g.memberId] ?? 0 : 0}
                 ownerChargeActive={ownerChargeActive}
+                queue={g.memberId != null ? flowsByMember[g.memberId]?.queue ?? [] : []}
+                incoming={g.memberId != null ? flowsByMember[g.memberId]?.incoming ?? [] : []}
+                spendCategories={c.categories.filter((cat) => cat.tracked).map((cat) => ({ id: cat.id, name: cat.name }))}
                 pool={inHand.treasurerPool}
                 sharedNet={inHand.shared.net}
                 monthBalance={inHand.monthBalance}

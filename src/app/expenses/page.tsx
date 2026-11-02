@@ -22,7 +22,7 @@ const MISC_DONUT_COLORS = ["#6366f1", "#f59e0b", "#10b981", "#ef4444", "#8b5cf6"
 export default async function ExpensesPage({
   searchParams,
 }: {
-  searchParams: Promise<{ y?: string; m?: string; sort?: string; member?: string }>;
+  searchParams: Promise<{ y?: string; m?: string; sort?: string; member?: string; card?: string }>;
 }) {
   const sp = await searchParams;
   const c = await loadCommon(sp);
@@ -30,6 +30,8 @@ export default async function ExpensesPage({
 
   const sort: SortKey = sp.sort === "amount" || sp.sort === "member" ? sp.sort : "date";
   const filterMemberId = sp.member ? Number(sp.member) : null;
+  // ?card=<id> (from the In-Hand card popup): only spends swiped on that card — view-only, like ?member.
+  const filterCardId = sp.card ? Number(sp.card) : null;
   const filterMemberName = filterMemberId != null ? c.members.find((m) => m.id === filterMemberId)?.name ?? null : null;
 
   const nav = (
@@ -78,8 +80,9 @@ export default async function ExpensesPage({
   // Apply the chosen sort (and optional per-member filter, e.g. arriving from Settlement)
   // to each card's spend list. Totals above stay on the full month — filtering is view-only.
   const memberName = (id: number | null) => (id != null ? c.members.find((m) => m.id === id)?.name ?? "" : "Shared");
-  const orderSpends = <T extends { amount: number; createdAt: Date; memberId: number | null }>(rows: T[]): T[] => {
-    const filtered = filterMemberId != null ? rows.filter((s) => s.memberId === filterMemberId) : rows;
+  const orderSpends = <T extends { amount: number; createdAt: Date; memberId: number | null; cardAccountId: number | null }>(rows: T[]): T[] => {
+    const byMember = filterMemberId != null ? rows.filter((s) => s.memberId === filterMemberId) : rows;
+    const filtered = filterCardId != null ? byMember.filter((s) => s.cardAccountId === filterCardId) : byMember;
     const by = [...filtered];
     if (sort === "amount") by.sort((a, b) => b.amount - a.amount);
     else if (sort === "member") by.sort((a, b) => memberName(a.memberId).localeCompare(memberName(b.memberId)) || b.createdAt.getTime() - a.createdAt.getTime());
@@ -210,6 +213,14 @@ export default async function ExpensesPage({
           </div>
         </div>
 
+        {filterCardId != null && (
+          <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-fuchsia-200 bg-fuchsia-50 px-4 py-2.5 text-sm">
+            <span className="text-fuchsia-800">
+              Showing only spends on <b>💳 {familyCards.find((fc) => fc.id === filterCardId)?.name ?? "this card"}</b> in {c.selected.label}
+            </span>
+            <a href={`/expenses?y=${c.selYear}&m=${c.selMonth}&sort=${sort}`} className="rounded-md border border-fuchsia-300 bg-white px-3 py-1 text-xs font-medium text-fuchsia-700 hover:bg-fuchsia-100">✕ Clear filter</a>
+          </div>
+        )}
         {/* active per-member filter (e.g. arrived from Settlement → a member's Misc) */}
         {filterMemberName && (
           <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-indigo-200 bg-indigo-50 px-4 py-2.5 text-sm">

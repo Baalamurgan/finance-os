@@ -7,6 +7,9 @@ import type { InHand } from "@/lib/queries";
 import { toggleBillPaid, unpayPeriodicBill, unpayMiscBill, unhideStep } from "@/app/actions";
 import { PayBillModal } from "@/components/PayBillModal";
 import { MiscPayModal } from "@/components/MiscPayModal";
+import { PayCardBillModal } from "@/components/PayCardBillModal";
+import { InHandCardBlock } from "@/components/InHandCardBlock";
+import { allocate, type Covered, type IncomingItem, type QueueItem, type Waiting } from "@/lib/inHandCoverage";
 
 export function InHandPersonGroup({
   group,
@@ -38,10 +41,11 @@ export function InHandPersonGroup({
   poolIncoming = [],
   poolDisbursements = [],
   treasurerOwnLeftover = 0,
-  toReceiveItems = [],
-  toSendItems = [],
   owedOthersSettled = 0,
   ownerChargeActive = false,
+  queue = [],
+  incoming = [],
+  spendCategories = [],
 }: {
   group: InHand["byPerson"][number];
   // This person's OWN credit cards → the "Paid with" picker on their bills' Pay modals.
@@ -75,10 +79,6 @@ export function InHandPersonGroup({
   poolIncoming?: { fromId: number; fromName: string; amount: number; kind: "leftover" | "piggy"; detail: string | null }[];
   poolDisbursements?: { recipientId: number; recipientName: string; label: string; amount: number }[];
   treasurerOwnLeftover?: number;
-  // Pending (not-yet-done) settlement for the treasurer: money still coming IN from members, and money
-  // he still owes OUT to members. Shown as their own sections BELOW the in-hand splits, never folded in.
-  toReceiveItems?: { name: string; amount: number }[];
-  toSendItems?: { name: string; label?: string | null; amount: number }[];
   // How much of this member's carried owed-others they've already PAID BACK to the treasurer via a done
   // manual step (capped at the owed-others). Once settled, drop that much from the "owe back" held line —
   // the done manual move already took the cash out of their holding, so netting the line keeps the card
@@ -88,6 +88,11 @@ export function InHandPersonGroup({
   // (folded into their "to give treasurer"), so the separate "owe back · held" line is suppressed to avoid
   // double-counting — exactly as it already is for the treasurer.
   ownerChargeActive?: boolean;
+  // Coverage inputs (live month): this member's pending bills + sends in Money Plan order, and pending inflows.
+  queue?: QueueItem[];
+  incoming?: IncomingItem[];
+  // Family spend categories — for the card-bill Pay modal (extra charges / cashback booking).
+  spendCategories?: { id: number; name: string }[];
 }) {
   const piggyToPool = group.pendingPiggyToPool ?? 0; // part of pendingPiggyHeld that was taken as income → goes to the treasurer, not the holder
   const { name, cats, unpaidBills, paidBills, earmarked, earmarkedTotal, sinkingFunds, sinkingHeld, unpaidPeriodic, paidPeriodic, carried, carriedDue, miscSpent, net, pendingPiggyHeld, pendingCardBills, cashSpent, cardSpent, yetToReceive, selfFundsBills } = group;
@@ -201,6 +206,87 @@ export function InHandPersonGroup({
     ? Math.round((holdingNow - sinkingHeld - carryLeftover - cats.reduce((s, c) => s + c.remaining, 0) - earmarkedTotal - heldBillsTotal - toTreasurerPending - piggyAmt) * 100) / 100
     : 0;
   const money = (n: number) => (n < 0 ? "−" : "") + formatINR(Math.abs(n));
+  const carr = <span className="text-slate-400"> · carried</span>;
+  const piggyLink = "truncate text-pink-600 underline decoration-dotted underline-offset-2 hover:text-pink-700";
+  // ── Live-month "Held for" with coverage (see lib/inHandCoverage) ─────────────────────────────────────
+  // Fixed holdings are always held; pending bills + sends (Money Plan order) are covered only when today's
+  // cash fully covers them (misc spends don't count against the plan — they show as their own line).
+  const v3 = (() => {
+    if (!showV3) return null;
+    // "Others' spend on your budget" is a real held line only for a regular member before owner-charge
+    // months; for the treasurer it's a pass-through already netted in his settlement moves.
+    const carriedOthers = (isTreasurer || ownerChargeActive) ? 0 : Math.max(0, (group.carryParts?.others ?? 0) - owedOthersSettled);
+    const carriedFreeHeld = piggyParts.carriedFreeHeld;
+    const budgetsTotal = incomeReceived ? cats.reduce((s, c) => s + c.remaining, 0) : 0;
+    const earmarkedHeld = incomeReceived ? earmarkedTotal : 0;
+    // The family month balance is the pool the treasurer holds only once EVERY income has arrived.
+    const monthBal = isTreasurer && allIncomeReceived ? monthBalance : 0;
+    const keptTotal = allowancesKept.reduce((s, a) => s + a.amount, 0);
+    // Card cash: the statement due now (held when the owner self-funds) + spends for a LATER statement
+    // from closed budget months (always held). One block per card.
+    // The FAMILY part of a card bill due now is held cash (Held for + Pay) when:
+    //  (A) they SEND to the treasurer — the settlement let them keep last month's family spends from their
+    //      salary, so it's held once the salary step is ticked (a purely budget-funded bill always is);
+    //  (C) they RECEIVE from the pool but no funding piece for this bill is still pending (it arrived, or the
+    //      reimbursement was netted elsewhere) — salary ticked = reimbursed.
+    // (B) a receiver whose funding piece is still pending → stays in the queue: waits, "arrives <day>".
+    const cardKey = (b: { cardId: number; cycleEndISO: string }) => `cardbill-${b.cardId}-${b.cycleEndISO}`;
+    // A RECEIVER is repaid last month's card spends by the pool's transfers to them — the cash is theirs
+    // once those have arrived (no plain, not-bill-specific transfer to them still pending).
+    const poolMoneyArrived = !incoming.some((i) => !i.income && !i.billLinked);
+    const cardCashHeld = selfFundsBills ? incomeReceived : poolMoneyArrived;
+    const dueCards = (pendingCardBills ?? []).filter((b) => !b.done && (cardCashHeld || (selfFundsBills && b.familyMisc <= 0.005)));
+    const heldCardKeys = new Set(dueCards.map(cardKey));
+    // Earlier months' OOP on their card (Misc / others' budgets) is held once reimbursed — for a sender, that's
+    // when the salary step is ticked (the settlement let them keep it). Receivers: comes via the pool.
+    const withOop = cardCashHeld;
+    const unbilled = (group.cardUnbilled ?? []).map((u) => withOop ? { ...u, amount: Math.round((u.amount + u.oopAmount) * 100) / 100, items: [...u.items, ...u.oopItems] } : u).filter((u) => u.amount > 0.005);
+    // Card cash still on its way (a receiver's repayment not arrived yet) — noted under To receive.
+    const cardCashComing = withOop ? [] : (group.cardUnbilled ?? []).filter((u) => u.oopAmount > 0.005).map((u) => ({ name: u.cardName, amount: u.oopAmount, dueISO: u.dueISO }));
+    // Last month's budgets that went over — paid from the holder's own pocket (context for lower free cash).
+    const overspent = group.carryParts?.over ?? [];
+    const cardIds = [...new Set([...dueCards.map((b) => b.cardId), ...unbilled.map((u) => u.cardId)])];
+    const cardBlocks = cardIds.map((id) => {
+      const due = dueCards.filter((b) => b.cardId === id);
+      const next = unbilled.filter((u) => u.cardId === id);
+      const ref = due[0] ?? next[0];
+      return { cardId: id, name: ref.cardName, color: ref.color, due, next, total: due.reduce((s, b) => s + b.familyAmount, 0) + next.reduce((s, u) => s + u.amount, 0) };
+    });
+    const cardTotal = cardBlocks.reduce((s, c) => s + c.total, 0);
+    const fixedTotal = carriedOthers + carriedFreeHeld + sinkingHeld + piggyAmt + pendingPiggyHeld + budgetsTotal + earmarkedHeld + cardTotal + routingToForward + monthBal + keptTotal;
+    // Cash spent this month on categories that are NOT this member's own budgets — itemised by category.
+    const budgetedNames = new Set(cats.map((c) => c.name));
+    const spentLines = (group.cashByCat ?? []).filter((sp) => !budgetedNames.has(sp.name) && sp.amount > 0.005);
+    const miscTotal = Math.round(spentLines.reduce((s, sp) => s + sp.amount, 0) * 100) / 100;
+    // A held due card bill is already a fixed card block → keep it out of the queue.
+    const q = queue.filter((it) => !(it.cardBill && heldCardKeys.has(cardKey(it.cardBill))));
+    const { items, unassigned } = allocate(holdingNow + miscTotal, fixedTotal, q, incoming);
+    const coveredBills = items.filter((i) => i.covered && i.type === "bill");
+    const coveredSends = items.filter((i) => i.covered && i.type === "send");
+    const waitingSends = items.filter((i): i is Waiting => !i.covered && i.type === "send");
+    // To send: the treasurer sees every pending send (covered ones are one aggregated Held-for line);
+    // others see only the waiting ones (their covered sends are itemised in Held for).
+    const sendsToList = isTreasurer ? items.filter((i) => i.type === "send") : waitingSends;
+    // Unassigned cash. Negative = paid ahead from own pocket; name when it comes back (the next inflow that
+    // isn't earmarked for a bill). Kept short — the laptop card truncates long labels.
+    const back = incoming.find((i) => !i.billLinked && !i.income) ?? incoming.find((i) => !i.income) ?? null;
+    const waiting = items.filter((i) => !i.covered).length;
+    const remLabel = isTreasurer
+      ? unassigned < -0.005 ? "↩ Paid out ahead · nets out" : "Family money in your hands"
+      : unassigned < -0.005
+        ? back ? `↩ Paid ahead · back ${back.day != null ? ord(back.day) + " " : ""}${formatINR(back.amount)}` : "↩ Paid ahead · owed back"
+        : waiting > 0 ? `Unassigned · ${waiting} waiting` : "Your own money";
+    const remTitle = unassigned < -0.005 && back
+      ? `You paid ${formatINR(Math.abs(unassigned))} more than you've received so far. ${back.fromName ?? "The pool"} sends ${formatINR(back.amount)}${back.day != null ? ` on the ${ord(back.day)}` : ""}.`
+      : undefined;
+    // One bills list: queue bills (covered / waiting) + fund bills due this month, by day (undated last).
+    type BillRow = { kind: "queue"; day: number | null; it: Covered | Waiting } | { kind: "fund"; day: number | null; b: (typeof shownPeriodic)[number] };
+    const billRows: BillRow[] = [
+      ...items.filter((i) => i.type === "bill").map((it): BillRow => ({ kind: "queue", day: it.day, it })),
+      ...shownPeriodic.map((b): BillRow => ({ kind: "fund", day: b.due?.day ?? null, b })),
+    ].sort((a, b) => (a.day ?? 99) - (b.day ?? 99));
+    return { cardCashComing, overspent, carriedOthers, carriedFreeHeld, monthBal, cardBlocks, spentLines, coveredBillsTotal: coveredBills.reduce((s, x) => s + x.amount, 0), coveredSends, coveredSendsTotal: coveredSends.reduce((s, x) => s + x.amount, 0), billRows, sendsToList, unassigned, remLabel, remTitle };
+  })();
   // Live headline, projected + full breakdown on tap. Default collapsed to keep the wall of cards
   // scannable; expanding reveals where the money will land and the bills still to pay.
   const [expanded, setExpanded] = useState(false);
@@ -253,72 +339,18 @@ export function InHandPersonGroup({
       {/* Live carry-walk month: the clean "Held for" partition — every rupee of holding-now labelled by
           what it's held FOR, reconciling by construction. The step-by-step cash-in/out lives in each
           Money-Plan step modal; preview/closed months keep the detailed breakdown below. */}
-      {showV3 && (() => {
-            // Persistent savings (sinking / piggy) show at their CURRENT value — the same money as the
-            // carried amount, counted once. This-month allocations (budgets / set-asides / to-give-treasurer
-            // / to-pay-bills) appear only once income has ARRIVED (the physical-cash model) — before that
-            // only the carry shows. The remainder is the member's genuine own position: negative = cash
-            // fronted (owed back next month, nets to 0 over the reimbursement cycle); positive = own money;
-            // for the treasurer a negative = fronted for the family (pool/advances). Reconciles by construction.
-            const carriedOnCard = group.carryParts?.onCard ?? 0;
-            // "Others' spend on your budget" — for a REGULAR member this is budget cash they still hold and
-            // owe the treasurer (real, shown). For the TREASURER it's the reverse: he owes it to those
-            // members, and he's already paying it back THROUGH his settlement transfers to them (it's folded
-            // into his "Sent to …" done moves / netted off what they pay him). So for the hub it's a
-            // pass-through that nets in the holding — showing it as "held" double-counts it and inflated the
-            // old remainder. Drop it from his held-for; the walk already nets it.
-            const carriedOthers = (isTreasurer || ownerChargeActive) ? 0 : Math.max(0, (group.carryParts?.others ?? 0) - owedOthersSettled);
-            // free→Piggy only still "held" if the Piggy hasn't been handed over/forwarded yet (see piggyGone).
-            const carriedFreeHeld = piggyParts.carriedFreeHeld;
-            const budgetsTotal = cats.reduce((s, c) => s + c.remaining, 0);
-            const give = incomeReceived ? toTreasurerPending : 0;
-            const bills = incomeReceived ? heldBillsTotal : 0;
-            // The family month balance is the pool the treasurer holds only once EVERY income has arrived — before
-            // that he doesn't physically have it, so it must not be listed (it was swamping his card, offset by
-            // a huge "paid out ahead" remainder).
-            const monthBal = isTreasurer && allIncomeReceived ? monthBalance : 0;
-            // Allowance money received & kept (e.g. Harish's ₹10k expense + ₹1k reward) is the SOURCE of
-            // what an allowance-holder holds — shown "+"; out-of-pocket / misc cash spent is shown "−".
-            // So the card reads: allowance in − spends = held, and the remainder collapses to 0 for a pure
-            // allowance-holder / earner (a leftover means genuine own money, or treasurer pool fronting).
-            const keptTotal = allowancesKept.reduce((s, a) => s + a.amount, 0);
-            // Cash spent this month on categories that are NOT this member's own budgets — the out-of-pocket
-            // (others' budgets) + misc (unbudgeted) that's subtracted from holding — itemised BY CATEGORY so
-            // a big one-off (e.g. the ₹26k G704 advance) shows on its own named line, never buried in a "misc"
-            // lump. Own-budget spends are already netted inside each budget's "remaining" above. Σ === miscSpent.
-            const budgetedNames = new Set(cats.map((c) => c.name));
-            const spentLines = (group.cashByCat ?? []).filter((sp) => !budgetedNames.has(sp.name) && sp.amount > 0.005);
-            const subtractedTotal = Math.round(spentLines.reduce((s, sp) => s + sp.amount, 0) * 100) / 100;
-            const labeled =
-              carriedOnCard + carriedOthers + carriedFreeHeld +
-              sinkingHeld + piggyAmt + pendingPiggyHeld +
-              (incomeReceived ? budgetsTotal + earmarkedTotal : 0) +
-              give + bills + routingToForward + monthBal +
-              keptTotal - subtractedTotal;
-            const remainder = Math.round((holdingNow - labeled) * 100) / 100;
-            // The TREASURER's remainder is NOT his own money fronted/owed back — it's the family pool
-            // churning through the hub: cash he's net paid out ahead of collecting (negative) or net
-            // holding before it goes out (positive). It nets out as the month's collections/disbursements
-            // settle, so it's labelled as family-pool-in-transit, never "your own money" or "owed back".
-            const remLabel = isTreasurer
-              ? remainder < -0.005
-                ? "↩ Family money paid out ahead · nets out as the month settles"
-                : "Family money in your hands · nets out as the month settles"
-              : remainder < -0.005
-                ? "↩ Fronted this month · owed back next month"
-                : "Your own money · spend as you like";
-            const carr = <span className="text-slate-400"> · carried</span>;
-            const piggyLink = "truncate text-pink-600 underline decoration-dotted underline-offset-2 hover:text-pink-700";
-            return (
+      {showV3 && v3 && (
               <div className="mb-2 mt-2">
                 <div className="mb-1 text-[10px] font-medium uppercase tracking-wide text-slate-400">Held for <span className="font-normal normal-case text-slate-300">— every rupee</span></div>
                 <ul className="space-y-0.5 text-[11px]">
                   {allowancesKept.map((a, i) => (
                     <li key={`v3al${i}`} className="flex items-center justify-between gap-2"><span className="truncate text-emerald-700">{a.label} <span className="text-slate-400">· your expense money</span></span><span className="shrink-0 tabular-nums text-emerald-700">+ {formatINR(a.amount)}</span></li>
                   ))}
-                  {carriedOnCard > 0.005 && <li className="flex items-center justify-between gap-2"><span className="truncate text-fuchsia-600">💳 Held for the card bill{carr}</span><span className="shrink-0 tabular-nums text-fuchsia-700">{formatINR(carriedOnCard)}</span></li>}
-                  {carriedOthers > 0.005 && <li className="flex items-center justify-between gap-2"><span className="truncate text-slate-500">Others&apos; spend on your budget · owe back{carr}</span><span className="shrink-0 tabular-nums text-slate-600">{formatINR(carriedOthers)}</span></li>}
-                  {carriedFreeHeld > 0.005 && <li className="flex items-center justify-between gap-2"><a href="/piggy" title="This goes to the Piggy — open the Piggy tab" className={piggyLink}>🐷 Free → Piggy{carr} ↗</a><span className="shrink-0 tabular-nums text-pink-700">{formatINR(carriedFreeHeld)}</span></li>}
+                  {v3.cardBlocks.map((cb) => (
+                    <InHandCardBlock key={`v3cb${cb.cardId}`} cardId={cb.cardId} name={cb.name} color={cb.color} due={cb.due} next={cb.next} canPay={canPay} categories={spendCategories} />
+                  ))}
+                  {v3.carriedOthers > 0.005 && <li className="flex items-center justify-between gap-2"><span className="truncate text-slate-500">Others&apos; spend on your budget · owe back{carr}</span><span className="shrink-0 tabular-nums text-slate-600">{formatINR(v3.carriedOthers)}</span></li>}
+                  {v3.carriedFreeHeld > 0.005 && <li className="flex items-center justify-between gap-2"><a href="/piggy" title="This goes to the Piggy — open the Piggy tab" className={piggyLink}>🐷 Free → Piggy{carr} ↗</a><span className="shrink-0 tabular-nums text-pink-700">{formatINR(v3.carriedFreeHeld)}</span></li>}
                   {sinkingFunds.map((f) => <li key={`v3cs${f.name}`} className="flex items-center justify-between gap-2"><span className="truncate text-indigo-600">🏦 Sinking for {f.name}</span><span className="shrink-0 tabular-nums text-indigo-700">{formatINR(f.amount)}</span></li>)}
                   {isPiggyHolder && Math.abs(piggyAmt) > 0.005 && <li className="flex items-center justify-between gap-2"><a href="/piggy" title="Open the Piggy tab" className={piggyLink}>🐷 General Piggy <span className="text-slate-400">· role money ↗</span></a><span className="shrink-0 tabular-nums text-pink-700">{formatINR(piggyAmt)}</span></li>}
                   {pendingPiggyHeld - piggyToPool > 0.005 && <li className="flex items-center justify-between gap-2"><a href="/piggy" title="Open the Piggy tab" className={piggyLink}>🐷 Piggy to hand over <span className="text-slate-400">· held ↗</span></a><span className="shrink-0 tabular-nums text-pink-700">{formatINR(pendingPiggyHeld - piggyToPool)}</span></li>}
@@ -332,55 +364,96 @@ export function InHandPersonGroup({
                   {incomeReceived && earmarked.map((e) => (
                     <li key={`v3he${e.id}`} className="flex items-center justify-between gap-2"><span className="truncate text-teal-600">Set aside for {e.name} <span className="text-slate-400">· its bill</span></span><span className="shrink-0 tabular-nums text-teal-700">{formatINR(e.amount)}</span></li>
                   ))}
-                  {give > 0.005 && (
-                    <li className="flex items-center justify-between gap-2"><span className="truncate text-violet-600">To give treasurer <span className="text-slate-400">· your settlement</span></span><span className="shrink-0 tabular-nums text-violet-700">{formatINR(give)}</span></li>
+                  {/* Bills the cash in hand covers right now — one summed line; each is listed (with Pay) in Bills below. */}
+                  {v3.coveredBillsTotal > 0.005 && (
+                    <li className="flex items-center justify-between gap-2"><span className="truncate text-amber-700">🧾 Bills covered <span className="text-slate-400">· see Bills</span></span><span className="shrink-0 tabular-nums text-amber-800">{formatINR(v3.coveredBillsTotal)}</span></li>
                   )}
-                  {bills > 0.005 && (
-                    <li className="flex items-center justify-between gap-2"><span className="truncate text-amber-700">To pay bills <span className="text-slate-400">· self-funded</span></span><span className="shrink-0 tabular-nums text-amber-800">{formatINR(bills)}</span></li>
-                  )}
+                  {isTreasurer
+                    ? v3.coveredSendsTotal > 0.005 && <li className="flex items-center justify-between gap-2"><span className="truncate text-violet-600">📤 Set aside to send <span className="text-slate-400">· see To send</span></span><span className="shrink-0 tabular-nums text-violet-700">{formatINR(v3.coveredSendsTotal)}</span></li>
+                    : v3.coveredSends.map((x) => (
+                        <li key={`v3qs${x.key}`} className="flex items-center justify-between gap-2"><span className="truncate text-violet-600">📤 To {x.toName ?? "send"}{x.day != null && <span className="text-slate-400"> · {ord(x.day)}</span>}</span><span className="shrink-0 tabular-nums text-violet-700">{formatINR(x.amount)}</span></li>
+                      ))}
                   {routingToForward > 0.005 && (
                     <li className="flex items-center justify-between gap-2"><span className="truncate text-amber-600">➡️ To forward <span className="text-slate-400">· routing through you</span></span><span className="shrink-0 tabular-nums text-amber-700">{formatINR(routingToForward)}</span></li>
                   )}
-                  {isTreasurer && Math.abs(monthBal) > 0.005 && (
-                    <li className="flex items-center justify-between gap-2"><span className="truncate text-emerald-600">Family month balance <span className="text-slate-400">· pool</span></span><span className="shrink-0 tabular-nums text-emerald-700">{formatINR(monthBal)}</span></li>
+                  {isTreasurer && Math.abs(v3.monthBal) > 0.005 && (
+                    <li className="flex items-center justify-between gap-2"><span className="truncate text-emerald-600">Family month balance <span className="text-slate-400">· pool</span></span><span className="shrink-0 tabular-nums text-emerald-700">{formatINR(v3.monthBal)}</span></li>
                   )}
-                  {spentLines.map((sp, i) => (
+                  {Math.abs(v3.unassigned) > 0.005 && (
+                    <li className="flex items-center justify-between gap-2"><span className="truncate text-slate-500" title={v3.remTitle}>{v3.remLabel}</span><span className={`shrink-0 tabular-nums ${v3.unassigned < 0 ? "text-rose-500" : "text-slate-600"}`}>{v3.unassigned < 0 ? "− " : ""}{formatINR(Math.abs(v3.unassigned))}</span></li>
+                  )}
+                  {v3.overspent.map((o) => (
+                    <li key={`v3ov${o.name}`} className="flex items-center justify-between gap-2 pl-3 text-[10px] text-slate-400" title={`Last month ${o.name} went ${formatINR(o.amount)} over its budget (incl. others' spends charged to you as its holder). You paid that from your own pocket, so your free cash is that much lower — it isn't paid back by the settlement.`}>
+                      <span className="truncate"><span className="mr-1 text-slate-300">↳</span>after last month&apos;s {o.name} overspend you paid</span><span className="shrink-0 tabular-nums">{formatINR(o.amount)}</span>
+                    </li>
+                  ))}
+                  {v3.spentLines.map((sp, i) => (
                     <li key={`v3sp${i}`} className="flex items-center justify-between gap-2"><span className="truncate text-amber-600">{sp.name} <span className="text-slate-400">· spent</span></span><span className="shrink-0 tabular-nums text-amber-600">− {formatINR(sp.amount)}</span></li>
                   ))}
-                  {Math.abs(remainder) > 0.005 && (
-                    <li className="flex items-center justify-between gap-2 border-t border-dashed border-slate-200 pt-0.5"><span className="truncate text-slate-500">{remLabel}</span><span className={`shrink-0 tabular-nums ${remainder < 0 ? "text-rose-500" : "text-slate-600"}`}>{remainder < 0 ? "− " : ""}{formatINR(Math.abs(remainder))}</span></li>
-                  )}
                   <li className="flex items-center justify-between gap-2 border-t border-slate-300 pt-0.5 font-semibold text-slate-800"><span>= {holdingNow < 0 ? "To reclaim" : "Holding now"}</span><span className={`shrink-0 tabular-nums ${holdingNow < 0 ? "text-red-600" : "text-emerald-700"}`}>{money(holdingNow)}</span></li>
                   {cardOutOfPocket > 0.005 && (
                     <li className="flex items-center justify-between gap-2 text-[10px] text-slate-400"><span className="truncate">💳 Fronted on a credit card <span className="italic">· owed back · offsets the bill · not subtracted</span></span><span className="shrink-0 tabular-nums italic">{formatINR(cardOutOfPocket)}</span></li>
                   )}
                 </ul>
-                {/* Pending settlement, shown AFTER the in-hand splits (not folded in): money still coming
-                    to him, and money he still owes out. These aren't in the holding above (the steps aren't
-                    done) — they're just what's left to flow. */}
-                {toReceiveItems.length > 0 && (
-                  <div className="mt-2">
-                    <div className="mb-1 text-[10px] font-medium uppercase tracking-wide text-slate-400">📥 To receive <span className="font-normal normal-case text-slate-300">— not in the in-hand yet</span></div>
-                    <ul className="space-y-0.5 text-[11px]">
-                      {toReceiveItems.map((r, i) => (
-                        <li key={`rc${i}`} className="flex items-center justify-between gap-2"><span className="truncate text-emerald-600">from {r.name}</span><span className="shrink-0 tabular-nums text-emerald-700">+ {formatINR(r.amount)}</span></li>
-                      ))}
-                    </ul>
-                  </div>
+                {/* ALL of this month's bills in one list, by day: covered by cash in hand (Pay), paid from their
+                    fund (Pay), or waiting for money (no Pay — unless its day has come: red "short", Pay anyway). */}
+                {v3.billRows.length > 0 && (
+                  <FlowSection tone="amber" icon="🧾" title="Bills" hint="this month, by date" total={v3.billRows.reduce((t, r) => t + (r.kind === "fund" ? r.b.bill : r.it.amount), 0)}>
+                    {v3.billRows.map((r) => {
+                      if (r.kind === "fund") {
+                        const b = r.b;
+                        return (
+                          <FlowRow key={`v3fb${b.categoryId}`} dot="bg-teal-400" amount={formatINR(b.bill)} action={canPay && <PayBillModal categoryId={b.categoryId} periodId={periodId} name={b.name} bill={b.bill} fund={b.fund} generalPiggy={generalPiggy} cards={cards} />}>
+                            <span className="text-slate-700">{b.name}</span>{b.due && <span className="text-slate-400"> · {ord(b.due.day)}</span>}
+                            <Tag tone="teal">from fund {formatINR(b.fund)}</Tag>{b.afterWindDown && <span className="text-[10px] text-violet-400"> (after {b.afterWindDown})</span>}
+                          </FlowRow>
+                        );
+                      }
+                      const b = r.it;
+                      if (b.covered) {
+                        return (
+                          <FlowRow key={`v3cb${b.key}`} dot="bg-emerald-500" amount={formatINR(b.amount)} action={canPay && <QueuePay it={b} generalPiggy={generalPiggy} pendingCardBills={pendingCardBills ?? []} categories={spendCategories} />}>
+                            <span className="text-slate-700">{b.label}</span>{b.day != null && <span className="text-slate-400"> · {ord(b.day)}</span>}
+                            <Tag tone="emerald">✓ in hand</Tag>
+                          </FlowRow>
+                        );
+                      }
+                      return (
+                        <FlowRow key={`v3wb${b.key}`} dot={b.dueNow ? "bg-red-500" : "bg-slate-300"} danger={b.dueNow} title={waitTitle(b)} amount={formatINR(b.amount)} action={b.dueNow && canPay && <QueuePay it={b} generalPiggy={generalPiggy} pendingCardBills={pendingCardBills ?? []} categories={spendCategories} />}>
+                          <span className={b.dueNow ? "text-red-700" : "text-slate-500"}>{b.label}</span>{b.day != null && <span className="text-slate-400"> · {ord(b.day)}</span>}
+                          <Tag tone={b.dueNow ? "red" : "slate"}>{b.dueNow ? `short ${formatINR(b.short)}` : waitShort(b)}</Tag>
+                        </FlowRow>
+                      );
+                    })}
+                  </FlowSection>
                 )}
-                {toSendItems.length > 0 && (
-                  <div className="mt-2">
-                    <div className="mb-1 text-[10px] font-medium uppercase tracking-wide text-slate-400">📤 To send <span className="font-normal normal-case text-slate-300">— still owed out</span></div>
-                    <ul className="space-y-0.5 text-[11px]">
-                      {toSendItems.map((s, i) => (
-                        <li key={`sd${i}`} className="flex items-center justify-between gap-2"><span className="truncate text-rose-600">to {s.name}{s.label ? <span className="text-slate-400"> · {s.label}</span> : null}</span><span className="shrink-0 tabular-nums text-rose-700">− {formatINR(s.amount)}</span></li>
-                      ))}
-                    </ul>
-                  </div>
+                {incoming.length > 0 && (
+                  <FlowSection tone="emerald" icon="📥" title="To receive" hint="not in hand yet" total={incoming.reduce((t, r) => t + r.amount, 0)} sign="+">
+                    {incoming.map((r) => (
+                      <FlowRow key={`rc${r.key}`} dot="bg-emerald-400" amount={`+ ${formatINR(r.amount)}`} amountTone="text-emerald-700">
+                        <span className="text-slate-700">{r.income ? r.label : `from ${r.fromName ?? "?"}`}</span>
+                        {!r.income && r.label && r.label !== "Transfer" && <span className="text-slate-400"> · {r.label}</span>}
+                        {r.day != null && <span className="text-slate-400"> · {ord(r.day)}</span>}
+                        {r.income && <Tag tone="emerald">income</Tag>}
+                      </FlowRow>
+                    ))}
+                    {v3.cardCashComing.map((c) => (
+                      <li key={`rcc${c.name}`} className="pl-4 text-[10px] text-emerald-700/70">↳ incl. {formatINR(c.amount)} for 💳 {c.name}{c.dueISO ? ` · due ${new Date(c.dueISO).toLocaleDateString("en-IN", { day: "numeric", month: "short", timeZone: "Asia/Kolkata" })}` : ""}</li>
+                    ))}
+                  </FlowSection>
+                )}
+                {v3.sendsToList.length > 0 && (
+                  <FlowSection tone="rose" icon="📤" title="To send" hint="still owed out" total={v3.sendsToList.reduce((t, x) => t + x.amount, 0)} sign="−">
+                    {v3.sendsToList.map((x) => (
+                      <FlowRow key={`sd${x.key}`} dot={x.covered ? "bg-emerald-500" : x.dueNow ? "bg-red-500" : "bg-slate-300"} title={x.covered ? undefined : waitTitle(x)} amount={`− ${formatINR(x.amount)}`} amountTone="text-rose-700">
+                        <span className="text-slate-700">to {x.toName ?? "?"}</span>{x.day != null && <span className="text-slate-400"> · {ord(x.day)}</span>}
+                        <Tag tone={x.covered ? "emerald" : "slate"}>{x.covered ? "✓ in hand" : waitShort(x)}</Tag>
+                      </FlowRow>
+                    ))}
+                  </FlowSection>
                 )}
               </div>
-            );
-          })()}
+          )}
       {!showV3 && <div className="mb-1 mt-2 text-[10px] font-medium uppercase tracking-wide text-slate-400">Where it&apos;s allocated <span className="font-normal normal-case text-slate-300">(old)</span></div>}
       <ul className="mt-1 space-y-1">
         {/* NON-TREASURER, LIVE/PREVIEW month: carry-based breakdown that sums EXACTLY to "Holding now".
@@ -767,16 +840,18 @@ export function InHandPersonGroup({
             fund bills. A SELF-FUNDER (net contributor) holds this cash from their own salary, so it's
             IN their in-hand total; a pool-funded receiver still awaits it (`yetToReceive`), and periodic
             fund bills are drawn from the fund (neither). */}
-        {(shownBills.length > 0 || shownPeriodic.length > 0) && (
+        {!showV3 && (shownBills.length > 0 || shownPeriodic.length > 0) && (
           <>
             <li className="pt-2">
               <div className="border-t border-slate-200" />
               <div className="mt-1.5 flex items-center justify-between gap-2">
                 <span className="text-[10px] font-semibold uppercase tracking-wide text-teal-600">
-                  Bills to pay this month
+                  {showV3 ? "Fund bills due" : "Bills to pay this month"}
                 </span>
                 <span className="text-[9px] text-slate-400">
-                  {selfFundsBills && shownBills.length > 0
+                  {showV3
+                    ? "paid from the fund · not your in-hand"
+                    : selfFundsBills && shownBills.length > 0
                     ? "you hold this cash · included in your in-hand"
                     : yetToReceive > 0.005
                     ? `yet to receive ${formatINR(yetToReceive)} from the pool · not in your in-hand`
@@ -784,7 +859,7 @@ export function InHandPersonGroup({
                 </span>
               </div>
             </li>
-            {shownBills.map((b) => {
+            {!showV3 && shownBills.map((b) => {
               const st = b.due?.status;
               return (
                 <li key={`ub${b.id}`} className={`flex items-center justify-between gap-2 rounded-md text-xs ${st === "overdue" ? "bg-red-50 px-1.5 py-0.5" : st === "soon" ? "bg-amber-50 px-1.5 py-0.5" : ""}`}>
@@ -828,7 +903,7 @@ export function InHandPersonGroup({
         {/* Family credit-card bills now due — the owner has HELD this cash since the swipe (a credit
             spend doesn't leave hand until the bill), so it sits in their in-hand and pays down when the
             card bill is settled. Its own ruled section, like the bills above — it's a bill to pay too. */}
-        {(pendingCardBills ?? []).some((b) => !b.done) && (
+        {!showV3 && (pendingCardBills ?? []).some((b) => !b.done) && (
           <>
             <li className="pt-2">
               <div className="border-t border-slate-200" />
@@ -983,4 +1058,91 @@ function PaidToggle({ id, title, label }: { id: number; title: string; label: st
       </button>
     </form>
   );
+}
+
+// Short "when does the money come" hint for a waiting item (laptop-friendly), full text in the tooltip.
+function waitShort(w: Waiting): string {
+  if (!w.arrives && w.partial) return `${formatINR(w.partial.amount)} arrives ${w.partial.day != null ? ord(w.partial.day) : "later"} · still short ${formatINR(w.partial.stillShort)}`;
+  if (!w.arrives) return "nothing incoming yet";
+  return `${formatINR(w.arrives.amount)} arrives ${w.arrives.day != null ? ord(w.arrives.day) : "later"}`;
+}
+function waitTitle(w: Waiting): string {
+  const base = `${formatINR(w.amount)} — only ${formatINR(Math.max(0, w.amount - w.short))} free in hand now (short ${formatINR(w.short)}).`;
+  if (!w.arrives && w.partial) return `${base} ${w.partial.fromName ? `${w.partial.fromName} sends` : w.partial.label + ":"} ${formatINR(w.partial.amount)}${w.partial.day != null ? ` on the ${ord(w.partial.day)}` : ""} — still ${formatINR(w.partial.stillShort)} short after everything planned to come in.`;
+  if (!w.arrives) return `${base} Nothing incoming is planned that covers it yet.`;
+  return `${base} ${w.arrives.fromName ? `${w.arrives.fromName} sends` : w.arrives.label + ":"} ${formatINR(w.arrives.amount)}${w.arrives.day != null ? ` on the ${ord(w.arrives.day)}` : ""}.`;
+}
+
+// The Pay control for a queued bill — same actions as elsewhere (no new behaviour): a plain bill toggles
+// paid, a misc bill opens the misc pay modal, a pool vendor leg ticks its vendor payment, a card bill
+// opens the card-bill pay modal.
+function QueuePay({ it, generalPiggy, pendingCardBills, categories }: { it: QueueItem; generalPiggy: number; pendingCardBills: InHand["byPerson"][number]["pendingCardBills"]; categories: { id: number; name: string }[] }) {
+  if (it.cardBill) {
+    const b = pendingCardBills.find((x) => x.cardId === it.cardBill!.cardId && x.cycleEndISO === it.cardBill!.cycleEndISO);
+    if (!b) return null;
+    return <PayCardBillModal cardId={b.cardId} cardName={b.cardName} color={b.color} cycleEndISO={b.cycleEndISO} dueISO={b.dueISO} familyBudgeted={b.familyBudgeted} familyBudgetedByMonth={b.familyBudgetedByMonth} familyMisc={b.familyMisc} personalAmount={b.personalAmount} annualFee={b.annualFee} categories={categories} />;
+  }
+  if (it.billId == null) return null;
+  if (it.poolVendorLeg) {
+    return (
+      <form action={toggleBillPaid}>
+        <input type="hidden" name="id" value={it.billId} />
+        <input type="hidden" name="leg" value="vendor" />
+        <button type="submit" title="Mark the vendor paid" className="rounded-full border border-slate-200 px-1.5 py-0.5 text-[10px] text-slate-500 hover:border-emerald-300 hover:text-emerald-600">✓ paid</button>
+      </form>
+    );
+  }
+  if (it.misc) return <MiscPayModal id={it.billId} name={it.label} estimate={it.amount} generalPiggy={generalPiggy} />;
+  return <PaidToggle id={it.billId} title="Mark this bill paid" label="✓ paid" />;
+}
+
+// ── Visual building blocks for the Bills / To receive / To send sections ─────────────────────────────
+// Each section is its own tinted card (coloured rail + header chip + count/total), each row a bullet whose
+// colour is its status — so the three lists read apart from each other and from the Held-for ledger above.
+const TONE = {
+  amber: { box: "border-amber-300 bg-amber-50/60", chip: "bg-amber-100 text-amber-800", total: "text-amber-800" },
+  emerald: { box: "border-emerald-300 bg-emerald-50/60", chip: "bg-emerald-100 text-emerald-800", total: "text-emerald-700" },
+  rose: { box: "border-rose-300 bg-rose-50/60", chip: "bg-rose-100 text-rose-800", total: "text-rose-700" },
+} as const;
+
+function FlowSection({ tone, icon, title, hint, total, sign = "", children }: { tone: keyof typeof TONE; icon: string; title: string; hint?: string; total: number; sign?: string; children: React.ReactNode }) {
+  const t = TONE[tone];
+  const count = Array.isArray(children) ? children.flat().filter(Boolean).length : 1;
+  return (
+    // Native <details open>: shown by default, one tap on the header folds it to a single summary line
+    // (title + count + total stay visible). The chevron points down when open, right when folded.
+    <details open className={`group/fs mt-2.5 rounded-lg border-l-4 px-2.5 py-2 ${t.box}`}>
+      <summary className="flex cursor-pointer list-none items-center justify-between gap-2 rounded-md outline-none focus-visible:ring-2 focus-visible:ring-slate-300 [&::-webkit-details-marker]:hidden" title="Show / hide">
+        <span className="flex min-w-0 items-center gap-1.5">
+          <svg viewBox="0 0 20 20" className="h-3 w-3 shrink-0 -rotate-90 text-slate-400 transition-transform duration-150 group-open/fs:rotate-0" aria-hidden>
+            <path fill="currentColor" d="M5.3 7.3a1 1 0 0 1 1.4 0L10 10.6l3.3-3.3a1 1 0 1 1 1.4 1.4l-4 4a1 1 0 0 1-1.4 0l-4-4a1 1 0 0 1 0-1.4z" />
+          </svg>
+          <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${t.chip}`}>{icon} {title}</span>
+          {hint && <span className="truncate text-[10px] text-slate-400">{hint}</span>}
+        </span>
+        <span className={`shrink-0 text-[10px] font-semibold tabular-nums ${t.total}`}>{count} · {sign ? `${sign} ` : ""}{formatINR(Math.round(total * 100) / 100)}</span>
+      </summary>
+      <ul className="mt-1.5 space-y-1 text-[11px]">{children}</ul>
+    </details>
+  );
+}
+
+function FlowRow({ dot, amount, amountTone, action, danger, title, children }: { dot: string; amount: string; amountTone?: string; action?: React.ReactNode; danger?: boolean; title?: string; children: React.ReactNode }) {
+  return (
+    <li className={`flex items-center justify-between gap-2 ${danger ? "-mx-1 rounded-md bg-red-100/70 px-1 py-0.5" : ""}`} title={title}>
+      <span className="flex min-w-0 items-center gap-1.5">
+        <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${dot}`} aria-hidden />
+        <span className="truncate">{children}</span>
+      </span>
+      <span className="flex shrink-0 items-center gap-1.5">
+        <span className={`tabular-nums font-medium ${amountTone ?? (danger ? "text-red-700" : "text-slate-700")}`}>{amount}</span>
+        {action}
+      </span>
+    </li>
+  );
+}
+
+const TAG = { emerald: "bg-emerald-100 text-emerald-700", teal: "bg-teal-100 text-teal-700", slate: "bg-white/80 text-slate-500 ring-1 ring-slate-200", red: "bg-red-100 text-red-700 font-semibold" } as const;
+function Tag({ tone, children }: { tone: keyof typeof TAG; children: React.ReactNode }) {
+  return <span className={`ml-1.5 rounded-full px-1.5 py-px text-[9.5px] ${TAG[tone]}`}>{children}</span>;
 }

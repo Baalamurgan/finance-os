@@ -104,7 +104,7 @@ export async function getUnpaidCardDues(memberId: number): Promise<number> {
 // `family` items are family-view spends mirrored onto this card (the family reimburses them), shown
 // for visibility with a tag. They are counted in `familyTotal` / `familyUnpaidTotal` ONLY — never in
 // `total` / `unpaidTotal`, which stay personal-only so the month spendable & cash-in-hand are unchanged.
-export type CardDueItem = { label: string; amount: number; dateISO: string; family: boolean };
+export type CardDueItem = { label: string; amount: number; dateISO: string; family: boolean; budgeted?: boolean; category?: string | null; peer?: boolean };
 // The budgeted family portion, split by the spend's budget month (a 16th–15th cycle spans two months).
 export type MonthAmount = { monthISO: string; amount: number };
 export type CardDueCycle = { cycleEndISO: string; dueISO: string | null; total: number; familyTotal: number; familyBudgeted: number; familyBudgetedByMonth: MonthAmount[]; annualFee: number; generated: boolean; items: CardDueItem[] };
@@ -190,7 +190,7 @@ export async function getCardDues(memberId: number): Promise<CardDue[]> {
     // bore a family spend) OR another member (source "peer", they spent on this card and owe the owner).
     // Both are reimbursed, so they're tracked apart in familyTotal and never touch the personal totals
     // (see below). The category name lets us split the family portion into budgeted vs misc.
-    prisma.accountTransaction.findMany({ where: { accountId: { in: cardIds }, source: { in: ["family", "peer"] }, type: "spend" }, select: { accountId: true, amount: true, date: true, merchant: true, category: true } }),
+    prisma.accountTransaction.findMany({ where: { accountId: { in: cardIds }, source: { in: ["family", "peer"] }, type: "spend" }, select: { accountId: true, amount: true, date: true, merchant: true, category: true, source: true } }),
     // Household budgeted (tracked, non-misc) category NAMES — a family mirror line whose category matches
     // one of these was a budgeted spend (Fuel/provision); anything else is misc/other. Name-matched because
     // the mirror stores the family category's name (set at spend time).
@@ -201,11 +201,11 @@ export async function getCardDues(memberId: number): Promise<CardDue[]> {
 
   // Normalise personal spends + fixed lines (family:false) and family mirror lines (family:true) to a
   // common shape with a display label.
-  type Item = { cardAccountId: number | null; amount: number; date: Date; label: string; family: boolean; budgeted: boolean };
+  type Item = { cardAccountId: number | null; amount: number; date: Date; label: string; family: boolean; budgeted: boolean; category?: string | null; peer?: boolean };
   const items: Item[] = [
     ...spends.map((s) => ({ cardAccountId: s.cardAccountId, amount: s.amount, date: s.date, label: s.note?.trim() || catName.get(s.categoryId) || "Spend", family: false, budgeted: false })),
     ...fixed.map((e) => ({ cardAccountId: e.cardAccountId, amount: e.amount, date: e.date, label: e.label?.trim() || "Fixed bill", family: false, budgeted: false })),
-    ...familyTxns.map((t) => ({ cardAccountId: t.accountId, amount: t.amount, date: t.date, label: t.merchant, family: true, budgeted: t.category != null && budgetedNames.has(t.category) })),
+    ...familyTxns.map((t) => ({ cardAccountId: t.accountId, amount: t.amount, date: t.date, label: t.merchant, family: true, budgeted: t.source !== "peer" && t.category != null && budgetedNames.has(t.category), category: t.category, peer: t.source === "peer" })),
   ];
   const out: CardDue[] = [];
 
@@ -219,7 +219,7 @@ export async function getCardDues(memberId: number): Promise<CardDue[]> {
     const familyAll = mine.filter((it) => it.family).reduce((s, it) => s + it.amount, 0);
     if (mine.length === 0 && myBills.length === 0) continue; // nothing on this card, ever
 
-    const toItem = (it: Item): CardDueItem => ({ label: it.label, amount: it.amount, dateISO: it.date.toISOString(), family: it.family });
+    const toItem = (it: Item): CardDueItem => ({ label: it.label, amount: it.amount, dateISO: it.date.toISOString(), family: it.family, budgeted: it.budgeted, category: it.category ?? null, peer: !!it.peer });
     const byDateDesc = (a: CardDueItem, b: CardDueItem) => b.dateISO.localeCompare(a.dateISO);
 
     if (statementDay == null) {
