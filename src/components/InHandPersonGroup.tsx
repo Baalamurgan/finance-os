@@ -405,7 +405,7 @@ export function InHandPersonGroup({
                       if (r.kind === "fund") {
                         const b = r.b;
                         return (
-                          <FlowRow key={`v3fb${b.categoryId}`} dot="bg-teal-400" amount={formatINR(b.bill)} action={canPay && <PayBillModal categoryId={b.categoryId} periodId={periodId} name={b.name} bill={b.bill} fund={b.fund} generalPiggy={generalPiggy} cards={cards} />}
+                          <FlowRow key={`v3fb${b.categoryId}`} dot="bg-teal-400" amount={formatINR(b.bill)} action={canPay && <PayBillModal categoryId={b.categoryId} periodId={periodId} name={b.name} bill={b.bill} fund={b.fund} saved={b.saved} setAside={b.setAside} generalPiggy={generalPiggy} cards={cards} />}
                             date={b.due && <Tag tone="slate">due {ord(b.due.day)}</Tag>} meta={<><Tag tone="teal">from fund {formatINR(b.fund)}</Tag>{b.afterWindDown && <Tag tone="slate">after {b.afterWindDown}</Tag>}</>}>
                             <span className="text-slate-700">{b.name}</span>
                           </FlowRow>
@@ -890,7 +890,7 @@ export function InHandPersonGroup({
                 <span className="flex shrink-0 items-center gap-1.5">
                   <span className="tabular-nums text-slate-500">{formatINR(b.bill)}</span>
                   {canPay ? (
-                    <PayBillModal categoryId={b.categoryId} periodId={periodId} name={b.name} bill={b.bill} fund={b.fund} generalPiggy={generalPiggy} cards={cards} />
+                    <PayBillModal categoryId={b.categoryId} periodId={periodId} name={b.name} bill={b.bill} fund={b.fund} saved={b.saved} setAside={b.setAside} generalPiggy={generalPiggy} cards={cards} />
                   ) : (
                     <span className="rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-400">to pay</span>
                   )}

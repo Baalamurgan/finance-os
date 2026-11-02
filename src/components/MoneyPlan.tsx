@@ -579,7 +579,7 @@ export function MoneyPlan({
                     !canActBill ? (
                       s.done ? null : <span className="text-[9px] text-slate-300">to be paid</span>
                     ) : s.fund && !s.done ? (
-                      <PayBillModal categoryId={s.categoryId!} periodId={periodId} name={s.vendor!} bill={s.amount} fund={s.fundAvail ?? 0} generalPiggy={generalPiggy} cards={s.payerId != null ? cardsByMember[s.payerId] ?? [] : []} />
+                      <PayBillModal categoryId={s.categoryId!} periodId={periodId} name={s.vendor!} bill={s.amount} fund={s.fundAvail ?? 0} saved={s.fundSaved} setAside={s.fundSetAside} generalPiggy={generalPiggy} cards={s.payerId != null ? cardsByMember[s.payerId] ?? [] : []} />
                     ) : s.misc && s.billId != null ? (
                       // Planned misc = estimate → actual-amount + Piggy-reconcile popup (undo reverses it).
                       s.done ? (

@@ -20,6 +20,8 @@ export function PayBillModal({
   spendPeriodId,
   carriedFrom,
   cards = [],
+  saved,
+  setAside,
 }: {
   categoryId: number;
   periodId: number;
@@ -34,6 +36,9 @@ export function PayBillModal({
   // The payer's OWN credit cards. If one is picked, the charge is mirrored onto that card's statement
   // (the fund still covers the bill — settlement is unchanged). Empty = no picker (cash/UPI only).
   cards?: { id: number; name: string; last4: string | null; color: string }[];
+  // Split of `fund` for display: the fund's saved balance vs this month's set-aside (drawn in that order).
+  saved?: number;
+  setAside?: number;
 }) {
   const [open, setOpen] = useState(false);
   const toast = useToast();
@@ -46,10 +51,14 @@ export function PayBillModal({
   // Which card it was swiped on (null = cash/UPI). Reset each open so a card never carries over to a
   // different bill — the default is always "no card".
   const [cardId, setCardId] = useState<number | null>(null);
+  // The day the card was actually charged (e.g. an auto-debit) — decides which statement it lands on.
+  const todayIso = () => { const t = new Date(Date.now() + 330 * 60000); return t.toISOString().slice(0, 10); };
+  const [chargedOn, setChargedOn] = useState(todayIso);
   useEffect(() => {
     if (!open) return;
     setAmountStr(String(bill));
     setCardId(null);
+    setChargedOn(todayIso());
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -68,6 +77,10 @@ export function PayBillModal({
   const remaining = Math.round((actual - fromFund) * 100) / 100;
   const leftover = Math.round((fund - fromFund) * 100) / 100; // stays in the fund
   const fundCovers = remaining <= 0;
+  // Drawn in the server's order: the saved fund first, then this month's set-aside.
+  const hasSplit = saved != null && setAside != null;
+  const fromSaved = hasSplit ? Math.min(saved!, actual) : 0;
+  const fromSetAside = hasSplit ? Math.min(setAside!, Math.max(0, actual - fromSaved)) : 0;
 
   const hidden = (source: string) => (
     <>
@@ -77,6 +90,7 @@ export function PayBillModal({
       <input type="hidden" name="source" value={source} />
       <input type="hidden" name="amount" value={actual} />
       {cardId != null && <input type="hidden" name="cardAccountId" value={cardId} />}
+      {cardId != null && <input type="hidden" name="chargedOn" value={chargedOn} />}
     </>
   );
 
@@ -116,8 +130,16 @@ export function PayBillModal({
                   </span>
                 </label>
                 <div className="rounded-xl bg-slate-50 p-3 text-sm">
-                  <div className="flex justify-between"><span className="text-slate-500">Fund available</span><span className="tabular-nums text-slate-600">{formatINR(fund)}</span></div>
-                  <div className="flex justify-between"><span className="text-slate-500">From its fund</span><span className="tabular-nums text-teal-700">− {formatINR(fromFund)}</span></div>
+                  {hasSplit ? (
+                    <>
+                      <div className="flex justify-between"><span className="text-slate-500">Fund</span><span className="tabular-nums text-slate-600">{formatINR(saved!)}</span></div>
+                      <div className="flex justify-between"><span className="text-slate-500">Set-aside</span><span className="tabular-nums text-slate-600">{formatINR(setAside!)}</span></div>
+                    </>
+                  ) : (
+                    <div className="flex justify-between"><span className="text-slate-500">Fund</span><span className="tabular-nums text-slate-600">{formatINR(fund)}</span></div>
+                  )}
+                  {/* One "Paying" line — the balances above show what's in each (drawn fund first, then set-aside). */}
+                  <div className="flex justify-between"><span className="text-slate-500">Paying</span><span className="tabular-nums text-teal-700">− {formatINR(fromFund)}</span></div>
                   {fundCovers && leftover > 0 && (
                     <div className="flex justify-between"><span className="text-slate-500">Stays in the fund</span><span className="tabular-nums text-slate-500">{formatINR(leftover)}</span></div>
                   )}
@@ -142,9 +164,16 @@ export function PayBillModal({
                   </select>
                   {cardId != null && (
                     <span className="mt-1 block text-[10px] font-normal text-slate-400">
-                      Adds {formatINR(actual)} to this card&apos;s statement. The fund still covers the bill — settlement is unchanged.
+                      Adds {formatINR(actual)} to this card&apos;s statement. The money stays in your account until you pay that card bill — settlement is unchanged.
                     </span>
                   )}
+                </label>
+              )}
+              {cardId != null && (
+                <label className="block text-xs font-medium text-slate-500">
+                  Charged on
+                  <input type="date" value={chargedOn} max={todayIso()} onChange={(e) => setChargedOn(e.target.value || todayIso())} className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800 focus:border-teal-400 focus:outline-none" />
+                  <span className="mt-0.5 block text-[10px] font-normal text-slate-400">The day the card was charged (e.g. the auto-debit date) — decides which statement it lands on.</span>
                 </label>
               )}
 
@@ -152,10 +181,10 @@ export function PayBillModal({
                 <div className="space-y-3">
                   <form action={formAction} className="space-y-3">
                     {hidden("fund")}
-                    <p className="text-xs text-slate-500">The fund fully covers this bill.</p>
+                    <p className="text-xs text-slate-500">{fromSaved > 0.005 && fromSetAside > 0.005 ? "Fund + set-aside cover it." : fromSetAside > 0.005 ? "Set-aside covers it." : "Fund covers it."}</p>
                     <div className="flex items-center gap-3">
                       <button type="button" onClick={() => setOpen(false)} className="min-h-11 flex-1 rounded-xl border-2 border-slate-200 px-4 py-2.5 text-sm font-medium text-slate-600">Cancel</button>
-                      <button type="submit" disabled={actual <= 0} className="min-h-11 flex-1 rounded-xl bg-teal-600 px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-40">Pay {formatINR(actual)} from fund</button>
+                      <button type="submit" disabled={actual <= 0} className="min-h-11 flex-1 rounded-xl bg-teal-600 px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-40">Pay {formatINR(actual)}</button>
                     </div>
                   </form>
                   <AlreadyPaidButton hidden={hidden} formAction={formAction} />

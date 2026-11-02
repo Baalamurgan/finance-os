@@ -8,7 +8,7 @@
 export type PlanTransfer = { fromId: number; from: string; toId: number; to: string; amount: number; paidAmount?: number | null; settled: boolean; recordId: number | null; payments?: { id: number; amount: number; settledAt?: Date | string | null; key?: string | null; fromId?: number; toId?: number }[]; status?: "overdue" | "soon" | "normal" | null; days?: number | null };
 export type PlanBill = {
   key: string; payerId: number | null; payerName: string; vendor: string; amount: number; done: boolean;
-  day: number | null; status: "overdue" | "soon" | "normal" | null; days?: number | null; billId?: number; categoryId?: number; fund?: boolean; fundAvail?: number;
+  day: number | null; status: "overdue" | "soon" | "normal" | null; days?: number | null; billId?: number; categoryId?: number; fund?: boolean; fundAvail?: number; fundSaved?: number; fundSetAside?: number;
   misc?: boolean; // a planned misc bill (estimated) → paid via the actual-amount + Piggy-reconcile popup
   miscCard?: boolean; // a planned-misc spend card: an ordinary dated bill whose Pay button logs a spend
   deferred?: boolean; // a wind-down-overhang expense: paid by its assignee at wind-down, out of the settlement
@@ -67,7 +67,7 @@ export type PlanStep = {
   returnBy?: number | null; // on a budgetLoan front: the day the hub repays it (shown as "returned by the Nth")
   infeasibleFrom?: number | null; // on a short BILL: the earliest day its payer can actually settle it ("payable from day Y"); null = not this month
   // bill
-  payerId?: number | null; payerName?: string; vendor?: string; billId?: number; categoryId?: number; fund?: boolean; fundAvail?: number; misc?: boolean; deferred?: boolean;
+  payerId?: number | null; payerName?: string; vendor?: string; billId?: number; categoryId?: number; fund?: boolean; fundAvail?: number; fundSaved?: number; fundSetAside?: number; misc?: boolean; deferred?: boolean;
   miscCard?: boolean; // a planned-misc spend card: paid by logging a spend against its category (categoryId)
   // A family credit-card bill: paid from cash the owner already HOLDS (carried budget / reimbursed misc),
   // so — like a fund bill — it's net-neutral in the walk (never "short"). cardId + cycleEndISO identify
@@ -229,7 +229,7 @@ export function buildMoneyPlan(input: {
   for (const b of bills) {
     steps.push({
       id: b.key, kind: "bill", day: b.day, amount: b.amount, done: b.done,
-      payerId: b.payerId, payerName: b.payerName, vendor: b.vendor, billId: b.billId, categoryId: b.categoryId, fund: b.fund, fundAvail: b.fundAvail, misc: b.misc, miscCard: b.miscCard, status: b.status, days: b.days ?? null, deferred: b.deferred,
+      payerId: b.payerId, payerName: b.payerName, vendor: b.vendor, billId: b.billId, categoryId: b.categoryId, fund: b.fund, fundAvail: b.fundAvail, fundSaved: b.fundSaved, fundSetAside: b.fundSetAside, misc: b.misc, miscCard: b.miscCard, status: b.status, days: b.days ?? null, deferred: b.deferred,
       cardBill: b.cardBill, cardId: b.cardId, cycleEndISO: b.cycleEndISO, dueISO: b.dueISO, paidPriorMonth: b.paidPriorMonth, cardPersonal: b.cardPersonal, cardAnnualFee: b.cardAnnualFee, cardColor: b.cardColor, cardFamilyBudgeted: b.cardFamilyBudgeted, cardFamilyMisc: b.cardFamilyMisc, cardFamilyBudgetedByMonth: b.cardFamilyBudgetedByMonth,
     });
   }

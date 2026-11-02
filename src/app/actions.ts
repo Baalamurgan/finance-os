@@ -2408,8 +2408,17 @@ export async function payPeriodicBill(prev: PayBillState, formData: FormData): P
   // The 1:1 card-statement mirror for a bill payment (linked via billPaymentId). source:"family" makes it
   // ride the card's cycle as a reimbursed/display line (never the owner's personal spendable), exactly like
   // a family card spend — but with no Spend behind it, so settlement never credits it a second time.
+  // "Charged on" (the real card charge day, e.g. an auto-debit) decides the statement it lands on.
+  // Accept a sane past date only (≤ today, ≥ 60 days back); otherwise now.
+  const chargedRaw = String(formData.get("chargedOn") ?? "");
+  const chargedAt = (() => {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(chargedRaw)) return new Date();
+    const d = new Date(`${chargedRaw}T12:00:00+05:30`); // noon IST — never slips a day across time zones
+    const now = Date.now();
+    return isNaN(d.getTime()) || d.getTime() > now + 86400000 || d.getTime() < now - 60 * 86400000 ? new Date() : d;
+  })();
   const mirrorData = (billPaymentId: number) => ({
-    memberId: payer as number, accountId: cardAccountId as number, date: new Date(),
+    memberId: payer as number, accountId: cardAccountId as number, date: chargedAt,
     merchant: cat.name, amount: actual, type: "spend", category: cat.name, source: "family", billPaymentId,
   });
 

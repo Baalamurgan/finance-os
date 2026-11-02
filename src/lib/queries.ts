@@ -672,7 +672,7 @@ export async function getMoneyPlan(householdId: number, periodId: number, inhand
   for (const g of inhand.byPerson) {
     for (const b of g.unpaidBills) bills.push({ key: `bill-${b.id}`, payerId: g.memberId, payerName: g.name, vendor: b.name, amount: b.amount, done: false, day: b.due?.day ?? null, status: b.due?.status ?? null, days: b.due?.days ?? null, billId: b.id, misc: b.misc });
     for (const b of g.paidBills) bills.push({ key: `bill-${b.id}`, payerId: g.memberId, payerName: g.name, vendor: b.name, amount: b.amount, done: true, day: b.due?.day ?? null, status: b.due?.status ?? null, days: b.due?.days ?? null, billId: b.id, misc: b.misc });
-    for (const p of g.unpaidPeriodic) bills.push({ key: `fund-${p.categoryId}`, payerId: g.memberId, payerName: g.name, vendor: p.name, amount: p.bill, done: false, day: p.due?.day ?? null, status: p.due?.status ?? null, days: p.due?.days ?? null, categoryId: p.categoryId, fund: true, fundAvail: p.fund });
+    for (const p of g.unpaidPeriodic) bills.push({ key: `fund-${p.categoryId}`, payerId: g.memberId, payerName: g.name, vendor: p.name, amount: p.bill, done: false, day: p.due?.day ?? null, status: p.due?.status ?? null, days: p.due?.days ?? null, categoryId: p.categoryId, fund: true, fundAvail: p.fund, fundSaved: p.saved, fundSetAside: p.setAside });
     for (const p of g.paidPeriodic) bills.push({ key: `fund-${p.categoryId}`, payerId: g.memberId, payerName: g.name, vendor: p.name, amount: p.bill, done: true, day: p.due?.day ?? null, status: p.due?.status ?? null, days: p.due?.days ?? null, categoryId: p.categoryId, fund: true, fundAvail: p.fund });
     // Family credit-card bills now due → a dated step on the statement due date, paid from cash the owner
     // already HOLDS (cardBill = net-neutral in the walk, never "short"). Amount = the family portion; the
@@ -1149,7 +1149,7 @@ export type CardUnbilled = { cardId: number; cardName: string; color: string; ow
 
 // IST calendar (year, month) of an ISO instant — month keys from getCardDues are local-midnight ISO strings.
 const istYm = (iso: string) => { const d = new Date(new Date(iso).getTime() + 330 * 60000); return d.getUTCFullYear() * 12 + d.getUTCMonth() + 1; };
-type RawCardItem = { label: string; amount: number; dateISO: string; family: boolean; budgeted?: boolean; category?: string | null; peer?: boolean };
+type RawCardItem = { label: string; amount: number; dateISO: string; family: boolean; budgeted?: boolean; category?: string | null; peer?: boolean; billPay?: boolean; billPaymentId?: number | null };
 // FAMILY spends only = spends entered in the family view on this card. A "peer" line (another member used
 // this card for their OWN purchase) is the card owner's own spend — settled between them via Lending — so
 // it never counts as family here (it rides in the owner's personal share of the bill instead).
@@ -1239,8 +1239,18 @@ export async function getCardHoldings(householdId: number, period: { year: numbe
   const priorItems = (ownerId: number, items: RawCardItem[]) =>
     famItems(items.filter((i) => i.family && !i.peer && i.budgeted && i.category != null && holderByName.get(i.category) === ownerId && istYm(i.dateISO) < planYm));
   const sumItems = (its: CardSpendItem[]) => Math.round(its.reduce((t, i) => t + i.amount, 0) * 100) / 100;
+  // A bill paid ON the card (a fund / set-aside bill's mirror — e.g. YouTube on SBI Cashback): its money came
+  // from the fund / set-aside the payer holds and stays with them until the card bill is paid → held, any month.
+  // Counted from the month the bill was PAID FOR (its BillPayment's spend month), never by the card's charge
+  // date — a November YouTube auto-debited on 28 Oct must not inflate October's close.
+  const bpRows = await prisma.billPayment.findMany({ where: { householdId, cardAccountId: { not: null } }, select: { id: true, periodId: true, spendPeriodId: true } });
+  const bpPeriods = await prisma.period.findMany({ where: { id: { in: [...new Set(bpRows.map((b) => b.spendPeriodId ?? b.periodId))] } }, select: { id: true, year: true, month: true } });
+  const ymOfPeriod = new Map(bpPeriods.map((pp) => [pp.id, pp.year * 12 + pp.month]));
+  const bpYm = new Map(bpRows.map((b) => [b.id, ymOfPeriod.get(b.spendPeriodId ?? b.periodId) ?? 0]));
+  const billPayItems = (items: RawCardItem[]) => famItems(items.filter((i) => i.family && !i.peer && i.billPay && i.billPaymentId != null && (bpYm.get(i.billPaymentId) ?? Infinity) <= planYm));
+  const priorItemsWithBills = (ownerId: number, items: RawCardItem[]) => [...priorItems(ownerId, items), ...billPayItems(items)];
   const priorOop = (ownerId: number, items: RawCardItem[]) =>
-    famItems(items.filter((i) => i.family && !i.peer && istYm(i.dateISO) < planYm && !(i.budgeted && i.category != null && holderByName.get(i.category) === ownerId)));
+    famItems(items.filter((i) => i.family && !i.peer && !i.billPay && istYm(i.dateISO) < planYm && !(i.budgeted && i.category != null && holderByName.get(i.category) === ownerId)));
   const cardById = new Map(cards.map((c) => [c.id, c]));
   const owners = [...new Set(cards.map((c) => c.memberId))];
   // Split the family portion into budgeted (Fuel/provision → from the held budget) vs misc/other (→ from
@@ -1261,7 +1271,7 @@ export async function getCardHoldings(householdId: number, period: { year: numbe
         // Not due within the plan month (not generated yet, or due later): any budgeted family spend from an
         // EARLIER (closed) budget month is still cash the owner holds for that later bill → unbilled carry.
         if (!cyc.generated || !cyc.dueISO || new Date(cyc.dueISO).getTime() > monthEnd) {
-          const its = priorItems(ownerId, cyc.items);
+          const its = priorItemsWithBills(ownerId, cyc.items);
           const amt = sumItems(its);
           const oop = priorOop(ownerId, cyc.items);
           const oopAmt = sumItems(oop);
@@ -1292,7 +1302,7 @@ export async function getCardHoldings(householdId: number, period: { year: numbe
         // Paid AFTER the plan month, for a bill due AFTER it: at the plan month's end that cash was still
         // held for the later bill (keeps a past month's close stable once the bill is later paid).
         if (due.getTime() > monthEnd && new Date(p.paidAtISO).getTime() > monthEnd) {
-          const its = priorItems(ownerId, p.items);
+          const its = priorItemsWithBills(ownerId, p.items);
           const amt = sumItems(its);
           const oop = priorOop(ownerId, p.items);
           const oopAmt = sumItems(oop);
@@ -1644,7 +1654,11 @@ export async function _getInHand(householdId: number, periodId: number, settleme
     .map((c) => {
       const projected = Math.max(0, Math.round((projectedByCat.get(c.id) ?? 0) * 100) / 100);
       const fund = Math.round(((sinkBal[c.id] ?? 0) + (pendingByCat.get(c.id) ?? 0) + projected) * 100) / 100;
-      return { categoryId: c.id, name: c.name, bill: c.billAmount!, payer: c.payerMemberId ?? c.responsibleMemberId ?? null, fund, afterWindDown: projected > 0 ? projectionLabel : null, paid: paidCats.has(c.id), day: c.billDay ?? null };
+      // `saved` = the fund's accrued balance; `setAside` = this month's own share (not accrued yet) — the
+      // pay window shows the split (a monthly bill like YouTube is paid wholly from its set-aside).
+      const saved = Math.max(0, Math.round((sinkBal[c.id] ?? 0) * 100) / 100);
+      const setAside = Math.max(0, Math.round((pendingByCat.get(c.id) ?? 0) * 100) / 100);
+      return { categoryId: c.id, name: c.name, bill: c.billAmount!, payer: c.payerMemberId ?? c.responsibleMemberId ?? null, fund, saved, setAside, afterWindDown: projected > 0 ? projectionLabel : null, paid: paidCats.has(c.id), day: c.billDay ?? null };
     });
 
   // Due-date status for a bill line, evaluated against today for THIS period's month. `overdue`
@@ -1704,7 +1718,7 @@ export async function _getInHand(householdId: number, periodId: number, settleme
     ) / 100;
     // due-month periodic bills this member pays (net-neutral; paid from fund/Piggy in the modal)
     const memberDue = dueBills.filter((b) => b.payer === key);
-    const unpaidPeriodic = memberDue.filter((b) => !b.paid).map((b) => ({ categoryId: b.categoryId, name: b.name, bill: b.bill, fund: b.fund, afterWindDown: b.afterWindDown, due: dueOf(b.day), hidden: isHiddenPeriodic(b.categoryId) }));
+    const unpaidPeriodic = memberDue.filter((b) => !b.paid).map((b) => ({ categoryId: b.categoryId, name: b.name, bill: b.bill, fund: b.fund, saved: b.saved, setAside: b.setAside, afterWindDown: b.afterWindDown, due: dueOf(b.day), hidden: isHiddenPeriodic(b.categoryId) }));
     const paidPeriodic = memberDue.filter((b) => b.paid).map((b) => ({ categoryId: b.categoryId, name: b.name, bill: b.bill, fund: b.fund, afterWindDown: b.afterWindDown, due: dueOf(b.day), hidden: isHiddenPeriodic(b.categoryId) }));
 
     // bills carried over from an earlier closed month, still not marked paid (net-neutral nag)
