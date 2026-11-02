@@ -65,7 +65,7 @@ export function NavHeader({
   selYear: number;
   selMonth: number;
   members: { id: number; name: string }[];
-  categories: { id: number; name: string; tracked?: boolean; section?: string; sinking?: boolean; miscCard?: boolean; repeatMonthly?: boolean; repeatYearly?: boolean }[];
+  categories: { id: number; name: string; tracked?: boolean; liveThisMonth?: boolean; section?: string; sinking?: boolean; miscCard?: boolean; repeatMonthly?: boolean; repeatYearly?: boolean }[];
   account: { name: string; email: string; image: string | null };
   isHead: boolean;
   piggyBalance: number;
@@ -90,7 +90,8 @@ export function NavHeader({
   // Add-spend picker: everyday budgeted categories first, sinking funds last (their
   // spend categories are logged against rarely). Stable sort keeps each group's name order.
   const spendCategories = categories
-    .filter((c) => c.tracked)
+    // only this month's categories: a one-off spend card from an earlier month is hidden
+    .filter((c) => c.tracked && c.liveThisMonth !== false)
     .sort((a, b) => Number(a.sinking ?? false) - Number(b.sinking ?? false))
     // oneMonth = a spend card created for THIS month only (not re-seeded) → grouped apart in the picker
     // from the always-recurring monthly budgets.

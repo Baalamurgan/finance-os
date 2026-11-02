@@ -134,6 +134,20 @@ export async function loadCommon(params?: { y?: string; m?: string }) {
       : null;
   const provisional = earlierOpen ? { workingLabel: earlierOpen.label } : null;
 
+  // One-off planned spend cards (miscCard) belong to the month they were made for. The category row
+  // lives on after that month, so mark which ones are live in the SELECTED month (a budget or an
+  // envelope line there) — the Add-spend picker hides the rest (last month's cards).
+  const miscIds = categories.filter((cat) => cat.miscCard).map((cat) => cat.id);
+  const liveMisc = new Set<number>();
+  if (selected && miscIds.length > 0) {
+    const [bud, env] = await Promise.all([
+      prisma.budget.findMany({ where: { periodId: selected.id, categoryId: { in: miscIds }, planned: { gt: 0 } }, select: { categoryId: true } }),
+      prisma.expenseEntry.findMany({ where: { periodId: selected.id, note: null, categoryId: { in: miscIds }, amount: { gt: 0 } }, select: { categoryId: true } }),
+    ]);
+    for (const r of [...bud, ...env]) liveMisc.add(r.categoryId);
+  }
+  const categoriesWithLive = categories.map((cat) => ({ ...cat, liveThisMonth: !cat.miscCard || liveMisc.has(cat.id) }));
+
   return {
     household,
     windDownReminder,
@@ -146,7 +160,7 @@ export async function loadCommon(params?: { y?: string; m?: string }) {
     noData,
     locked,
     members,
-    categories,
+    categories: categoriesWithLive,
     piggyBalance,
     miscSubCategories,
     currentMember,
