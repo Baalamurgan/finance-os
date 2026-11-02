@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { formatINR } from "@/lib/format";
-import { payFamilyCardBill } from "@/app/actions";
+import { payFamilyCardBill, getMyFeeAccounts } from "@/app/actions";
 import { useToastAction } from "@/components/Toast";
 import { CTA_CLASS, CtaLabel } from "@/components/Cta";
 
@@ -59,6 +59,12 @@ export function PayCardBillModal({
   // An RBL-style fuel card's extra is almost always fuel surcharge → pre-pick a Fuel/Petrol category if there is one.
   const defaultCat = categories.find((c) => /fuel|petrol|diesel/i.test(c.name))?.id ?? "";
   const [cashbackTo, setCashbackTo] = useState<"personal" | "piggy" | "category">("personal");
+  // Who bears card fees, chosen per payment: the annual fee and an extra (late fee / GST…) can each be the
+  // family's or the owner's own ("Me" → a personal spend, from the account picked below).
+  const [annualBy, setAnnualBy] = useState<"family" | "me">("family");
+  const [extraTo, setExtraTo] = useState<"family" | "me">("family");
+  const [feeAccounts, setFeeAccounts] = useState<{ id: number; name: string; familyPrimary: boolean }[] | null>(null);
+  const [feeFrom, setFeeFrom] = useState<number | "">("");
   const booksDiff = categories.length > 0;
   const due = new Date(dueISO).toLocaleDateString("en-IN", { day: "numeric", month: "short" });
   // Show the budgeted portion split by month only when the cycle genuinely straddles two+ budget months.
@@ -67,6 +73,17 @@ export function PayCardBillModal({
   const multiYear = new Set(budgetedMonths.map((m) => new Date(m.monthISO).getFullYear())).size > 1;
   const monthLabel = (iso: string) =>
     new Date(iso).toLocaleDateString("en-IN", multiYear ? { month: "short", year: "2-digit" } : { month: "short" });
+
+  const myAnnual = annualBy === "me" ? annualFee : 0;
+  const myExtra = extraTo === "me" && difference > 0.005 ? difference : 0;
+  const myFee = Math.round((myAnnual + myExtra) * 100) / 100;
+  // Load the owner's own accounts the first time a "Me" fee is chosen (default: a personal, non-family one).
+  useEffect(() => {
+    if (myFee <= 0.005 || feeAccounts) return;
+    let live = true;
+    getMyFeeAccounts().then((a) => { if (!live) return; setFeeAccounts(a); setFeeFrom((f) => f || (a.find((x) => !x.familyPrimary) ?? a[0])?.id || ""); });
+    return () => { live = false; };
+  }, [myFee, feeAccounts]);
 
   useEffect(() => {
     if (!open) return;
@@ -108,7 +125,7 @@ export function PayCardBillModal({
                 )}
                 {familyMisc > 0.005 && <Row label="🛒 Family — misc / other" hint="from your in-hand" value={familyMisc} />}
                 {personalAmount > 0.005 && <Row label="👤 Your spends" hint="from your Can-spend" value={personalAmount} />}
-                {annualFee > 0.005 && <Row label="🧾 Annual fee" hint="this month" value={annualFee} />}
+                {annualFee > 0.005 && <Row label="🧾 Annual fee" hint={annualBy === "me" ? "you pay it" : "family pays it"} value={annualFee} />}
                 <div className="mt-1.5 border-t border-slate-200 pt-1.5">
                   <Row label="Suggested total" value={suggested} strong />
                 </div>
@@ -132,14 +149,39 @@ export function PayCardBillModal({
                 )}
               </div>
 
+              {annualFee > 0.005 && (
+                <div className="rounded-xl border border-slate-200 p-3">
+                  <p className="text-sm font-medium text-slate-700">Annual fee {formatINR(annualFee)} is paid by</p>
+                  <input type="hidden" name="annualFeeBy" value={annualBy} />
+                  <Toggle value={annualBy} onChange={setAnnualBy} />
+                </div>
+              )}
               {booksDiff && difference > 0.005 && (
                 <div className="rounded-xl border border-amber-200 bg-amber-50/60 p-3">
-                  <label className="text-sm font-medium text-slate-700">The extra {formatINR(difference)} is spent from</label>
-                  <select name="diffCategoryId" required defaultValue={defaultCat} className="input mt-1.5 w-full">
-                    <option value="" disabled>Pick a category</option>
-                    {categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                  <p className="text-sm font-medium text-slate-700">The extra {formatINR(difference)} (late fee / charges) is paid by</p>
+                  <input type="hidden" name="extraTo" value={extraTo} />
+                  <Toggle value={extraTo} onChange={setExtraTo} />
+                  {extraTo === "family" ? (
+                    <>
+                      <select name="diffCategoryId" required defaultValue={defaultCat} className="input mt-2 w-full">
+                        <option value="" disabled>Pick a category</option>
+                        {categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                      </select>
+                      <p className="mt-1 text-[11px] text-slate-500">A family spend this month (&ldquo;{cardName} bill charges&rdquo;) in that category — it lowers that budget and your In-Hand, and comes out of your family account.</p>
+                    </>
+                  ) : (
+                    <p className="mt-1 text-[11px] text-slate-500">Your own card fee — a personal spend (&ldquo;{cardName} card fee&rdquo;) that lowers your Can-spend.</p>
+                  )}
+                </div>
+              )}
+              {myFee > 0.005 && (
+                <div className="rounded-xl border border-slate-200 p-3">
+                  <label className="text-sm font-medium text-slate-700">Your card fee {formatINR(myFee)} is paid from</label>
+                  <select name="feeFromAccountId" required value={feeFrom} onChange={(e) => setFeeFrom(e.target.value ? Number(e.target.value) : "")} className="input mt-1.5 w-full">
+                    <option value="" disabled>{feeAccounts ? "Pick an account" : "Loading…"}</option>
+                    {(feeAccounts ?? []).map((a) => <option key={a.id} value={a.id}>{a.name}{a.familyPrimary ? " · family" : ""}</option>)}
                   </select>
-                  <p className="mt-1 text-[11px] text-slate-500">Booked as a family spend this month (&ldquo;{cardName} bill charges&rdquo;) — it lowers that budget and your In-Hand, and comes out of your family account.</p>
+                  <p className="mt-1 text-[11px] text-slate-500">Your family account pays {formatINR(Math.max(0, suggested - myAnnual))}; this account pays your {formatINR(myFee)}.</p>
                 </div>
               )}
               {booksDiff && difference < -0.005 && (
@@ -175,5 +217,17 @@ export function PayCardBillModal({
         </div>
       )}
     </>
+  );
+}
+
+// Family / Me segmented choice for who bears a card fee.
+function Toggle({ value, onChange }: { value: "family" | "me"; onChange: (v: "family" | "me") => void }) {
+  return (
+    <div className="mt-1.5 grid grid-cols-2 gap-1.5">
+      {([["family", "👨‍👩‍👧 Family"], ["me", "👤 Me · card fee"]] as const).map(([k, l]) => (
+        <button key={k} type="button" onClick={() => onChange(k)}
+          className={`rounded-lg border-2 px-2 py-2 text-xs font-medium ${value === k ? "border-emerald-500 bg-white text-emerald-700" : "border-slate-200 bg-white text-slate-500"}`}>{l}</button>
+      ))}
+    </div>
   );
 }
