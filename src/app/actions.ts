@@ -19,7 +19,7 @@ import { ensurePersonalMonth } from "@/lib/personal";
 import { planBillMonth, billCyclePhase, taxCycleMonth, type FundingStyle } from "@/lib/schedule";
 import { getBillReminders } from "@/lib/billReminders";
 import { applyBudgetShortfall, windDownPeriod } from "@/lib/windDown";
-import { PAYBACK_REIMB_NOTE, PAYBACK_AHEAD_NOTE, SURPLUS_NOTE, CARRY_NOTE, DEFERRED_NOTE, PIGGY_INCOME_NOTE, POOL_NOTE, POOL_BILL_NOTE, REMOVED_NOTE, isPoolNote } from "@/lib/notes";
+import { PAYBACK_REIMB_NOTE, PAYBACK_AHEAD_NOTE, SURPLUS_NOTE, CARRY_NOTE, DEFERRED_NOTE, PIGGY_INCOME_NOTE, POOL_NOTE, POOL_BILL_NOTE, REMOVED_NOTE, isPoolNote, isPaybackNote } from "@/lib/notes";
 import { canActOnStep } from "@/lib/planAuth";
 
 // Record a money-affecting change (who + what + when) for the activity feeds: the Money-Plan
@@ -2257,13 +2257,35 @@ export async function editManualStepAmount(formData: FormData): Promise<{ ok: bo
   const session = await auth();
   const memberId = session?.user?.memberId ?? null;
   if (!(await unlocked())) await relock("editManualStepAmount");
-  if (!(await isHead())) { log.warn("editManualStepAmount", "blocked", { outcome: "blocked", reason: "not-head", memberId }); return { ok: false, error: "Head only" }; }
   const id = Number(formData.get("id"));
   const amount = Math.round((parseAmount(formData.get("amount")) || 0) * 100) / 100;
   if (!id || !Number.isFinite(amount) || amount <= 0) return { ok: false, error: "Enter a valid amount" };
-  const step = await prisma.manualPlanStep.findUnique({ where: { id }, select: { id: true, periodId: true, bridgeGroup: true, fundsExpenseId: true } });
+  const step = await prisma.manualPlanStep.findUnique({ where: { id }, select: { id: true, periodId: true, bridgeGroup: true, fundsExpenseId: true, note: true, amount: true, done: true, fromMemberId: true, toMemberId: true } });
   if (!step) return { ok: false, error: "Step not found" };
+  // A payback step (from the suggestion card) is editable by head + manager, like adding it; others head only.
+  const payback = isPaybackNote(step.note);
+  if (!(payback ? await canEdit() : await isHead())) { log.warn("editManualStepAmount", "blocked", { outcome: "blocked", reason: "not-allowed", memberId }); return { ok: false, error: payback ? "Not allowed" : "Head only" }; }
   if (step.bridgeGroup || step.fundsExpenseId != null) return { ok: false, error: "This step's amount is linked to a bill/bridge — edit it there" };
+  if (payback) {
+    if (step.done) return { ok: false, error: "Already sent — undo it first" };
+    if (!(await periodOpen(step.periodId))) return { ok: false, error: "This month is closed" };
+    // Keep the settlement whole: a payback can only grow by what the pool still owes the member outside
+    // bills (their later payout); the reimbursement line can't pass last month's spends still owed.
+    const period = await prisma.period.findUnique({ where: { id: step.periodId }, select: { householdId: true, treasurerMemberId: true } });
+    if (!period) return { ok: false, error: "Month not found" };
+    const household = await prisma.household.findUnique({ where: { id: period.householdId }, select: { treasurerMemberId: true } });
+    const settlement = await _getSettlement(period.householdId, step.periodId, period.treasurerMemberId ?? household?.treasurerMemberId ?? null);
+    const inhand = await _getInHand(period.householdId, step.periodId, settlement);
+    const plan = await getMoneyPlan(period.householdId, step.periodId, inhand, undefined, undefined, settlement);
+    const owedLeft = plan.steps.filter((st) => !st.done && !st.hidden && st.kind === "transfer-out" && st.fromId === step.fromMemberId && st.toId === step.toMemberId && !st.fundsMember && !st.fundsBillKey).reduce((t, st) => t + st.amount, 0);
+    if (amount > step.amount + owedLeft + 0.005) return { ok: false, error: `At most ${formatINR(step.amount + owedLeft)} — what the pool still owes them` };
+    if (step.note?.startsWith(PAYBACK_REIMB_NOTE)) {
+      const others = await prisma.manualPlanStep.findMany({ where: { periodId: step.periodId, fromMemberId: step.fromMemberId, toMemberId: step.toMemberId, id: { not: step.id } }, select: { amount: true, note: true } });
+      const otherReimb = others.filter((o) => o.note?.startsWith(PAYBACK_REIMB_NOTE)).reduce((t, o) => t + o.amount, 0);
+      const cap = Math.max(0, (plan.reimburseByMember?.[step.toMemberId] ?? 0) - otherReimb);
+      if (amount > cap + 0.005) return { ok: false, error: `Reimbursement can be at most ${formatINR(cap)} (last month's spends)` };
+    }
+  }
   await prisma.manualPlanStep.update({ where: { id }, data: { amount } });
   log.info("editManualStepAmount", "ok", { outcome: "ok", memberId, periodId: step.periodId, id, amount });
   await logActivity("settlement", "updated", `Changed a manual move to ${formatINR(amount)}`, step.periodId);
@@ -2330,9 +2352,24 @@ export async function addPaybackSteps(formData: FormData): Promise<{ ok: boolean
   const plan = await getMoneyPlan(period.householdId, periodId, inhand, undefined, undefined, settlement);
   const sug = plan.suggestions.find((x) => x.memberId === memberId);
   if (!sug || inhand.treasurerId == null) return { ok: false, error: "Nothing to pay back right now — the plan has changed. Refresh and check again." };
+  // The card's amounts may be edited before adding (e.g. round them, or pay less now). Blank → the
+  // suggested figure. Capped: reimbursement ≤ last month's spends not yet paid back; both together ≤
+  // what the pool still owes them outside bills (so the settlement total never changes).
+  const pick = (name: string, fallback: number) => {
+    const raw = formData.get(name);
+    if (raw == null || String(raw).trim() === "") return fallback;
+    const n = Math.round((parseAmount(raw) || 0) * 100) / 100;
+    return Number.isFinite(n) && n >= 0 ? n : NaN;
+  };
+  const reimb = pick("reimb", sug.reimb);
+  const ahead = pick("ahead", sug.ahead);
+  if (!Number.isFinite(reimb) || !Number.isFinite(ahead)) return { ok: false, error: "Enter valid amounts" };
+  if (reimb > sug.maxReimb + 0.005) return { ok: false, error: `Reimbursement can be at most ${formatINR(sug.maxReimb)} (last month's spends still owed)` };
+  if (reimb + ahead > sug.maxTotal + 0.005) return { ok: false, error: `Together they can be at most ${formatINR(sug.maxTotal)} — what the pool still owes ${sug.memberName}` };
+  if (reimb + ahead < 1) return { ok: false, error: "Enter an amount" };
   const parts = [
-    { amount: sug.reimb, note: PAYBACK_REIMB_NOTE },
-    { amount: sug.ahead, note: PAYBACK_AHEAD_NOTE },
+    { amount: reimb, note: PAYBACK_REIMB_NOTE },
+    { amount: ahead, note: PAYBACK_AHEAD_NOTE },
   ].filter((p) => p.amount >= 1);
   // Chain them: the first after the suggested anchor, the second right after the first.
   let after = sug.afterStepKey;
@@ -2340,8 +2377,8 @@ export async function addPaybackSteps(formData: FormData): Promise<{ ok: boolean
     const m = await prisma.manualPlanStep.create({ data: { periodId, fromMemberId: inhand.treasurerId, toMemberId: memberId, amount: p.amount, day: sug.day, afterStepKey: after, note: p.note } });
     after = `manual-${m.id}`;
   }
-  log.info("addPaybackSteps", "ok", { outcome: "ok", memberId: actor, periodId, to: memberId, total: sug.total });
-  await logActivity("settlement", "created", `Added payback to ${sug.memberName} ${formatINR(sug.total)} (${parts.map((p) => p.note.replace("↩ ", "")).join(" + ")})`, periodId);
+  log.info("addPaybackSteps", "ok", { outcome: "ok", memberId: actor, periodId, to: memberId, total: reimb + ahead });
+  await logActivity("settlement", "created", `Added payback to ${sug.memberName} ${formatINR(reimb + ahead)} (${parts.map((p) => p.note.replace("↩ ", "")).join(" + ")})`, periodId);
   revalidateFamily();
   return { ok: true };
 }
@@ -2437,6 +2474,61 @@ export async function toggleManualStepDone(formData: FormData) {
   await prisma.manualPlanStep.update({ where: { id }, data: { done: !m.done } });
   await logActivity("settlement", "updated", `${m.done ? "Unmarked" : "Marked"} a manual move ${formatINR(m.amount)} done`, m.periodId);
   revalidateFamily();
+}
+
+// Tick (or undo) a GROUPED Money-Plan row: several same-day moves between the same two people shown as one
+// "A → B ₹total" row. Every piece keeps its own record (a keyed settlement payment for a pool transfer, the
+// done flag for a manual step), so this just applies each piece's own tick — with the same permission
+// checks — and only flips pieces not already in the wanted state (a double-tap can't un-send anything).
+type GroupItem =
+  | { t: "transfer"; from: number; to: number; amount: number; key: string; recordId?: number | null }
+  | { t: "manual"; id: number };
+export async function toggleStepGroup(formData: FormData): Promise<{ ok: boolean; error?: string }> {
+  const session = await auth();
+  const me = session?.user?.memberId ?? null;
+  await requireUnlocked("toggleStepGroup");
+  const householdId = Number(formData.get("householdId"));
+  const periodId = Number(formData.get("periodId"));
+  const undo = formData.get("undo") === "1";
+  let items: GroupItem[] = [];
+  try { items = JSON.parse(String(formData.get("items") ?? "[]")); } catch { items = []; }
+  if (!householdId || !periodId || !Array.isArray(items) || items.length === 0) return { ok: false, error: "Nothing to update" };
+  const actor = { memberId: me, isHead: await isHead(), canEdit: await canEdit() };
+  if (!actor.isHead && !(await periodOpen(periodId))) return { ok: false, error: "This month is closed" };
+  // Check every piece first, so a group is applied all-or-nothing as far as permission goes.
+  const manualIds = items.filter((i) => i.t === "manual").map((i) => Number((i as { id: number }).id));
+  const manuals = await prisma.manualPlanStep.findMany({ where: { id: { in: manualIds }, periodId } });
+  if (manuals.length !== manualIds.length) return { ok: false, error: "The plan changed — refresh" };
+  for (const m of manuals) if (!canActOnStep({ kind: "manual", fromId: m.fromMemberId, toId: m.toMemberId }, actor)) return { ok: false, error: "Not allowed" };
+  for (const i of items) if (i.t === "transfer" && !canActOnStep({ kind: "transfer-out", fromId: i.from, toId: i.to }, { memberId: me, isHead: actor.isHead, canEdit: false })) return { ok: false, error: "Not allowed" };
+  let total = 0;
+  for (const i of items) {
+    if (i.t === "manual") {
+      const m = manuals.find((x) => x.id === Number(i.id))!;
+      if (m.done === !undo) continue;
+      await prisma.manualPlanStep.update({ where: { id: m.id }, data: { done: !undo } });
+      total += m.amount;
+    } else if (undo) {
+      if (i.recordId == null) continue;
+      const rec = await prisma.settlementRecord.findUnique({ where: { id: Number(i.recordId) } });
+      if (!rec || rec.periodId !== periodId) continue;
+      await prisma.settlementRecord.delete({ where: { id: rec.id } });
+      total += rec.amount;
+    } else {
+      const amount = Math.round(Number(i.amount) * 100) / 100;
+      const key = String(i.key ?? "").trim();
+      if (!key || !(amount > 0)) continue;
+      await prisma.settlementRecord.upsert({
+        where: { periodId_key: { periodId, key } },
+        update: { amount, fromMemberId: i.from, toMemberId: i.to, settledById: me, settledAt: new Date() },
+        create: { householdId, periodId, fromMemberId: i.from, toMemberId: i.to, amount, key, settledById: me },
+      });
+      total += amount;
+    }
+  }
+  await logActivity("settlement", undo ? "deleted" : "created", `${undo ? "Undid" : "Sent"} a grouped move ${formatINR(total)} (${items.length} parts)`, periodId);
+  revalidateFamily();
+  return { ok: true };
 }
 
 // Tick a combined pool hand-over (holder → treasurer) received — marks every underlying PoolHandover

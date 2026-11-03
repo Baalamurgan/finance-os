@@ -4,7 +4,7 @@ import { Fragment, useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { formatINR } from "@/lib/format";
-import { addPaybackSteps, markSettled, unsettle, toggleBillPaid, markAdvanceSettled, unsettleAdvance, markPiggyHandedOver, toggleIncomeReceived, addManualStep, deleteManualStep, toggleManualStepDone, hideStep, unhideStep, unpayMiscBill, togglePoolHandover, togglePiggyHandover, moveStep, unpayFamilyCardBill } from "@/app/actions";
+import { addPaybackSteps, toggleStepGroup, markSettled, unsettle, toggleBillPaid, markAdvanceSettled, unsettleAdvance, markPiggyHandedOver, toggleIncomeReceived, addManualStep, deleteManualStep, toggleManualStepDone, hideStep, unhideStep, unpayMiscBill, togglePoolHandover, togglePiggyHandover, moveStep, unpayFamilyCardBill } from "@/app/actions";
 import { PayBillModal } from "@/components/PayBillModal";
 import { PayCardBillModal } from "@/components/PayCardBillModal";
 import { MiscPayModal } from "@/components/MiscPayModal";
@@ -18,6 +18,7 @@ import { useToast, useToastAction } from "@/components/Toast";
 import type { MoneyPlanResult } from "@/lib/queries";
 import { canActOnStep, canActInMonth } from "@/lib/planAuth";
 import { CTA_CLASS, CtaLabel } from "@/components/Cta";
+import { isPaybackNote } from "@/lib/notes";
 
 // The shared, everyone-visible Money Plan: the month's transfers + bill payments as one ordered,
 // dated checklist. Ticking a step writes through to the real record (settlement / bill paid) — the
@@ -99,13 +100,49 @@ export function MoneyPlan({
   // Steps are already in display order (sorted by day). Group them under a date heading: a new heading
   // starts whenever the day changes from the previous visible step (undated steps share a "no date" head).
   const visibleRows = shown.filter(({ s }) => !s.hidden);
+  // GROUP same-day moves between the same two people (e.g. Arumugam → Harish funding two bills + a payback)
+  // into ONE row "A → B ₹total" with a breakdown of what it's for — one real transfer, one tap. Only
+  // back-to-back pool/manual moves in the same state group (bridge legs and budget loans stay on their own:
+  // they carry repay-by rules). Each piece keeps its own record underneath; see toggleStepGroup.
+  type Step = MoneyPlanResult["steps"][number];
+  const groupable = (x: Step) => (x.kind === "transfer-out" || x.kind === "transfer-in" || x.kind === "manual") && x.fromId != null && x.toId != null && !x.bridgeGroup && !x.budgetLoan && !x.budgetPayback;
+  const displayRows: { s: Step; n: number; items: { s: Step; n: number }[] }[] = [];
+  for (const r of visibleRows) {
+    const last = displayRows[displayRows.length - 1];
+    const head = last?.items[0].s;
+    if (last && head && groupable(r.s) && groupable(head) && head.day === r.s.day && head.fromId === r.s.fromId && head.toId === r.s.toId && head.done === r.s.done) {
+      last.items.push(r);
+      continue;
+    }
+    displayRows.push({ s: r.s, n: r.n, items: [r] });
+  }
+  for (const d of displayRows) {
+    if (d.items.length < 2) continue;
+    const first = d.items[0].s, lastS = d.items[d.items.length - 1].s;
+    const shorts = d.items.map((x) => x.s.senderShort ?? x.s.short ?? 0);
+    d.s = {
+      ...first, id: `grp-${first.id}`, kind: "transfer-out", amount: Math.round(d.items.reduce((t, x) => t + x.s.amount, 0) * 100) / 100,
+      balancesBefore: first.balancesBefore, balancesAfter: lastS.balancesAfter,
+      senderShort: Math.max(...shorts) > 0.005 ? Math.max(...shorts) : undefined, short: undefined,
+      fundsBillKey: undefined, fundsMember: false, reimbursement: undefined, reroute: false, note: undefined, manualId: undefined, recordId: null,
+    } as Step;
+  }
+  // What one piece of a grouped row is FOR (its line in the breakdown).
+  const pieceLabel = (x: Step) =>
+    x.fundsBillKey ? `💰 ${billVendorByKey.get(x.fundsBillKey) ?? "bill"}`
+    : x.kind === "manual" && x.note ? (isPaybackNote(x.note) ? x.note : `✎ ${x.note}`)
+    : x.reimbursement ? "↩ Reimbursement · last month’s spends"
+    : x.fundsMember ? `💰 funds ${x.toName ?? ""}`.trim()
+    : x.kind === "manual" ? "✎ manual move"
+    : x.kind === "transfer-in" ? "📥 collection"
+    : "Payout · rest of what the pool owes";
 
   // Every day folds into its date header (tap to expand/collapse), showing "N done" / "N pending" — so the
   // plan stays focused. ONLY today's date is expanded by default; every other day starts collapsed. Keyed
   // by day; undated → "none" (never today's date, so always collapsed by default).
   const dayKeyOf = (step: MoneyPlanResult["steps"][number]) => (step.day == null ? "none" : String(step.day));
   const dayStats = new Map<string, { total: number; done: number }>();
-  for (const { s } of visibleRows) {
+  for (const { s } of displayRows) {
     const e = dayStats.get(dayKeyOf(s)) ?? { total: 0, done: 0 };
     e.total++; if (s.done) e.done++;
     dayStats.set(dayKeyOf(s), e);
@@ -214,10 +251,11 @@ export function MoneyPlan({
         <p className="mb-1.5 text-[10px] text-slate-400">Tap any step&apos;s number <span className="mx-0.5 inline-grid h-3.5 w-3.5 place-items-center rounded-full ring-1 ring-slate-300 align-middle text-[8px]">1</span> to see everyone&apos;s cash before &amp; after it.</p>
         <ol className={`space-y-1.5 transition-opacity ${pending ? "pointer-events-none opacity-50" : ""}`} aria-busy={pending}>
           {canEdit && open && who == null && <InsertHere onClick={() => setInsert({ anchor: null })} />}
-          {visibleRows.map(({ s, n }, i) => {
+          {displayRows.map(({ s, n, items }, i) => {
+            const g = items.length > 1 ? items : null; // a grouped row: same day, same two people
             // A date heading precedes the first step of each new day (income "up front" at the top,
             // undated bills/piggy "no date" at the bottom) so same-day steps read as one dated group.
-            const prev = i > 0 ? visibleRows[i - 1].s : null;
+            const prev = i > 0 ? displayRows[i - 1].s : null;
             const newDateGroup = i === 0 || (prev?.day ?? null) !== (s.day ?? null);
             const dayKey = dayKeyOf(s);
             const dayCollapsed = isDayCollapsed(s); // every day folds except today (tap any header to flip)
@@ -294,6 +332,12 @@ export function MoneyPlan({
                   {/* Sender → receiver on its own line — never truncated; wraps to as many lines as it
                       needs so it's always fully readable on a phone. Metadata badges sit below it. */}
                   <div className={`break-words font-medium leading-snug ${s.done ? "text-slate-400 line-through" : "text-slate-800"}`}>{title}</div>
+                  {g ? (
+                    <div className="mt-1 flex flex-wrap items-center gap-1.5">
+                      {s.done && s.day != null ? <span className="shrink-0 rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] font-normal text-slate-400">was due {ordinal(s.day)}</span> : <DayTag kind={s.kind} day={s.day} status={s.status ?? null} days={s.days ?? null} />}
+                      <span className="shrink-0 rounded-full bg-slate-100 px-1.5 py-0.5 text-[9px] font-medium text-slate-500">{g.length} parts · one transfer</span>
+                    </div>
+                  ) : (
                   <div className={`mt-1 flex flex-wrap items-center gap-1.5 empty:mt-0 ${s.done ? "text-slate-400" : "text-slate-800"}`}>
                     {isIncome && <span className="shrink-0 rounded-full bg-emerald-50 px-1.5 py-0.5 text-[9px] font-medium text-emerald-600">↓ income in hand</span>}
                     {isManual && <span className="shrink-0 rounded-full bg-cyan-50 px-1.5 py-0.5 text-[9px] font-medium text-cyan-600">✎ manual</span>}
@@ -365,6 +409,7 @@ export function MoneyPlan({
                     {isAdvance && !s.payback && <span className="shrink-0 rounded-full bg-teal-50 px-1.5 py-0.5 text-[9px] font-medium text-teal-600" title={`${s.fromName} fronts this so ${s.toName} can pay the next step`}>advance · funds {s.toName}</span>}
                     {isAdvance && s.payback && <span className="shrink-0 rounded-full bg-teal-50 px-1.5 py-0.5 text-[9px] font-medium text-teal-600" title={`${s.fromName} repays ${s.toName} the advance, now that their income has landed`}>payback → {s.toName}</span>}
                   </div>
+                  )}
                   {/* Cash before → after — but NOT for the Piggy hand-over: it moves LAST month's leftover
                       (a separate bucket tracked in In-Hand), not this month's cash, so those running
                       balances legitimately don't change. Showing them would read as "nothing moved". */}
@@ -380,6 +425,30 @@ export function MoneyPlan({
                         );
                       })}
                     </div>
+                  )}
+                  {g && (
+                    <ul className={`mt-1.5 divide-y divide-slate-100 rounded-lg border border-slate-200 bg-white px-2 text-[11px] ${s.done ? "text-slate-400" : "text-slate-700"}`}>
+                      {g.map(({ s: x }) => {
+                        const amt = <span className="tabular-nums">{formatINR(x.amount)}</span>;
+                        const paybackLine = x.kind === "manual" && isPaybackNote(x.note);
+                        const editable = !x.done && open && x.manualId != null && (paybackLine ? canEdit : isHead && datesEditable);
+                        return (
+                          <li key={x.id} className="flex items-center justify-between gap-2 py-1">
+                            <span className="min-w-0 break-words">{pieceLabel(x)}</span>
+                            <span className="flex shrink-0 items-center gap-1">
+                              {editable ? <StepAmountEditor id={x.manualId!} amount={x.amount}>{amt}</StepAmountEditor> : amt}
+                              {canEdit && open && who == null && !x.done && (
+                                x.kind === "manual" ? (
+                                  <form action={withToast(deleteManualStep, { success: "Step deleted" })}><input type="hidden" name="id" value={x.manualId} /><button title="Delete this part" className="px-0.5 text-xs text-slate-300 hover:text-red-600">✕</button></form>
+                                ) : (
+                                  <form action={withToast(hideStep, { success: "Removed from plan" })}><input type="hidden" name="periodId" value={periodId} /><input type="hidden" name="stepKey" value={x.id} /><button title="Remove this part from the plan" className="px-0.5 text-xs text-slate-300 hover:text-red-600">✕</button></form>
+                                )
+                              )}
+                            </span>
+                          </li>
+                        );
+                      })}
+                    </ul>
                   )}
                   {isManual && s.note && !s.fundsBillKey && (
                     <div className="mt-0.5 text-[10px] italic text-slate-500">📝 {s.note}</div>
@@ -443,19 +512,25 @@ export function MoneyPlan({
                     return (
                       <div className="mt-1.5 rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-2 text-[11px] text-slate-700">
                         <div className="font-semibold text-amber-800">💡 {sug.memberName} is {formatINR(sug.total)} below zero from steps already done</div>
-                        <div className="mt-0.5 text-slate-600">The pool owes them this now. {sug.treasurerName} has the cash{sug.day != null ? ` on the ${ordinal(sug.day)}` : ""}. Suggested:</div>
-                        <ul className="mt-1 space-y-0.5">
-                          {sug.reimb >= 1 && <li>• {sug.treasurerName} → {sug.memberName} <b className="tabular-nums">{formatINR(sug.reimb)}</b> <span className="text-slate-500">· reimbursement · last month&apos;s spends</span></li>}
-                          {sug.ahead >= 1 && <li>• {sug.treasurerName} → {sug.memberName} <b className="tabular-nums">{formatINR(sug.ahead)}</b> <span className="text-slate-500">· paid ahead this month</span></li>}
-                        </ul>
-                        <div className="mt-0.5 text-[10px] text-slate-500">Their later payout shrinks by the same {formatINR(sug.total)} (to {formatINR(sug.laterPayout)}) — the total doesn&apos;t change.</div>
+                        <div className="mt-0.5 text-slate-600">The pool owes them this now. {sug.treasurerName} has the cash{sug.day != null ? ` on the ${ordinal(sug.day)}` : ""}. Suggested (edit if you like):</div>
                         <div className="mt-1.5 flex flex-wrap gap-1.5">
-                          <form action={withToast(async (fd: FormData) => { const r = await addPaybackSteps(fd); if (!r.ok) throw new Error(r.error); }, { success: "Payback steps added", error: "Couldn't add — the plan changed; refresh and check" })}>
+                          <form action={withToast(async (fd: FormData) => { const r = await addPaybackSteps(fd); if (!r.ok) throw new Error(r.error); }, { success: "Payback added" })} className="w-full space-y-1">
                             <input type="hidden" name="periodId" value={periodId} />
                             <input type="hidden" name="memberId" value={sug.memberId} />
-                            <button type="submit" className={CTA_CLASS.tap}><CtaLabel kind="tap">Add {[sug.reimb >= 1, sug.ahead >= 1].filter(Boolean).length === 2 ? "these 2 steps" : "this step"}</CtaLabel></button>
+                            <label className="flex items-center justify-between gap-2">
+                              <span>↩ Reimbursement · last month&apos;s cash spends</span>
+                              <input name="reimb" inputMode="decimal" defaultValue={sug.reimb} title={`Up to ${formatINR(sug.maxReimb)}`} className="w-24 rounded border border-amber-300 bg-white px-1.5 py-0.5 text-right tabular-nums" />
+                            </label>
+                            <label className="flex items-center justify-between gap-2">
+                              <span>↩ Paid ahead this month</span>
+                              <input name="ahead" inputMode="decimal" defaultValue={sug.ahead} className="w-24 rounded border border-amber-300 bg-white px-1.5 py-0.5 text-right tabular-nums" />
+                            </label>
+                            <div className="text-[10px] text-slate-500">Joins {sug.treasurerName} → {sug.memberName} on the {sug.day != null ? ordinal(sug.day) : "same day"} as one transfer. Their later payout shrinks by the same amount (to {formatINR(sug.laterPayout)} as suggested) — the total doesn&apos;t change. Up to {formatINR(sug.maxTotal)} in all.</div>
+                            <div className="flex flex-wrap gap-1.5 pt-0.5">
+                              <button type="submit" className={CTA_CLASS.tap}><CtaLabel kind="tap">Add payback</CtaLabel></button>
+                              <button type="button" onClick={() => setDismissed((d) => [...d, sug.memberId])} className={CTA_CLASS.undo}>Not now</button>
+                            </div>
                           </form>
-                          <button type="button" onClick={() => setDismissed((d) => [...d, sug.memberId])} className={CTA_CLASS.undo}>Not now</button>
                         </div>
                       </div>
                     );
@@ -516,13 +591,30 @@ export function MoneyPlan({
                 {(() => {
                   const amtSpan = <span className={`tabular-nums ${s.done ? "text-slate-400 line-through" : isIncome ? "font-medium text-emerald-600" : urgent ? "font-semibold text-red-700" : "text-slate-700"}`}>{isIncome ? "+" : ""}{formatINR(s.amount)}</span>;
                   // Head can edit a PLAIN manual move's amount inline (not bridge legs / bill-funding, not once done).
-                  const amountEditable = isManual && isHead && datesEditable && !s.done && s.manualId != null && !s.bridgeGroup && !s.fundsBillKey;
+                  const amountEditable = isManual && (isPaybackNote(s.note) ? canEdit && open : isHead && datesEditable) && !s.done && s.manualId != null && !s.bridgeGroup && !s.fundsBillKey;
                   return amountEditable ? <StepAmountEditor id={s.manualId!} amount={s.amount}>{amtSpan}</StepAmountEditor> : amtSpan;
                 })()}
 
                 {/* action */}
                 <span className="flex justify-end empty:hidden">
-                  {isHandover || isPoolHandover ? null /* rendered inline in the content column above */ : isPiggy ? (
+                  {g ? (() => {
+                    // One tap sends (or undoes) every part. Shown only if this viewer may tick EVERY part.
+                    const canAll = g.every(({ s: x }) =>
+                      x.kind === "manual"
+                        ? x.manualId != null && canActOnStep({ kind: "manual", fromId: x.fromId, toId: x.toId }, actor) && canActInMonth(open, isHead)
+                        : open && canActOnStep({ kind: x.kind, fromId: x.fromId, toId: x.toId }, actor) && (!x.done || x.recordId != null));
+                    if (!canAll) return null;
+                    const payload = g.map(({ s: x }) => x.kind === "manual" ? { t: "manual", id: x.manualId } : { t: "transfer", from: x.fromId, to: x.toId, amount: x.amount, key: x.id, recordId: x.recordId ?? null });
+                    return (
+                      <form action={withToast(async (fd: FormData) => { const r = await toggleStepGroup(fd); if (!r.ok) throw new Error(r.error); }, { success: s.done ? "Undone" : "Marked sent" })} onSubmit={confirmFront}>
+                        <input type="hidden" name="householdId" value={householdId} />
+                        <input type="hidden" name="periodId" value={periodId} />
+                        <input type="hidden" name="items" value={JSON.stringify(payload)} />
+                        {s.done && <input type="hidden" name="undo" value="1" />}
+                        <MiniBtn primary={!s.done}>Sent</MiniBtn>
+                      </form>
+                    );
+                  })() : isHandover || isPoolHandover ? null /* rendered inline in the content column above */ : isPiggy ? (
                     <span className="text-[9px] text-slate-300">est.</span>
                   ) : isAdvance ? (
                     s.advanceId != null && canActTransfer ? (
@@ -626,7 +718,7 @@ export function MoneyPlan({
                 </div>
 
                 {/* head reorder: move this step one slot up/down (positional), then the plan recomputes. */}
-                {isHead && datesEditable && who == null && (
+                {isHead && datesEditable && who == null && !g && (
                   <span className="flex shrink-0 flex-col justify-center leading-none">
                     <button
                       type="button"
@@ -638,14 +730,14 @@ export function MoneyPlan({
                     <button
                       type="button"
                       title="Move down a step"
-                      disabled={pending || i === visibleRows.length - 1}
+                      disabled={pending || i === displayRows.length - 1}
                       onClick={() => move(s.id, "down")}
                       className="px-0.5 text-[10px] text-slate-300 hover:text-slate-600 disabled:opacity-30"
                     >▼</button>
                   </span>
                 )}
                 {/* delete: manual steps are removed outright; derived steps are hidden from the plan view */}
-                {canEdit && open && who == null && (
+                {canEdit && open && who == null && !g && (
                   isManual ? (
                     <form action={withToast(deleteManualStep, { success: "Step deleted" })} className="shrink-0"><input type="hidden" name="id" value={s.manualId} /><button title="Delete this step" className="px-0.5 text-sm text-slate-300 hover:text-red-600">✕</button></form>
                   ) : (
@@ -654,7 +746,7 @@ export function MoneyPlan({
                 )}
               </li>
               )}
-              {!dayCollapsed && canEdit && open && who == null && <InsertHere onClick={() => setInsert({ anchor: s.id })} />}
+              {!dayCollapsed && canEdit && open && who == null && <InsertHere onClick={() => setInsert({ anchor: items[items.length - 1].s.id })} />}
               </Fragment>
             );
           })}

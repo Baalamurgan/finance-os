@@ -95,6 +95,8 @@ export type PaybackSuggestion = {
   day: number | null; afterStepKey: string | null; // where the steps go (earliest the hub can cover it)
   showOnStepId: string; // the member's first short bill — the card renders there
   laterPayout: number; // what's left of the pool's payout to them after this
+  maxTotal: number; // the most that can be paid back early (what the pool still owes them, not tied to a bill)
+  maxReimb: number; // the most the reimbursement line can be (last month's out-of-pocket not yet paid back)
 };
 export type MoneyPlan = { steps: PlanStep[]; done: number; total: number; hubShortfall: number; shortBills: number; suggestions: PaybackSuggestion[] };
 
@@ -870,15 +872,30 @@ export function buildMoneyPlan(input: {
       const total = Math.round(Math.min(deficit, Math.max(0, owedLeft)) * 100) / 100;
       if (total < 1) continue;
       const reimbPaid = manualSteps.filter((m) => m.fromId === treasurerId && m.toId === mid && (m.note ?? "").startsWith(PAYBACK_REIMB_NOTE)).reduce((t, m) => t + m.amount, 0);
-      const reimb = Math.round(Math.max(0, Math.min(total, (reimburseByMember[mid] ?? 0) - reimbPaid)) * 100) / 100;
+      const maxReimb = Math.round(Math.max(0, (reimburseByMember[mid] ?? 0) - reimbPaid) * 100) / 100;
+      // The reimbursement part of the hole is only the CASH they started the month short (their negative
+      // opening) — last month's spends on a CARD haven't left their cash yet (that slice stays in the later
+      // payout, in time for the card bill). The rest of the hole is what they paid ahead this month.
+      const openingHole = Math.max(0, -(openingByMember[mid] ?? 0));
+      const reimb = Math.round(Math.max(0, Math.min(total, openingHole, maxReimb)) * 100) / 100;
       // Earliest point (from the member's first pending step) where the hub's running cash covers it.
       let at = -1;
       for (let j = firstIdx; j < steps.length; j++) if ((steps[j].balancesBefore?.[treasurerId] ?? 0) + 0.005 >= total) { at = j; break; }
       if (at < 0) continue; // the hub never holds that much this month — nothing sensible to suggest
+      // Sit right after the hub's other pending moves to this member on that day (if any), so they show as
+      // ONE grouped "hub → member" row — as long as the hub still covers it there.
+      let anchorIdx = at - 1;
+      const samePair = (st: PlanStep) => !st.done && !st.hidden && (st.kind === "transfer-out" || st.kind === "manual") && st.fromId === treasurerId && st.toId === mid && st.day === steps[at].day;
+      let k = steps.findIndex((st, j) => j >= at && samePair(st));
+      if (k >= 0) {
+        while (k + 1 < steps.length && samePair(steps[k + 1])) k++;
+        if ((steps[k].balancesAfter?.[treasurerId] ?? 0) + 0.005 >= total) anchorIdx = k;
+      }
       suggestions.push({
         memberId: mid, memberName: o.to, treasurerName: treasurerName ?? "Treasurer", total, reimb, ahead: Math.round((total - reimb) * 100) / 100,
-        day: steps[at].day ?? null, afterStepKey: at > 0 ? steps[at - 1].id : null, showOnStepId: shortBill.id,
+        day: steps[at].day ?? null, afterStepKey: anchorIdx >= 0 ? steps[anchorIdx].id : null, showOnStepId: shortBill.id,
         laterPayout: Math.round(Math.max(0, owedLeft - total) * 100) / 100,
+        maxTotal: owedLeft, maxReimb,
       });
     }
   }

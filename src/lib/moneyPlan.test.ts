@@ -44,14 +44,16 @@ describe("buildMoneyPlan", () => {
       transfers: [xfer({ fromId: 2, toId: T, amount: 30000 }), xfer({ fromId: T, from: "A", toId: 3, to: "H", amount: 10000 })],
       bills: [bill({ key: "b-old", payerId: 3, payerName: "H", vendor: "Old", amount: 6000, day: 1, done: true }), bill({ key: "b-new", billId: 9, payerId: 3, payerName: "H", vendor: "New", amount: 2000, day: 5 })],
       incomeDayByMember: { 2: 1 },
-      reimburseByMember: { 3: 1500 },
+      reimburseByMember: { 3: 1500 }, // ₹1,500 of last month's spends: ₹1,000 in cash (they open at −1,000) + ₹500 on a card
+      openingByMember: { 3: -1000 },
     };
     const plan = buildMoneyPlan(base);
     expect(plan.shortBills).toBeGreaterThan(0);
     const sug = plan.suggestions.find((x) => x.memberId === 3)!;
-    expect(sug.total).toBe(6000);
-    expect(sug.reimb).toBe(1500);
-    expect(sug.ahead).toBe(4500);
+    expect(sug.total).toBe(7000);
+    expect(sug.reimb).toBe(1000); // only the CASH part of last month's spends is in the hole — the card part stays in the later payout
+    expect(sug.ahead).toBe(6000);
+    expect(sug.maxReimb).toBe(1500);
     const toThree = (p: typeof plan) => p.steps.filter((s) => (s.kind === "transfer-out" || s.kind === "manual") && s.fromId === T && s.toId === 3).reduce((t, s) => t + s.amount, 0);
     const after = buildMoneyPlan({
       ...base,
