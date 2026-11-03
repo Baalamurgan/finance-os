@@ -47,3 +47,9 @@ export const REMOVED_NOTE = "__removed__";
 export const PAYBACK_REIMB_NOTE = "↩ Reimbursement · last month's spends";
 export const PAYBACK_AHEAD_NOTE = "↩ Paid ahead this month";
 export const isPaybackNote = (note: string | null | undefined) => !!note && (note.startsWith(PAYBACK_REIMB_NOTE) || note.startsWith(PAYBACK_AHEAD_NOTE));
+
+// A bridge LOAN to a member the pool still owes: lender → member now (above the short bill), and — unless
+// the lender is the hub — hub → lender later, dated by the engine (earliest the hub can spare it). The
+// member's later payout shrinks by the loan. Both legs share a bridgeGroup with this prefix.
+export const LEND_GROUP_PREFIX = "lend-";
+export const isLendGroup = (g: string | null | undefined) => !!g && g.startsWith(LEND_GROUP_PREFIX);

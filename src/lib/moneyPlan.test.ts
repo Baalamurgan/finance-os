@@ -36,35 +36,39 @@ describe("buildMoneyPlan", () => {
     expect(step.balancesAfter?.[2] ?? 0).toBe(0);
   });
 
-  it("payback suggestion: a receiver below zero from DONE steps gets a hub payback suggestion; adding it clears the shortfall and trims the later payout", () => {
-    // Member 3 receives ₹10,000 from the pool. They already paid a ₹6,000 bill (done) with no income of their
-    // own → −6,000. A later ₹2,000 bill (day 5) is funded exactly, so it reads short by the old −6,000.
+  it("bridge loan to a member the pool still owes: clears the hole, shrinks their later payout, hub returns it at the earliest safe point", () => {
+    // Member 3 receives ₹10,000 from the pool. They already paid a ₹6,000 bill (done) and open the month at
+    // −1,000 (last month's cash spends) → −7,000. A later ₹2,000 bill (day 5) is funded exactly, so it reads
+    // short by the hole. Member 2 (who owes the hub ₹30,000, income day 1) has spare cash.
     const base = {
       treasurerId: T,
       transfers: [xfer({ fromId: 2, toId: T, amount: 30000 }), xfer({ fromId: T, from: "A", toId: 3, to: "H", amount: 10000 })],
       bills: [bill({ key: "b-old", payerId: 3, payerName: "H", vendor: "Old", amount: 6000, day: 1, done: true }), bill({ key: "b-new", billId: 9, payerId: 3, payerName: "H", vendor: "New", amount: 2000, day: 5 })],
       incomeDayByMember: { 2: 1 },
-      reimburseByMember: { 3: 1500 }, // ₹1,500 of last month's spends: ₹1,000 in cash (they open at −1,000) + ₹500 on a card
       openingByMember: { 3: -1000 },
     };
     const plan = buildMoneyPlan(base);
-    expect(plan.shortBills).toBeGreaterThan(0);
-    const sug = plan.suggestions.find((x) => x.memberId === 3)!;
-    expect(sug.total).toBe(7000);
-    expect(sug.reimb).toBe(1000); // only the CASH part of last month's spends is in the hole — the card part stays in the later payout
-    expect(sug.ahead).toBe(6000);
-    expect(sug.maxReimb).toBe(1500);
-    const toThree = (p: typeof plan) => p.steps.filter((s) => (s.kind === "transfer-out" || s.kind === "manual") && s.fromId === T && s.toId === 3).reduce((t, s) => t + s.amount, 0);
-    const after = buildMoneyPlan({
-      ...base,
-      manualSteps: [
-        { id: 1, fromId: T, toId: 3, amount: sug.reimb, day: sug.day, done: false, afterStepKey: sug.afterStepKey, note: "↩ Reimbursement · last month's spends" },
-        { id: 2, fromId: T, toId: 3, amount: sug.ahead, day: sug.day, done: false, afterStepKey: "manual-1", note: "↩ Paid ahead this month" },
-      ],
-    });
-    expect(after.shortBills).toBe(0);
-    expect(after.suggestions.length).toBe(0);
-    expect(toThree(after)).toBe(toThree(plan)); // same total to the member — only the timing moved
+    expect(plan.shortBills).toBe(1);
+    expect(plan.holes.find((h) => h.memberId === 3)).toEqual({ memberId: 3, deficit: 7000, lastMonth: 1000, paidAhead: 6000 });
+    const toThree = (p: typeof plan) => p.steps.filter((s) => (s.kind === "transfer-out" || s.kind === "manual") && s.fromId === T && s.toId === 3).reduce((t, s) => t + s.amount, 0) + p.steps.filter((s) => s.kind === "manual" && s.fromId !== T && s.toId === 3).reduce((t, s) => t + s.amount, 0);
+    // Hub lends: one leg, no return; later payout shrinks by it.
+    const byHub = buildMoneyPlan({ ...base, manualSteps: [{ id: 1, fromId: T, toId: 3, amount: 7000, day: 5, done: false, fundsBillKey: "b-new", bridgeGroup: "lend-9-1" }] });
+    expect(byHub.shortBills).toBe(0);
+    expect(toThree(byHub)).toBe(toThree(plan));
+    // A peer lends: loan + an auto-dated hub → lender return, placed after the loan.
+    const byPeer = buildMoneyPlan({ ...base, manualSteps: [
+      { id: 1, fromId: 2, toId: 3, amount: 7000, day: 5, done: false, fundsBillKey: "b-new", bridgeGroup: "lend-9-2" },
+      { id: 2, fromId: T, toId: 2, amount: 7000, day: null, done: false, bridgeGroup: "lend-9-2" },
+    ] });
+    expect(byPeer.shortBills).toBe(0);
+    expect(toThree(byPeer)).toBe(toThree(plan)); // same total to the member — only who/when moved
+    const loanIdx = byPeer.steps.findIndex((s) => s.id === "manual-1");
+    const retIdx = byPeer.steps.findIndex((s) => s.id === "manual-2");
+    expect(retIdx).toBeGreaterThan(loanIdx);
+    expect(byPeer.steps[retIdx].day).not.toBeNull();
+    expect(byPeer.steps[loanIdx].returnBy).toBe(byPeer.steps[retIdx].day);
+    // the hub never goes below zero because of the return
+    for (const s of byPeer.steps) expect(s.balancesAfter?.[T] ?? 0).toBeGreaterThanOrEqual(-0.005);
   });
 
   it("piggy taken as income: a separate step per batch (done + open), each walk-correct", () => {

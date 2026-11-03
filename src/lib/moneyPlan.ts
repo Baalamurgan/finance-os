@@ -5,7 +5,7 @@
 // family can execute it step by step. Completion is written through to the underlying records
 // (SettlementRecord / bill paid) elsewhere, so this stays a projection, never a second ledger.
 
-import { isPaybackNote, PAYBACK_REIMB_NOTE } from "./notes";
+import { isPaybackNote, isLendGroup } from "./notes";
 
 export type PlanTransfer = { fromId: number; from: string; toId: number; to: string; amount: number; paidAmount?: number | null; settled: boolean; recordId: number | null; payments?: { id: number; amount: number; settledAt?: Date | string | null; key?: string | null; fromId?: number; toId?: number }[]; status?: "overdue" | "soon" | "normal" | null; days?: number | null };
 export type PlanBill = {
@@ -89,16 +89,9 @@ export type PlanStep = {
   senderShort?: number; // the step's sender can't cover it from cash-in-hand yet — short by this much
 };
 
-export type PaybackSuggestion = {
-  memberId: number; memberName: string; treasurerName: string;
-  total: number; reimb: number; ahead: number; // ₹ to pay back now = last month's reimbursement + paid ahead this month
-  day: number | null; afterStepKey: string | null; // where the steps go (earliest the hub can cover it)
-  showOnStepId: string; // the member's first short bill — the card renders there
-  laterPayout: number; // what's left of the pool's payout to them after this
-  maxTotal: number; // the most that can be paid back early (what the pool still owes them, not tied to a bill)
-  maxReimb: number; // the most the reimbursement line can be (last month's out-of-pocket not yet paid back)
-};
-export type MoneyPlan = { steps: PlanStep[]; done: number; total: number; hubShortfall: number; shortBills: number; suggestions: PaybackSuggestion[] };
+// A member below zero from done steps: last month's cash spends (negative opening) + paid ahead this month.
+export type MemberHole = { memberId: number; deficit: number; lastMonth: number; paidAhead: number };
+export type MoneyPlan = { steps: PlanStep[]; done: number; total: number; hubShortfall: number; shortBills: number; holes: MemberHole[] };
 
 export function buildMoneyPlan(input: {
   treasurerId: number | null;
@@ -167,7 +160,7 @@ export function buildMoneyPlan(input: {
   const fundingEventsByPayer = new Map<number, { day: number; amount: number }[]>();
   const fundingTotalByPayer = new Map<number, number>();
   for (const m of manualSteps) {
-    if (!m.fundsBillKey) continue;
+    if (!m.fundsBillKey || isLendGroup(m.bridgeGroup)) continue; // a bridge LOAN fills a hole on top of the bill's own funding — see lendByPayer
     const b = bills.find((x) => x.key === m.fundsBillKey);
     if (!b || b.payerId == null) continue; // dangling tag → treated as a plain manual move
     const amt = Math.round(m.amount * 100) / 100;
@@ -435,6 +428,12 @@ export function buildMoneyPlan(input: {
     if (!isPaybackNote(m.note) || m.fromId !== treasurerId) continue;
     paybackByMember.set(m.toId, Math.round(((paybackByMember.get(m.toId) ?? 0) + m.amount) * 100) / 100);
   }
+  // Bridge LOANS to a member the pool still owes (lender → member now, the hub repays the lender later):
+  // the member got that money early, so their later payout shrinks by it — the total never changes.
+  for (const m of manualSteps) {
+    if (!isLendGroup(m.bridgeGroup) || !m.fundsBillKey) continue;
+    paybackByMember.set(m.toId, Math.round(((paybackByMember.get(m.toId) ?? 0) + m.amount) * 100) / 100);
+  }
   for (const [mid, total] of paybackByMember) {
     if (owed.has(mid)) owed.set(mid, Math.max(0, Math.round((owed.get(mid)! - total) * 100) / 100));
   }
@@ -645,7 +644,11 @@ export function buildMoneyPlan(input: {
   // walk credits the payer right before they pay. Done first so they skip the afterStepKey chain below;
   // if the bill isn't in the plan, they fall through to the normal manual placement.
   const pendingManual: PlanStep[] = [];
+  // A bridge loan's RETURN (hub → lender) with no day is placed by the engine after the walk, at the
+  // earliest point the hub can spare it (see placeAutoReturns) — so it moves with the plan.
+  const autoReturns: PlanStep[] = [];
   for (const m of manualObjs) {
+    if (isLendGroup(m.bridgeGroup) && !m.fundsBillKey && m.day == null) { autoReturns.push(m); continue; }
     if (m.fundsBillKey) {
       const bi = steps.findIndex((s) => s.id === m.fundsBillKey);
       if (bi >= 0) {
@@ -737,16 +740,14 @@ export function buildMoneyPlan(input: {
   };
   // Open the walk from REALITY: each member starts holding their carry (last month's closing personal),
   // not 0 — so step 1 begins at e.g. ₹5,505, and the running balance stays continuous month to month.
-  for (const [id, amt] of Object.entries(openingByMember)) shift(Number(id), amt);
+  // (seeding happens inside runWalk, so the walk can be re-run after placing auto-dated returns)
   // Seed each pool-handover holder with the prior-month cash they physically START holding (their
   // leftover / Piggy that became this month's pool income). This lets the hand-over move real balance
   // to the hub — crediting the pool income so the hub can disburse — WITHOUT flagging the holder short.
-  for (const p of poolHandovers) shift(p.fromId, p.amount);
   // Seed each card-bill payer with the carried cash they've HELD since the swipe (a credit spend never
   // left their hand). A card bill PAID in a prior month already left then (and isn't a payment step in
   // this walk), so don't seed it — its stale cash would otherwise inflate the opening balance (e.g. the
   // ₹6,417 RBL that made Baala's step 1 start at 6,417 instead of his real ₹5,505 carry).
-  for (const b of bills) if (b.cardBill && !b.paidPriorMonth) shift(b.payerId, b.amount);
   const senderOf = (s: PlanStep): number | null => (s.kind === "bill" ? s.payerId ?? null : s.fromId ?? null);
   const touchesHub = (s: PlanStep): boolean =>
     treasurerId != null &&
@@ -754,7 +755,14 @@ export function buildMoneyPlan(input: {
       (s.kind === "income" && s.toId === treasurerId) ||
       ((s.kind === "transfer-in" || s.kind === "transfer-out" || s.kind === "allowance" || s.kind === "advance" || s.kind === "manual" || s.kind === "pool-handover") && (s.fromId === treasurerId || s.toId === treasurerId)));
   let hubShortfall = 0;
+  const runWalk = () => {
+  bal.clear();
+  for (const [id, amt] of Object.entries(openingByMember)) shift(Number(id), amt);
+  for (const p of poolHandovers) shift(p.fromId, p.amount);
+  for (const b of bills) if (b.cardBill && !b.paidPriorMonth) shift(b.payerId, b.amount);
+  hubShortfall = 0;
   for (const s of steps) {
+    s.senderShort = undefined;
     s.balancesBefore = Object.fromEntries(bal); // snapshot each person's cash BEFORE this step moves any
     if (s.hidden) { s.balancesAfter = Object.fromEntries(bal); continue; } // removed from the plan → moves nothing
     // Fund bills draw a held fund → net-neutral (no month cash). A card bill DOES move cash, but from the
@@ -790,6 +798,34 @@ export function buildMoneyPlan(input: {
     }
     s.balancesAfter = Object.fromEntries(bal);
     if (touchesHub(s)) s.hubAfter = bal.get(treasurerId!) ?? 0;
+  }
+  };
+  runWalk();
+  // Place each auto-dated loan RETURN (hub → lender) at the EARLIEST point after its loan where the hub
+  // can spare it without leaving any later hub move short: the hub's balance must stay ≥ the return from
+  // there to the end. None → month-end (last). Re-walk after each so the next one sees it.
+  for (const r of autoReturns) {
+    const lendIdx = steps.findIndex((x) => x.bridgeGroup === r.bridgeGroup && x.fundsBillKey);
+    const hub = treasurerId!;
+    let pos = steps.length;
+    // suffix minimum of the hub's balance after each step (and its end balance)
+    const endBal = bal.get(hub) ?? 0;
+    let suffixMin = endBal;
+    const minFrom: number[] = new Array(steps.length + 1);
+    minFrom[steps.length] = endBal;
+    for (let j = steps.length - 1; j >= 0; j--) { suffixMin = Math.min(suffixMin, steps[j].hidden ? Infinity : (steps[j].balancesAfter?.[hub] ?? 0)); minFrom[j] = suffixMin; }
+    for (let j = Math.max(0, lendIdx + 1); j <= steps.length; j++) {
+      const before = j < steps.length ? (steps[j].balancesBefore?.[hub] ?? 0) : endBal;
+      if (before + 0.005 >= r.amount && (j >= steps.length || minFrom[j] + 0.005 >= r.amount)) { pos = j; break; }
+    }
+    // Same day as the step it lands before (or the last dated day); never earlier than the loan's day.
+    const near = pos < steps.length ? steps[pos] : steps[steps.length - 1];
+    r.day = near?.day ?? lastDay;
+    if (pos >= steps.length) r.day = lastDay;
+    steps.splice(pos, 0, r);
+    const lend = steps.find((x) => x.bridgeGroup === r.bridgeGroup && x.fundsBillKey);
+    if (lend) lend.returnBy = r.day;
+    runWalk();
   }
 
   // Each SHORT bill's payable-from day: the first later step after which the payer's running balance is
@@ -850,57 +886,22 @@ export function buildMoneyPlan(input: {
   // neither counts toward the "N/total done" progress — they're context, not tickable settlement steps.
   const counted = steps.filter((s) => s.kind !== "piggy" && s.kind !== "income" && !s.hidden);
   const done = counted.filter((s) => s.done).length;
-  // ── Payback SUGGESTIONS (shown, never auto-added) ──────────────────────────────────────────────────
-  // A member who RECEIVES from the pool and is already below zero from DONE steps (e.g. paid a big bill
-  // ahead of receiving, or carried last month's out-of-pocket) shows every later bill "short" until the
-  // month-end payout. Suggest the treasurer pays that hole back first — as early as the hub's running cash
-  // covers it — split into last month's reimbursement and this month's paid-ahead. Tapping it adds manual
-  // payback steps (see PAYBACK_* notes); nothing changes until someone does.
-  const suggestions: PaybackSuggestion[] = [];
-  if (treasurerId != null) {
-    for (const o of unsettledOut) {
-      const mid = o.toId!;
-      const firstIdx = steps.findIndex((st) => !st.done && !st.hidden && (st.payerId === mid || st.fromId === mid || st.toId === mid) && st.kind !== "income");
-      if (firstIdx < 0) continue;
-      const deficit = Math.round(-(steps[firstIdx].balancesBefore?.[mid] ?? 0) * 100) / 100;
-      if (deficit < 1) continue;
-      const shortBill = steps.slice(firstIdx).find((st) => st.kind === "bill" && st.payerId === mid && (st.senderShort ?? 0) > 0.005);
-      if (!shortBill) continue; // no bill is actually short → nothing to suggest
-      // What the pool still pays them that ISN'T tied to a bill (the reimbursement / month-end remainder) —
-      // the payback comes out of that, so the funded bills keep their own pieces.
-      const owedLeft = Math.round(steps.filter((st) => !st.done && !st.hidden && st.kind === "transfer-out" && st.fromId === treasurerId && st.toId === mid && !st.fundsMember && !st.fundsBillKey).reduce((t, st) => t + st.amount, 0) * 100) / 100;
-      const total = Math.round(Math.min(deficit, Math.max(0, owedLeft)) * 100) / 100;
-      if (total < 1) continue;
-      const reimbPaid = manualSteps.filter((m) => m.fromId === treasurerId && m.toId === mid && (m.note ?? "").startsWith(PAYBACK_REIMB_NOTE)).reduce((t, m) => t + m.amount, 0);
-      const maxReimb = Math.round(Math.max(0, (reimburseByMember[mid] ?? 0) - reimbPaid) * 100) / 100;
-      // The reimbursement part of the hole is only the CASH they started the month short (their negative
-      // opening) — last month's spends on a CARD haven't left their cash yet (that slice stays in the later
-      // payout, in time for the card bill). The rest of the hole is what they paid ahead this month.
-      const openingHole = Math.max(0, -(openingByMember[mid] ?? 0));
-      const reimb = Math.round(Math.max(0, Math.min(total, openingHole, maxReimb)) * 100) / 100;
-      // Earliest point (from the member's first pending step) where the hub's running cash covers it.
-      let at = -1;
-      for (let j = firstIdx; j < steps.length; j++) if ((steps[j].balancesBefore?.[treasurerId] ?? 0) + 0.005 >= total) { at = j; break; }
-      if (at < 0) continue; // the hub never holds that much this month — nothing sensible to suggest
-      // Sit right after the hub's other pending moves to this member on that day (if any), so they show as
-      // ONE grouped "hub → member" row — as long as the hub still covers it there.
-      let anchorIdx = at - 1;
-      const samePair = (st: PlanStep) => !st.done && !st.hidden && (st.kind === "transfer-out" || st.kind === "manual") && st.fromId === treasurerId && st.toId === mid && st.day === steps[at].day;
-      let k = steps.findIndex((st, j) => j >= at && samePair(st));
-      if (k >= 0) {
-        while (k + 1 < steps.length && samePair(steps[k + 1])) k++;
-        if ((steps[k].balancesAfter?.[treasurerId] ?? 0) + 0.005 >= total) anchorIdx = k;
-      }
-      suggestions.push({
-        memberId: mid, memberName: o.to, treasurerName: treasurerName ?? "Treasurer", total, reimb, ahead: Math.round((total - reimb) * 100) / 100,
-        day: steps[at].day ?? null, afterStepKey: anchorIdx >= 0 ? steps[anchorIdx].id : null, showOnStepId: shortBill.id,
-        laterPayout: Math.round(Math.max(0, owedLeft - total) * 100) / 100,
-        maxTotal: owedLeft, maxReimb,
-      });
-    }
+  // ── Why a member is below zero (for the bridge note) ─────────────────────────────────────────────
+  // A member already under zero before their first pending step: split into last month's CASH spends
+  // (their negative opening) and what they paid ahead this month. Saved on a bridge loan when it's made.
+  const holes: MemberHole[] = [];
+  const memberIds = new Set<number>();
+  for (const st of steps) for (const id of [st.payerId, st.fromId, st.toId]) if (id != null) memberIds.add(id);
+  for (const mid of memberIds) {
+    const firstIdx = steps.findIndex((st) => !st.done && !st.hidden && st.kind !== "income" && (st.payerId === mid || st.fromId === mid || st.toId === mid));
+    if (firstIdx < 0) continue;
+    const deficit = Math.round(-(steps[firstIdx].balancesBefore?.[mid] ?? 0) * 100) / 100;
+    if (deficit < 1) continue;
+    const lastMonth = Math.round(Math.min(deficit, Math.max(0, -(openingByMember[mid] ?? 0))) * 100) / 100;
+    holes.push({ memberId: mid, deficit, lastMonth, paidAhead: Math.round((deficit - lastMonth) * 100) / 100 });
   }
 
-  return { steps, done, total: counted.length, hubShortfall: Math.round(hubShortfall), shortBills: shortBillSteps.length, suggestions };
+  return { steps, done, total: counted.length, hubShortfall: Math.round(hubShortfall), shortBills: shortBillSteps.length, holes };
 }
 
 // Cash-move step kinds that shift a member's actual holding when completed: income lands in a hand,
