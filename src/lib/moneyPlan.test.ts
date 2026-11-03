@@ -36,6 +36,35 @@ describe("buildMoneyPlan", () => {
     expect(step.balancesAfter?.[2] ?? 0).toBe(0);
   });
 
+  it("payback suggestion: a receiver below zero from DONE steps gets a hub payback suggestion; adding it clears the shortfall and trims the later payout", () => {
+    // Member 3 receives ₹10,000 from the pool. They already paid a ₹6,000 bill (done) with no income of their
+    // own → −6,000. A later ₹2,000 bill (day 5) is funded exactly, so it reads short by the old −6,000.
+    const base = {
+      treasurerId: T,
+      transfers: [xfer({ fromId: 2, toId: T, amount: 30000 }), xfer({ fromId: T, from: "A", toId: 3, to: "H", amount: 10000 })],
+      bills: [bill({ key: "b-old", payerId: 3, payerName: "H", vendor: "Old", amount: 6000, day: 1, done: true }), bill({ key: "b-new", billId: 9, payerId: 3, payerName: "H", vendor: "New", amount: 2000, day: 5 })],
+      incomeDayByMember: { 2: 1 },
+      reimburseByMember: { 3: 1500 },
+    };
+    const plan = buildMoneyPlan(base);
+    expect(plan.shortBills).toBeGreaterThan(0);
+    const sug = plan.suggestions.find((x) => x.memberId === 3)!;
+    expect(sug.total).toBe(6000);
+    expect(sug.reimb).toBe(1500);
+    expect(sug.ahead).toBe(4500);
+    const toThree = (p: typeof plan) => p.steps.filter((s) => (s.kind === "transfer-out" || s.kind === "manual") && s.fromId === T && s.toId === 3).reduce((t, s) => t + s.amount, 0);
+    const after = buildMoneyPlan({
+      ...base,
+      manualSteps: [
+        { id: 1, fromId: T, toId: 3, amount: sug.reimb, day: sug.day, done: false, afterStepKey: sug.afterStepKey, note: "↩ Reimbursement · last month's spends" },
+        { id: 2, fromId: T, toId: 3, amount: sug.ahead, day: sug.day, done: false, afterStepKey: "manual-1", note: "↩ Paid ahead this month" },
+      ],
+    });
+    expect(after.shortBills).toBe(0);
+    expect(after.suggestions.length).toBe(0);
+    expect(toThree(after)).toBe(toThree(plan)); // same total to the member — only the timing moved
+  });
+
   it("piggy taken as income: a separate step per batch (done + open), each walk-correct", () => {
     // Holder 2 brought ₹5,500 into the month and already handed it over (done batch), then withdrew
     // ₹7,436 more (open batch). Two separate pool-handover steps, each with its own income ids.

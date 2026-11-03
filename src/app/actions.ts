@@ -13,13 +13,13 @@ import { formatINR, parseAmount } from "@/lib/format";
 import { generateMonth } from "@/lib/periodClone";
 import { isMiscBucket, MISC_SUBCATEGORIES } from "@/lib/misc";
 import { isLearnable, validateSpendLabel } from "@/lib/spendCategorize";
-import { getSpendShortcuts, getMatcherKeywords, getFrequentSpendItems, getFrequentSpendCombos, getMoneyPlan, getMiscSubCategories, getFamilyCards } from "@/lib/queries";
+import { getSpendShortcuts, getMatcherKeywords, getFrequentSpendItems, getFrequentSpendCombos, getMoneyPlan, getMiscSubCategories, getFamilyCards, _getInHand, _getSettlement } from "@/lib/queries";
 import { getCardDues } from "@/lib/personal/cash";
 import { ensurePersonalMonth } from "@/lib/personal";
 import { planBillMonth, billCyclePhase, taxCycleMonth, type FundingStyle } from "@/lib/schedule";
 import { getBillReminders } from "@/lib/billReminders";
 import { applyBudgetShortfall, windDownPeriod } from "@/lib/windDown";
-import { SURPLUS_NOTE, CARRY_NOTE, DEFERRED_NOTE, PIGGY_INCOME_NOTE, POOL_NOTE, POOL_BILL_NOTE, REMOVED_NOTE, isPoolNote } from "@/lib/notes";
+import { PAYBACK_REIMB_NOTE, PAYBACK_AHEAD_NOTE, SURPLUS_NOTE, CARRY_NOTE, DEFERRED_NOTE, PIGGY_INCOME_NOTE, POOL_NOTE, POOL_BILL_NOTE, REMOVED_NOTE, isPoolNote } from "@/lib/notes";
 import { canActOnStep } from "@/lib/planAuth";
 
 // Record a money-affecting change (who + what + when) for the activity feeds: the Money-Plan
@@ -2303,6 +2303,45 @@ export async function fundExistingBill(formData: FormData): Promise<{ ok: boolea
   }
   log.info("fundExistingBill", "ok", { outcome: "ok", memberId, periodId, billId, total });
   await logActivity("settlement", "created", `Funding to cover “${bill.label}” (${formatINR(total)})`, periodId);
+  revalidateFamily();
+  return { ok: true };
+}
+
+// Add the Money Plan's PAYBACK suggestion as real steps (only ever on a tap — the plan never adds them
+// itself). Recomputed server-side from the live plan (never trusts the card's numbers): hub → member
+// "↩ Reimbursement · last month's spends" and/or "↩ Paid ahead this month", placed where the suggestion
+// says (the earliest point the hub's cash covers it). The plan trims the member's later payout by the
+// same amount (see PAYBACK_* in lib/notes). Head + manager; open month.
+export async function addPaybackSteps(formData: FormData): Promise<{ ok: boolean; error?: string }> {
+  const session = await auth();
+  const actor = session?.user?.memberId ?? null;
+  if (!(await unlocked())) await relock("addPaybackSteps");
+  if (!(await canEdit())) { log.warn("addPaybackSteps", "blocked", { outcome: "blocked", reason: "not-allowed", memberId: actor }); return { ok: false, error: "Not allowed" }; }
+  const periodId = Number(formData.get("periodId"));
+  const memberId = Number(formData.get("memberId"));
+  if (!periodId || !memberId) return { ok: false, error: "Missing details" };
+  if (!(await periodOpen(periodId))) return { ok: false, error: "This month is closed" };
+  const period = await prisma.period.findUnique({ where: { id: periodId }, select: { householdId: true, treasurerMemberId: true } });
+  if (!period) return { ok: false, error: "Month not found" };
+  const household = await prisma.household.findUnique({ where: { id: period.householdId }, select: { treasurerMemberId: true } });
+  const treasurerId = period.treasurerMemberId ?? household?.treasurerMemberId ?? null;
+  const settlement = await _getSettlement(period.householdId, periodId, treasurerId);
+  const inhand = await _getInHand(period.householdId, periodId, settlement);
+  const plan = await getMoneyPlan(period.householdId, periodId, inhand, undefined, undefined, settlement);
+  const sug = plan.suggestions.find((x) => x.memberId === memberId);
+  if (!sug || inhand.treasurerId == null) return { ok: false, error: "Nothing to pay back right now — the plan has changed. Refresh and check again." };
+  const parts = [
+    { amount: sug.reimb, note: PAYBACK_REIMB_NOTE },
+    { amount: sug.ahead, note: PAYBACK_AHEAD_NOTE },
+  ].filter((p) => p.amount >= 1);
+  // Chain them: the first after the suggested anchor, the second right after the first.
+  let after = sug.afterStepKey;
+  for (const p of parts) {
+    const m = await prisma.manualPlanStep.create({ data: { periodId, fromMemberId: inhand.treasurerId, toMemberId: memberId, amount: p.amount, day: sug.day, afterStepKey: after, note: p.note } });
+    after = `manual-${m.id}`;
+  }
+  log.info("addPaybackSteps", "ok", { outcome: "ok", memberId: actor, periodId, to: memberId, total: sug.total });
+  await logActivity("settlement", "created", `Added payback to ${sug.memberName} ${formatINR(sug.total)} (${parts.map((p) => p.note.replace("↩ ", "")).join(" + ")})`, periodId);
   revalidateFamily();
   return { ok: true };
 }

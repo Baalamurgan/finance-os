@@ -38,3 +38,12 @@ export function isPoolNote(note: string | null | undefined): boolean {
 // button. Amount 0 keeps every total/settlement correct automatically; it's only hidden from the rows
 // that render a live line. Restoring hard-deletes the tombstone so the next sync/rebuild regenerates it.
 export const REMOVED_NOTE = "__removed__";
+
+// Treasurer → member PAYBACK steps (added from the Money Plan's suggestion card, never automatically):
+// they repay a member who RECEIVES from the pool for money already below zero from done steps — last
+// month's out-of-pocket spends (reimbursement) and/or what they paid ahead this month. The plan counts
+// them against what the pool still owes that member (the later payout shrinks by the same amount) but,
+// unlike bill funding, NOT as funding for any one bill. Identified by their note prefix.
+export const PAYBACK_REIMB_NOTE = "↩ Reimbursement · last month's spends";
+export const PAYBACK_AHEAD_NOTE = "↩ Paid ahead this month";
+export const isPaybackNote = (note: string | null | undefined) => !!note && (note.startsWith(PAYBACK_REIMB_NOTE) || note.startsWith(PAYBACK_AHEAD_NOTE));

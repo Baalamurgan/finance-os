@@ -4,7 +4,7 @@ import { Fragment, useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { formatINR } from "@/lib/format";
-import { markSettled, unsettle, toggleBillPaid, markAdvanceSettled, unsettleAdvance, markPiggyHandedOver, toggleIncomeReceived, addManualStep, deleteManualStep, toggleManualStepDone, hideStep, unhideStep, unpayMiscBill, togglePoolHandover, togglePiggyHandover, moveStep, unpayFamilyCardBill } from "@/app/actions";
+import { addPaybackSteps, markSettled, unsettle, toggleBillPaid, markAdvanceSettled, unsettleAdvance, markPiggyHandedOver, toggleIncomeReceived, addManualStep, deleteManualStep, toggleManualStepDone, hideStep, unhideStep, unpayMiscBill, togglePoolHandover, togglePiggyHandover, moveStep, unpayFamilyCardBill } from "@/app/actions";
 import { PayBillModal } from "@/components/PayBillModal";
 import { PayCardBillModal } from "@/components/PayCardBillModal";
 import { MiscPayModal } from "@/components/MiscPayModal";
@@ -63,6 +63,8 @@ export function MoneyPlan({
   const [balances, setBalances] = useState<{ s: MoneyPlanResult["steps"][number]; n: number } | null>(null);
   // A short bill the head is funding from held cash (the cross-bill knock-on entry point).
   const [fund, setFund] = useState<MoneyPlanResult["steps"][number] | null>(null);
+  // Payback suggestions the user waved off ("Not now") this visit — they come back on the next load.
+  const [dismissed, setDismissed] = useState<number[]>([]);
   // A short bill the head is BRIDGING (repayable, via the hub) — payer's own income lands later.
   const [bridge, setBridge] = useState<MoneyPlanResult["steps"][number] | null>(null);
   // Days (keyed by day number / "none") the viewer has FLIPPED from their default fold state.
@@ -433,6 +435,31 @@ export function MoneyPlan({
                       <MiniBtn primary>Sent</MiniBtn>
                     </form>
                   )}
+                  {/* Payback suggestion (head/manager): shown on the member's first short bill — never applied
+                      until tapped. Clears every later shortfall caused by money they're already below zero. */}
+                  {canEdit && open && !s.done && (() => {
+                    const sug = (plan.suggestions ?? []).find((x) => x.showOnStepId === s.id);
+                    if (!sug || dismissed.includes(sug.memberId)) return null;
+                    return (
+                      <div className="mt-1.5 rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-2 text-[11px] text-slate-700">
+                        <div className="font-semibold text-amber-800">💡 {sug.memberName} is {formatINR(sug.total)} below zero from steps already done</div>
+                        <div className="mt-0.5 text-slate-600">The pool owes them this now. {sug.treasurerName} has the cash{sug.day != null ? ` on the ${ordinal(sug.day)}` : ""}. Suggested:</div>
+                        <ul className="mt-1 space-y-0.5">
+                          {sug.reimb >= 1 && <li>• {sug.treasurerName} → {sug.memberName} <b className="tabular-nums">{formatINR(sug.reimb)}</b> <span className="text-slate-500">· reimbursement · last month&apos;s spends</span></li>}
+                          {sug.ahead >= 1 && <li>• {sug.treasurerName} → {sug.memberName} <b className="tabular-nums">{formatINR(sug.ahead)}</b> <span className="text-slate-500">· paid ahead this month</span></li>}
+                        </ul>
+                        <div className="mt-0.5 text-[10px] text-slate-500">Their later payout shrinks by the same {formatINR(sug.total)} (to {formatINR(sug.laterPayout)}) — the total doesn&apos;t change.</div>
+                        <div className="mt-1.5 flex flex-wrap gap-1.5">
+                          <form action={withToast(async (fd: FormData) => { const r = await addPaybackSteps(fd); if (!r.ok) throw new Error(r.error); }, { success: "Payback steps added", error: "Couldn't add — the plan changed; refresh and check" })}>
+                            <input type="hidden" name="periodId" value={periodId} />
+                            <input type="hidden" name="memberId" value={sug.memberId} />
+                            <button type="submit" className={CTA_CLASS.tap}><CtaLabel kind="tap">Add {[sug.reimb >= 1, sug.ahead >= 1].filter(Boolean).length === 2 ? "these 2 steps" : "this step"}</CtaLabel></button>
+                          </form>
+                          <button type="button" onClick={() => setDismissed((d) => [...d, sug.memberId])} className={CTA_CLASS.undo}>Not now</button>
+                        </div>
+                      </div>
+                    );
+                  })()}
                   {!s.done && short != null && short > 0.005 && (
                     s.kind === "bill" ? (
                       // The shortfall lives on the bill itself: the hub sends the fullest it can; whatever

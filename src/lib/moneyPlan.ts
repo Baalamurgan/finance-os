@@ -5,6 +5,8 @@
 // family can execute it step by step. Completion is written through to the underlying records
 // (SettlementRecord / bill paid) elsewhere, so this stays a projection, never a second ledger.
 
+import { isPaybackNote, PAYBACK_REIMB_NOTE } from "./notes";
+
 export type PlanTransfer = { fromId: number; from: string; toId: number; to: string; amount: number; paidAmount?: number | null; settled: boolean; recordId: number | null; payments?: { id: number; amount: number; settledAt?: Date | string | null; key?: string | null; fromId?: number; toId?: number }[]; status?: "overdue" | "soon" | "normal" | null; days?: number | null };
 export type PlanBill = {
   key: string; payerId: number | null; payerName: string; vendor: string; amount: number; done: boolean;
@@ -87,7 +89,14 @@ export type PlanStep = {
   senderShort?: number; // the step's sender can't cover it from cash-in-hand yet — short by this much
 };
 
-export type MoneyPlan = { steps: PlanStep[]; done: number; total: number; hubShortfall: number; shortBills: number };
+export type PaybackSuggestion = {
+  memberId: number; memberName: string; treasurerName: string;
+  total: number; reimb: number; ahead: number; // ₹ to pay back now = last month's reimbursement + paid ahead this month
+  day: number | null; afterStepKey: string | null; // where the steps go (earliest the hub can cover it)
+  showOnStepId: string; // the member's first short bill — the card renders there
+  laterPayout: number; // what's left of the pool's payout to them after this
+};
+export type MoneyPlan = { steps: PlanStep[]; done: number; total: number; hubShortfall: number; shortBills: number; suggestions: PaybackSuggestion[] };
 
 export function buildMoneyPlan(input: {
   treasurerId: number | null;
@@ -416,6 +425,16 @@ export function buildMoneyPlan(input: {
   // (the remaining need is funded by the funder→payer step). Mirrors how a reroute shrinks a disbursement.
   for (const [payerId, total] of fundingTotalByPayer) {
     if (owed.has(payerId)) owed.set(payerId, Math.max(0, Math.round((owed.get(payerId)! - total) * 100) / 100));
+  }
+  // Payback steps (hub → member, from the suggestion card) already hand over part of what the pool owes
+  // that member — trim the later payout by exactly that much (they fund no specific bill, so no needs change).
+  const paybackByMember = new Map<number, number>();
+  for (const m of manualSteps) {
+    if (!isPaybackNote(m.note) || m.fromId !== treasurerId) continue;
+    paybackByMember.set(m.toId, Math.round(((paybackByMember.get(m.toId) ?? 0) + m.amount) * 100) / 100);
+  }
+  for (const [mid, total] of paybackByMember) {
+    if (owed.has(mid)) owed.set(mid, Math.max(0, Math.round((owed.get(mid)! - total) * 100) / 100));
   }
   const recOf = new Map<number, { name: string; recordId: number | null }>(unsettledOut.map((o) => [o.toId!, { name: o.to, recordId: o.recordId }]));
   // Dated needs are bill-driven. Then — for each net-receiver — their prior-month spend reimbursement is
@@ -829,7 +848,42 @@ export function buildMoneyPlan(input: {
   // neither counts toward the "N/total done" progress — they're context, not tickable settlement steps.
   const counted = steps.filter((s) => s.kind !== "piggy" && s.kind !== "income" && !s.hidden);
   const done = counted.filter((s) => s.done).length;
-  return { steps, done, total: counted.length, hubShortfall: Math.round(hubShortfall), shortBills: shortBillSteps.length };
+  // ── Payback SUGGESTIONS (shown, never auto-added) ──────────────────────────────────────────────────
+  // A member who RECEIVES from the pool and is already below zero from DONE steps (e.g. paid a big bill
+  // ahead of receiving, or carried last month's out-of-pocket) shows every later bill "short" until the
+  // month-end payout. Suggest the treasurer pays that hole back first — as early as the hub's running cash
+  // covers it — split into last month's reimbursement and this month's paid-ahead. Tapping it adds manual
+  // payback steps (see PAYBACK_* notes); nothing changes until someone does.
+  const suggestions: PaybackSuggestion[] = [];
+  if (treasurerId != null) {
+    for (const o of unsettledOut) {
+      const mid = o.toId!;
+      const firstIdx = steps.findIndex((st) => !st.done && !st.hidden && (st.payerId === mid || st.fromId === mid || st.toId === mid) && st.kind !== "income");
+      if (firstIdx < 0) continue;
+      const deficit = Math.round(-(steps[firstIdx].balancesBefore?.[mid] ?? 0) * 100) / 100;
+      if (deficit < 1) continue;
+      const shortBill = steps.slice(firstIdx).find((st) => st.kind === "bill" && st.payerId === mid && (st.senderShort ?? 0) > 0.005);
+      if (!shortBill) continue; // no bill is actually short → nothing to suggest
+      // What the pool still pays them that ISN'T tied to a bill (the reimbursement / month-end remainder) —
+      // the payback comes out of that, so the funded bills keep their own pieces.
+      const owedLeft = Math.round(steps.filter((st) => !st.done && !st.hidden && st.kind === "transfer-out" && st.fromId === treasurerId && st.toId === mid && !st.fundsMember && !st.fundsBillKey).reduce((t, st) => t + st.amount, 0) * 100) / 100;
+      const total = Math.round(Math.min(deficit, Math.max(0, owedLeft)) * 100) / 100;
+      if (total < 1) continue;
+      const reimbPaid = manualSteps.filter((m) => m.fromId === treasurerId && m.toId === mid && (m.note ?? "").startsWith(PAYBACK_REIMB_NOTE)).reduce((t, m) => t + m.amount, 0);
+      const reimb = Math.round(Math.max(0, Math.min(total, (reimburseByMember[mid] ?? 0) - reimbPaid)) * 100) / 100;
+      // Earliest point (from the member's first pending step) where the hub's running cash covers it.
+      let at = -1;
+      for (let j = firstIdx; j < steps.length; j++) if ((steps[j].balancesBefore?.[treasurerId] ?? 0) + 0.005 >= total) { at = j; break; }
+      if (at < 0) continue; // the hub never holds that much this month — nothing sensible to suggest
+      suggestions.push({
+        memberId: mid, memberName: o.to, treasurerName: treasurerName ?? "Treasurer", total, reimb, ahead: Math.round((total - reimb) * 100) / 100,
+        day: steps[at].day ?? null, afterStepKey: at > 0 ? steps[at - 1].id : null, showOnStepId: shortBill.id,
+        laterPayout: Math.round(Math.max(0, owedLeft - total) * 100) / 100,
+      });
+    }
+  }
+
+  return { steps, done, total: counted.length, hubShortfall: Math.round(hubShortfall), shortBills: shortBillSteps.length, suggestions };
 }
 
 // Cash-move step kinds that shift a member's actual holding when completed: income lands in a hand,
