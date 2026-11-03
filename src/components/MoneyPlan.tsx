@@ -17,7 +17,7 @@ import { useToast, useToastAction } from "@/components/Toast";
 import type { MoneyPlanResult } from "@/lib/queries";
 import { canActOnStep, canActInMonth } from "@/lib/planAuth";
 import { CTA_CLASS, CtaLabel } from "@/components/Cta";
-import { isPaybackNote, isLendGroup, isPoolLendGroup } from "@/lib/notes";
+import { isPaybackNote, isLendGroup, isPoolLendGroup, isRefundGroup } from "@/lib/notes";
 
 // The shared, everyone-visible Money Plan: the month's transfers + bill payments as one ordered,
 // dated checklist. Ticking a step writes through to the real record (settlement / bill paid) — the
@@ -407,7 +407,8 @@ export function MoneyPlan({
                     {isLendGroup(s.bridgeGroup) && <span className="shrink-0 rounded-full bg-sky-100 px-1.5 py-0.5 text-[9px] font-medium text-sky-700" title={s.fundsBillKey ? `${s.fromName} covers ${s.toName}'s ${billVendorByKey.get(s.fundsBillKey) ?? "bill"} now — ${s.toName}'s later payout shrinks by it${isPoolLendGroup(s.bridgeGroup) ? `; it counts toward what ${s.fromName} owes the pool (no return)` : s.fromId !== treasurerId ? "; the pool returns it as soon as it can spare it" : ""}` : `The pool returns ${s.toName}'s bridge loan — dated to the earliest day it can spare it`}>{lendLabel(s)}</span>}
                     {s.slid && !s.done && <span className="shrink-0 rounded-full bg-amber-50 px-1.5 py-0.5 text-[9px] font-medium text-amber-700" title="You'd moved this earlier, but the pool can't spare it there any more — it sits at the earliest point it can">↓ earliest the pool can spare it</span>}
                     {s.fundsBillKey && s.bridgeGroup && !isLendGroup(s.bridgeGroup) && <span className="shrink-0 rounded-full bg-sky-100 px-1.5 py-0.5 text-[9px] font-medium text-sky-700" title={`${s.fromName} fronts ${s.toName}'s ${billVendorByKey.get(s.fundsBillKey) ?? "bill"} — the pool repays ${s.fromName} when ${s.toName}'s income lands`}>🌉 bridges {billVendorByKey.get(s.fundsBillKey) ?? s.toName}</span>}
-                    {s.bridgeGroup && !isLendGroup(s.bridgeGroup) && !s.fundsBillKey && <span className="shrink-0 rounded-full bg-sky-50 px-1.5 py-0.5 text-[9px] font-medium text-sky-600">🌉 bridge payback</span>}
+                    {s.bridgeGroup && !isLendGroup(s.bridgeGroup) && !isRefundGroup(s.bridgeGroup) && !s.fundsBillKey && <span className="shrink-0 rounded-full bg-sky-50 px-1.5 py-0.5 text-[9px] font-medium text-sky-600">🌉 bridge payback</span>}
+                    {isRefundGroup(s.bridgeGroup) && <span className="shrink-0 rounded-full bg-rose-50 px-1.5 py-0.5 text-[9px] font-medium text-rose-600" title="Sends back money for a spend that was refunded — undo it from the refund on the Expenses page">↩ refund</span>}
                     {s.reimbursement && <span className="shrink-0 rounded-full bg-emerald-50 px-1.5 py-0.5 text-[9px] font-medium text-emerald-600" title={`${s.toName} is paid back early for what they spent out of pocket last month`}>reimbursement · last month’s spends</span>}
                     {s.budgetLoan && !s.done && <span className="shrink-0 rounded-full bg-violet-50 px-1.5 py-0.5 text-[9px] font-medium text-violet-600" title={`${s.fromName} lends their own budget so ${s.toName}'s bill is paid on time — the hub returns it${s.returnBy != null ? ` by the ${ordinal(s.returnBy)}` : " once income lands"}`}>💜 lends budget{s.returnBy != null ? ` · back by ${ordinal(s.returnBy)}` : ""}</span>}
                     {s.budgetPayback && !s.done && <span className="shrink-0 rounded-full bg-violet-50 px-1.5 py-0.5 text-[9px] font-medium text-violet-600" title={`The hub returns the budget ${s.toName} lent earlier to fund a bill on time`}>↩️ budget returned → {s.toName}</span>}
@@ -728,7 +729,7 @@ export function MoneyPlan({
                 )}
                 {/* delete: manual steps are removed outright; derived steps are hidden from the plan view */}
                 {canEdit && open && who == null && !g && (
-                  isManual ? (
+                  isManual && isRefundGroup(s.bridgeGroup) ? null : isManual ? (
                     <form action={withToast(deleteManualStep, { success: "Step deleted" })} className="shrink-0"><input type="hidden" name="id" value={s.manualId} /><button title="Delete this step" className="px-0.5 text-sm text-slate-300 hover:text-red-600">✕</button></form>
                   ) : (
                     <form action={withToast(hideStep, { success: "Removed from plan" })} className="shrink-0"><input type="hidden" name="periodId" value={periodId} /><input type="hidden" name="stepKey" value={s.id} /><button title="Remove from plan (keeps the underlying bill/income)" className="px-0.5 text-sm text-slate-300 hover:text-red-600">✕</button></form>

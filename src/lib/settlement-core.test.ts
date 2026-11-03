@@ -201,3 +201,33 @@ describe("computeSettlement", () => {
     expect(res.allSettled).toBe(false);
   });
 });
+
+describe("refund lines (Refund modal)", () => {
+  const base = { members, incomes: [{ ownerId: 2, amount: 10_000 }], expenses: [], records: [], treasurerId: 3, prevLabel: "NOV 2026" };
+  it("a −₹548 refund line shows as its own labelled line and raises what the spender pays", () => {
+    const res = computeSettlement({
+      ...base,
+      spends: [exp(2, 1_000, "Rice", "Provision", 3), { ...exp(2, -548, "↩ Refund: Bosch descaler (28 Oct, duplicate entry)", "Provision", 3), refundOfId: 483 }],
+    });
+    const h = res.rows.find((r) => r.id === 2)!;
+    expect(h.paidItems.map((i) => [i.label, i.amount])).toEqual([
+      ["Provision (NOV 2026)", 1_000],
+      ["↩ Refund: Bosch descaler (28 Oct, duplicate entry) (NOV 2026)", -548],
+    ]);
+    expect(h.net).toBe(10_000 - 452);
+  });
+  it("no change when the category is the spender's own budget", () => {
+    const res = computeSettlement({ ...base, spends: [{ ...exp(2, -548, "↩ Refund", "Fuel", 2), refundOfId: 1 }] });
+    expect(res.rows.find((r) => r.id === 2)!.paidItems).toEqual([]);
+  });
+  it("wrong category: moving from a shared budget into the spender's own nets −amount", () => {
+    const res = computeSettlement({
+      ...base,
+      spends: [
+        { ...exp(2, -300, "↩ Moved to Fuel", "Provision", 3), refundOfId: 9 },
+        { ...exp(2, 300, "↩ Moved from Provision", "Fuel", 2), refundOfId: 9 }, // Fuel is Harish's own → not credited
+      ],
+    });
+    expect(res.rows.find((r) => r.id === 2)!.paid).toBe(-300);
+  });
+});

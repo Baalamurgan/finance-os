@@ -946,7 +946,35 @@ model Spend {
   subCategory String? // reporting-only tag for Personal/Misc spends (Food, Travel…); null = uncategorized
   imagePath  String? // /uploads/<file> for petrol receipts etc.
   reviewIgnored Boolean @default(false) // "Review Misc" dismissed: a genuine misc spend, don't keep suggesting a move
+  // Set on a REFUND line (a negative spend booked by the Refund modal): the original spend it corrects.
+  // Refund lines are created/removed only through SpendRefund (never edited or deleted directly).
+  refundOfId Int?
   createdAt  DateTime @default(now())
+}
+
+// A refund raised against ONE spend (head only, any month) — duplicate entry, wrong amount, shop refund or
+// wrong category. Every piece it creates is linked here so Undo removes exactly those pieces:
+//   refundSpendId — the negative spend in the open month (budget back to the category; also fixes the card)
+//   incomeId      — the pool income line (budget back to the pool instead), this month or next month's preview
+//   cardTxnId     — a standalone card/account correction line when there's no refund spend (pool route)
+//   stepId        — the Money Plan move "spender → holder" when the money is sent now
+//   moveSpendId   — wrong category: the +amount spend in the new category (refundSpendId is the −amount one)
+model SpendRefund {
+  id            Int      @id @default(autoincrement())
+  householdId   Int
+  spendId       Int      @unique // the original spend (one refund per spend for now)
+  kind          String   // duplicate | amount | shop | category
+  amount        Float    // money corrected (the moved amount for "category")
+  budgetTo      String   // category | pool | none
+  payWhen       String   // now | next | none
+  periodId      Int      // the open month it was booked in
+  refundSpendId Int?
+  moveSpendId   Int?
+  incomeId      Int?
+  cardTxnId     Int?
+  stepId        Int?
+  createdById   Int?
+  createdAt     DateTime @default(now())
 }
 
 // Learned item→category memory that reinforces the Add-Spend nudge. Seed knowledge

@@ -9,6 +9,7 @@ export type SettleTagged = {
   amount: number;
   label: string;
   category: { name: string; responsibleMemberId?: number | null; section?: string | null };
+  refundOfId?: number | null; // a "↩ Refund" line (Refund modal) — shown as its own settlement line
 };
 
 // Sheet section order (mirrors the Sheet tab) so the settlement "paid" breakdown reads in the
@@ -56,9 +57,15 @@ export function computeSettlement(opts: {
     // counting the spend too would double-credit). Club them into ONE line per category —
     // the month's sheet already itemises each spend, so the settlement just needs the total.
     const spendByCat = new Map<string, number>();
+    // A refund line (negative) keeps its own labelled row so the settlement says WHY the spender gets less.
+    const refundItems: { label: string; amount: number; category: string; kind: "spend" }[] = [];
     for (const sp of spends) {
       if (sp.memberId !== m.id) continue;
       if ((sp.category.responsibleMemberId ?? null) === m.id) continue;
+      if (sp.refundOfId != null) {
+        refundItems.push({ label: prevLabel ? `${sp.label} (${prevLabel})` : sp.label, amount: sp.amount, category: sp.category.name, kind: "spend" });
+        continue;
+      }
       spendByCat.set(sp.category.name, (spendByCat.get(sp.category.name) ?? 0) + sp.amount);
     }
     // This month's sheet expenses first, in SHEET order (by section, then their input/id order);
@@ -76,7 +83,8 @@ export function computeSettlement(opts: {
         category,
         kind: "spend" as const,
       }))
-      .sort((a, b) => b.amount - a.amount);
+      .sort((a, b) => b.amount - a.amount)
+      .concat(refundItems);
     // Owner-charge: others' spend on THIS member's OWN budget categories (the exact mirror of the credit
     // above — same spend set, roles flipped). Lands as a NEGATIVE paid line so `net = contributed − paid`
     // still holds while the net rises by the charge — i.e. the owner settles their budget that others

@@ -13,13 +13,15 @@ import { formatINR, parseAmount } from "@/lib/format";
 import { generateMonth } from "@/lib/periodClone";
 import { isMiscBucket, MISC_SUBCATEGORIES } from "@/lib/misc";
 import { isLearnable, validateSpendLabel } from "@/lib/spendCategorize";
-import { getSpendShortcuts, getMatcherKeywords, getFrequentSpendItems, getFrequentSpendCombos, getMoneyPlan, getMiscSubCategories, getFamilyCards, _getInHand, _getSettlement } from "@/lib/queries";
+import { getSpendShortcuts, getMatcherKeywords, getFrequentSpendItems, getFrequentSpendCombos, getMoneyPlan, getMiscSubCategories, getFamilyCards, _getInHand, _getSettlement, getTrackedExpenses } from "@/lib/queries";
 import { getCardDues } from "@/lib/personal/cash";
 import { ensurePersonalMonth } from "@/lib/personal";
 import { planBillMonth, billCyclePhase, taxCycleMonth, type FundingStyle } from "@/lib/schedule";
 import { getBillReminders } from "@/lib/billReminders";
 import { applyBudgetShortfall, windDownPeriod } from "@/lib/windDown";
-import { PAYBACK_REIMB_NOTE, SURPLUS_NOTE, CARRY_NOTE, DEFERRED_NOTE, PIGGY_INCOME_NOTE, POOL_NOTE, POOL_BILL_NOTE, REMOVED_NOTE, isPoolNote, isPaybackNote, isLendGroup, LEND_GROUP_PREFIX, POOL_LEND_GROUP_PREFIX } from "@/lib/notes";
+import { PAYBACK_REIMB_NOTE, SURPLUS_NOTE, CARRY_NOTE, DEFERRED_NOTE, PIGGY_INCOME_NOTE, POOL_NOTE, POOL_BILL_NOTE, REMOVED_NOTE, isPoolNote, isPaybackNote, isLendGroup, LEND_GROUP_PREFIX, POOL_LEND_GROUP_PREFIX, REFUND_GROUP_PREFIX, isRefundGroup, REFUND_INCOME_NOTE } from "@/lib/notes";
+import { currentCycle } from "@/lib/finance/cycle";
+import { istDateParts } from "@/lib/time";
 import { canActOnStep } from "@/lib/planAuth";
 
 // Record a money-affecting change (who + what + when) for the activity feeds: the Money-Plan
@@ -975,6 +977,7 @@ export async function moveSpendCategory(formData: FormData) {
   const spend = await prisma.spend.findUnique({ where: { id } });
   if (!spend) return;
   if (!(await periodOpen(spend.periodId))) return;
+  if (spend.refundOfId != null || (await prisma.spendRefund.findUnique({ where: { spendId: spend.id } }))) return; // refund-locked
   const isOwner = spend.memberId === session.user.memberId;
   if (session.user.role !== "head" && !isOwner) return;
 
@@ -1061,6 +1064,10 @@ export async function deleteSpend(formData: FormData) {
     await logBlocked("deleteSpend", "spend", "not-logger-or-head", `Remove “${spend.label}” ${formatINR(spend.amount)}`, spend.periodId);
     throw new Error("Only the person who logged this entry (or the head) can delete it.");
   }
+
+  // A refund line is removed only by undoing its refund; a refunded spend only after its refund is undone.
+  if (spend.refundOfId != null) throw new Error("This is a refund line — undo the refund instead.");
+  if (await prisma.spendRefund.findUnique({ where: { spendId: spend.id } })) throw new Error("This spend has a refund — undo the refund first.");
 
   // (Receipt files are deferred/cloud-stored — nothing to unlink locally.)
   // Any credit-dashboard mirror line (family credit-card spend) is removed by the DB cascade
@@ -1284,6 +1291,9 @@ export async function editSpendAction(
   const spend = await prisma.spend.findUnique({ where: { id }, include: { category: { select: { section: true, tracked: true, name: true } } } });
   if (!spend) return prev;
   if (!(await periodOpen(spend.periodId))) return prev;
+  // Refund lines and refunded spends are locked (undo the refund to change them) — the refund's card line,
+  // income and plan move were computed from these exact numbers.
+  if (spend.refundOfId != null || (await prisma.spendRefund.findUnique({ where: { spendId: spend.id } }))) return prev;
 
   const isHead = session.user.role === "head";
   const isOwner = spend.memberId === session.user.memberId;
@@ -2632,6 +2642,7 @@ export async function deleteManualStep(formData: FormData) {
   const m = await prisma.manualPlanStep.findUnique({ where: { id } });
   if (!m) return;
   if (!(await isHead()) && !(await periodOpen(m.periodId))) return;
+  if (isRefundGroup(m.bridgeGroup)) throw new Error("This move belongs to a refund — undo the refund from the spend instead.");
   // A bridge is 3+ linked steps — deleting any leg removes the WHOLE group, so a bridge can never be
   // left half-applied (which would leave the pool or the funder out of pocket).
   if (m.bridgeGroup) {
@@ -4273,4 +4284,321 @@ export async function markPiggyHandedOver(formData: FormData) {
   await prisma.period.update({ where: { id: periodId }, data: { piggyHandedOverAt: undo ? null : new Date() } });
   await logActivity("piggy", "updated", `${undo ? "Reverted" : "Confirmed"} last month's Piggy hand-over`, periodId);
   revalidateFamily();
+}
+
+// ── Refunds (head only, any month) ───────────────────────────────────────────────────────────────────────
+// One modal corrects a spend that was wrong — a duplicate entry, a wrong amount, a shop refund or a wrong
+// category — WITHOUT editing the original (a closed month stays as it was). Everything is booked in the
+// OPEN month and linked to a SpendRefund so Undo removes exactly what it made:
+//   • budget back to the CATEGORY → a negative "↩ Refund" spend in that category (budget left rises). It
+//     also carries the card/account correction line, so the card's statement drops by the same amount.
+//   • budget back to the POOL → a one-off income line (this month, or next month's preview) + a standalone
+//     card/account correction line.
+//   • the money: "send now" → a Money Plan move spender → holder (category) / hub (pool), dated today;
+//     "next settlement" → the refund line rides next month's settlement (category) or next month's income.
+// A spend from the OPEN month isn't settled yet, so its refund simply nets in next month's settlement.
+export type RefundKind = "duplicate" | "amount" | "shop" | "category";
+export type RefundSpendOption = {
+  id: number; label: string; amount: number; dateISO: string; periodLabel: string; periodOpen: boolean;
+  category: string; cardName: string | null; refunded: boolean;
+};
+export async function refundSpendOptions(memberId: number): Promise<{ ok: boolean; error?: string; spends: RefundSpendOption[] }> {
+  if (!(await isHead())) return { ok: false, error: "Only the head can raise a refund.", spends: [] };
+  const household = await prisma.household.findFirst({ select: { id: true } });
+  if (!household || !memberId) return { ok: false, error: "Pick a member.", spends: [] };
+  const rows = await prisma.spend.findMany({
+    where: { memberId, refundOfId: null, amount: { gt: 0 }, category: { householdId: household.id } },
+    orderBy: { createdAt: "desc" },
+    take: 400,
+    include: { category: { select: { name: true } }, period: { select: { label: true, status: true } }, cardAccount: { select: { name: true } } },
+  });
+  const done = new Set((await prisma.spendRefund.findMany({ where: { spendId: { in: rows.map((r) => r.id) } }, select: { spendId: true } })).map((r) => r.spendId));
+  return {
+    ok: true,
+    spends: rows.map((r) => ({
+      id: r.id, label: r.label, amount: r.amount, dateISO: r.createdAt.toISOString(), periodLabel: r.period.label, periodOpen: r.period.status === "open",
+      category: r.category.name, cardName: r.cardAccount?.name ?? null, refunded: done.has(r.id),
+    })),
+  };
+}
+
+export type RefundPreview = {
+  ok: boolean;
+  error?: string;
+  blocked?: string; // a reason Confirm is not allowed (shown in the modal)
+  needsPreviewMonth?: { label: string }; // next month isn't previewed yet (CTA to build it)
+  amount: number;
+  spenderName: string;
+  settled: boolean; // the spend's month has already been settled (false = it's in the open month)
+  payWhen: "now" | "next"; // effective (an open-month spend is always "next")
+  openLabel: string;
+  nextLabel: string;
+  changes: string[]; // every number that changes, in plain words
+};
+
+type RefundInput = { spendId: number; kind: RefundKind; realAmount: number | null; shopAmount: number | null; budgetTo: "category" | "pool"; payWhen: "now" | "next"; toCategoryId: number | null };
+const refundInput = (fd: FormData): RefundInput => ({
+  spendId: Number(fd.get("spendId")) || 0,
+  kind: (["duplicate", "amount", "shop", "category"].includes(String(fd.get("kind"))) ? String(fd.get("kind")) : "duplicate") as RefundKind,
+  realAmount: fd.get("realAmount") != null && String(fd.get("realAmount")).trim() !== "" ? parseAmount(fd.get("realAmount")) : null,
+  shopAmount: fd.get("shopAmount") != null && String(fd.get("shopAmount")).trim() !== "" ? parseAmount(fd.get("shopAmount")) : null,
+  budgetTo: fd.get("budgetTo") === "pool" ? "pool" : "category",
+  payWhen: fd.get("payWhen") === "next" ? "next" : "now",
+  toCategoryId: Number(fd.get("toCategoryId")) || null,
+});
+const r2 = (n: number) => Math.round(n * 100) / 100;
+const shortDate = (d: Date) => d.toLocaleDateString("en-IN", { day: "numeric", month: "short", timeZone: "Asia/Kolkata" });
+const REFUND_KIND_TEXT: Record<RefundKind, string> = { duplicate: "duplicate entry", amount: "wrong amount", shop: "shop refund", category: "wrong category" };
+
+// Everything a refund would do — shared by the preview (read-only) and create (which re-runs it).
+async function planRefund(input: RefundInput) {
+  const fail = (error: string) => ({ ok: false as const, error });
+  const spend = await prisma.spend.findUnique({
+    where: { id: input.spendId },
+    include: { category: true, period: true, member: { select: { name: true } }, mirrorTxn: { select: { accountId: true, memberId: true } }, cardAccount: { include: { credit: true } } },
+  });
+  if (!spend) return fail("That spend no longer exists.");
+  if (spend.refundOfId != null || spend.amount <= 0) return fail("Pick an original spend, not a refund line.");
+  if (spend.memberId == null) return fail("This spend has no member, so there's no one to refund.");
+  if (await prisma.spendRefund.findUnique({ where: { spendId: spend.id } })) return fail("This spend already has a refund. Undo that one first.");
+  const householdId = spend.period.householdId;
+  const open = await earliestOpenPeriod(householdId);
+  if (!open) return fail("No month is open.");
+  const ym = (p: { year: number; month: number }) => p.year * 12 + p.month;
+  if (ym(spend.period) > ym(open)) return fail("This spend is in a month that isn't open yet.");
+  const settled = ym(spend.period) < ym(open); // an open-month spend hasn't been settled yet
+  const payWhen: "now" | "next" = settled ? input.payWhen : "next";
+
+  // How much money is corrected.
+  let amount = 0;
+  if (input.kind === "duplicate") amount = spend.amount;
+  else if (input.kind === "amount") {
+    if (input.realAmount == null || !(input.realAmount >= 0)) return fail("Enter the real amount.");
+    if (input.realAmount >= spend.amount - 0.005) return fail(`The real amount must be less than ${formatINR(spend.amount)}.`);
+    amount = r2(spend.amount - input.realAmount);
+  } else if (input.kind === "category") {
+    amount = spend.amount; // the whole spend moves
+  } else {
+    if (input.shopAmount == null || !(input.shopAmount > 0)) return fail("Enter how much the shop refunded.");
+    if (input.shopAmount > spend.amount + 0.005) return fail(`A refund can't be more than the spend (${formatINR(spend.amount)}).`);
+    amount = r2(input.shopAmount);
+  }
+
+  const [household, members] = await Promise.all([
+    prisma.household.findUnique({ where: { id: householdId }, select: { treasurerMemberId: true } }),
+    prisma.member.findMany({ where: { householdId }, select: { id: true, name: true, role: true } }),
+  ]);
+  const nameOf = (id: number | null | undefined) => members.find((m) => m.id === id)?.name ?? "the hub";
+  const treasurerId = open.treasurerMemberId ?? household?.treasurerMemberId ?? members.find((m) => m.role === "head")?.id ?? null;
+  if (treasurerId == null) return fail("No hub (treasurer) is set.");
+  const spenderId = spend.memberId;
+  const spenderName = spend.member?.name ?? nameOf(spenderId);
+  const holderId = spend.category.responsibleMemberId ?? treasurerId;
+  const recipientId = input.budgetTo === "category" ? holderId : treasurerId;
+  const nextYm = nextYM(open.year, open.month);
+  const next = await prisma.period.findUnique({ where: { householdId_year_month: { householdId, year: nextYm.year, month: nextYm.month } } });
+  const nextLabel = next?.label ?? `${new Date(nextYm.year, nextYm.month - 1, 1).toLocaleString("en-US", { month: "short" }).toUpperCase()} ${nextYm.year}`;
+
+  const changes: string[] = [];
+  let blocked: string | undefined;
+  let needsPreviewMonth: { label: string } | undefined;
+  const label = `↩ Refund: ${spend.label} (${shortDate(spend.createdAt)}, ${REFUND_KIND_TEXT[input.kind]})`;
+
+  // Wrong category: no money is refunded — the spend moves. Booked as a swap in the OPEN month (old
+  // category +amount back, new category −amount), so a closed month stays untouched. Both lines ride the
+  // next settlement, which corrects the reimbursement if only one of the two categories credits the spender.
+  if (input.kind === "category") {
+    const to = input.toCategoryId ? await prisma.category.findUnique({ where: { id: input.toCategoryId } }) : null;
+    if (!to || to.householdId !== householdId || !to.tracked) return fail("Pick the category it should have been.");
+    if (to.id === spend.categoryId) return fail(`It's already in ${to.name} — pick a different category.`);
+    const tracked = await getTrackedExpenses(householdId, open.id);
+    const leftLine = (id: number, name: string, delta: number) => {
+      const c = tracked.cards.find((x) => x.id === id);
+      return c && c.allocation > 0
+        ? `${name} (${open.label}) left: ${formatINR(c.remaining)} → ${formatINR(r2(c.remaining + delta))}`
+        : `${name} (${open.label}) spent: ${delta > 0 ? "−" : "+"}${formatINR(amount)}`;
+    };
+    changes.push(leftLine(spend.categoryId, spend.category.name, amount));
+    changes.push(leftLine(to.id, to.name, -amount));
+    // Settlement credits a spender only for categories that aren't theirs (and never moves the hub's own net).
+    const credited = (resp: number | null) => (resp ?? null) !== spenderId;
+    const net = spenderId === treasurerId ? 0 : (credited(to.responsibleMemberId) ? amount : 0) - (credited(spend.category.responsibleMemberId) ? amount : 0);
+    if (Math.abs(net) < 0.005) changes.push(`No settlement change — ${spenderName} is reimbursed the same either way`);
+    else {
+      changes.push(`${nextLabel} settlement: ${spenderName} gets ${formatINR(Math.abs(net))} ${net > 0 ? "more" : "less"} (${net > 0 ? `${to.name} isn't ${spenderName}'s budget` : `${to.name} is ${spenderName}'s own budget`})`);
+      if (!next) needsPreviewMonth = { label: nextLabel };
+    }
+    return {
+      ok: true as const, spend, open, next, nextLabel, settled, payWhen, amount, label, corrDate: spend.createdAt, accountId: null as number | null, accountOwnerId: spenderId,
+      spenderId, spenderName, treasurerId, recipientId, step: null as { fromId: number; toId: number; day: number } | null, changes, blocked, needsPreviewMonth, householdId, moveTo: { id: to.id, name: to.name },
+    };
+  }
+
+  // The card / account correction line. A duplicate or wrong amount was never charged by the bank, so it
+  // fixes the ORIGINAL spend's statement; a shop refund lands on the CURRENT statement (where the credit shows).
+  const corrDate = input.kind === "shop" ? new Date() : spend.createdAt;
+  const card = spend.cardAccount;
+  const accountId = card ? card.id : spend.mirrorTxn?.accountId ?? null;
+  const accountOwnerId = card ? card.memberId : spend.mirrorTxn?.memberId ?? spenderId;
+  if (card && card.type === "credit_card" && card.credit?.statementDay) {
+    const cycleEnd = currentCycle(card.credit.statementDay, corrDate, card.credit.dueOffsetDays).end;
+    const paid = await prisma.personalCardBill.findFirst({ where: { cardAccountId: card.id, cycleEnd: { gte: new Date(cycleEnd.getTime() - 86400000), lte: new Date(cycleEnd.getTime() + 86400000) } } });
+    const stmt = shortDate(cycleEnd);
+    if (paid) {
+      blocked = input.kind === "shop"
+        ? `The ${card.name} statement of ${stmt} is already paid, so this refund can't go on it.`
+        : `The ${card.name} statement of ${stmt} is already paid — use Shop refund instead (the credit goes on the current statement).`;
+    } else {
+      const dues = await getCardDues(card.memberId);
+      const cyc = dues.find((d) => d.cardId === card.id)?.cycles.find((c) => Math.abs(new Date(c.cycleEndISO).getTime() - cycleEnd.getTime()) < 86400000);
+      const before = cyc ? r2(cyc.total + cyc.familyTotal + cyc.annualFee) : null;
+      changes.push(before != null
+        ? `💳 ${card.name} statement of ${stmt}: ${formatINR(before)} → ${formatINR(r2(before - amount))} (a −${formatINR(amount)} line in ${nameOf(card.memberId)}'s card view)`
+        : `💳 ${card.name} statement of ${stmt}: −${formatINR(amount)} (a refund line in ${nameOf(card.memberId)}'s card view)`);
+    }
+  } else if (accountId != null) {
+    changes.push(`🏦 ${card?.name ?? "Family account"}: +${formatINR(amount)} back (a refund line on the account)`);
+  }
+
+  // Budget.
+  if (input.budgetTo === "category") {
+    const tracked = await getTrackedExpenses(householdId, open.id);
+    const c = tracked.cards.find((x) => x.id === spend.categoryId);
+    changes.push(c && c.allocation > 0
+      ? `${spend.category.name} (${open.label}) left: ${formatINR(c.remaining)} → ${formatINR(r2(c.remaining + amount))}`
+      : `${spend.category.name} (${open.label}) spent: −${formatINR(amount)}`);
+  } else {
+    if (payWhen === "next" && !next) {
+      needsPreviewMonth = { label: nextLabel };
+      blocked = blocked ?? `${nextLabel} isn't previewed yet — build the preview first, then add the refund to it.`;
+    }
+    changes.push(`Pool income (${payWhen === "now" ? open.label : nextLabel}): +${formatINR(amount)} “${label}”`);
+  }
+
+  // The money.
+  let step: { fromId: number; toId: number; day: number } | null = null;
+  if (payWhen === "now") {
+    if (recipientId === spenderId) changes.push(`Nothing to send — ${spenderName} already holds it`);
+    else {
+      const t = istDateParts();
+      const day = t.year === open.year && t.month === open.month ? t.day : 1;
+      step = { fromId: spenderId, toId: recipientId, day };
+      // Same rule as Bridge: sending it today must not leave anyone's bill short. Simulate the move in the
+      // live plan and compare the short bills with and without it.
+      const base = await loadLivePlan(open.id);
+      const sim = await loadLivePlan(open.id, [{ id: -1, fromId: spenderId, toId: recipientId, amount, day, done: false, bridgeGroup: `${REFUND_GROUP_PREFIX}pv`, note: label }]);
+      if (base && sim) {
+        const wasShort = new Set(base.plan.steps.filter((x) => x.kind === "bill" && (x.senderShort ?? 0) > 0.005).map((x) => x.id));
+        const nowShort = sim.plan.steps.filter((x) => x.kind === "bill" && !x.done && !x.hidden && (x.senderShort ?? 0) > 0.005 && !wasShort.has(x.id));
+        if (nowShort.length) {
+          const list = nowShort.map((x) => `${x.vendor ?? "a bill"}${x.day != null ? ` on the ${x.day}${["th", "st", "nd", "rd"][x.day % 10 > 3 || Math.floor(x.day / 10) === 1 ? 0 : x.day % 10]}` : ""} (short ${formatINR(Math.round((x.senderShort ?? 0) * 100) / 100)})`).join(", ");
+          blocked = blocked ?? `${spenderName} doesn't have the cash to send ${formatINR(amount)} today — it would leave ${nowShort.length === 1 ? "this bill" : "these bills"} short: ${list}. Choose Next settlement instead.`;
+        }
+      }
+      changes.push(`Money Plan (${open.label}, ${day}${["th", "st", "nd", "rd"][day % 10 > 3 || Math.floor(day / 10) === 1 ? 0 : day % 10]}): ${spenderName} → ${nameOf(recipientId)} ${formatINR(amount)} · ${label}`);
+    }
+  } else if (input.budgetTo === "category") {
+    if (holderId === spenderId) changes.push(`No settlement change — ${spend.category.name} is ${spenderName}'s own budget, so the spend was never reimbursed`);
+    else {
+      changes.push(`${nextLabel} settlement: ${spenderName} gets ${formatINR(amount)} less (a “${label}” line)`);
+      if (!next) needsPreviewMonth = { label: nextLabel };
+    }
+  } else {
+    changes.push(`${nextLabel} settlement: ${spenderName} sends ${formatINR(amount)} more to the pool (the income line above)`);
+  }
+
+  return {
+    ok: true as const, spend, open, next, nextLabel, settled, payWhen, amount, label, corrDate, accountId, accountOwnerId,
+    spenderId, spenderName, treasurerId, recipientId, step, changes, blocked, needsPreviewMonth, householdId, moveTo: null as { id: number; name: string } | null,
+  };
+}
+
+export async function previewRefund(formData: FormData): Promise<RefundPreview> {
+  const empty = { amount: 0, spenderName: "", settled: false, payWhen: "now" as const, openLabel: "", nextLabel: "", changes: [] };
+  if (!(await isHead())) return { ok: false, error: "Only the head can raise a refund.", ...empty };
+  const p = await planRefund(refundInput(formData));
+  if (!p.ok) return { ok: false, error: p.error, ...empty };
+  return { ok: true, blocked: p.blocked, needsPreviewMonth: p.needsPreviewMonth, amount: p.amount, spenderName: p.spenderName, settled: p.settled, payWhen: p.payWhen, openLabel: p.open.label, nextLabel: p.nextLabel, changes: p.changes };
+}
+
+export async function createRefund(formData: FormData): Promise<{ ok: boolean; error?: string }> {
+  if (!(await isHead())) return { ok: false, error: "Only the head can raise a refund." };
+  const session = await auth();
+  const input = refundInput(formData);
+  const p = await planRefund(input);
+  if (!p.ok) return { ok: false, error: p.error };
+  if (p.blocked) return { ok: false, error: p.blocked };
+  const { spend, open, next, amount, label } = p;
+  await prisma.$transaction(async (tx) => {
+    const rf = await tx.spendRefund.create({
+      data: { householdId: p.householdId, spendId: spend.id, kind: input.kind, amount, budgetTo: input.budgetTo, payWhen: p.payWhen, periodId: open.id, createdById: session?.user?.memberId ?? null },
+    });
+    const links: { refundSpendId?: number; moveSpendId?: number; incomeId?: number; cardTxnId?: number; stepId?: number } = {};
+    let mirrorSpendId: number | null = null;
+    if (p.moveTo) {
+      const base = { periodId: open.id, memberId: p.spenderId, loggedById: session?.user?.memberId ?? null, refundOfId: spend.id };
+      const out = await tx.spend.create({ data: { ...base, categoryId: spend.categoryId, label: `↩ Moved to ${p.moveTo.name}: ${spend.label} (${shortDate(spend.createdAt)})`, amount: -amount, subCategory: spend.subCategory } });
+      const inn = await tx.spend.create({ data: { ...base, categoryId: p.moveTo.id, label: `↩ Moved from ${spend.category.name}: ${spend.label} (${shortDate(spend.createdAt)})`, amount } });
+      await tx.spendRefund.update({ where: { id: rf.id }, data: { refundSpendId: out.id, moveSpendId: inn.id, budgetTo: "none", payWhen: "none" } });
+      return;
+    }
+    if (input.budgetTo === "category") {
+      const rs = await tx.spend.create({
+        data: { periodId: open.id, categoryId: spend.categoryId, memberId: p.spenderId, label, amount: -amount, subCategory: spend.subCategory, cardAccountId: spend.cardAccountId, loggedById: session?.user?.memberId ?? null, refundOfId: spend.id },
+      });
+      links.refundSpendId = rs.id;
+      mirrorSpendId = rs.id;
+    } else {
+      const inc = await tx.incomeEntry.create({
+        data: {
+          periodId: p.payWhen === "now" ? open.id : next!.id, source: label, amount, oneOff: true,
+          ownerId: p.payWhen === "now" ? p.treasurerId : p.spenderId, // now → already at the hub (the move brings it); next → the spender settles it
+          note: `${REFUND_INCOME_NOTE}${rf.id}:${p.payWhen}`, dueDay: p.step?.day ?? 1,
+        },
+      });
+      links.incomeId = inc.id;
+    }
+    if (p.accountId != null) {
+      const t = await tx.accountTransaction.create({
+        data: { memberId: p.accountOwnerId, accountId: p.accountId, date: p.corrDate, merchant: label, amount: -amount, type: "spend", category: spend.category.name, source: "family", familySpendId: mirrorSpendId },
+      });
+      if (mirrorSpendId == null) links.cardTxnId = t.id;
+    }
+    if (p.step) {
+      const st = await tx.manualPlanStep.create({
+        data: { periodId: open.id, fromMemberId: p.step.fromId, toMemberId: p.step.toId, amount, day: p.step.day, bridgeGroup: `${REFUND_GROUP_PREFIX}${rf.id}`, note: label },
+      });
+      links.stepId = st.id;
+    }
+    await tx.spendRefund.update({ where: { id: rf.id }, data: links });
+  });
+  await logActivity("spend", "created", p.moveTo
+    ? `Moved “${spend.label}” ${formatINR(amount)} (${p.spenderName}) from ${spend.category.name} to ${p.moveTo.name} — wrong category`
+    : `Refund ${formatINR(amount)} for “${spend.label}” (${p.spenderName}, ${REFUND_KIND_TEXT[input.kind]})`, open.id);
+  revalidateFamily();
+  return { ok: true };
+}
+
+// Undo a refund — removes every piece it made. Allowed until its Money Plan move is ticked (money sent).
+export async function undoRefund(formData: FormData): Promise<{ ok: boolean; error?: string }> {
+  if (!(await isHead())) return { ok: false, error: "Only the head can undo a refund." };
+  const id = Number(formData.get("id")) || 0;
+  const rf = await prisma.spendRefund.findUnique({ where: { id } });
+  if (!rf) return { ok: false, error: "That refund is already gone." };
+  if (rf.stepId != null) {
+    const st = await prisma.manualPlanStep.findUnique({ where: { id: rf.stepId } });
+    if (st?.done) return { ok: false, error: "The refund was already sent in the Money Plan — untick that step first." };
+  }
+  if (!(await periodOpen(rf.periodId))) return { ok: false, error: "The month this refund was booked in is closed." };
+  await prisma.$transaction(async (tx) => {
+    if (rf.stepId != null) await tx.manualPlanStep.deleteMany({ where: { id: rf.stepId } });
+    if (rf.cardTxnId != null) await tx.accountTransaction.deleteMany({ where: { id: rf.cardTxnId } });
+    if (rf.incomeId != null) await tx.incomeEntry.deleteMany({ where: { id: rf.incomeId } });
+    const spendIds = [rf.refundSpendId, rf.moveSpendId].filter((x): x is number => x != null);
+    if (spendIds.length) await tx.spend.deleteMany({ where: { id: { in: spendIds } } }); // mirror lines cascade
+    await tx.spendRefund.delete({ where: { id: rf.id } });
+  });
+  await logActivity("spend", "deleted", `Undid a refund of ${formatINR(rf.amount)}`, rf.periodId);
+  revalidateFamily();
+  return { ok: true };
 }

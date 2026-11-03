@@ -2,7 +2,9 @@ import { formatINR } from "@/lib/format";
 import { sheetSection, isBudgetLikeCard } from "@/lib/sheetSection";
 import { loadCommon } from "@/lib/load";
 import { CARRY_NOTE } from "@/lib/notes";
-import { getRollup, getTrackedExpenses, getMiscReview, getSpendActivity, getFamilyCards } from "@/lib/queries";
+import { getRollup, getTrackedExpenses, getMiscReview, getSpendActivity, getFamilyCards, getSpendRefundIndex } from "@/lib/queries";
+import { RefundModal } from "@/components/RefundModal";
+import { UndoRefundButton } from "@/components/UndoRefundButton";
 import { NavHeader } from "@/components/NavHeader";
 import { SpendActivity } from "@/components/SpendActivity";
 import { AddSpendModal } from "@/components/AddSpendModal";
@@ -149,6 +151,10 @@ export default async function ExpensesPage({
   const miscDonutTotal = miscSegments.reduce((s, x) => s + x.value, 0);
   // Who logged/edited/removed a spend this month (audit trail, everyone) — at the bottom under the cards.
   const spendActivity = await getSpendActivity(c.selected.id);
+  // Refund tags on spends (original → "↩ refunded", refund line → its refund) + Undo (head).
+  const refunds = await getSpendRefundIndex(c.household.id);
+  // The Refund modal is head-only and books into the OPEN month — offered while any month is open.
+  const anyOpen = c.selected.status === "open" || c.selected.status === "closed";
 
   return (
     <>
@@ -166,6 +172,7 @@ export default async function ExpensesPage({
             </p>
           </div>
           <div className="flex flex-1 basis-64 flex-wrap items-center justify-end gap-3">
+            {c.isHead && anyOpen && <RefundModal members={c.members} householdId={c.household.id} categories={c.categories.filter((cat) => cat.tracked && cat.liveThisMonth).map((cat) => ({ id: cat.id, name: cat.name }))} />}
             <ExpensesMemberFilter members={c.members} selectedId={filterMemberId} />
             <ExpensesSortControl sort={sort} />
             {filterMemberId != null ? (
@@ -250,6 +257,7 @@ export default async function ExpensesPage({
               subCats={c.miscSubCategories}
               filterMemberName={filterMemberName}
               cards={familyCards}
+              refunds={refunds}
             />
           ))}
         </div>
@@ -277,6 +285,7 @@ export default async function ExpensesPage({
                   subCats={c.miscSubCategories}
                   filterMemberName={filterMemberName}
                   cards={familyCards}
+                  refunds={refunds}
                 />
               ))}
               {plannedLines.map((e) => (
@@ -316,6 +325,7 @@ export default async function ExpensesPage({
                     subCats={c.miscSubCategories}
                     filterMemberName={filterMemberName}
                     cards={familyCards}
+                    refunds={refunds}
                   />
                 ))}
               </div>
@@ -378,7 +388,9 @@ function SpendCard({
   filterMemberName,
   subCats,
   cards,
+  refunds,
 }: {
+  refunds: Awaited<ReturnType<typeof getSpendRefundIndex>>;
   card: SpendCardData;
   open: boolean;
   periodId: number;
@@ -397,6 +409,8 @@ function SpendCard({
   const filtered = filterMemberName != null;
   const memberSpent = filtered ? card.spends.reduce((s, x) => s + x.amount, 0) : card.spent;
   const cid = `card-${card.id}`;
+  // A refund bigger than the month's spends takes "spent" below zero — mark it as a refund, not a spend.
+  const spentText = (n: number) => (n < -0.005 ? `↩ ${formatINR(n)}` : formatINR(n));
   return (
     <section className="flex flex-col rounded-xl border border-slate-200 bg-white">
       {/* mobile-only collapse toggle (pure CSS): body is hidden on mobile until checked,
@@ -417,7 +431,7 @@ function SpendCard({
         <div className="flex shrink-0 items-center gap-2">
           {/* compact figure so a collapsed card still shows the spend at a glance (mobile) */}
           <span className="shrink-0 text-xs tabular-nums text-slate-500 sm:hidden">
-            {formatINR(memberSpent)}
+            {spentText(memberSpent)}
             {!filtered && card.allocation > 0 && <span className="text-slate-400"> / {formatINR(card.allocation)}</span>}
           </span>
           {open && (
@@ -445,7 +459,7 @@ function SpendCard({
           <div className="flex items-center justify-between text-sm">
             <span className="text-slate-500">
               <b className="text-indigo-600">{filterMemberName}</b> spent{" "}
-              <b className="text-slate-800">{formatINR(memberSpent)}</b>
+              <b className="text-slate-800">{spentText(memberSpent)}</b>
             </span>
             <span className="text-xs text-slate-400">{card.spends.length} spend{card.spends.length === 1 ? "" : "s"}</span>
           </div>
@@ -453,7 +467,7 @@ function SpendCard({
           <>
             <div className="flex items-center justify-between text-sm">
               <span className="text-slate-500">
-                Spent <b className="text-slate-800">{formatINR(card.spent)}</b>
+                Spent <b className="text-slate-800">{spentText(card.spent)}</b>
               </span>
               <span className="text-xs font-medium text-indigo-600">
                 {card.spent > card.allocation
@@ -471,7 +485,7 @@ function SpendCard({
           <>
             <div className="flex items-center justify-between text-sm">
               <span className="text-slate-500">
-                Spent <b className="text-slate-800">{formatINR(card.spent)}</b>
+                Spent <b className="text-slate-800">{spentText(card.spent)}</b>
                 <span className="text-slate-400"> / {formatINR(card.allocation)}</span>
               </span>
               <span className={`text-xs font-medium ${card.overBudget ? "text-red-600" : "text-green-600"}`}>
@@ -493,7 +507,7 @@ function SpendCard({
         ) : (
           <div className="flex items-center justify-between text-sm">
             <span className="text-slate-500">
-              Spent <b className="text-slate-800">{formatINR(card.spent)}</b>
+              Spent <b className="text-slate-800">{spentText(card.spent)}</b>
             </span>
             <span className="rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-700">
               One-off · not budgeted
@@ -526,6 +540,12 @@ function SpendCard({
                       💳 {s.cardAccount.name}{s.cardAccount.last4 ? ` XX${s.cardAccount.last4}` : ""}
                     </span>
                   )}
+                  {refunds.byOriginal.get(s.id) && (
+                    <span className="rounded-full bg-rose-50 px-1.5 py-0.5 text-[10px] font-medium text-rose-600" title={`Refund booked ${new Date(refunds.byOriginal.get(s.id)!.dateISO).toLocaleDateString("en-IN", { day: "numeric", month: "short" })}`}>
+                      ↩ refunded {formatINR(refunds.byOriginal.get(s.id)!.amount)}
+                    </span>
+                  )}
+                  {refunds.byLine.get(s.id) && <span className="rounded-full bg-rose-50 px-1.5 py-0.5 text-[10px] font-medium text-rose-600">↩ refund line</span>}
                   {isMisc && (
                     <SpendSubCategoryPicker
                       id={s.id}
@@ -538,8 +558,10 @@ function SpendCard({
               </div>
             </div>
             <div className="flex items-center gap-2">
-              <span className="tabular-nums text-slate-700">{formatINR(s.amount)}</span>
-              {open && (isHead || s.memberId === currentMemberId) && (
+              <span className={`tabular-nums ${s.amount < 0 ? "text-rose-600" : "text-slate-700"}`}>{formatINR(s.amount)}</span>
+              {/* Refund-locked: a refund line or a refunded spend changes only through Undo refund. */}
+              {(() => { const rid = refunds.byLine.get(s.id)?.id ?? refunds.byOriginal.get(s.id)?.id; return rid != null && isHead ? <UndoRefundButton refundId={rid} /> : null; })()}
+              {open && !refunds.byLine.get(s.id) && !refunds.byOriginal.get(s.id) && (isHead || s.memberId === currentMemberId) && (
                 <EditSpendModal
                   spend={{ id: s.id, label: s.label, amount: s.amount, memberId: s.memberId, subCategory: s.subCategory, cardAccountId: s.cardAccountId }}
                   categoryName={card.name}
@@ -550,7 +572,7 @@ function SpendCard({
                   cards={cards}
                 />
               )}
-              {open && <SpendDeleteButton id={s.id} />}
+              {open && !refunds.byLine.get(s.id) && !refunds.byOriginal.get(s.id) && <SpendDeleteButton id={s.id} />}
             </div>
           </div>
         ))}

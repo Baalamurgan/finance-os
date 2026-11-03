@@ -3,7 +3,7 @@ import { unstable_cache } from "next/cache";
 import { prisma } from "@/lib/prisma";
 import { FAMILY_TAG } from "@/lib/revalidate";
 import { MISC_SUBCATEGORIES } from "@/lib/misc";
-import { SURPLUS_NOTE, LEFTOVER_NOTE, CARRY_NOTE, PIGGY_INCOME_NOTE, POOL_NOTE, POOL_BILL_NOTE, REMOVED_NOTE, isPoolNote } from "@/lib/notes";
+import { SURPLUS_NOTE, LEFTOVER_NOTE, CARRY_NOTE, PIGGY_INCOME_NOTE, POOL_NOTE, POOL_BILL_NOTE, REMOVED_NOTE, isPoolNote, isRefundIncomeNote } from "@/lib/notes";
 import { computeSettlement, ownerChargeActiveFor, type SettleTagged } from "@/lib/settlement-core";
 import { buildAllocation, getMiscCardEnvelopes } from "@/lib/allocation";
 import { planBillMonth, isLumpDue, monthsUntilNextDue, type FundingStyle } from "@/lib/schedule";
@@ -129,7 +129,7 @@ export async function getMiscReview(householdId: number, periodId: number) {
     const [miscSpends, learned, trackedCats] = await Promise.all([
       prisma.spend.findMany({
         // reviewIgnored = the head/owner said "leave it in Misc" — don't suggest it again.
-        where: { periodId, reviewIgnored: false, category: { section: "Misc", tracked: true } },
+        where: { periodId, reviewIgnored: false, refundOfId: null, category: { section: "Misc", tracked: true } },
         select: { id: true, label: true, amount: true, subCategory: true, member: { select: { name: true } } },
         orderBy: { id: "desc" },
       }),
@@ -582,13 +582,18 @@ export async function _getSettlement(
       })
     : null;
 
-  const [members, incomes, allExpenses, spends, records] = await Promise.all([
+  const [members, incomes, allExpenses, prevSpends, records, sentRefunds] = await Promise.all([
     prisma.member.findMany({ where: { householdId }, orderBy: { id: "asc" } }),
     prisma.incomeEntry.findMany({ where: { periodId } }),
     prisma.expenseEntry.findMany({ where: { periodId }, include: { category: true }, orderBy: { id: "asc" } }),
     prisma.spend.findMany({ where: { periodId: prevPeriod?.id ?? -1 }, include: { category: true } }),
     prisma.settlementRecord.findMany({ where: { periodId } }),
+    // Refunds whose money was SENT NOW (a Money Plan move in the month they were booked) — their refund
+    // line must stay OUT of the next settlement, or the spender would pay it back twice.
+    prisma.spendRefund.findMany({ where: { periodId: prevPeriod?.id ?? -1, payWhen: "now", refundSpendId: { not: null } }, select: { refundSpendId: true } }),
   ]);
+  const sentRefundIds = new Set(sentRefunds.map((r) => r.refundSpendId));
+  const spends = prevSpends.filter((s) => !sentRefundIds.has(s.id));
   // Exclude carried-misc lines (note "__carry__") in JS, NOT via a Prisma `not`
   // filter — Prisma's `not` also drops rows where note IS NULL (i.e. every normal
   // line), which zeroed out everyone's tagged expenses. They're tagged to the
@@ -629,7 +634,9 @@ export async function getMoneyPlan(householdId: number, periodId: number, inhand
       : extraExpenses?.length
         ? _getSettlement(householdId, periodId, inhand.treasurerId, extraExpenses)
         : getSettlement(householdId, periodId, inhand.treasurerId),
-    prisma.incomeEntry.findMany({ where: { periodId }, select: { id: true, ownerId: true, dueDay: true, amount: true, source: true, receivedAt: true, note: true, createdAt: true } }),
+    // A refund's pool income booked with "send now" is NOT an arrival — the refund's own Money Plan move
+    // (spender → hub) is that cash — so it's left out of the plan (it still counts on the Sheet/In-Hand).
+    prisma.incomeEntry.findMany({ where: { periodId }, select: { id: true, ownerId: true, dueDay: true, amount: true, source: true, receivedAt: true, note: true, createdAt: true } }).then((rows) => rows.filter((i) => !(isRefundIncomeNote(i.note) && i.note!.endsWith(":now")))),
     prisma.period.findUnique({ where: { id: periodId }, select: { year: true, month: true, status: true } }),
     prisma.household.findUnique({ where: { id: householdId }, select: { windDownDay: true } }),
     prisma.stepDayOverride.findMany({ where: { periodId }, select: { stepKey: true, day: true } }),
@@ -2642,4 +2649,18 @@ export async function getTransactionLedger(householdId: number, periodId: number
     out.push({ memberId: mid, name: g.name, rows, inHand: running });
   }
   return out;
+}
+
+// Refunds by spend, for the Expenses page tags: the original spend → "↩ refunded ₹X" and the refund
+// line → its refund (both carry the refund id for Undo).
+export async function getSpendRefundIndex(householdId: number) {
+  const rows = await prisma.spendRefund.findMany({ where: { householdId }, select: { id: true, spendId: true, refundSpendId: true, moveSpendId: true, amount: true, kind: true, createdAt: true } });
+  const byOriginal = new Map<number, { id: number; amount: number; kind: string; dateISO: string }>();
+  const byLine = new Map<number, { id: number }>();
+  for (const r of rows) {
+    byOriginal.set(r.spendId, { id: r.id, amount: r.amount, kind: r.kind, dateISO: r.createdAt.toISOString() });
+    if (r.refundSpendId != null) byLine.set(r.refundSpendId, { id: r.id });
+    if (r.moveSpendId != null) byLine.set(r.moveSpendId, { id: r.id });
+  }
+  return { byOriginal, byLine };
 }

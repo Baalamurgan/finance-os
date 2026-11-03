@@ -57,3 +57,12 @@ export const isLendGroup = (g: string | null | undefined) => !!g && g.startsWith
 // return leg — it counts toward their payment to the pool. Still a lend group (the payer's payout shrinks).
 export const POOL_LEND_GROUP_PREFIX = "lend-pool-";
 export const isPoolLendGroup = (g: string | null | undefined) => !!g && g.startsWith(POOL_LEND_GROUP_PREFIX);
+
+// Refunds (the Refund modal): the Money Plan move that sends a refunded amount back ("spender → holder")
+// shares this bridgeGroup prefix (+ the SpendRefund id), so it's placed on its own day, tagged "↩ refund",
+// and can't be deleted from the plan (Undo the refund instead). The pool-income line it books carries
+// REFUND_INCOME_NOTE + id; when the money is sent NOW the plan skips that income (the move is the cash).
+export const REFUND_GROUP_PREFIX = "refund-";
+export const isRefundGroup = (g: string | null | undefined) => !!g && g.startsWith(REFUND_GROUP_PREFIX);
+export const REFUND_INCOME_NOTE = "__refund__:";
+export const isRefundIncomeNote = (note: string | null | undefined) => !!note && note.startsWith(REFUND_INCOME_NOTE);
