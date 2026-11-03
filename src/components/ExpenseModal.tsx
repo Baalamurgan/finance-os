@@ -27,6 +27,7 @@ export function ExpenseModal({
   newCategoryDefaultSection = "Monthly",
   showDueDay = false,
   defaultRepeat = true,
+  treasurerId = null,
 }: {
   categories: Cat[];
   members: Mem[];
@@ -51,6 +52,7 @@ export function ExpenseModal({
   newCategoryDefaultSection?: string; // preselected section when creating a new category
   showDueDay?: boolean; // show an optional "due day" field (drives Money-plan ordering)
   defaultRepeat?: boolean; // default state of the "repeat every month" checkbox (create only)
+  treasurerId?: number | null; // the month's hub — their own line is already paid from the pool (no pool option)
 }) {
   const [openState, setOpenState] = useState(false);
   const open = controlledOpen ?? openState;
@@ -106,7 +108,10 @@ export function ExpenseModal({
   // Offer pool-funding only for the misc bucket assigned to a real member, on create.
   const selectedCat = categoryId != null ? categories.find((c) => c.id === categoryId) : undefined;
   const isMiscCat = newCat ? newCatSection === "Misc" : selectedCat?.section === "Misc";
-  const showPool = !initial && isMiscCat && memberId !== "" && !spendCard;
+  // The treasurer IS the pool: their own line is paid straight from it as one "treasurer → vendor" step,
+  // so the pool options (which add a treasurer → member step) are hidden for them.
+  const isTreasurerLine = treasurerId != null && memberId === String(treasurerId);
+  const showPool = !initial && isMiscCat && memberId !== "" && !spendCard && !isTreasurerLine;
   // Offer "make it a spend card" for a misc expense on create (a reusable budget, not a bill).
   const showCardToggle = !initial && isMiscCat;
   const memberLabel = members.find((m) => String(m.id) === memberId)?.name ?? "";
@@ -443,6 +448,11 @@ export function ExpenseModal({
 
                 {/* Pool-funded misc: treasurer sends the full amount to this member (family money, no
                     repayment) instead of them covering it from their own cash. */}
+                {!initial && isMiscCat && isTreasurerLine && !spendCard && (
+                  <p className="rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-500">
+                    {memberLabel} is the treasurer, so this is paid straight from the pool — one “{memberLabel} → vendor” step in the Money Plan.
+                  </p>
+                )}
                 {showPool && !hasSources && (
                   <div className="rounded-lg bg-amber-50 px-3 py-2">
                     <label className="flex items-start gap-2 text-sm text-amber-800">

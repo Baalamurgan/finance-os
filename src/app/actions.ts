@@ -174,6 +174,16 @@ async function canEdit() {
   return await unlocked();
 }
 
+// The month's hub: its own override, else the household's treasurer, else the head.
+async function periodTreasurerId(periodId: number): Promise<number | null> {
+  const p = await prisma.period.findUnique({ where: { id: periodId }, select: { treasurerMemberId: true, householdId: true } });
+  if (!p) return null;
+  if (p.treasurerMemberId != null) return p.treasurerMemberId;
+  const h = await prisma.household.findUnique({ where: { id: p.householdId }, select: { treasurerMemberId: true } });
+  if (h?.treasurerMemberId != null) return h.treasurerMemberId;
+  return (await prisma.member.findFirst({ where: { householdId: p.householdId, role: "head" }, select: { id: true } }))?.id ?? null;
+}
+
 async function periodOpen(periodId: number) {
   const p = await prisma.period.findUnique({ where: { id: periodId } });
   return p?.status === "open";
@@ -462,7 +472,10 @@ async function doSaveExpense(formData: FormData): Promise<{ ok: boolean; error?:
     // Pool-funded misc: the treasurer pays the full amount to the assigned member (family money, no
     // payback) instead of the member self-funding it. Only valid when a member is actually assigned —
     // otherwise it's just a normal (shared/own) expense. Skips the shortfall gate + funding advances.
-    const poolFund = formData.get("poolFund") === "on" && finalMemberId != null && !deferred;
+    // The TREASURER's own line is already paid from the pool (they ARE the hub) — a pool flag would only add a
+    // pointless "treasurer → treasurer" step, so it's saved as a plain line: one "treasurer → vendor" step.
+    const lineTreasurerId = finalMemberId != null ? await periodTreasurerId(periodId) : null;
+    const poolFund = formData.get("poolFund") === "on" && finalMemberId != null && finalMemberId !== lineTreasurerId && !deferred;
     // Two-step variant: the hub disburses to the member AND a separate "member → vendor" payment step is
     // added (independently tickable). Only meaningful when pool-funding, so gate on poolFund.
     const poolBill = poolFund && formData.get("poolBill") === "on";
@@ -2131,7 +2144,11 @@ export async function toggleBillPaid(formData: FormData) {
   // `paid`). Same row, same authorization; only which flag flips differs.
   const vendorLeg = formData.get("leg") === "vendor";
   if (vendorLeg) {
-    await prisma.expenseEntry.update({ where: { id }, data: { vendorPaid: !e.vendorPaid, vendorPaidAt: e.vendorPaid ? null : new Date() } });
+    // A two-step pool line held by the TREASURER has no real leg 1 (hub → hub) — the plan shows only the
+    // vendor step, so ticking it settles both flags together.
+    const selfLeg = e.memberId != null && e.memberId === (await periodTreasurerId(e.periodId));
+    const now = !e.vendorPaid;
+    await prisma.expenseEntry.update({ where: { id }, data: { vendorPaid: now, vendorPaidAt: now ? new Date() : null, ...(selfLeg ? { paid: now, paidAt: now ? new Date() : null } : {}) } });
     log.info("toggleBillPaid", "ok", { outcome: "ok", memberId, id, vendorPaid: !e.vendorPaid, periodId: e.periodId });
     await logActivity("expense", "updated", `${e.vendorPaid ? "Unmarked" : "Marked"} vendor payment “${e.label}” ${formatINR(e.amount)} paid`, e.periodId);
     revalidateFamily();

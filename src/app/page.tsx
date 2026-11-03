@@ -964,7 +964,7 @@ export default async function SheetPage({
                       </div>
                       {canEditHere && (
                         <div className="px-2 py-2">
-                          <ExpenseModal categories={miscCats} members={c.members} periodId={c.selected!.id} trigger="sheet" balance={rollup.balance} sheetLabel="+ Add planned expense" newCategoryDefaultSection="Misc" showDueDay defaultRepeat={false} />
+                          <ExpenseModal treasurerId={c.selected?.treasurerMemberId ?? c.household.treasurerMemberId ?? null} categories={miscCats} members={c.members} periodId={c.selected!.id} trigger="sheet" balance={rollup.balance} sheetLabel="+ Add planned expense" newCategoryDefaultSection="Misc" showDueDay defaultRepeat={false} />
                         </div>
                       )}
                     </div>
@@ -1041,6 +1041,7 @@ export default async function SheetPage({
                     {canEditHere && (
                       <div className="px-2 py-2">
                         <ExpenseModal
+                          treasurerId={c.selected?.treasurerMemberId ?? c.household.treasurerMemberId ?? null}
                           categories={miscCats}
                           members={c.members}
                           periodId={c.selected!.id}

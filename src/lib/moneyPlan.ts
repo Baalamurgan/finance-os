@@ -263,6 +263,17 @@ export function buildMoneyPlan(input: {
   // Allowances: the treasurer disburses these AFTER collection (like a payout), never dated/overdue.
   // Rendered as "Send → <member>"; ticking one writes through to the Sheet line's paid flag (billId).
   for (const a of allowances) {
+    // A pool line assigned to the TREASURER: "hub → hub" isn't a real move. Show only the payment itself as
+    // a normal "treasurer → vendor" bill (the vendor leg for a two-step line; the line's own paid flag otherwise).
+    if (treasurerId != null && a.recipientId === treasurerId) {
+      steps.push({
+        id: a.vendorLeg ? `poolbill-${a.billId}` : a.key, kind: "bill", day: a.day ?? lastDay, amount: a.amount,
+        done: a.vendorLeg ? a.vendorLeg.vendorPaid : a.done,
+        payerId: a.recipientId, payerName: a.recipientName, vendor: a.vendorLeg?.vendor ?? a.label, billId: a.billId,
+        poolVendorLeg: !!a.vendorLeg, status: a.status ?? null, days: a.days ?? null,
+      });
+      continue;
+    }
     steps.push({
       // dated → sent on that day (in order, liquidity-checked); undated → after collection (last day)
       id: a.key, kind: "allowance", day: a.day ?? lastDay, amount: a.amount, done: a.done,

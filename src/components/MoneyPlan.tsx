@@ -230,6 +230,7 @@ export function MoneyPlan({
       {/* Add a one-off expense to pay from the remaining balance — lands on the Sheet and slots into
           the plan by its due date. Capped at the month balance; a blank due day sorts it last. */}
       <ExpenseModal
+        treasurerId={treasurerId ?? null}
         hideTrigger
         controlledOpen={addOpen}
         onOpenChange={setAddOpen}
@@ -340,7 +341,7 @@ export function MoneyPlan({
                   <div className={`break-words font-medium leading-snug ${s.done ? "text-slate-400 line-through" : "text-slate-800"}`}>{title}</div>
                   {g ? (
                     <div className="mt-1 flex flex-wrap items-center gap-1.5">
-                      {s.done && s.day != null ? <span className="shrink-0 rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] font-normal text-slate-400">was due {ordinal(s.day)}</span> : <DayTag kind={s.kind} day={s.day} status={s.status ?? null} days={s.days ?? null} />}
+                      <DayTag kind={s.kind} day={s.day} status={s.status ?? null} days={s.days ?? null} done={s.done} />
                       <span className="shrink-0 rounded-full bg-slate-100 px-1.5 py-0.5 text-[9px] font-medium text-slate-500">{g.length} parts · one transfer</span>
                     </div>
                   ) : (
@@ -353,12 +354,12 @@ export function MoneyPlan({
                     {/* Manual steps own their day and can edit it in ANY state (it's ad-hoc metadata;
                         position still follows the insert anchor). Handled here so it's not gated by !done. */}
                     {isManual && (() => {
-                      const tag = <DayTag kind="manual" day={s.day} status={s.status ?? null} days={s.days ?? null} />;
+                      const tag = <DayTag kind="manual" day={s.day} status={s.status ?? null} days={s.days ?? null} done={s.done} />;
                       if (!isHead || !datesEditable || s.manualId == null) return s.day != null ? tag : null;
                       return <StepDayEditor kind="manual" id={s.manualId} day={s.day} minDay={s.fundsBillKey ? plan.minEditDay : undefined} maxDay={s.fundsBillKey ? (s.disbMaxDay ?? s.day ?? undefined) : undefined}>{tag}</StepDayEditor>;
                     })()}
                     {!isManual && !s.done && (!isPiggy || isHandover) && (() => {
-                      const tag = <DayTag kind={s.kind} day={s.day} status={s.status ?? null} days={s.days ?? null} />;
+                      const tag = <DayTag kind={s.kind} day={s.day} status={s.status ?? null} days={s.days ?? null} done={s.done} />;
                       if (!isHead || !datesEditable) return tag;
                       // Row-backed steps → edit the row's day (+ pin): bill/allowance line, income entry,
                       // advance (its ExpenseEntry / IncomeEntry / advance id).
@@ -989,8 +990,11 @@ function ordinal(day: number) {
   return `${day}${["th", "st", "nd", "rd"][((day % 100) - 20) % 10] ?? ["th", "st", "nd", "rd"][day % 100] ?? "th"}`;
 }
 
-function DayTag({ kind, day, status, days }: { kind: string; day: number | null; status: "overdue" | "soon" | "normal" | null; days: number | null }) {
+// Urgency colours (red = overdue / due today, amber = due in 1–2 days) are ONLY for steps still to do.
+// A done step is history: a quiet grey "was due <day>" (or "on <day>" for income), never red/amber.
+function DayTag({ kind, day, status, days, done = false }: { kind: string; day: number | null; status: "overdue" | "soon" | "normal" | null; days: number | null; done?: boolean }) {
   const ord = day == null ? null : ordinal(day);
+  if (done) return ord ? <span className="shrink-0 rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] font-normal text-slate-400">{kind === "income" ? `on ${ord}` : `was due ${ord}`}</span> : null;
   // Income lands ON a day (or "up front" if undated) — it's an arrival, not a deadline.
   if (kind === "income") return <span className="shrink-0 rounded-full bg-emerald-50 px-1.5 py-0.5 text-[10px] text-emerald-600">{ord ? `on ${ord}` : "up front"}</span>;
   // Disbursements (hub → member) go out once the hub has collected enough. They're scheduled to a
