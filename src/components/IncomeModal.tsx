@@ -5,7 +5,7 @@ import { addIncomeAction, updateIncome, type SaveState } from "@/app/actions";
 import { useToast } from "@/components/Toast";
 
 type Mem = { id: number; name: string };
-type IncomeInitial = { id: number; source: string; amount: number; ownerId: number | null; dueDay?: number | null };
+type IncomeInitial = { id: number; source: string; amount: number; ownerId: number | null; dueDay?: number | null; oneOff?: boolean; received?: boolean };
 
 // Add- or Edit-income modal. Add mode matches the Sheet "+ Add expense" UI;
 // edit mode (initial set) is opened from the row kebab and posts to updateIncome.
@@ -25,6 +25,9 @@ export function IncomeModal({
   onOpenChange?: (v: boolean) => void;
 }) {
   const isEdit = !!initial;
+  // Received in the Money Plan → the money has moved: amount, owner and arrival day are locked (undo the
+  // step there to change them). The name and "Repeat every month" stay editable.
+  const locked = isEdit && !!initial!.received;
   const toast = useToast();
   const [uncontrolled, setUncontrolled] = useState(false);
   const open = controlledOpen ?? uncontrolled;
@@ -106,12 +109,14 @@ export function IncomeModal({
                     type="number"
                     step="0.01"
                     inputMode="decimal"
-                    autoFocus
+                    autoFocus={!locked}
                     required
+                    readOnly={locked}
                     defaultValue={isEdit ? initial!.amount : ""}
                     placeholder="0"
-                    className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-3 text-3xl font-bold tabular-nums outline-none focus:border-green-400 focus:ring-2 focus:ring-green-100"
+                    className={`mt-1 w-full rounded-lg border border-slate-300 px-3 py-3 text-3xl font-bold tabular-nums outline-none focus:border-green-400 focus:ring-2 focus:ring-green-100 ${locked ? "cursor-not-allowed bg-slate-50 text-slate-500" : ""}`}
                   />
+                  {locked && <p className="mt-1 text-[11px] text-slate-500">🔒 Received in the Money Plan — amount, owner and day are locked. Undo it there to change them.</p>}
                 </div>
 
                 <div>
@@ -127,9 +132,11 @@ export function IncomeModal({
 
                 <div>
                   <label className="text-xs font-medium text-slate-500">Owner</label>
+                  {locked && <input type="hidden" name="ownerId" value={initial!.ownerId?.toString() ?? ""} />}
                   <select
-                    name="ownerId"
-                    className="input mt-1 w-full"
+                    name={locked ? undefined : "ownerId"}
+                    disabled={locked}
+                    className="input mt-1 w-full disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500"
                     defaultValue={isEdit ? (initial!.ownerId?.toString() ?? "") : ""}
                   >
                     <option value="">Shared</option>
@@ -148,6 +155,7 @@ export function IncomeModal({
                     min="1"
                     max="31"
                     inputMode="numeric"
+                    readOnly={locked}
                     defaultValue={isEdit ? (initial!.dueDay ?? "") : ""}
                     placeholder="e.g. 1"
                     className="input mt-1 w-full"
@@ -157,13 +165,14 @@ export function IncomeModal({
                   </p>
                 </div>
 
-                {!isEdit && (
-                  <label className="flex items-center gap-2 rounded-lg bg-slate-50 px-3 py-2 text-sm text-slate-700">
-                    <input type="checkbox" name="repeat" defaultChecked className="h-4 w-4 accent-green-600" />
-                    Repeat every month
-                    <span className="text-xs text-slate-400">(uncheck = only this month)</span>
-                  </label>
-                )}
+                {/* Add: repeat by default. Edit: shows the line's current state; switching it off makes this month's
+                    line a one-off and stops its Setup template (next month won't get it again). */}
+                <label className="flex items-center gap-2 rounded-lg bg-slate-50 px-3 py-2 text-sm text-slate-700">
+                  {isEdit && <input type="hidden" name="repeatSet" value="1" />}
+                  <input type="checkbox" name="repeat" defaultChecked={isEdit ? !initial!.oneOff : true} className="h-4 w-4 accent-green-600" />
+                  Repeat every month
+                  <span className="text-xs text-slate-400">{isEdit ? "(off = only this month; next month won't get it)" : "(uncheck = only this month)"}</span>
+                </label>
               </div>
 
               <div className="flex justify-end gap-2 border-t border-slate-100 px-5 py-3">

@@ -29,13 +29,15 @@ export function ExpenseRowActions({
     memberId: number | null;
     necessary: boolean;
     dueDay?: number | null;
+    oneOff?: boolean;
+    paid?: boolean; // paid in the Money Plan → Edit only (no Delete), money fields locked
   };
   showDueDay?: boolean;
 }) {
   const [editOpen, setEditOpen] = useState(false);
   return (
     <>
-      <RowActions id={initial.id} deleteAction={deleteExpense} onEdit={() => setEditOpen(true)} />
+      <RowActions id={initial.id} deleteAction={deleteExpense} onEdit={() => setEditOpen(true)} editOnly={!!initial.paid} />
       <ExpenseModal
         categories={categories}
         members={members}

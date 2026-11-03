@@ -39,6 +39,8 @@ export function ExpenseModal({
     memberId: number | null;
     necessary: boolean;
     dueDay?: number | null;
+    oneOff?: boolean; // edit: the line's current repeat state (shows the "Repeat every month" switch)
+    paid?: boolean; // paid in the Money Plan → amount / category / member / due day locked
   };
   trigger?: "primary" | "row" | "menuitem" | "sheet";
   controlledOpen?: boolean; // when provided, parent controls open state
@@ -91,6 +93,9 @@ export function ExpenseModal({
 
   // balance cap applies only when adding a new expense (create) and a balance is known
   const capped = !initial && typeof balance === "number";
+  // Paid in the Money Plan → the money has moved: amount, category, member and due day are locked (undo the
+  // payment there to change them). The name and "Repeat every month" stay editable.
+  const locked = !!initial?.paid;
   const amountNum = Number(amount) || 0;
   const overBalance = capped && amountNum > balance!;
   const hasSources = !state.ok && !!state.sources && state.sources.length > 0;
@@ -254,17 +259,19 @@ export function ExpenseModal({
                     type="number"
                     step="0.01"
                     inputMode="decimal"
-                    autoFocus
+                    autoFocus={!locked}
                     required
+                    readOnly={locked}
                     value={amount}
                     onChange={(e) => setAmount(e.target.value)}
                     placeholder="0"
-                    className={`mt-1 w-full rounded-lg border px-3 py-3 text-3xl font-bold tabular-nums outline-none focus:ring-2 ${
+                    className={`mt-1 w-full rounded-lg border px-3 py-3 text-3xl font-bold tabular-nums outline-none focus:ring-2 ${locked ? "cursor-not-allowed bg-slate-50 text-slate-500 " : ""}${
                       overBalance
                         ? "border-red-400 focus:border-red-400 focus:ring-red-100"
                         : "border-slate-300 focus:border-indigo-400 focus:ring-indigo-100"
                     }`}
                   />
+                  {locked && <p className="mt-1 text-[11px] text-slate-500">🔒 Paid in the Money Plan — amount, category, member and due day are locked. Undo the payment there to change them.</p>}
                   {capped && (
                     <p className={`mt-1 text-xs ${overBalance ? "font-medium text-red-600" : "text-slate-400"}`}>
                       {overBalance ? "More than available — " : "Balance available: "}
@@ -277,6 +284,7 @@ export function ExpenseModal({
                 <div>
                   <label className="text-xs font-medium text-slate-500">Category</label>
                   <select
+                    disabled={locked}
                     value={newCat ? "new" : categoryId ?? ""}
                     onChange={(e) => {
                       const v = e.target.value;
@@ -288,7 +296,7 @@ export function ExpenseModal({
                         setCategoryId(v ? Number(v) : null);
                       }
                     }}
-                    className="input mt-1 w-full"
+                    className="input mt-1 w-full disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500"
                   >
                     <option value="">Select category…</option>
                     {grouped
@@ -328,11 +336,13 @@ export function ExpenseModal({
 
                 <div>
                   <label className="text-xs font-medium text-slate-500">Member</label>
+                  {locked && <input type="hidden" name="memberId" value={memberId} />}
                   <select
-                    name="memberId"
+                    name={locked ? undefined : "memberId"}
+                    disabled={locked}
                     value={memberId}
                     onChange={(e) => setMemberId(e.target.value)}
-                    className="input mt-1 w-full"
+                    className="input mt-1 w-full disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500"
                   >
                     <option value="">Shared</option>
                     {members.map((m) => (
@@ -400,6 +410,7 @@ export function ExpenseModal({
                       min="1"
                       max="31"
                       inputMode="numeric"
+                      readOnly={locked}
                       value={dueDay}
                       onChange={(e) => setDueDay(e.target.value)}
                       placeholder="e.g. 15"
@@ -411,12 +422,22 @@ export function ExpenseModal({
                   </div>
                 )}
 
-                {/* recurring vs one-time — create mode only (a spend card uses "repeat every year" instead) */}
+                {/* recurring vs one-time (a spend card uses "repeat every year" instead) */}
                 {!initial && !spendCard && (
                   <label className="flex items-center gap-2 rounded-lg bg-slate-50 px-3 py-2 text-sm text-slate-700">
                     <input type="checkbox" name="repeat" checked={repeat} onChange={(e) => setRepeat(e.target.checked)} className="h-4 w-4 accent-indigo-600" />
                     Repeat every month
                     <span className="text-xs text-slate-400">(uncheck = only this month)</span>
+                  </label>
+                )}
+                {/* Edit: the line's current state. Off = a one-off for this month only; its Setup template stops,
+                    so next month won't get it again. (Hidden for budget envelopes — those come from the category.) */}
+                {initial && initial.oneOff !== undefined && (
+                  <label className="flex items-center gap-2 rounded-lg bg-slate-50 px-3 py-2 text-sm text-slate-700">
+                    <input type="hidden" name="repeatSet" value="1" />
+                    <input type="checkbox" name="repeat" defaultChecked={!initial.oneOff} className="h-4 w-4 accent-indigo-600" />
+                    Repeat every month
+                    <span className="text-xs text-slate-400">(off = only this month; next month won&apos;t get it)</span>
                   </label>
                 )}
 

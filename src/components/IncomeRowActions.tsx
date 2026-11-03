@@ -15,12 +15,12 @@ export function IncomeRowActions({
 }: {
   members: Mem[];
   periodId: number;
-  initial: { id: number; source: string; amount: number; ownerId: number | null; dueDay?: number | null };
+  initial: { id: number; source: string; amount: number; ownerId: number | null; dueDay?: number | null; oneOff?: boolean; received?: boolean };
 }) {
   const [editOpen, setEditOpen] = useState(false);
   return (
     <>
-      <RowActions id={initial.id} deleteAction={deleteIncome} onEdit={() => setEditOpen(true)} />
+      <RowActions id={initial.id} deleteAction={deleteIncome} onEdit={() => setEditOpen(true)} editOnly={!!initial.received} />
       <IncomeModal
         members={members}
         periodId={periodId}

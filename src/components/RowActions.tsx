@@ -11,10 +11,12 @@ export function RowActions({
   id,
   deleteAction,
   onEdit,
+  editOnly = false,
 }: {
   id: number;
   deleteAction: (formData: FormData) => void;
   onEdit?: () => void; // when set, an "Edit" item is shown
+  editOnly?: boolean; // a paid / received line: Edit only, no Delete
 }) {
   const withToast = useToastAction();
   const [open, setOpen] = useState(false);
@@ -88,7 +90,7 @@ export function RowActions({
               </button>
             )}
 
-            {!confirming ? (
+            {editOnly ? null : !confirming ? (
               <button
                 type="button"
                 onClick={() => setConfirming(true)}

@@ -197,6 +197,39 @@ async function canEditNow(periodId: number) {
   return !(await periodSettlementLocked(periodId));
 }
 
+// "Repeat every month" switched on an EXISTING Sheet line (Edit window). ON → the line becomes a
+// template-generated line and its RecurringItem is created/re-activated (promoteToTemplate). OFF → the line
+// becomes a one-off for THIS month only (so a refresh-from-Setup never removes or regenerates it — it keeps
+// any received/paid tick and its Money-Plan step) and its Setup template is turned off, so next month
+// doesn't get it again. Budget envelopes / fund bills are generated from their Category — not touched.
+async function applyRepeatChoice(
+  kind: "income" | "expense",
+  row: { id: number; periodId: number; oneOff: boolean; name: string; amount: number; categoryId: number | null; memberId: number | null; dueDay: number | null },
+  repeat: boolean,
+) {
+  if (kind === "expense" && row.categoryId != null) {
+    const cat = await prisma.category.findUnique({ where: { id: row.categoryId }, select: { monthlyBudget: true, fundingStyle: true } });
+    if (cat?.fundingStyle != null || (cat?.monthlyBudget != null && cat.monthlyBudget > 0)) return; // generated from the Category
+  }
+  if (repeat === !row.oneOff) return; // no change
+  const period = await prisma.period.findUnique({ where: { id: row.periodId }, select: { householdId: true } });
+  if (!period) return;
+  if (repeat) {
+    if (kind === "income") await prisma.incomeEntry.update({ where: { id: row.id }, data: { oneOff: false } });
+    else await prisma.expenseEntry.update({ where: { id: row.id }, data: { oneOff: false } });
+    await promoteToTemplate(row.periodId, kind, row.name, row.amount, row.categoryId, row.memberId, row.dueDay);
+  } else {
+    if (kind === "income") await prisma.incomeEntry.update({ where: { id: row.id }, data: { oneOff: true } });
+    else await prisma.expenseEntry.update({ where: { id: row.id }, data: { oneOff: true } });
+    // The template that generated it: same name (an installment line reads "<name> n/N"), member and category.
+    const base = row.name.replace(/\s+\d+\/\d+$/, "");
+    await prisma.recurringItem.updateMany({
+      where: { householdId: period.householdId, kind, active: true, memberId: row.memberId, name: { in: [...new Set([row.name, base])] }, ...(kind === "expense" ? { categoryId: row.categoryId } : {}) },
+      data: { active: false },
+    });
+  }
+}
+
 // Success signal for useActionState-driven modals (close + reset only on real success).
 export type FundSource = { memberId: number; name: string; spare: number; isTreasurer?: boolean };
 export type SaveShortfall = { toMemberId: number; toName: string; amount: number; day: number | null };
@@ -389,8 +422,12 @@ async function doSaveExpense(formData: FormData): Promise<{ ok: boolean; error?:
   if (id) {
     // A line already paid in the money plan is frozen — the head can edit anything else all month, but
     // a paid step is paid (editing it would silently redraw a payment that already happened).
-    const existing = await prisma.expenseEntry.findUnique({ where: { id }, select: { paid: true, amount: true, dueDay: true, note: true } });
-    if (existing?.paid) return { ok: false, error: "This is already paid in the money plan — it can’t be changed." };
+    const existing = await prisma.expenseEntry.findUnique({ where: { id }, select: { paid: true, amount: true, dueDay: true, note: true, oneOff: true, label: true, memberId: true, categoryId: true } });
+    // PAID in the Money Plan → the money has moved: amount, category, member and due day are locked (the
+    // Edit window shows them read-only; this enforces it). Only the name / necessary flag / repeat can change.
+    if (existing?.paid && (existing.amount !== amount || existing.categoryId !== categoryId || existing.memberId !== finalMemberId || (hasDueField && existing.dueDay !== dueDay))) {
+      return { ok: false, error: "This is already paid in the money plan — undo the payment there to change the amount, category, member or due day." };
+    }
     // Editing the VALUE (amount / due-day) on the Sheet pins this line for the month: a later
     // refresh-from-Setup leaves the intentional override alone (until it's un-pinned). Editing only
     // the label / member / necessary flag doesn't pin — those aren't touched by the Setup sync.
@@ -399,6 +436,12 @@ async function doSaveExpense(formData: FormData): Promise<{ ok: boolean; error?:
       where: { id },
       data: { categoryId, amount, label, memberId: finalMemberId, necessary, ...(hasDueField ? { dueDay } : {}), ...(valueChanged ? { pinned: true } : {}) },
     });
+    if (existing && formData.get("repeatSet") === "1") {
+      const repeat = formData.get("repeat") === "on";
+      // Match the template by the line's ORIGINAL name/member/category (before this edit renamed it).
+      await applyRepeatChoice("expense", { id, periodId, oneOff: existing.oneOff, name: repeat ? label : existing.label, amount, categoryId: repeat ? categoryId : existing.categoryId, memberId: repeat ? finalMemberId : existing.memberId, dueDay: hasDueField ? dueDay : existing.dueDay }, repeat);
+      if (repeat !== !existing.oneOff) await logActivity("expense", "updated", `${repeat ? "Set" : "Stopped"} “${label}” repeating every month`, periodId);
+    }
     await logActivity("expense", "updated", `Edited expense “${label}” to ${formatINR(amount)}`, periodId);
   } else {
     // A new expense added while the month is in its wind-down overhang (calendar past it, not yet
@@ -539,11 +582,22 @@ export async function updateIncome(prev: SaveState, formData: FormData): Promise
   const dueNum = Number(String(formData.get("dueDay") ?? "").trim());
   const dueDay = Number.isFinite(dueNum) && dueNum >= 1 && dueNum <= 31 ? Math.round(dueNum) : null;
   if (!id || !source || !amount) return { ok: false, n: prev.n };
-  const i = await prisma.incomeEntry.findUnique({ where: { id } });
-  if (!i || !(await canEditNow(i.periodId))) return { ok: false, n: prev.n };
+  const i0 = await prisma.incomeEntry.findUnique({ where: { id } });
+  if (!i0 || !(await canEditNow(i0.periodId))) return { ok: false, n: prev.n };
+  const i = i0;
+  // RECEIVED in the Money Plan → the money has moved: amount, owner and arrival day are locked (the Edit
+  // window shows them read-only; this enforces it). Only the name and "Repeat every month" can change.
+  if (i.receivedAt != null && (i.amount !== amount || i.ownerId !== ownerId || (hasDueField && i.dueDay !== dueDay))) {
+    return { ok: false, n: prev.n, error: "This income is already received — undo it in the Money Plan to change the amount, owner or day." };
+  }
   // A month-specific amount/date edit pins the line so a refresh-from-Setup won't revert it (until un-pinned).
   const pin = i.amount !== amount || (hasDueField && i.dueDay !== dueDay) ? { pinned: true } : {};
   await prisma.incomeEntry.update({ where: { id }, data: { source, amount, ownerId, ...(hasDueField ? { dueDay } : {}), ...pin } });
+  if (formData.get("repeatSet") === "1") {
+    const repeat = formData.get("repeat") === "on";
+    await applyRepeatChoice("income", { id, periodId: i.periodId, oneOff: i.oneOff, name: repeat ? source : i.source, amount, categoryId: null, memberId: repeat ? ownerId : i.ownerId, dueDay: hasDueField ? dueDay : i.dueDay }, repeat);
+    if (repeat !== !i.oneOff) await logActivity("income", "updated", `${repeat ? "Set" : "Stopped"} “${source}” repeating every month`, i.periodId);
+  }
   await logActivity("income", "updated", `Edited income “${source}” to ${formatINR(amount)}`, i.periodId);
   revalidateFamily();
   return { ok: true, n: prev.n + 1 };

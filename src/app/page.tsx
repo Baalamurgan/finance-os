@@ -334,12 +334,14 @@ function ExpenseRow({
       tag={e.member?.name}
       amount={e.amount}
       locked={done}
-      keepActionsWhenDone={budgetLike && isHead}
+      // A budget card with spends logged keeps the head's ⋯ (adjust the budget); a PAID line keeps an
+      // edit-only ⋯ (name + repeat — its money fields are locked in the Edit window).
+      keepActionsWhenDone={(budgetLike && isHead) || (done && canEditHere && !budgetLike && !isSetAside)}
       tags={tags}
       details={periodic ? billDetailRows(e, paidCard) : undefined}
       detailName={e.category.name}
     >
-      {canEditHere && isSetAside && (
+      {canEditHere && isSetAside && !done && (
         <ConfirmForm action={skipSetAside} message={removeMsg}>
           <input type="hidden" name="categoryId" value={e.categoryId} />
           <input type="hidden" name="periodId" value={periodId} />
@@ -348,7 +350,7 @@ function ExpenseRow({
           </button>
         </ConfirmForm>
       )}
-      {canEditHere && tPhase != null && !e.label.endsWith("(overdue)") && (
+      {canEditHere && !done && tPhase != null && !e.label.endsWith("(overdue)") && (
         <ConfirmForm action={skipSetAside} message={taxSkipMsg(e)}>
           <input type="hidden" name="categoryId" value={e.categoryId} />
           <input type="hidden" name="periodId" value={periodId} />
@@ -371,6 +373,9 @@ function ExpenseRow({
             memberId: e.memberId,
             necessary: e.necessary,
             dueDay: e.dueDay,
+            paid: done && !budgetLike,
+            // the "Repeat every month" switch — not for budget envelopes / fund bills (generated from the category)
+            ...(e.category.fundingStyle == null && !(e.category.monthlyBudget != null && e.category.monthlyBudget > 0) ? { oneOff: e.oneOff } : {}),
           }}
         />
       )}
@@ -797,12 +802,12 @@ export default async function SheetPage({
                     </div>
                   </div>
                 ) : (
-                  <Row key={i.id} label={(piggyIncomeNo.get(i.id) ?? 0) > 1 ? `${i.source} (${piggyIncomeNo.get(i.id)})` : i.source} tag={i.owner?.name} amount={i.amount} locked={i.receivedAt != null} tags={incomeTags}>
+                  <Row key={i.id} label={(piggyIncomeNo.get(i.id) ?? 0) > 1 ? `${i.source} (${piggyIncomeNo.get(i.id)})` : i.source} tag={i.owner?.name} amount={i.amount} locked={i.receivedAt != null} keepActionsWhenDone={i.receivedAt != null && (c.isHead || canEditHere)} tags={incomeTags}>
                     {c.isHead || canEditHere ? (
                       <IncomeRowActions
                         members={c.members}
                         periodId={c.selected!.id}
-                        initial={{ id: i.id, source: i.source, amount: i.amount, ownerId: i.ownerId, dueDay: i.dueDay }}
+                        initial={{ id: i.id, source: i.source, amount: i.amount, ownerId: i.ownerId, dueDay: i.dueDay, oneOff: i.oneOff, received: i.receivedAt != null }}
                       />
                     ) : (
                       canEditHere && <RowActions id={i.id} deleteAction={deleteIncome} />
