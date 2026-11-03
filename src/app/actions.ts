@@ -19,7 +19,7 @@ import { ensurePersonalMonth } from "@/lib/personal";
 import { planBillMonth, billCyclePhase, taxCycleMonth, type FundingStyle } from "@/lib/schedule";
 import { getBillReminders } from "@/lib/billReminders";
 import { applyBudgetShortfall, windDownPeriod } from "@/lib/windDown";
-import { PAYBACK_REIMB_NOTE, SURPLUS_NOTE, CARRY_NOTE, DEFERRED_NOTE, PIGGY_INCOME_NOTE, POOL_NOTE, POOL_BILL_NOTE, REMOVED_NOTE, isPoolNote, isPaybackNote, isLendGroup, LEND_GROUP_PREFIX } from "@/lib/notes";
+import { PAYBACK_REIMB_NOTE, SURPLUS_NOTE, CARRY_NOTE, DEFERRED_NOTE, PIGGY_INCOME_NOTE, POOL_NOTE, POOL_BILL_NOTE, REMOVED_NOTE, isPoolNote, isPaybackNote, isLendGroup, LEND_GROUP_PREFIX, POOL_LEND_GROUP_PREFIX } from "@/lib/notes";
 import { canActOnStep } from "@/lib/planAuth";
 
 // Record a money-affecting change (who + what + when) for the activity feeds: the Money-Plan
@@ -2293,41 +2293,6 @@ export async function editManualStepAmount(formData: FormData): Promise<{ ok: bo
   return { ok: true };
 }
 
-// Fund an ALREADY-SAVED short bill from pool cash a member is holding — the Money-Plan counterpart to
-// the add-expense funder picker. Creates one TAGGED ManualPlanStep per funder (funder → payer, earmarked
-// to THIS bill via fundsExpenseId, NO payback), so the engine shrinks the hub's disbursement to the payer
-// and places the funder just above the bill. Funding one bill can leave ANOTHER short (the knock-on) —
-// that bill then surfaces its own "Fund from held cash" button, so the head clears the chain one tap at a
-// time (the recursion the add-expense modal can't do once a bill is saved). Partial funding is allowed
-// (cover some now, the rest surfaces as still-short). Head/manager; open month unless head.
-export async function fundExistingBill(formData: FormData): Promise<{ ok: boolean; error?: string }> {
-  const session = await auth();
-  const memberId = session?.user?.memberId ?? null;
-  if (!(await unlocked())) await relock("fundExistingBill");
-  if (!(await canEdit())) { log.warn("fundExistingBill", "blocked", { outcome: "blocked", reason: "not-allowed", memberId }); return { ok: false, error: "Not allowed" }; }
-  const periodId = Number(formData.get("periodId"));
-  const billId = Number(formData.get("billId"));
-  if (!periodId || !billId) return { ok: false, error: "Missing bill" };
-  if (!(await isHead()) && !(await periodOpen(periodId))) return { ok: false, error: "This month is closed" };
-  const bill = await prisma.expenseEntry.findUnique({ where: { id: billId }, select: { id: true, periodId: true, memberId: true, dueDay: true, label: true } });
-  if (!bill || bill.periodId !== periodId || bill.memberId == null) return { ok: false, error: "Bill not found" };
-  let funders: { memberId: number; amount: number }[] = [];
-  try {
-    funders = (JSON.parse(String(formData.get("funders") ?? "[]")) as { memberId: number; amount: number }[])
-      .filter((f) => f && Number.isFinite(f.memberId) && f.amount > 0.005 && f.memberId !== bill.memberId) // can't fund your own bill
-      .map((f) => ({ memberId: f.memberId, amount: Math.round(f.amount * 100) / 100 }));
-  } catch { funders = []; }
-  if (funders.length === 0) return { ok: false, error: "Pick at least one funder" };
-  let total = 0;
-  for (const f of funders) {
-    await prisma.manualPlanStep.create({ data: { periodId, fromMemberId: f.memberId, toMemberId: bill.memberId, amount: f.amount, day: bill.dueDay, fundsExpenseId: bill.id, note: `Funds ${bill.label}` } });
-    total += f.amount;
-  }
-  log.info("fundExistingBill", "ok", { outcome: "ok", memberId, periodId, billId, total });
-  await logActivity("settlement", "created", `Funding to cover “${bill.label}” (${formatINR(total)})`, periodId);
-  revalidateFamily();
-  return { ok: true };
-}
 
 // ── Bridge a short bill from ANY member who holds cash (the treasurer included) ──────────────────────
 // Two ways the lender gets their money back, picked by the plan (never by the person tapping):
@@ -2349,77 +2314,194 @@ async function loadLivePlan(periodId: number, extra?: Parameters<typeof getMoney
   return { period, plan, hubId: inhand.treasurerId };
 }
 
+// One lender's share in a bridge, and how they're paid back:
+//  "pool"   — they still owe the pool (collection not handed over yet): it counts toward that, no return
+//  "hub"    — the treasurer: it's the payer's own payout, early — no return
+//  "loan"   — anyone else: the pool returns it on the earliest day it can spare it (auto-dated)
+//  "income" — the payer has no later payout but their own income lands later: repaid that day
+// A "pool" share beyond what their pool payment can absorb (poolCap) splits: the rest is a "loan".
+export type LenderBillIssue = { vendor: string; day: number | null; amount: number; short: number };
+export type LendShare = { lenderId: number; name: string; holds: number; spare: number; noReturnCap: number; amount: number; isHub: boolean; owesPool: number; poolDay: number | null; poolCap: number; poolPart: number; loanPart: number;
+  shortBills?: LenderBillIssue[]; // the lender's own unpaid bills this would leave short (blocks Confirm)
+  sameDayBills?: LenderBillIssue[]; // their bills due the SAME day the pool returns it (returned first, before they pay)
+  kind: "pool" | "hub" | "loan" | "income"; returnDay: number | null };
 export type LendPreview = {
   ok: boolean; error?: string;
-  route?: "payout" | "income";
-  lenderIsHub?: boolean;
-  returnDay?: number | null; // when the lender gets it back (null = not this month)
-  payoutBefore?: { day: number | null; amount: number }[]; // the member's later payout piece(s), now…
-  payoutAfter?: { day: number | null; amount: number }[]; // …and after the loan
-  lenderBefore?: number; lenderAfter?: number; // lender's cash right before the bill, now → after lending
-  billShortAfter?: number; // what's still short on THIS bill after the loan
+  shortfall?: number;
+  shares?: LendShare[]; // the mix (suggested when opening; then whatever was sent)
+  candidates?: LendShare[]; // everyone who could lend, with what they'd get back if they covered it alone
+  payoutBefore?: { day: number | null; amount: number }[];
+  payoutAfter?: { day: number | null; amount: number }[];
   shortBillsBefore?: number; shortBillsAfter?: number;
-  lenderNewShort?: string[]; // the lender's own bills that this loan would leave short
+  billShortAfter?: number;
+  newShort?: string[]; // lenders' own bills this would leave short
 };
 
-async function lendCore(formData: FormData): Promise<{ err?: string; ctx?: { periodId: number; billId: number; lenderId: number; amount: number; payerId: number; billDay: number | null; billLabel: string; hubId: number; route: "payout" | "income"; paybackDay: number | null; base: NonNullable<Awaited<ReturnType<typeof loadLivePlan>>> } }> {
-  const periodId = Number(formData.get("periodId"));
-  const billId = Number(formData.get("billId"));
-  const lenderId = Number(formData.get("lenderId"));
-  const amount = Math.round((parseAmount(formData.get("amount")) || 0) * 100) / 100;
-  if (!periodId || !billId || !lenderId) return { err: "Missing details" };
-  if (!(amount > 0)) return { err: "Enter an amount" };
+type ManualExtra = NonNullable<Parameters<typeof getMoneyPlan>[6]>;
+type LendCtx = { periodId: number; billId: number; billKey: string; payerId: number; payerName: string; billDay: number | null; billLabel: string; hubId: number; shortfall: number; owedLeft: number; laterIncome: number | null; base: NonNullable<Awaited<ReturnType<typeof loadLivePlan>>>; names: Map<number, string> };
+
+async function lendContext(periodId: number, billId: number): Promise<{ err?: string; ctx?: LendCtx }> {
+  if (!periodId || !billId) return { err: "Missing details" };
   const bill = await prisma.expenseEntry.findUnique({ where: { id: billId }, select: { periodId: true, memberId: true, dueDay: true, label: true } });
   if (!bill || bill.periodId !== periodId || bill.memberId == null) return { err: "Bill not found" };
-  if (lenderId === bill.memberId) return { err: "Pick someone other than the payer" };
   const base = await loadLivePlan(periodId);
   if (!base || base.hubId == null) return { err: "No treasurer for this month" };
-  const billStep = base.plan.steps.find((x) => x.id === `bill-${billId}`);
+  const billKey = `bill-${billId}`;
+  const billStep = base.plan.steps.find((x) => x.id === billKey);
   if (!billStep) return { err: "This bill isn't in the plan" };
   const payerId = bill.memberId;
-  // What the pool still pays them that isn't tied to a bill (their later payout) — the loan comes out of it.
-  const owedLeft = base.plan.steps.filter((x) => !x.done && !x.hidden && x.kind === "transfer-out" && x.fromId === base.hubId && x.toId === payerId && !x.fundsMember && !x.fundsBillKey).reduce((t, x) => t + x.amount, 0);
+  const hubId = base.hubId;
+  const owedLeft = Math.round(base.plan.steps.filter((x) => !x.done && !x.hidden && x.kind === "transfer-out" && x.fromId === hubId && x.toId === payerId && !x.fundsMember && !x.fundsBillKey).reduce((t, x) => t + x.amount, 0) * 100) / 100;
   const laterIncome = base.plan.steps.filter((x) => x.kind === "income" && !x.done && x.toId === payerId && (x.day ?? 0) > (billStep.day ?? 0)).map((x) => x.day as number).sort((p, q) => p - q)[0] ?? null;
-  let route: "payout" | "income";
-  if (owedLeft + 0.005 >= amount) route = "payout";
-  else if (laterIncome != null && lenderId !== base.hubId) route = "income";
-  else return { err: owedLeft > 0.5 ? `At most ${formatINR(owedLeft)} — what the pool still pays ${billStep.payerName ?? "them"} later this month` : "Nothing to repay it from this month — no later payout or income for this member" };
-  return { ctx: { periodId, billId, lenderId, amount, payerId, billDay: bill.dueDay, billLabel: bill.label, hubId: base.hubId, route, paybackDay: laterIncome, base } };
+  const members = await prisma.member.findMany({ where: { householdId: base.period.householdId }, select: { id: true, name: true } });
+  return { ctx: { periodId, billId, billKey, payerId, payerName: members.find((m) => m.id === payerId)?.name ?? "them", billDay: bill.dueDay, billLabel: bill.label, hubId, shortfall: Math.round((billStep.senderShort ?? 0) * 100) / 100, owedLeft, laterIncome, base, names: new Map(members.map((m) => [m.id, m.name])) } };
+}
+
+// Who could lend and how much. A lender may cover up to everything they HOLD at the bill — as long as each
+// of their own unpaid bills gets its cash back on or before its due day (checked by simulating the plan:
+// see simulateLend / shortBills). Money comes back two ways:
+//  • poolCap — the part their PENDING payment to the pool (collection on day C) can absorb: that payment
+//    just shrinks. It only "comes back" on C, so it's capped by their lowest cash between the bill and C
+//    (their bills before C must still be paid from their own cash). A collection already ticked paid is
+//    never touched (it isn't owed any more → poolCap 0).
+//  • the rest is a LOAN: the pool returns it on the earliest day it can spare the cash.
+// The hub has no return (it's the payer's own payout, early): its limit is its lowest cash to month-end.
+// noReturnCap = what they can give with nothing to send back (used first when suggesting a mix).
+function lendCandidates(ctx: LendCtx) {
+  const steps = ctx.base.plan.steps;
+  const billIdx = steps.findIndex((x) => x.id === ctx.billKey);
+  const billStep = steps[billIdx];
+  const low = (id: number, from: number, to: number) => {
+    let m = billStep.balancesBefore?.[id] ?? 0;
+    for (let j = from; j < to && j < steps.length; j++) if (!steps[j].hidden) m = Math.min(m, steps[j].balancesAfter?.[id] ?? 0);
+    return m;
+  };
+  const r = (n: number) => Math.max(0, Math.round(n * 100) / 100);
+  return [...ctx.names.keys()]
+    .filter((id) => id !== ctx.payerId)
+    .map((id) => {
+      const holds = r(billStep.balancesBefore?.[id] ?? 0);
+      const isHub = id === ctx.hubId;
+      const cIdx = isHub ? -1 : steps.findIndex((x) => x.kind === "transfer-in" && !x.done && !x.hidden && x.fromId === id && x.toId === ctx.hubId);
+      const owesPool = cIdx >= 0 ? r(steps[cIdx].amount) : 0;
+      const poolCap = owesPool > 0 ? r(Math.min(owesPool, cIdx > billIdx ? low(id, billIdx, cIdx) : holds)) : 0;
+      const spare = isHub ? r(low(id, billIdx, steps.length)) : holds;
+      return { lenderId: id, name: ctx.names.get(id)!, holds, spare, noReturnCap: isHub ? spare : Math.min(poolCap, spare), isHub, owesPool, poolDay: cIdx >= 0 ? steps[cIdx].day ?? null : null, poolCap };
+    })
+    .filter((c) => c.spare > 0.5);
+}
+
+// Turn a mix into shares (kind + split) and the plan steps that would represent it.
+function lendShares(ctx: LendCtx, mix: { lenderId: number; amount: number }[]): { err?: string; shares?: Omit<LendShare, "returnDay">[]; legs?: ManualExtra } {
+  const cands = new Map(lendCandidates(ctx).map((c) => [c.lenderId, c]));
+  const total = mix.reduce((t, m) => t + m.amount, 0);
+  const viaPayout = ctx.owedLeft + 0.005 >= total;
+  if (!viaPayout && ctx.laterIncome == null) return { err: ctx.owedLeft > 0.5 ? `At most ${formatINR(ctx.owedLeft)} in all — what the pool still pays ${ctx.payerName} later this month` : `Nothing to repay it from this month — ${ctx.payerName} has no later payout or income` };
+  const shares: Omit<LendShare, "returnDay">[] = [];
+  const legs: ManualExtra = [];
+  let fake = -1;
+  for (const m of mix) {
+    const c = cands.get(m.lenderId);
+    if (!c) return { err: `${ctx.names.get(m.lenderId) ?? "Someone"} holds no spare cash before this bill` };
+    if (m.amount > c.spare + 0.005) return { err: c.isHub ? `${c.name} can spare only ${formatINR(c.spare)} — the rest is needed for the pool's own steps` : `${c.name} holds only ${formatINR(c.spare)}` };
+    if (!viaPayout) {
+      shares.push({ ...c, amount: m.amount, poolPart: 0, loanPart: m.amount, kind: "income" });
+      continue;
+    }
+    if (c.isHub) {
+      shares.push({ ...c, amount: m.amount, poolPart: 0, loanPart: 0, kind: "hub" });
+      legs.push({ id: fake--, fromId: c.lenderId, toId: ctx.payerId, amount: m.amount, day: ctx.billDay, done: false, fundsBillKey: ctx.billKey, bridgeGroup: `${LEND_GROUP_PREFIX}pv${c.lenderId}` });
+      continue;
+    }
+    const poolPart = Math.round(Math.min(m.amount, c.poolCap) * 100) / 100;
+    const loanPart = Math.round((m.amount - poolPart) * 100) / 100;
+    shares.push({ ...c, amount: m.amount, poolPart, loanPart, kind: poolPart > 0.005 ? "pool" : "loan" });
+    if (poolPart > 0.005) legs.push({ id: fake--, fromId: c.lenderId, toId: ctx.payerId, amount: poolPart, day: ctx.billDay, done: false, fundsBillKey: ctx.billKey, bridgeGroup: `${POOL_LEND_GROUP_PREFIX}pv${c.lenderId}` });
+    if (loanPart > 0.005) {
+      legs.push({ id: fake--, fromId: c.lenderId, toId: ctx.payerId, amount: loanPart, day: ctx.billDay, done: false, fundsBillKey: ctx.billKey, bridgeGroup: `${LEND_GROUP_PREFIX}pv${c.lenderId}` });
+      legs.push({ id: fake--, fromId: ctx.hubId, toId: c.lenderId, amount: loanPart, day: null, done: false, bridgeGroup: `${LEND_GROUP_PREFIX}pv${c.lenderId}` });
+    }
+  }
+  if (!viaPayout) {
+    // Classic bridge: each lender → payer now; payer → hub and hub → lender when the payer's income lands.
+    for (const sh of shares) {
+      const g = `bridge-pv${sh.lenderId}`;
+      legs.push({ id: fake--, fromId: sh.lenderId, toId: ctx.payerId, amount: sh.amount, day: ctx.billDay, done: false, fundsBillKey: ctx.billKey, bridgeGroup: g });
+      legs.push({ id: fake--, fromId: ctx.payerId, toId: ctx.hubId, amount: sh.amount, day: ctx.laterIncome, done: false, bridgeGroup: g });
+      if (!sh.isHub) legs.push({ id: fake--, fromId: ctx.hubId, toId: sh.lenderId, amount: sh.amount, day: ctx.laterIncome, done: false, bridgeGroup: g });
+    }
+  }
+  return { shares, legs };
+}
+
+async function simulateLend(ctx: LendCtx, mix: { lenderId: number; amount: number }[]) {
+  const r = lendShares(ctx, mix);
+  if (r.err) return { err: r.err };
+  const sim = await loadLivePlan(ctx.periodId, r.legs);
+  if (!sim) return { err: "Month not found" };
+  const wasShort = new Set(ctx.base.plan.steps.filter((x) => x.kind === "bill" && (x.senderShort ?? 0) > 0.005).map((x) => x.id));
+  const shares: LendShare[] = r.shares!.map((sh) => {
+    const ret = sh.kind === "income" ? null : sim.plan.steps.find((x) => x.bridgeGroup === `${LEND_GROUP_PREFIX}pv${sh.lenderId}` && !x.fundsBillKey);
+    const returnDay = sh.kind === "income" ? ctx.laterIncome : ret?.day ?? null;
+    const own = sim.plan.steps.filter((x) => x.kind === "bill" && !x.done && !x.hidden && x.payerId === sh.lenderId);
+    const shortBills = own.filter((x) => (x.senderShort ?? 0) > 0.005 && !wasShort.has(x.id)).map((x) => ({ vendor: x.vendor ?? "a bill", day: x.day, amount: x.amount, short: Math.round((x.senderShort ?? 0) * 100) / 100 }));
+    const sameDayBills = returnDay == null || sh.kind === "hub" ? [] : own.filter((x) => x.day === returnDay && (x.senderShort ?? 0) <= 0.005).map((x) => ({ vendor: x.vendor ?? "a bill", day: x.day, amount: x.amount, short: 0 }));
+    return { ...sh, returnDay, shortBills, sameDayBills };
+  });
+  return { shares, plan: sim.plan };
+}
+
+function payoutOf(plan: { steps: { done: boolean; hidden?: boolean; kind: string; fromId?: number; toId?: number; fundsMember?: boolean; fundsBillKey?: string | null; day: number | null; amount: number }[] }, hubId: number, payerId: number) {
+  return plan.steps.filter((x) => !x.done && !x.hidden && x.kind === "transfer-out" && x.fromId === hubId && x.toId === payerId && !x.fundsMember && !x.fundsBillKey).map((x) => ({ day: x.day, amount: x.amount }));
 }
 
 export async function previewLend(formData: FormData): Promise<LendPreview> {
   if (!(await unlocked())) await relock("previewLend");
   if (!(await canEdit())) return { ok: false, error: "Not allowed" };
-  const { err, ctx } = await lendCore(formData);
+  const { err, ctx } = await lendContext(Number(formData.get("periodId")), Number(formData.get("billId")));
   if (err || !ctx) return { ok: false, error: err };
-  const { base, billId, lenderId, amount, payerId, hubId, route, billDay, paybackDay } = ctx;
-  const billKey = `bill-${billId}`;
-  const legs: NonNullable<Parameters<typeof getMoneyPlan>[6]> = route === "payout"
-    ? [
-        { id: -1, fromId: lenderId, toId: payerId, amount, day: billDay, done: false, fundsBillKey: billKey, bridgeGroup: "lend-preview" },
-        ...(lenderId !== hubId ? [{ id: -2, fromId: hubId, toId: lenderId, amount, day: null, done: false, bridgeGroup: "lend-preview" }] : []),
-      ]
-    : [
-        { id: -1, fromId: lenderId, toId: payerId, amount, day: billDay, done: false, fundsBillKey: billKey, bridgeGroup: "bridge-preview" },
-        { id: -2, fromId: payerId, toId: hubId, amount, day: paybackDay, done: false, bridgeGroup: "bridge-preview" },
-        { id: -3, fromId: hubId, toId: lenderId, amount, day: paybackDay, done: false, bridgeGroup: "bridge-preview" },
-      ];
-  const sim = await loadLivePlan(ctx.periodId, legs);
-  if (!sim) return { ok: false, error: "Month not found" };
-  const payoutOf = (p: typeof base.plan) => p.steps.filter((x) => !x.done && !x.hidden && x.kind === "transfer-out" && x.fromId === hubId && x.toId === payerId && !x.fundsMember && !x.fundsBillKey).map((x) => ({ day: x.day, amount: x.amount }));
-  const lenderShort = (p: typeof base.plan) => new Set(p.steps.filter((x) => x.kind === "bill" && x.payerId === lenderId && (x.senderShort ?? 0) > 0.005).map((x) => x.id));
-  const before = lenderShort(base.plan);
-  const billBefore = base.plan.steps.find((x) => x.id === billKey)!;
-  const lendStep = sim.plan.steps.find((x) => x.manualId === -1);
-  const retStep = sim.plan.steps.find((x) => x.manualId === (route === "payout" ? -2 : -3));
+  let mix: { lenderId: number; amount: number }[] | null = null;
+  try { const raw = formData.get("mix"); if (raw) mix = (JSON.parse(String(raw)) as { lenderId: number; amount: number }[]).map((m) => ({ lenderId: Number(m.lenderId), amount: Math.round(Number(m.amount) * 100) / 100 })).filter((m) => m.amount > 0.005); } catch { mix = null; }
+  let candidates: LendShare[] | undefined;
+  if (mix == null) {
+    // Opening the window: what each person would get back if they covered it alone, then the best mix —
+    // no-return first (owes the pool, then the hub), then loans by earliest return; each up to what's left.
+    candidates = [];
+    for (const c of lendCandidates(ctx)) {
+      const one = await simulateLend(ctx, [{ lenderId: c.lenderId, amount: Math.min(c.spare, ctx.shortfall) }]);
+      candidates.push(one.shares?.[0] ?? { ...c, amount: 0, poolPart: 0, loanPart: 0, kind: "loan", returnDay: null });
+      // (each candidate's hint = covering it alone, up to what they hold)
+    }
+    const rank = (c: LendShare) => (!c.isHub && c.poolCap > 0.5 ? 0 : c.isHub ? 1 : 2);
+    const order = [...candidates].sort((a, b) => rank(a) - rank(b) || (a.kind === "pool" && b.kind === "pool" ? b.owesPool - a.owesPool : 0) || (a.returnDay ?? 99) - (b.returnDay ?? 99) || b.spare - a.spare);
+    mix = [];
+    let left = ctx.shortfall;
+    for (const c of order) {
+      if (left <= 0.005) break;
+      // a "pool" lender first covers only what they owe (no return); any rest falls to the next person
+      const cap = c.noReturnCap; // no-return money first (pool payment / hub); loans only in the top-up below
+      const take = Math.round(Math.min(cap, left) * 100) / 100;
+      if (take > 0.005) { mix.push({ lenderId: c.lenderId, amount: take }); left = Math.round((left - take) * 100) / 100; }
+    }
+    if (left > 0.005) for (const c of order) { // still short → top up from anyone with room left
+      if (left <= 0.005) break;
+      const cur = mix.find((m) => m.lenderId === c.lenderId);
+      const room = c.spare - (cur?.amount ?? 0);
+      const take = Math.round(Math.min(room, left) * 100) / 100;
+      if (take > 0.005) { if (cur) cur.amount = Math.round((cur.amount + take) * 100) / 100; else mix.push({ lenderId: c.lenderId, amount: take }); left = Math.round((left - take) * 100) / 100; }
+    }
+  }
+  const before = new Set(ctx.base.plan.steps.filter((x) => x.kind === "bill" && (x.senderShort ?? 0) > 0.005).map((x) => x.id));
+  const res = mix.length ? await simulateLend(ctx, mix) : { shares: [] as LendShare[], plan: ctx.base.plan };
+  if ("err" in res && res.err) return { ok: false, error: res.err, shortfall: ctx.shortfall, candidates };
+  const plan = res.plan!;
+  const lenders = new Set(mix.map((m) => m.lenderId));
   return {
-    ok: true, route, lenderIsHub: lenderId === hubId,
-    returnDay: lenderId === hubId && route === "payout" ? null : retStep?.day ?? null,
-    payoutBefore: payoutOf(base.plan), payoutAfter: payoutOf(sim.plan),
-    lenderBefore: billBefore.balancesBefore?.[lenderId] ?? 0, lenderAfter: lendStep?.balancesAfter?.[lenderId] ?? 0,
-    billShortAfter: sim.plan.steps.find((x) => x.id === billKey)?.senderShort ?? 0,
-    shortBillsBefore: base.plan.shortBills, shortBillsAfter: sim.plan.shortBills,
-    lenderNewShort: sim.plan.steps.filter((x) => x.kind === "bill" && x.payerId === lenderId && (x.senderShort ?? 0) > 0.005 && !before.has(x.id)).map((x) => x.vendor ?? "a bill"),
+    ok: true, shortfall: ctx.shortfall, shares: res.shares, candidates,
+    payoutBefore: payoutOf(ctx.base.plan, ctx.hubId, ctx.payerId), payoutAfter: payoutOf(plan, ctx.hubId, ctx.payerId),
+    shortBillsBefore: ctx.base.plan.shortBills, shortBillsAfter: plan.shortBills,
+    billShortAfter: plan.steps.find((x) => x.id === ctx.billKey)?.senderShort ?? 0,
+    newShort: plan.steps.filter((x) => x.kind === "bill" && x.payerId != null && lenders.has(x.payerId) && (x.senderShort ?? 0) > 0.005 && !before.has(x.id)).map((x) => `${x.payerName}'s ${x.vendor ?? "bill"}`),
   };
 }
 
@@ -2430,29 +2512,49 @@ export async function lendForBill(formData: FormData): Promise<{ ok: boolean; er
   if (!(await canEdit())) { log.warn("lendForBill", "blocked", { outcome: "blocked", reason: "not-allowed", memberId: actor }); return { ok: false, error: "Not allowed" }; }
   const periodId = Number(formData.get("periodId"));
   if (!(await isHead()) && !(await periodOpen(periodId))) return { ok: false, error: "This month is closed" };
-  const { err, ctx } = await lendCore(formData);
+  const { err, ctx } = await lendContext(periodId, Number(formData.get("billId")));
   if (err || !ctx) return { ok: false, error: err };
-  const { billId, lenderId, amount, payerId, hubId, route, billDay, billLabel, paybackDay, base } = ctx;
-  if (route === "income") {
+  let mix: { lenderId: number; amount: number }[] = [];
+  try { mix = (JSON.parse(String(formData.get("mix") ?? "[]")) as { lenderId: number; amount: number }[]).map((m) => ({ lenderId: Number(m.lenderId), amount: Math.round(Number(m.amount) * 100) / 100 })).filter((m) => m.amount > 0.005); } catch { mix = []; }
+  if (mix.length === 0) return { ok: false, error: "Pick who covers it" };
+  const total = Math.round(mix.reduce((t, m) => t + m.amount, 0) * 100) / 100;
+  if (Math.abs(total - ctx.shortfall) > 0.5) return { ok: false, error: `The shares must add up to ${formatINR(ctx.shortfall)} (now ${formatINR(total)}) — the plan may have changed; reopen Bridge` };
+  const r = lendShares(ctx, mix);
+  if (r.err) return { ok: false, error: r.err };
+  const shares = r.shares!;
+  // Never leave a lender short for their own bill: every unpaid bill of theirs must get its cash back in time.
+  const sim = await simulateLend(ctx, mix);
+  if (sim.err) return { ok: false, error: sim.err };
+  const hurt = (sim.shares ?? []).flatMap((sh) => (sh.shortBills ?? []).map((b) => `${sh.name}'s ${b.vendor}${b.day != null ? ` (${b.day})` : ""}`));
+  if (hurt.length) return { ok: false, error: `This would leave ${hurt.join(", ")} short — lower that share` };
+  if (shares[0]?.kind === "income") {
     const fd = new FormData();
-    fd.set("periodId", String(periodId)); fd.set("billId", String(billId)); fd.set("paybackDay", String(paybackDay ?? ""));
-    fd.set("funders", JSON.stringify([{ memberId: lenderId, amount }]));
+    fd.set("periodId", String(periodId)); fd.set("billId", String(ctx.billId)); fd.set("paybackDay", String(ctx.laterIncome ?? ""));
+    fd.set("funders", JSON.stringify(shares.map((s) => ({ memberId: s.lenderId, amount: s.amount }))));
     return bridgeShortBill(fd);
   }
-  const members = await prisma.member.findMany({ where: { householdId: base.period.householdId }, select: { id: true, name: true } });
-  const nameOf = (id: number) => members.find((m) => m.id === id)?.name ?? "someone";
   // Why they were short — saved with the loan so the row keeps explaining itself after the hole is gone.
-  const hole = base.plan.holes.find((h) => h.memberId === payerId);
+  const hole = ctx.base.plan.holes.find((h) => h.memberId === ctx.payerId);
   const why = hole
-    ? `${nameOf(payerId)} was ${formatINR(hole.deficit)} below zero — ${[hole.lastMonth >= 1 ? `${formatINR(hole.lastMonth)} last month's cash spends` : null, hole.paidAhead >= 1 ? `${formatINR(hole.paidAhead)} paid ahead this month` : null].filter(Boolean).join(" + ")}`
-    : `${nameOf(payerId)}'s cash lands later than ${billLabel}`;
-  const group = `${LEND_GROUP_PREFIX}${billId}-${Date.now()}`;
-  await prisma.manualPlanStep.create({ data: { periodId, fromMemberId: lenderId, toMemberId: payerId, amount, day: billDay, fundsExpenseId: billId, bridgeGroup: group, note: why } });
-  if (lenderId !== hubId) {
-    await prisma.manualPlanStep.create({ data: { periodId, fromMemberId: hubId, toMemberId: lenderId, amount, day: null, bridgeGroup: group, note: `Pool returns ${nameOf(lenderId)}'s loan for ${billLabel}` } });
+    ? `${ctx.payerName} was ${formatINR(hole.deficit)} below zero — ${[hole.lastMonth >= 1 ? `${formatINR(hole.lastMonth)} last month's cash spends` : null, hole.paidAhead >= 1 ? `${formatINR(hole.paidAhead)} paid ahead this month` : null].filter(Boolean).join(" + ")}`
+    : `${ctx.payerName}'s cash lands later than ${ctx.billLabel}`;
+  const stamp = Date.now();
+  for (const sh of shares) {
+    if (sh.kind === "hub") {
+      await prisma.manualPlanStep.create({ data: { periodId, fromMemberId: sh.lenderId, toMemberId: ctx.payerId, amount: sh.amount, day: ctx.billDay, fundsExpenseId: ctx.billId, bridgeGroup: `${LEND_GROUP_PREFIX}${ctx.billId}-${stamp}-${sh.lenderId}`, note: why } });
+      continue;
+    }
+    if (sh.poolPart > 0.005) {
+      await prisma.manualPlanStep.create({ data: { periodId, fromMemberId: sh.lenderId, toMemberId: ctx.payerId, amount: sh.poolPart, day: ctx.billDay, fundsExpenseId: ctx.billId, bridgeGroup: `${POOL_LEND_GROUP_PREFIX}${ctx.billId}-${stamp}-${sh.lenderId}`, note: why } });
+    }
+    if (sh.loanPart > 0.005) {
+      const g = `${LEND_GROUP_PREFIX}${ctx.billId}-${stamp}-${sh.lenderId}`;
+      await prisma.manualPlanStep.create({ data: { periodId, fromMemberId: sh.lenderId, toMemberId: ctx.payerId, amount: sh.loanPart, day: ctx.billDay, fundsExpenseId: ctx.billId, bridgeGroup: g, note: why } });
+      await prisma.manualPlanStep.create({ data: { periodId, fromMemberId: ctx.hubId, toMemberId: sh.lenderId, amount: sh.loanPart, day: null, bridgeGroup: g, note: `Pool returns ${sh.name}'s loan for ${ctx.billLabel}` } });
+    }
   }
-  log.info("lendForBill", "ok", { outcome: "ok", memberId: actor, periodId, billId, lenderId, amount });
-  await logActivity("settlement", "created", `${nameOf(lenderId)} bridges “${billLabel}” for ${nameOf(payerId)} (${formatINR(amount)}) — ${nameOf(payerId)}'s later payout shrinks by it`, periodId);
+  log.info("lendForBill", "ok", { outcome: "ok", memberId: actor, periodId, billId: ctx.billId, total, lenders: shares.length });
+  await logActivity("settlement", "created", `Bridged “${ctx.billLabel}” for ${ctx.payerName} (${formatINR(total)}: ${shares.map((s) => `${s.name} ${formatINR(s.amount)}`).join(", ")}) — ${ctx.payerName}'s later payout shrinks by it`, periodId);
   revalidateFamily();
   return { ok: true };
 }
@@ -3870,54 +3972,99 @@ function stepDayParamsFor(s: import("@/lib/moneyPlan").PlanStep, periodId: numbe
 export async function moveStep(formData: FormData): Promise<{ ok: boolean; error?: string }> {
   if (!(await isHead())) return { ok: false, error: "Only the head can reorder steps." };
   const periodId = Number(formData.get("periodId"));
-  const stepKey = String(formData.get("stepKey") ?? "");
   const dir = String(formData.get("dir") ?? "");
-  if (!periodId || !stepKey || (dir !== "up" && dir !== "down")) return { ok: false, error: "Bad request." };
+  // The row being moved: one step, or every part of a grouped row (stepKeys). neighborKeys = the row it
+  // passes (which may itself be a grouped row), as shown on screen.
+  const listOf = (k: string) => String(formData.get(k) ?? "").split(",").map((x) => x.trim()).filter(Boolean);
+  const keys = listOf("stepKeys").length ? listOf("stepKeys") : listOf("stepKey");
+  if (!periodId || keys.length === 0 || (dir !== "up" && dir !== "down")) return { ok: false, error: "Bad request." };
   const period = await prisma.period.findUnique({ where: { id: periodId }, select: { householdId: true, status: true } });
-  if (!period || period.status === "closed") return { ok: false, error: "This month is closed." };
+  if (!period || period.status === "closed") return { ok: false, error: "This month is closed — steps can't be reordered." };
 
   const plan = await getMoneyPlan(period.householdId, periodId);
   const visible = plan.steps.filter((s) => !s.hidden);
-  const vi = visible.findIndex((s) => s.id === stepKey);
-  if (vi < 0) return { ok: false, error: "Step not found." };
-  const vj = dir === "up" ? vi - 1 : vi + 1;
-  if (vj < 0 || vj >= visible.length) return { ok: true }; // top/bottom of the whole plan — no-op
-  const moved = visible[vi];
-  const neighbor = visible[vj];
+  const idx = keys.map((k) => visible.findIndex((s) => s.id === k)).sort((x, y) => x - y);
+  if (idx.some((i) => i < 0)) return { ok: false, error: "The plan changed — refresh and try again." };
+  const vi = idx[0], vl = idx[idx.length - 1];
+  const block = visible.slice(vi, vl + 1);
+  if (dir === "up" && vi === 0) return { ok: false, error: "Already the first step." };
+  if (dir === "down" && vl === visible.length - 1) return { ok: false, error: "Already the last step." };
+  // The neighbouring row (a whole grouped row if it is one).
+  let nb = listOf("neighborKeys").map((k) => visible.findIndex((s) => s.id === k)).filter((i) => i >= 0).sort((x, y) => x - y);
+  const adjacent = nb.length > 0 && (dir === "up" ? nb[nb.length - 1] === vi - 1 : nb[0] === vl + 1);
+  if (!adjacent) nb = [dir === "up" ? vi - 1 : vl + 1];
+  const neighbor = visible.slice(nb[0], nb[nb.length - 1] + 1);
+  const name = (x: (typeof visible)[number]) => x.kind === "bill" ? `“${x.vendor ?? "the bill"}”` : `${x.fromName ?? "?"} → ${x.toName ?? "?"}`;
 
-  // DAY BOUNDARY: moved is first/last of its day (neighbour sits on a different day). Change its date to
-  // the neighbour's day, if editable — that's the "date also changes" behaviour. Clear any stale order
-  // override so it sorts naturally in its new day. (Done/paid steps and derived steps fall through to swap.)
-  const sameDay = (moved.day ?? null) === (neighbor.day ?? null);
-  if (!sameDay && neighbor.day != null && !moved.done) {
-    const p = stepDayParamsFor(moved, periodId);
-    if (p) {
-      const fd = new FormData();
-      fd.set("kind", p.kind);
-      fd.set("id", String(p.id));
-      if (p.stepKey) fd.set("stepKey", p.stepKey);
-      fd.set("day", String(neighbor.day));
-      const r = await setStepDay(fd);
-      if (!r.ok) return r;
-      await prisma.stepOrderOverride.deleteMany({ where: { periodId, stepKey } });
-      revalidateFamily();
-      return { ok: true };
+  // Rules the plan always keeps — say which one, plainly.
+  for (const m of block) {
+    for (const n of neighbor) {
+      if (dir === "down" && m.fundsBillKey && n.id === m.fundsBillKey) return { ok: false, error: `Can't go below ${name(n)} — this is the money for that bill, so it has to come first.` };
+      if (dir === "up" && n.fundsBillKey && m.id === n.fundsBillKey) return { ok: false, error: `Can't go above ${name(n)} — that's the money for this bill, so it has to come first.` };
+      const isReturn = (x: typeof m) => x.kind === "manual" && isLendGroup(x.bridgeGroup) && !x.fundsBillKey;
+      if (dir === "up" && isReturn(m) && n.bridgeGroup === m.bridgeGroup && n.fundsBillKey) return { ok: false, error: `Can't go above the loan — ${m.toName} gets this back only after lending it.` };
+      if (dir === "down" && isReturn(n) && m.bridgeGroup === n.bridgeGroup && m.fundsBillKey) return { ok: false, error: `Can't go below its return — ${m.fromName} lends it before the pool pays it back.` };
     }
   }
 
-  // WITHIN A DAY (or a non-editable boundary cross): swap the two ids in the full order, renumber EVERY
-  // step so the manual order is fully consistent (steps with no row fall back to their derived slot).
+  // DAY BOUNDARY: the neighbour is on another day → change the step's date to theirs, if its date is editable.
+  const blockDay = block[0].day ?? null;
+  const nbDay = neighbor[0].day ?? null;
+  if (blockDay !== nbDay) {
+    const dayLabel = nbDay != null ? `the ${ordinalDay(nbDay)}` : "another day";
+    if (block.length > 1) return { ok: false, error: `A grouped transfer moves within its day only — it can't move to ${dayLabel}.` };
+    const moved = block[0];
+    if (moved.done) return { ok: false, error: `Already done — it stays on the day it happened.` };
+    if (nbDay == null) return { ok: false, error: `Can't move into the undated steps at the end.` };
+    const p = stepDayParamsFor(moved, periodId);
+    if (!p) return { ok: false, error: `Its date is set by the plan (from income, bills or the pool's cash), so it can't move to ${dayLabel}.` };
+    const fd = new FormData();
+    fd.set("kind", p.kind);
+    fd.set("id", String(p.id));
+    if (p.stepKey) fd.set("stepKey", p.stepKey);
+    fd.set("day", String(nbDay));
+    const r = await setStepDay(fd);
+    if (!r.ok) return { ok: false, error: r.error ?? `Can't move it to ${dayLabel}.` };
+    await prisma.stepOrderOverride.deleteMany({ where: { periodId, stepKey: { in: keys } } });
+    revalidateFamily();
+    return { ok: true };
+  }
+
+  // WITHIN A DAY: move the whole block past the neighbour row in the full order, renumber every step.
   const order = plan.steps.map((s) => s.id);
-  const ai = order.indexOf(moved.id);
-  const aj = order.indexOf(neighbor.id);
-  [order[ai], order[aj]] = [order[aj], order[ai]];
-  await prisma.$transaction([
+  const blockIds = new Set(block.map((x) => x.id));
+  const rest = order.filter((id) => !blockIds.has(id));
+  const anchor = dir === "up" ? rest.indexOf(neighbor[0].id) : rest.indexOf(neighbor[neighbor.length - 1].id) + 1;
+  rest.splice(anchor, 0, ...block.map((x) => x.id));
+  const prev = await prisma.stepOrderOverride.findMany({ where: { periodId }, select: { stepKey: true, sortIndex: true } });
+  const save = (rows: { stepKey: string; sortIndex: number }[]) => prisma.$transaction([
     prisma.stepOrderOverride.deleteMany({ where: { periodId } }),
-    prisma.stepOrderOverride.createMany({ data: order.map((id, idx) => ({ periodId, stepKey: id, sortIndex: idx })) }),
+    prisma.stepOrderOverride.createMany({ data: rows.map((r) => ({ periodId, ...r })) }),
   ]);
+  await save(rest.map((id, i) => ({ stepKey: id, sortIndex: i })));
+
+  // Check it really moved (the plan may keep a step in place — e.g. a return the pool can't afford earlier).
+  // If not, put the old order back and say why.
+  const after = (await getMoneyPlan(period.householdId, periodId)).steps.filter((s) => !s.hidden);
+  const pos = (id: string) => after.findIndex((s) => s.id === id);
+  const movedOk = dir === "up" ? pos(block[0].id) < pos(neighbor[0].id) : pos(block[block.length - 1].id) > pos(neighbor[neighbor.length - 1].id);
+  if (!movedOk) {
+    await save(prev);
+    const ret = block.find((x) => x.kind === "manual" && isLendGroup(x.bridgeGroup) && !x.fundsBillKey);
+    return {
+      ok: false,
+      error: ret
+        ? `Can't go earlier — the pool can't spare ${formatINR(ret.amount)} for ${ret.toName} before this point.`
+        : neighbor.some((x) => x.kind === "manual" && isLendGroup(x.bridgeGroup) && !x.fundsBillKey)
+          ? `Can't pass the pool's return there — it can't be paid back any earlier.`
+          : `The plan keeps this step here — it depends on the steps around it.`,
+    };
+  }
   revalidateFamily();
   return { ok: true };
 }
+
+const ordinalDay = (d: number) => `${d}${["th", "st", "nd", "rd"][((d % 100) - 20) % 10] ?? ["th", "st", "nd", "rd"][d % 100] ?? "th"}`;
 
 // Batch-save the recurring template rows edited in Setup (one floating "N changes → Save" bar).
 export async function saveAllRecurringItems(

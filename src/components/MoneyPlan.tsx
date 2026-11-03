@@ -12,13 +12,12 @@ import { ExpenseModal } from "@/components/ExpenseModal";
 import { AddSpendModal } from "@/components/AddSpendModal";
 import { StepDayEditor } from "@/components/StepDayEditor";
 import { StepAmountEditor } from "@/components/StepAmountEditor";
-import { FundBillModal } from "@/components/FundBillModal";
 import { LendModal } from "@/components/LendModal";
 import { useToast, useToastAction } from "@/components/Toast";
 import type { MoneyPlanResult } from "@/lib/queries";
 import { canActOnStep, canActInMonth } from "@/lib/planAuth";
 import { CTA_CLASS, CtaLabel } from "@/components/Cta";
-import { isPaybackNote, isLendGroup } from "@/lib/notes";
+import { isPaybackNote, isLendGroup, isPoolLendGroup } from "@/lib/notes";
 
 // The shared, everyone-visible Money Plan: the month's transfers + bill payments as one ordered,
 // dated checklist. Ticking a step writes through to the real record (settlement / bill paid) — the
@@ -62,8 +61,6 @@ export function MoneyPlan({
   );
   const [addOpen, setAddOpen] = useState(false);
   const [balances, setBalances] = useState<{ s: MoneyPlanResult["steps"][number]; n: number } | null>(null);
-  // A short bill the head is funding from held cash (the cross-bill knock-on entry point).
-  const [fund, setFund] = useState<MoneyPlanResult["steps"][number] | null>(null);
   // A short bill the head is BRIDGING (repayable, via the hub) — payer's own income lands later.
   const [bridge, setBridge] = useState<MoneyPlanResult["steps"][number] | null>(null);
   // Days (keyed by day number / "none") the viewer has FLIPPED from their default fold state.
@@ -127,7 +124,8 @@ export function MoneyPlan({
   }
   // A bridge loan's two legs: the loan itself (lender → member, above the bill) and the pool's return of it.
   const lendLabel = (x: Step) =>
-    x.fundsBillKey
+    x.fundsBillKey && isPoolLendGroup(x.bridgeGroup) ? `🌉 Covers ${billVendorByKey.get(x.fundsBillKey) ?? "a bill"} · counts toward what ${x.fromName} owes the pool`
+    : x.fundsBillKey
       ? (x.fromId === treasurerId ? `↩ Early from ${x.toName}'s payout · for ${billVendorByKey.get(x.fundsBillKey) ?? "a bill"}` : `🌉 Bridges ${billVendorByKey.get(x.fundsBillKey) ?? "a bill"}${x.returnBy != null ? ` · back on the ${ordinal(x.returnBy)}` : ""}`)
       : `🌉 Returns ${x.toName}'s loan`;
   // What one piece of a grouped row is FOR (its line in the breakdown).
@@ -168,11 +166,15 @@ export function MoneyPlan({
 
   // Head reorder: swap this step one slot with its neighbour (positional, NOT a date change). Persists the
   // whole order server-side and recomputes the plan in it — the list dims while it recalculates.
-  const move = (stepId: string, dir: "up" | "down") =>
+  // Move a row (one step, or every part of a grouped row) past the neighbouring row (which may be grouped
+  // too). Anything that can't move says why in a toast — the server checks and explains every case.
+  const move = (stepIds: string[], dir: "up" | "down", neighborIds: string[]) =>
     startTransition(async () => {
+      if (neighborIds.length === 0) { toast(dir === "up" ? "Already the first step." : "Already the last step.", "error"); return; }
       const fd = new FormData();
       fd.set("periodId", String(periodId));
-      fd.set("stepKey", stepId);
+      fd.set("stepKeys", stepIds.join(","));
+      fd.set("neighborKeys", neighborIds.join(","));
       fd.set("dir", dir);
       const r = await moveStep(fd);
       router.refresh();
@@ -402,7 +404,8 @@ export function MoneyPlan({
                     }>💰 funds {billVendorByKey.get(s.fundsBillKey) ?? s.toName}</span>}
                     {/* Repayable bridge: the funder→debtor leg names the bill it bridges; the two pay-back
                         legs (debtor→hub, hub→funder) carry a quiet tag so the trio reads as one bridge. */}
-                    {isLendGroup(s.bridgeGroup) && <span className="shrink-0 rounded-full bg-sky-100 px-1.5 py-0.5 text-[9px] font-medium text-sky-700" title={s.fundsBillKey ? `${s.fromName} covers ${s.toName}'s ${billVendorByKey.get(s.fundsBillKey) ?? "bill"} now — ${s.toName}'s later payout shrinks by it${s.fromId !== treasurerId ? "; the pool returns it as soon as it can spare it" : ""}` : `The pool returns ${s.toName}'s bridge loan — dated to the earliest day it can spare it`}>{lendLabel(s)}</span>}
+                    {isLendGroup(s.bridgeGroup) && <span className="shrink-0 rounded-full bg-sky-100 px-1.5 py-0.5 text-[9px] font-medium text-sky-700" title={s.fundsBillKey ? `${s.fromName} covers ${s.toName}'s ${billVendorByKey.get(s.fundsBillKey) ?? "bill"} now — ${s.toName}'s later payout shrinks by it${isPoolLendGroup(s.bridgeGroup) ? `; it counts toward what ${s.fromName} owes the pool (no return)` : s.fromId !== treasurerId ? "; the pool returns it as soon as it can spare it" : ""}` : `The pool returns ${s.toName}'s bridge loan — dated to the earliest day it can spare it`}>{lendLabel(s)}</span>}
+                    {s.slid && !s.done && <span className="shrink-0 rounded-full bg-amber-50 px-1.5 py-0.5 text-[9px] font-medium text-amber-700" title="You'd moved this earlier, but the pool can't spare it there any more — it sits at the earliest point it can">↓ earliest the pool can spare it</span>}
                     {s.fundsBillKey && s.bridgeGroup && !isLendGroup(s.bridgeGroup) && <span className="shrink-0 rounded-full bg-sky-100 px-1.5 py-0.5 text-[9px] font-medium text-sky-700" title={`${s.fromName} fronts ${s.toName}'s ${billVendorByKey.get(s.fundsBillKey) ?? "bill"} — the pool repays ${s.fromName} when ${s.toName}'s income lands`}>🌉 bridges {billVendorByKey.get(s.fundsBillKey) ?? s.toName}</span>}
                     {s.bridgeGroup && !isLendGroup(s.bridgeGroup) && !s.fundsBillKey && <span className="shrink-0 rounded-full bg-sky-50 px-1.5 py-0.5 text-[9px] font-medium text-sky-600">🌉 bridge payback</span>}
                     {s.reimbursement && <span className="shrink-0 rounded-full bg-emerald-50 px-1.5 py-0.5 text-[9px] font-medium text-emerald-600" title={`${s.toName} is paid back early for what they spent out of pocket last month`}>reimbursement · last month’s spends</span>}
@@ -526,13 +529,11 @@ export function MoneyPlan({
                             there's something to square up from). */}
                         {(() => {
                           if (s.billId == null || !canEdit || !open) return null;
-                          const hasSpare = members.some((m) => m.id !== s.payerId && m.id !== treasurerId && (s.balancesBefore?.[m.id] ?? 0) > 0.5);
                           const anyCash = members.some((m) => m.id !== s.payerId && (s.balancesBefore?.[m.id] ?? 0) > 0.5);
                           if (!anyCash) return null;
                           return (
                             <div className="mt-1 flex flex-wrap gap-1">
                               <button type="button" onClick={() => setBridge(s)} className={`${CTA_CLASS.window} bg-sky-600 hover:bg-sky-700 active:bg-sky-800`} title="Someone with cash covers it now; the plan pays them back"><CtaLabel kind="window">🌉 Bridge</CtaLabel></button>
-                              {isHead && hasSpare && <button type="button" onClick={() => setFund(s)} className={CTA_CLASS.window} title="Cover it from pool cash a member holds — no payback"><CtaLabel kind="window">💰 Fund from held cash</CtaLabel></button>}
                             </div>
                           );
                         })()}
@@ -575,11 +576,11 @@ export function MoneyPlan({
                   {g ? (() => {
                     // One tap sends (or undoes) every part. Shown only if this viewer may tick EVERY part.
                     const canAll = g.every(({ s: x }) =>
-                      x.kind === "manual"
+                      x.kind === "manual" && !x.settleKey
                         ? x.manualId != null && canActOnStep({ kind: "manual", fromId: x.fromId, toId: x.toId }, actor) && canActInMonth(open, isHead)
-                        : open && canActOnStep({ kind: x.kind, fromId: x.fromId, toId: x.toId }, actor) && (!x.done || x.recordId != null));
+                        : open && canActOnStep({ kind: x.settleKey ? "transfer-out" : x.kind, fromId: x.fromId, toId: x.toId }, x.settleKey ? { ...actor, canEdit: false } : actor) && (!x.done || x.recordId != null));
                     if (!canAll) return null;
-                    const payload = g.map(({ s: x }) => x.kind === "manual" ? { t: "manual", id: x.manualId } : { t: "transfer", from: x.fromId, to: x.toId, amount: x.amount, key: x.id, recordId: x.recordId ?? null });
+                    const payload = g.map(({ s: x }) => x.kind === "manual" && x.settleKey ? { t: "transfer", from: x.fromId, to: x.toId, amount: x.amount, key: x.settleKey, recordId: null } : x.kind === "manual" ? { t: "manual", id: x.manualId } : { t: "transfer", from: x.fromId, to: x.toId, amount: x.amount, key: x.id, recordId: x.recordId ?? null });
                     return (
                       <form action={withToast(async (fd: FormData) => { const r = await toggleStepGroup(fd); if (!r.ok) throw new Error(r.error); }, { success: s.done ? "Undone" : "Marked sent" })} onSubmit={confirmFront}>
                         <input type="hidden" name="householdId" value={householdId} />
@@ -616,6 +617,20 @@ export function MoneyPlan({
                         <input type="hidden" name="toMemberId" value={s.toId} />
                         <input type="hidden" name="amount" value={s.amount} />
                         <input type="hidden" name="key" value={s.id} />
+                        <MiniBtn primary>Sent</MiniBtn>
+                      </form>
+                    ) : null
+                  ) : isManual && s.settleKey ? (
+                    // A pool-cash bridge leg: ticking it records a real direct payment (lender → payer) that
+                    // counts toward what the lender owes the pool AND what the pool owes the payer.
+                    open && canActOnStep({ kind: "transfer-out", fromId: s.fromId, toId: s.toId }, { ...actor, canEdit: false }) ? (
+                      <form action={withToast(markSettled, { success: "Marked done" })} onSubmit={confirmFront}>
+                        <input type="hidden" name="householdId" value={householdId} />
+                        <input type="hidden" name="periodId" value={periodId} />
+                        <input type="hidden" name="fromMemberId" value={s.fromId} />
+                        <input type="hidden" name="toMemberId" value={s.toId} />
+                        <input type="hidden" name="amount" value={s.amount} />
+                        <input type="hidden" name="key" value={s.settleKey} />
                         <MiniBtn primary>Sent</MiniBtn>
                       </form>
                     ) : null
@@ -693,20 +708,20 @@ export function MoneyPlan({
                 </div>
 
                 {/* head reorder: move this step one slot up/down (positional), then the plan recomputes. */}
-                {isHead && datesEditable && who == null && !g && (
+                {isHead && datesEditable && who == null && (
                   <span className="flex shrink-0 flex-col justify-center leading-none">
                     <button
                       type="button"
-                      title="Move up a step"
-                      disabled={pending || i === 0}
-                      onClick={() => move(s.id, "up")}
+                      title={g ? "Move this grouped transfer up" : "Move up a step"}
+                      disabled={pending}
+                      onClick={() => move(items.map((x) => x.s.id), "up", i > 0 ? displayRows[i - 1].items.map((x) => x.s.id) : [])}
                       className="px-0.5 text-[10px] text-slate-300 hover:text-slate-600 disabled:opacity-30"
                     >▲</button>
                     <button
                       type="button"
-                      title="Move down a step"
-                      disabled={pending || i === displayRows.length - 1}
-                      onClick={() => move(s.id, "down")}
+                      title={g ? "Move this grouped transfer down" : "Move down a step"}
+                      disabled={pending}
+                      onClick={() => move(items.map((x) => x.s.id), "down", i < displayRows.length - 1 ? displayRows[i + 1].items.map((x) => x.s.id) : [])}
                       className="px-0.5 text-[10px] text-slate-300 hover:text-slate-600 disabled:opacity-30"
                     >▼</button>
                   </span>
@@ -749,51 +764,19 @@ export function MoneyPlan({
         </>
       )}
 
-      {/* Fund a short bill from held cash: the spare-cash holders are read straight off the bill step's
-          balancesBefore (what each member holds right before it) — the payer and the hub are excluded. */}
-      {fund && (() => {
-        const bb = fund.balancesBefore ?? {};
-        const sources = members
-          .filter((m) => m.id !== fund.payerId && m.id !== treasurerId)
-          .map((m) => ({ memberId: m.id, name: m.name, spare: Math.round((bb[m.id] ?? 0) * 100) / 100 }))
-          .filter((src) => src.spare > 0.5)
-          .sort((a, b) => b.spare - a.spare);
-        return (
-          <FundBillModal
-            periodId={periodId}
-            billId={fund.billId!}
-            label={fund.vendor ?? "this bill"}
-            payerName={fund.payerName ?? "The payer"}
-            shortfall={Math.round(fund.senderShort ?? 0)}
-            day={fund.day ?? null}
-            sources={sources}
-            onClose={() => setFund(null)}
-          />
-        );
-      })()}
-
       {/* Bridge a short bill from anyone holding cash (hub included): the plan works out how they're paid
           back and shows it per member before confirming — see LendModal / previewLend. */}
-      {bridge && (() => {
-        const bb = bridge.balancesBefore ?? {};
-        const sources = members
-          .filter((m) => m.id !== bridge.payerId)
-          .map((m) => ({ memberId: m.id, name: m.name, spare: Math.round((bb[m.id] ?? 0) * 100) / 100, isHub: m.id === treasurerId }))
-          .filter((src) => src.spare > 0.5)
-          .sort((a, b) => b.spare - a.spare);
-        return (
-          <LendModal
-            periodId={periodId}
-            billId={bridge.billId!}
-            label={bridge.vendor ?? "this bill"}
-            payerName={bridge.payerName ?? "The payer"}
-            shortfall={Math.round((bridge.senderShort ?? 0) * 100) / 100}
-            day={bridge.day ?? null}
-            sources={sources}
-            onClose={() => setBridge(null)}
-          />
-        );
-      })()}
+      {bridge && (
+        <LendModal
+          periodId={periodId}
+          billId={bridge.billId!}
+          label={bridge.vendor ?? "this bill"}
+          payerName={bridge.payerName ?? "The payer"}
+          shortfall={Math.round((bridge.senderShort ?? 0) * 100) / 100}
+          day={bridge.day ?? null}
+          onClose={() => setBridge(null)}
+        />
+      )}
 
       {/* Add-a-step modal: a real member↔member (or ↔ hub) move, inserted at the chosen spot. */}
       {insert && (

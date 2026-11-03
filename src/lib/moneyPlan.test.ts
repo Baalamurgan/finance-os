@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildMoneyPlan, pendingCashMoveByMember, doneCashMoveByMember, type PlanTransfer, type PlanBill, type PlanStep } from "./moneyPlan";
+import { buildMoneyPlan, poolLendKey, pendingCashMoveByMember, doneCashMoveByMember, type PlanTransfer, type PlanBill, type PlanStep } from "./moneyPlan";
 
 const T = 1; // treasurer id
 const xfer = (o: Partial<PlanTransfer>): PlanTransfer => ({ fromId: 2, from: "B", toId: T, to: "A", amount: 100, settled: false, recordId: null, ...o });
@@ -69,6 +69,101 @@ describe("buildMoneyPlan", () => {
     expect(byPeer.steps[loanIdx].returnBy).toBe(byPeer.steps[retIdx].day);
     // the hub never goes below zero because of the return
     for (const s of byPeer.steps) expect(s.balancesAfter?.[T] ?? 0).toBeGreaterThanOrEqual(-0.005);
+  });
+
+  it("pool-cash bridge: a debtor who still owes the pool covers the bill — no return, their collection shrinks; once ticked it's a direct payment", () => {
+    const base = {
+      treasurerId: T,
+      transfers: [xfer({ fromId: 2, toId: T, amount: 30000 }), xfer({ fromId: T, from: "A", toId: 3, to: "H", amount: 10000 })],
+      bills: [bill({ key: "b-old", payerId: 3, payerName: "H", vendor: "Old", amount: 6000, day: 1, done: true }), bill({ key: "b-new", billId: 9, payerId: 3, payerName: "H", vendor: "New", amount: 2000, day: 5 })],
+      incomeDayByMember: { 2: 1 },
+      openingByMember: { 3: -1000 },
+    };
+    const leg = { id: 7, fromId: 2, toId: 3, amount: 7000, day: 5, done: false, fundsBillKey: "b-new", bridgeGroup: "lend-pool-9-1-2" };
+    const plan = buildMoneyPlan({ ...base, manualSteps: [leg] });
+    expect(plan.shortBills).toBe(0);
+    expect(plan.steps.find((s) => s.kind === "transfer-in" && s.fromId === 2)?.amount).toBe(23000); // pays the pool 7,000 less
+    expect(plan.steps.some((s) => s.kind === "manual" && s.toId === 2)).toBe(false); // nothing to return
+    const step = plan.steps.find((s) => s.id === "manual-7")!;
+    expect(step.settleKey).toBe(poolLendKey(leg));
+    // Their (reduced) ₹23,000 collection ticked while the cover is still pending → the collection reads done.
+    const collPaid = buildMoneyPlan({ ...base, manualSteps: [leg], transfers: [xfer({ fromId: 2, toId: T, amount: 30000, payments: [{ id: 50, amount: 23000, key: "xfer-2-1" }], paidAmount: 23000 }), base.transfers[1]] });
+    expect(collPaid.steps.find((s) => s.kind === "transfer-in" && s.fromId === 2)?.done).toBe(true);
+    expect(collPaid.shortBills).toBe(0);
+    // Ticked: recorded as a direct settlement payment 2 → 3 on both transfers → the manual leg drops out.
+    const pay = { id: 99, amount: 7000, key: poolLendKey(leg), fromId: 2, toId: 3 };
+    const ticked = buildMoneyPlan({ ...base, manualSteps: [leg], transfers: [xfer({ fromId: 2, toId: T, amount: 30000, payments: [pay], paidAmount: 7000 }), xfer({ fromId: T, from: "A", toId: 3, to: "H", amount: 10000, payments: [pay], paidAmount: 7000 })] });
+    expect(ticked.steps.some((s) => s.id === "manual-7")).toBe(false);
+    expect(ticked.shortBills).toBe(0);
+    const toThree = (p: typeof plan) => p.steps.filter((s) => (s.kind === "transfer-out" || s.kind === "manual") && s.toId === 3).reduce((t, s) => t + s.amount, 0);
+    expect(toThree(ticked)).toBe(10000);
+    expect(toThree(plan)).toBe(10000);
+    expect(ticked.steps.find((s) => s.kind === "transfer-in" && s.fromId === 2)?.amount).toBe(23000);
+  });
+
+  it("lender gets a loan part back before their own bill: pool payment later + a same-day return keep their bills paid", () => {
+    // Lender 2 holds 5,000 on day 4, owes the hub 30,000 on day 8 (income lands day 8), and has their own
+    // 1,500 bill on day 5. The hub (T) has 20,000 from day 1. 3 is short for a day-4 bill.
+    const base = {
+      treasurerId: T,
+      transfers: [xfer({ fromId: 2, toId: T, amount: 30000 }), xfer({ fromId: T, from: "A", toId: 3, to: "H", amount: 10000 })],
+      bills: [
+        bill({ key: "b-old", payerId: 3, payerName: "H", vendor: "Old", amount: 6000, day: 1, done: true }),
+        bill({ key: "b-new", billId: 9, payerId: 3, payerName: "H", vendor: "New", amount: 2000, day: 4 }),
+        bill({ key: "b-van", billId: 11, payerId: 2, payerName: "L", vendor: "Van", amount: 1500, day: 5 }),
+      ],
+      incomeArrivals: [{ memberId: T, day: 1, amount: 20000 }, { memberId: 2, day: 8, amount: 30000 }],
+      incomeDayByMember: { 2: 8 },
+      openingByMember: { 2: 5000, 3: -1000 },
+    };
+    // 3,500 from pool payment (no return) + 1,500 loan the hub returns at once → Van on the 5th still paid.
+    const plan = buildMoneyPlan({ ...base, manualSteps: [
+      { id: 1, fromId: 2, toId: 3, amount: 3500, day: 4, done: false, fundsBillKey: "b-new", bridgeGroup: "lend-pool-9-1-2" },
+      { id: 2, fromId: 2, toId: 3, amount: 1500, day: 4, done: false, fundsBillKey: "b-new", bridgeGroup: "lend-9-1-2" },
+      { id: 3, fromId: T, toId: 2, amount: 1500, day: null, done: false, bridgeGroup: "lend-9-1-2" },
+    ] });
+    const van = plan.steps.find((s) => s.id === "b-van")!;
+    expect(van.senderShort ?? 0).toBe(0);
+    const ret = plan.steps.find((s) => s.id === "manual-3")!;
+    expect(plan.steps.indexOf(ret)).toBeLessThan(plan.steps.indexOf(van)); // back before they pay the van
+    expect(plan.steps.find((s) => s.kind === "transfer-in" && s.fromId === 2)?.amount).toBe(26500);
+  });
+
+  it("a bridge return follows the head's ▲▼ order when it's affordable there; too early → it slides to the earliest point", () => {
+    const base = {
+      treasurerId: T,
+      transfers: [xfer({ fromId: 2, toId: T, amount: 30000 }), xfer({ fromId: T, from: "A", toId: 3, to: "H", amount: 20000 })],
+      bills: [
+        bill({ key: "b-old", payerId: 3, payerName: "H", vendor: "Old", amount: 6000, day: 1, done: true }),
+        bill({ key: "b-a", billId: 9, payerId: 3, payerName: "H", vendor: "A", amount: 2000, day: 4 }),
+        bill({ key: "b-b", billId: 10, payerId: 3, payerName: "H", vendor: "B", amount: 1000, day: 4 }),
+      ],
+      incomeDayByMember: { 2: 1 },
+      openingByMember: { 4: 20000 },
+      manualSteps: [
+        { id: 1, fromId: 4, toId: 3, amount: 5000, day: 4, done: false, fundsBillKey: "b-a", bridgeGroup: "lend-9-1-4" },
+        { id: 2, fromId: T, toId: 4, amount: 5000, day: null, done: false, bridgeGroup: "lend-9-1-4" },
+        { id: 3, fromId: 4, toId: 3, amount: 1000, day: 4, done: false, fundsBillKey: "b-b", bridgeGroup: "lend-10-2-4" },
+        { id: 4, fromId: T, toId: 4, amount: 1000, day: null, done: false, bridgeGroup: "lend-10-2-4" },
+      ],
+    };
+    const plan = buildMoneyPlan(base);
+    const ids = plan.steps.map((s) => s.id);
+    expect(ids.indexOf("manual-2")).toBe(ids.indexOf("manual-1") + 1); // earliest: right after its loan
+    // Head moves return 2 down to just before return 4 → kept there.
+    const order = ids.filter((x) => x !== "manual-2");
+    order.splice(order.indexOf("manual-4"), 0, "manual-2");
+    const moved = buildMoneyPlan({ ...base, orderOverrides: Object.fromEntries(order.map((id, i) => [id, i])) });
+    const mids = moved.steps.map((s) => s.id);
+    expect(mids.indexOf("manual-2")).toBe(mids.indexOf("manual-4") - 1);
+    expect(moved.steps.find((s) => s.id === "manual-2")!.slid).toBeUndefined();
+    // Head puts return 4 ABOVE its own loan (too early) → it slides back to right after the loan.
+    const early = ids.filter((x) => x !== "manual-4");
+    early.splice(early.indexOf("manual-3"), 0, "manual-4");
+    const slid = buildMoneyPlan({ ...base, orderOverrides: Object.fromEntries(early.map((id, i) => [id, i])) });
+    const sids = slid.steps.map((s) => s.id);
+    expect(sids.indexOf("manual-4")).toBeGreaterThan(sids.indexOf("manual-3"));
+    expect(slid.steps.find((s) => s.id === "manual-4")!.slid).toBe(true);
   });
 
   it("piggy taken as income: a separate step per batch (done + open), each walk-correct", () => {

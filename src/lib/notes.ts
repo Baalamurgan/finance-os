@@ -53,3 +53,7 @@ export const isPaybackNote = (note: string | null | undefined) => !!note && (not
 // member's later payout shrinks by the loan. Both legs share a bridgeGroup with this prefix.
 export const LEND_GROUP_PREFIX = "lend-";
 export const isLendGroup = (g: string | null | undefined) => !!g && g.startsWith(LEND_GROUP_PREFIX);
+// A bridge from POOL cash the lender still holds (part of what they owe the hub, not yet handed over): no
+// return leg — it counts toward their payment to the pool. Still a lend group (the payer's payout shrinks).
+export const POOL_LEND_GROUP_PREFIX = "lend-pool-";
+export const isPoolLendGroup = (g: string | null | undefined) => !!g && g.startsWith(POOL_LEND_GROUP_PREFIX);

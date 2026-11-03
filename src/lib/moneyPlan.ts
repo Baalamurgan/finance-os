@@ -5,7 +5,11 @@
 // family can execute it step by step. Completion is written through to the underlying records
 // (SettlementRecord / bill paid) elsewhere, so this stays a projection, never a second ledger.
 
-import { isPaybackNote, isLendGroup } from "./notes";
+import { isPaybackNote, isLendGroup, isPoolLendGroup } from "./notes";
+
+// Settlement key a ticked pool-cash bridge leg is recorded under (field 3 = the day, like disb- keys, so the
+// done payment line keeps its place).
+export const poolLendKey = (m: { id: number; fromId: number; toId: number; day?: number | null }) => `poollend-${m.toId}-${m.fromId}-${m.day ?? 0}-${m.id}`;
 
 export type PlanTransfer = { fromId: number; from: string; toId: number; to: string; amount: number; paidAmount?: number | null; settled: boolean; recordId: number | null; payments?: { id: number; amount: number; settledAt?: Date | string | null; key?: string | null; fromId?: number; toId?: number }[]; status?: "overdue" | "soon" | "normal" | null; days?: number | null };
 export type PlanBill = {
@@ -44,6 +48,8 @@ export type PlanStep = {
   note?: string | null; // a manual move's optional note — why the sender is paying
   afterStepKey?: string; // a manual step: the step id it's anchored right after (for stable positioning)
   fundsBillKey?: string | null; // a funder→payer move earmarked to FUND this bill (its plan-step key): shrinks the hub's disbursement to the payer, placed just above the bill
+  slid?: boolean; // a bridge loan's return the head moved earlier than the pool can afford — it sits at the earliest safe point instead
+  settleKey?: string; // a pool-cash bridge leg: ticking it records a real DIRECT settlement payment (lender → payer) under this key
   bridgeGroup?: string | null; // the 3 steps of one REPAYABLE bridge share this id (funder→debtor + debtor→hub + hub→funder) — so they render/delete as a unit
   hidden?: boolean; // a head-hidden derived step — kept for the "un-hide" list but out of the walk/progress
   day: number | null; // effective day-of-month for ordering/display (null = undated)
@@ -114,9 +120,13 @@ export function buildMoneyPlan(input: {
   orderOverrides?: Record<string, number>; // head "move up/down": step id → manual sort index (overrides day/rank order)
   disbDayByStep?: Record<string, number>; // head re-dated ONE funding piece earlier: its stable step id → chosen day. Only that piece moves (setStepDay only persists an affordable day ≤ the bill)
 }): MoneyPlan {
-  const { treasurerId, treasurerName, transfers, bills, allowances = [], piggyReturns = [], advances = [], incomeDayByMember, incomeByMember = {}, incomeArrivals, reimburseByMember = {}, reimburseDay, piggyHandover, manualSteps = [], poolHandovers = [], openingByMember = {}, hiddenKeys = [], orderOverrides = {}, disbDayByStep = {} } = input;
+  const { treasurerId, treasurerName, transfers, bills, allowances = [], piggyReturns = [], advances = [], incomeDayByMember, incomeByMember = {}, incomeArrivals, reimburseByMember = {}, reimburseDay, piggyHandover, manualSteps: manualStepsIn = [], poolHandovers = [], openingByMember = {}, hiddenKeys = [], orderOverrides = {}, disbDayByStep = {} } = input;
 
   const inbound = transfers.filter((t) => t.toId === treasurerId);
+  // A pool-cash bridge leg, once ticked, IS a direct settlement payment (key poolLendKey) — the payment's
+  // own done line represents it from then on, so drop the manual leg (else it would count twice).
+  const paymentKeys = new Set(transfers.flatMap((t) => (t.payments ?? []).map((p) => p.key).filter((k): k is string => !!k)));
+  const manualSteps = manualStepsIn.filter((m) => !(isPoolLendGroup(m.bridgeGroup) && m.fundsBillKey && paymentKeys.has(poolLendKey(m))));
   const outbound = transfers.filter((t) => t.toId !== treasurerId && t.fromId === treasurerId); // hub → creditor
   // Paid-so-far on a (possibly PARTIALLY) settled disbursement. An early reimbursement can settle just
   // a SLICE of what the hub owes a creditor (the settlement record holds one amount); the unpaid rest
@@ -134,6 +144,15 @@ export function buildMoneyPlan(input: {
     const v = Math.round((t.payments ?? []).filter((p) => p.toId != null && p.toId !== t.toId).reduce((a, p) => a + p.amount, 0) * 100) / 100;
     if (v > 0.005) paidDirectBy.set(t.fromId, v);
   }
+  // A bridge from POOL cash a debtor still holds (their collection not yet handed to the hub): they pay the
+  // short member directly instead — that much of their collection never reaches the hub (no return leg).
+  const poolPendingBy = new Map<number, number>();
+  for (const m of manualSteps) {
+    if (!isPoolLendGroup(m.bridgeGroup) || !m.fundsBillKey) continue;
+    if (!inbound.some((t) => t.fromId === m.fromId)) continue;
+    poolPendingBy.set(m.fromId, Math.round(((poolPendingBy.get(m.fromId) ?? 0) + m.amount) * 100) / 100);
+    paidDirectBy.set(m.fromId, Math.round(((paidDirectBy.get(m.fromId) ?? 0) + m.amount) * 100) / 100);
+  }
   const inboundLeft = (t: PlanTransfer) => Math.max(0, Math.round((t.amount - (paidDirectBy.get(t.fromId) ?? 0)) * 100) / 100);
   const hubPaidOf = (o: PlanTransfer) => Math.min(o.amount, (o.payments ?? []).filter((p) => p.fromId == null || p.fromId === treasurerId).reduce((a, p) => a + p.amount, 0));
   // Payments a creditor has already RECEIVED (from the hub or direct), on the day they were scheduled — they
@@ -142,7 +161,9 @@ export function buildMoneyPlan(input: {
   const receivedBy = (creditorId: number) =>
     // Only KEYED payments (ticked plan pieces) carry the day they were scheduled for; a legacy key-less payment
     // keeps the old behaviour (shown at the payout slot, not counted toward earlier bills).
-    outbound.filter((o) => o.toId === creditorId).flatMap((o) => (o.payments ?? []).filter((p) => p.key).map((p) => ({ day: keyDayOf(p.key), amount: p.amount })));
+    // A ticked pool-cash bridge leg (poollend-) filled a HOLE on top of the bill's own funding, so it isn't
+    // counted toward the bill's need (it trims the later payout instead, via paidOf).
+    outbound.filter((o) => o.toId === creditorId).flatMap((o) => (o.payments ?? []).filter((p) => p.key && !p.key.startsWith("poollend-")).map((p) => ({ day: keyDayOf(p.key), amount: p.amount })));
   // Disbursements happen only after everything has been collected AND the bills paid, so anchor
   // undated/residual outbound transfers to the latest inbound-income day OR bill due-day, whichever
   // is later. Undated bills contribute 0 here — a bill with no due date shouldn't push the payout later.
@@ -205,7 +226,9 @@ export function buildMoneyPlan(input: {
     if (paidDirect > 0.005 && remaining <= 0.005) continue; // all of it went direct — the debtor → creditor done line is the record
     steps.push({
       id: `xfer-${t.fromId}-${t.toId}`, kind: "transfer-in", day: inboundDay.get(t.fromId) ?? null,
-      amount: paidDirect > 0.005 ? remaining : t.amount, done: t.settled, fromId: t.fromId, toId: t.toId, fromName: t.from, toName: t.to,
+      // With a pending pool-cash bridge, ticking the (reduced) collection pays all that's left → it's done
+      // once paid + the pending bridge cover the net (the bridge settles itself when its own step is ticked).
+      amount: paidDirect > 0.005 ? remaining : t.amount, done: t.settled || ((poolPendingBy.get(t.fromId) ?? 0) > 0.005 && (t.paidAmount ?? 0) + (poolPendingBy.get(t.fromId) ?? 0) >= t.amount - 0.005), fromId: t.fromId, toId: t.toId, fromName: t.from, toName: t.to,
       recordId: t.recordId, status: t.status ?? null, days: t.days ?? null, feedsBills: hasHubBills,
     });
   }
@@ -226,7 +249,7 @@ export function buildMoneyPlan(input: {
         fromId: p.fromId ?? t.fromId, toId: t.toId, fromName: p.fromId != null && p.fromId !== t.fromId ? nameById.get(p.fromId) ?? t.from : t.from, toName: t.to, recordId: p.id,
         ...(p.fromId != null && p.fromId !== t.fromId ? { reroute: true } : {}),
         // a paid FUNDING piece (disb-…) keeps its place just before the bill it funded, as when it was pending
-        ...(p.key?.startsWith("disb-") ? { fundsMember: true } : {}),
+        ...(p.key?.startsWith("disb-") || p.key?.startsWith("poollend-") ? { fundsMember: true } : {}), // (a ticked pool-cash bridge leg too)
       });
     }
   }
@@ -637,6 +660,7 @@ export function buildMoneyPlan(input: {
   // its slot across refreshes; chain-resolve so a manual can sit after another manual. If the anchor is
   // gone (its bill was removed, say) fall back to the manual's own day. afterStepKey null → top.
   const manualObjs: PlanStep[] = manualSteps.map((m) => ({
+    ...(isPoolLendGroup(m.bridgeGroup) && m.fundsBillKey ? { settleKey: poolLendKey(m) } : {}),
     id: `manual-${m.id}`, kind: "manual", day: m.day ?? null, amount: Math.round(m.amount * 100) / 100, done: m.done,
     fromId: m.fromId, toId: m.toId, fromName: m.fromName, toName: m.toName, manualId: m.id, note: m.note ?? null, afterStepKey: m.afterStepKey ?? undefined, fundsBillKey: m.fundsBillKey ?? null, bridgeGroup: m.bridgeGroup ?? null, status: m.status ?? null, days: m.days ?? null,
   }));
@@ -708,7 +732,6 @@ export function buildMoneyPlan(input: {
     const ord = (s: PlanStep) => orderOverrides[s.id] ?? derived.get(s.id)!;
     steps.sort((a, b) => eff(a) - eff(b) || ord(a) - ord(b));
   }
-
   // Per-actor "still to pay" for the member chip: a pure running sum of that person's own outgoing
   // steps (their transfer to the hub + the bills they pay), decremented as the plan proceeds. Since
   // it's derived only from the plan's own steps it can't drift from anything. The treasurer is shown
@@ -818,10 +841,18 @@ export function buildMoneyPlan(input: {
       const before = j < steps.length ? (steps[j].balancesBefore?.[hub] ?? 0) : endBal;
       if (before + 0.005 >= r.amount && (j >= steps.length || minFrom[j] + 0.005 >= r.amount)) { pos = j; break; }
     }
+    // The head moved it (▲▼ saved an order)? Keep THEIR spot when it's at or after the earliest safe point
+    // (later is always safe for the hub); an earlier spot isn't affordable → it slides to the earliest one.
+    const o = orderOverrides[r.id];
+    if (o != null) {
+      let want = steps.findIndex((x) => (orderOverrides[x.id] ?? -Infinity) > o);
+      if (want < 0) want = steps.length;
+      if (want >= pos) pos = want;
+      else r.slid = true;
+    }
     // Same day as the step it lands before (or the last dated day); never earlier than the loan's day.
-    const near = pos < steps.length ? steps[pos] : steps[steps.length - 1];
-    r.day = near?.day ?? lastDay;
-    if (pos >= steps.length) r.day = lastDay;
+    // Its day = the day of the step it follows (the loan, the income that made it affordable, or the head's spot).
+    r.day = (pos > 0 ? steps[pos - 1].day : null) ?? (pos < steps.length ? steps[pos].day : null) ?? lastDay;
     steps.splice(pos, 0, r);
     const lend = steps.find((x) => x.bridgeGroup === r.bridgeGroup && x.fundsBillKey);
     if (lend) lend.returnBy = r.day;
