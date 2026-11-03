@@ -511,21 +511,29 @@ export function MoneyPlan({
                     if (!sug || dismissed.includes(sug.memberId)) return null;
                     return (
                       <div className="mt-1.5 rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-2 text-[11px] text-slate-700">
-                        <div className="font-semibold text-amber-800">💡 {sug.memberName} is {formatINR(sug.total)} below zero from steps already done</div>
-                        <div className="mt-0.5 text-slate-600">The pool owes them this now. {sug.treasurerName} has the cash{sug.day != null ? ` on the ${ordinal(sug.day)}` : ""}. Suggested (edit if you like):</div>
-                        <div className="mt-1.5 flex flex-wrap gap-1.5">
+                        <div className="font-semibold leading-snug text-amber-800">💡 {sug.memberName} is {formatINR(sug.total)} below zero</div>
+                        <div className="mt-0.5 text-slate-600">Pay it back early — {sug.treasurerName} has the cash{sug.day != null ? ` on the ${ordinal(sug.day)}` : ""}. Edit if needed:</div>
+                        <div className="mt-1.5">
                           <form action={withToast(async (fd: FormData) => { const r = await addPaybackSteps(fd); if (!r.ok) throw new Error(r.error); }, { success: "Payback added" })} className="w-full space-y-1">
                             <input type="hidden" name="periodId" value={periodId} />
                             <input type="hidden" name="memberId" value={sug.memberId} />
-                            <label className="flex items-center justify-between gap-2">
-                              <span>↩ Reimbursement · last month&apos;s cash spends</span>
-                              <input name="reimb" inputMode="decimal" defaultValue={sug.reimb} title={`Up to ${formatINR(sug.maxReimb)}`} className="w-24 rounded border border-amber-300 bg-white px-1.5 py-0.5 text-right tabular-nums" />
-                            </label>
-                            <label className="flex items-center justify-between gap-2">
-                              <span>↩ Paid ahead this month</span>
-                              <input name="ahead" inputMode="decimal" defaultValue={sug.ahead} className="w-24 rounded border border-amber-300 bg-white px-1.5 py-0.5 text-right tabular-nums" />
-                            </label>
-                            <div className="text-[10px] text-slate-500">Joins {sug.treasurerName} → {sug.memberName} on the {sug.day != null ? ordinal(sug.day) : "same day"} as one transfer. Their later payout shrinks by the same amount (to {formatINR(sug.laterPayout)} as suggested) — the total doesn&apos;t change. Up to {formatINR(sug.maxTotal)} in all.</div>
+                            <div className="grid grid-cols-2 gap-2">
+                              <label className="block min-w-0">
+                                <span className="block text-[10px] leading-tight text-slate-500">↩ Last month&apos;s spends</span>
+                                <span className="mt-0.5 flex items-center rounded-md border border-amber-300 bg-white px-1.5 focus-within:ring-2 focus-within:ring-amber-200">
+                                  <span className="text-slate-400">₹</span>
+                                  <input name="reimb" inputMode="decimal" defaultValue={sug.reimb} title={`Up to ${formatINR(sug.maxReimb)}`} className="w-full min-w-0 bg-transparent px-1 py-1 text-right text-xs font-semibold tabular-nums outline-none" />
+                                </span>
+                              </label>
+                              <label className="block min-w-0">
+                                <span className="block text-[10px] leading-tight text-slate-500">↩ Paid ahead</span>
+                                <span className="mt-0.5 flex items-center rounded-md border border-amber-300 bg-white px-1.5 focus-within:ring-2 focus-within:ring-amber-200">
+                                  <span className="text-slate-400">₹</span>
+                                  <input name="ahead" inputMode="decimal" defaultValue={sug.ahead} className="w-full min-w-0 bg-transparent px-1 py-1 text-right text-xs font-semibold tabular-nums outline-none" />
+                                </span>
+                              </label>
+                            </div>
+                            <div className="text-[10px] leading-snug text-slate-500">Joins the {sug.day != null ? ordinal(sug.day) : "same-day"} transfer. Their later payout drops by the same amount — total unchanged. Max {formatINR(sug.maxTotal)}.</div>
                             <div className="flex flex-wrap gap-1.5 pt-0.5">
                               <button type="submit" className={CTA_CLASS.tap}><CtaLabel kind="tap">Add payback</CtaLabel></button>
                               <button type="button" onClick={() => setDismissed((d) => [...d, sug.memberId])} className={CTA_CLASS.undo}>Not now</button>
