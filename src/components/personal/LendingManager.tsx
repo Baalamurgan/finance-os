@@ -235,3 +235,26 @@ export function LoanRowActions({ loan }: { loan: LoanRow; categories?: LoanCat[]
 function fmtDate(iso: string) {
   return new Date(iso).toLocaleDateString("en-IN", { day: "numeric", month: "short" });
 }
+
+// ── Delete a SETTLED manual entry (no parent spend) — tidy-up for a duplicate / mistaken entry. Two taps
+// (Delete → Yes, delete) so it can't happen by accident. Spend-linked entries are NOT offered: deleting
+// one also deletes its spend (see deletePersonalLoan), so those are removed from the spend instead. A
+// linked member entry clears both tabs, same as deleting an open one.
+export function SettledLoanDelete({ id, linked }: { id: number; linked: boolean }) {
+  const [confirming, setConfirming] = useState(false);
+  if (!confirming) {
+    return (
+      <button type="button" onClick={() => setConfirming(true)} className="rounded-md px-1.5 py-0.5 text-[11px] font-medium text-slate-400 hover:bg-red-50 hover:text-red-600">
+        Delete
+      </button>
+    );
+  }
+  return (
+    <ToastForm action={deletePersonalLoan} successMessage="Deleted" className="inline-flex items-center gap-1.5">
+      <input type="hidden" name="id" value={id} />
+      <span className="text-[11px] text-slate-500">Delete this settled entry{linked ? " (both tabs)" : ""}?</span>
+      <button type="submit" className="rounded-md bg-red-600 px-2 py-0.5 text-[11px] font-semibold text-white hover:bg-red-700">Yes, delete</button>
+      <button type="button" onClick={() => setConfirming(false)} className="rounded-md px-1.5 py-0.5 text-[11px] text-slate-500 hover:bg-slate-100">Cancel</button>
+    </ToastForm>
+  );
+}

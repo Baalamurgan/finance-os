@@ -94,7 +94,9 @@ export default async function PersonalExpenses({
       // Only the LENDER rows are this spend's receivables. A member split also writes a mirrored
       // "borrowed" row on the other member (same spendId) — that's their liability copy, not more owed
       // to you, so exclude it or the totals double.
-      const loans = s.splitLoans.filter((l) => l.direction === "lent");
+      // Peer-card debt rows (cardAccountId set — the card OWNER's "lent" side carries this spendId too) are
+      // what you owe the owner, not your split receivables — leave them out as well.
+      const loans = s.splitLoans.filter((l) => l.direction === "lent" && l.cardAccountId == null);
       const existingTotal = r2(loans.reduce((t, l) => t + l.amount, 0));
       const borne = Math.max(0, r2(s.sharedOthers - existingTotal)); // receivables that were deleted → you eat them
       const open = loans.filter((l) => l.status === "open");
@@ -107,6 +109,30 @@ export default async function PersonalExpenses({
         borne,
       };
     }
+    // What the EDIT modal needs to show/change the split: the current receivables (lent rows; peer-card
+    // debt rows carry a cardAccountId and aren't part of it) and whether anything has moved on them yet
+    // (paid back, settled or dropped) — then it's locked, same rule as the server (splitLockReason).
+    let edit: { kind: "split" | "reimburse"; others: { name: string; amount: number; memberId: number | null }[]; myShare: number; reimbMemberId: number | null; reimbName: string | null; dueISO: string | null; notifyDaysBefore: number; locked: string | null } | undefined;
+    if (s.sharedOthers != null) {
+      const rows = s.splitLoans.filter((l) => l.cardAccountId == null);
+      const lent = rows.filter((l) => l.direction === "lent");
+      // a member counterparty = the member whose mirrored "borrowed" row shares this lent row's linkGroup
+      const memberOf = (linkGroup: string | null) => (linkGroup ? rows.find((l) => l.direction === "borrowed" && l.linkGroup === linkGroup)?.memberId ?? null : null);
+      const moved = rows.find((l) => l.status !== "open" || l.outstanding < l.amount - 0.005);
+      const dropped = r2(lent.reduce((t, l) => t + l.amount, 0)) < s.sharedOthers - 0.005;
+      const myShare = r2(s.amount - s.sharedOthers);
+      const isReimb = myShare <= 0.005;
+      edit = {
+        kind: isReimb ? "reimburse" : "split",
+        others: isReimb ? [] : lent.map((l) => ({ name: l.counterparty, amount: l.amount, memberId: memberOf(l.linkGroup) })),
+        myShare,
+        reimbMemberId: isReimb && lent[0] ? memberOf(lent[0].linkGroup) : null,
+        reimbName: isReimb && lent[0] ? lent[0].counterparty : null,
+        dueISO: lent[0]?.dueDate ? lent[0].dueDate.toISOString() : null,
+        notifyDaysBefore: lent[0]?.notifyDaysBefore ?? 3,
+        locked: moved ? "Part of this has already been paid back — undo that in Lending first to change it." : dropped ? "A share on this spend was dropped (you bore it) — the split can't be changed now." : null,
+      };
+    }
     return {
       id: s.id,
       categoryId: s.categoryId,
@@ -115,6 +141,7 @@ export default async function PersonalExpenses({
       date: s.date.toISOString(),
       cardAccountId: s.cardAccountId,
       split,
+      edit,
     };
   });
 
@@ -166,7 +193,7 @@ export default async function PersonalExpenses({
 
         <PlannedSpends items={plannedItems} accounts={myAccounts} removed={removedList} />
 
-        <PersonalSpendsView spends={spendsForClient} categories={catList} cards={c.spendCards} periodId={period.id} />
+        <PersonalSpendsView spends={spendsForClient} categories={catList} cards={c.spendCards} periodId={period.id} periodOpen={period.status === "open"} members={c.members} pastNames={c.pastNames} />
 
         {/* manage spend categories */}
         <section className="rounded-xl border border-slate-200 bg-white p-4">

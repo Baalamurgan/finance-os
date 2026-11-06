@@ -29,6 +29,7 @@ async function main() {
     expenseEntry: await prisma.expenseEntry.findMany(),
     budget: await prisma.budget.findMany(),
     spend: await prisma.spend.findMany(),
+    spendRefund: await prisma.spendRefund.findMany(),
     piggyEntry: await prisma.piggyEntry.findMany(),
     settlementRecord: await prisma.settlementRecord.findMany(),
     loan: await prisma.loan.findMany(),

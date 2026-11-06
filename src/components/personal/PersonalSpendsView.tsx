@@ -1,24 +1,32 @@
 "use client";
 
-import { useState } from "react";
+import { Fragment, useState } from "react";
 import { formatINR } from "@/lib/format";
 import { PersonalSpendRowActions } from "@/components/personal/PersonalSpendRowActions";
+import type { SpendCard, SplitEditInfo } from "@/components/personal/PersonalSpendModal";
+import type { Member } from "@/components/personal/PersonalSplitModal";
 
 type Cat = { id: number; name: string; icon: string | null };
-type Card = { id: number; name: string; color: string };
+type Card = SpendCard;
 type Split = { kind: "split" | "reimburse"; youSpent: number; people: number; toCome: number; borne: number };
-type Spend = { id: number; categoryId: number; amount: number; note: string | null; date: string; cardAccountId: number | null; split?: Split };
+type Spend = { id: number; categoryId: number; amount: number; note: string | null; date: string; cardAccountId: number | null; split?: Split; edit?: SplitEditInfo };
 
 export function PersonalSpendsView({
   spends,
   categories,
   cards = [],
   periodId,
+  periodOpen = true,
+  members = [],
+  pastNames = [],
 }: {
   spends: Spend[];
   categories: Cat[];
   cards?: Card[];
   periodId: number;
+  periodOpen?: boolean;
+  members?: Member[];
+  pastNames?: string[];
 }) {
   const [mode, setMode] = useState<"category" | "date" | "amount">("category");
   const catMap = new Map(categories.map((c) => [c.id, c]));
@@ -57,7 +65,10 @@ export function PersonalSpendsView({
     );
   };
 
-  const Row = ({ s, showCat }: { s: Spend; showCat?: boolean }) => {
+  // A render helper called as a FUNCTION (not <Row/>): a component defined inside render gets a new identity
+  // on every parent re-render (e.g. the focus/visibility router.refresh), which remounted every row and
+  // closed any open edit modal mid-edit. Called inline, the row actions keep their state across refreshes.
+  const row = ({ s, showCat }: { s: Spend; showCat?: boolean }) => {
     const cat = catMap.get(s.categoryId);
     const card = s.cardAccountId != null ? cardMap.get(s.cardAccountId) : undefined;
     return (
@@ -79,7 +90,7 @@ export function PersonalSpendsView({
         </div>
         <div className="flex items-center gap-2 pl-2">
           <span className={`tabular-nums ${card ? "text-slate-400" : "text-slate-700"}`}>{formatINR(s.amount)}</span>
-          <PersonalSpendRowActions periodId={periodId} categories={categories} cards={cards} initial={{ id: s.id, categoryId: s.categoryId, amount: s.amount, note: s.note, cardAccountId: s.cardAccountId }} />
+          <PersonalSpendRowActions periodId={periodId} categories={categories} cards={cards} members={members} pastNames={pastNames} initial={{ id: s.id, categoryId: s.categoryId, amount: s.amount, note: s.note, cardAccountId: s.cardAccountId, dateISO: s.date, periodOpen, split: s.edit }} />
         </div>
       </div>
     );
@@ -105,7 +116,7 @@ export function PersonalSpendsView({
             </summary>
             <div className="divide-y divide-slate-100 border-t border-slate-100 px-4">
               {g.items.map((s) => (
-                <Row key={s.id} s={s} />
+                <Fragment key={s.id}>{row({ s })}</Fragment>
               ))}
             </div>
           </details>
@@ -119,7 +130,7 @@ export function PersonalSpendsView({
     body = (
       <div className="divide-y divide-slate-100 rounded-xl border border-slate-200 bg-white px-4">
         {list.map((s) => (
-          <Row key={s.id} s={s} showCat />
+          <Fragment key={s.id}>{row({ s, showCat: true })}</Fragment>
         ))}
       </div>
     );

@@ -3,7 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { loadPersonal } from "@/lib/loadPersonal";
 import { PersonalNav } from "@/components/personal/PersonalNav";
 import { ToastForm } from "@/components/ToastForm";
-import { AddLoanModal, LoanRowActions, type LoanRow } from "@/components/personal/LendingManager";
+import { AddLoanModal, LoanRowActions, SettledLoanDelete, type LoanRow } from "@/components/personal/LendingManager";
 import { renamePersonalLoanParty } from "@/app/personal/actions";
 
 type LoanData = {
@@ -18,6 +18,7 @@ type LoanData = {
   sharedShare: number | null;
   dueDate: Date | null;
   linkGroup: string | null;
+  spendId: number | null; // set → came from a spend split/reimbursement/peer card (deleting it deletes the spend)
   cardAccount: { name: string; color: string } | null;
 };
 
@@ -186,7 +187,11 @@ function LoanList({
                               {l.status === "open" ? (
                                 <LoanRowActions loan={row} categories={categories} />
                               ) : (
-                                <span className="text-[11px] font-medium text-emerald-600">✓ settled</span>
+                                <>
+                                  <span className="text-[11px] font-medium text-emerald-600">✓ settled</span>
+                                  {/* manual entries only — a spend-linked one is removed via its spend */}
+                                  {l.spendId == null && <SettledLoanDelete id={l.id} linked={l.linkGroup != null} />}
+                                </>
                               )}
                             </div>
                           </li>
