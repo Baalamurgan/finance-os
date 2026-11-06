@@ -1,5 +1,6 @@
 "use server";
 
+import { canPayFrom } from "@/lib/payAccounts";
 import { prisma } from "@/lib/prisma";
 import { Prisma } from "@prisma/client";
 import { revalidatePath } from "next/cache";
@@ -776,6 +777,8 @@ async function doAddSpend(formData: FormData): Promise<SpendResult> {
   if (cardAccountId) {
     const card = await prisma.financeAccount.findUnique({ where: { id: cardAccountId }, select: { memberId: true, active: true, type: true, member: { select: { householdId: true } } } });
     if (card && card.active && cat && card.member.householdId === cat.householdId) {
+      // a bank / cash account is its owner's alone — no one else may pay from it
+      if (!canPayFrom({ type: card.type, ownerId: card.memberId }, selfId)) return { ok: false, error: "That's someone else's bank account — only they can pay from it. Pick a card or Cash/UPI." };
       memberId = card.memberId; // card owner bore the cost
       cardId = cardAccountId;
       cardOwnerId = card.memberId;
@@ -898,7 +901,10 @@ export async function getSpendAssist(): Promise<SpendAssist> {
   const combos = session.user.memberId ? await getFrequentSpendCombos(household.id, session.user.memberId) : [];
   const mfu: SpendAssist["chips"] = combos.map((c) => ({ icon: c.icon, label: c.label, categoryId: c.categoryId, cardId: c.cardId, frequent: true }));
   const chips = [...curated, ...mfu];
-  const cards = cardRows.map((c) => ({ id: c.id, name: c.name, ownerId: c.memberId, ownerName: c.member.name, last4: c.last4, type: c.type, color: c.color, familyPrimary: c.familyPrimary }));
+  // Cards are shared; a bank / cash account shows only to its owner (canPayFrom).
+  const cards = cardRows
+    .filter((c) => canPayFrom({ type: c.type, ownerId: c.memberId }, session.user.memberId))
+    .map((c) => ({ id: c.id, name: c.name, ownerId: c.memberId, ownerName: c.member.name, last4: c.last4, type: c.type, color: c.color, familyPrimary: c.familyPrimary }));
   // Only feature it if it's still an active card in the list; else fall back to the first card.
   const rawTop = topCard[0]?.cardAccountId ?? null;
   const topCardId = cards.some((c) => c.id === rawTop) ? rawTop : (cards[0]?.id ?? null);
@@ -1325,7 +1331,9 @@ export async function editSpendAction(
   let cardOwnerId: number | null = null;
   const rawCard = Number(formData.get("cardAccountId")) || 0;
   if (rawCard) {
-    const card = await prisma.financeAccount.findUnique({ where: { id: rawCard }, select: { memberId: true, active: true, member: { select: { householdId: true } } } });
+    const card = await prisma.financeAccount.findUnique({ where: { id: rawCard }, select: { memberId: true, active: true, type: true, member: { select: { householdId: true } } } });
+    // someone else's bank / cash account can't be picked (keeping the one the spend already has is fine)
+    if (card && !canPayFrom({ type: card.type, ownerId: card.memberId }, session.user.memberId, spend.cardAccountId, rawCard)) return prev;
     if (card && card.active && household && card.member.householdId === household.id) {
       cardAccountId = rawCard;
       cardOwnerId = card.memberId;
@@ -2683,7 +2691,7 @@ export async function toggleManualStepDone(formData: FormData) {
   const actor = { memberId, isHead: await isHead(), canEdit: await canEdit() };
   if (!canActOnStep({ kind: "manual", fromId: m.fromMemberId, toId: m.toMemberId }, actor)) return;
   if (!actor.isHead && !(await periodOpen(m.periodId))) return;
-  await prisma.manualPlanStep.update({ where: { id }, data: { done: !m.done } });
+  await prisma.manualPlanStep.update({ where: { id }, data: { done: !m.done, doneAt: m.done ? null : new Date() } });
   await pinLendReturnDay(m, !m.done);
   await logActivity("settlement", "updated", `${m.done ? "Unmarked" : "Marked"} a manual move ${formatINR(m.amount)} done`, m.periodId);
   revalidateFamily();
@@ -2719,7 +2727,7 @@ export async function toggleStepGroup(formData: FormData): Promise<{ ok: boolean
     if (i.t === "manual") {
       const m = manuals.find((x) => x.id === Number(i.id))!;
       if (m.done === !undo) continue;
-      await prisma.manualPlanStep.update({ where: { id: m.id }, data: { done: !undo } });
+      await prisma.manualPlanStep.update({ where: { id: m.id }, data: { done: !undo, doneAt: undo ? null : new Date() } });
       await pinLendReturnDay(m, !undo);
       total += m.amount;
     } else if (undo) {

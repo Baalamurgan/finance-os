@@ -1,3 +1,4 @@
+import { canPayFrom } from "@/lib/payAccounts";
 import { formatINR } from "@/lib/format";
 import { sheetSection, isBudgetLikeCard } from "@/lib/sheetSection";
 import { loadCommon } from "@/lib/load";
@@ -569,7 +570,8 @@ function SpendCard({
                   subCategories={isMisc ? subCats : undefined}
                   isHead={isHead}
                   members={members}
-                  cards={cards}
+                  // cards are shared; a bank/cash account only for its owner (+ whatever this spend already uses)
+                  cards={(cards ?? []).filter((fc) => canPayFrom({ type: fc.type, ownerId: fc.ownerId }, currentMemberId, s.cardAccountId, fc.id))}
                 />
               )}
               {open && !refunds.byLine.get(s.id) && !refunds.byOriginal.get(s.id) && <SpendDeleteButton id={s.id} />}

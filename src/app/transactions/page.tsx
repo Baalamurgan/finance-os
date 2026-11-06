@@ -3,8 +3,6 @@ import { getTransactionLedger } from "@/lib/queries";
 import { NavHeader } from "@/components/NavHeader";
 import { Transactions } from "@/components/Transactions";
 
-const MONTHS = ["", "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-
 export default async function TransactionsPage({
   searchParams,
 }: {
@@ -60,13 +58,12 @@ export default async function TransactionsPage({
         <div>
           <h1 className="text-xl font-bold text-slate-900">🧾 Transactions</h1>
           <p className="text-sm text-slate-500">
-            Every rupee in and out this month, in date order — the running balance ends exactly at each
+            Every rupee in and out this month, in the order it happened — the running balance ends exactly at each
             person&apos;s in-hand.
           </p>
         </div>
         <Transactions
           ledgers={ledgers}
-          monthLabel={MONTHS[c.selMonth] ?? ""}
           defaultMemberId={c.currentMember?.id ?? null}
         />
       </main>

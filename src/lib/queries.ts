@@ -2581,32 +2581,76 @@ export async function getMiscSubCategories(householdId: number): Promise<MiscSub
   }
 }
 
-export type LedgerRow = { day: number | null; label: string; amount: number; dir: "in" | "out"; running: number };
+// A ledger tag: payment method (💳 card / 🏦 bank), category chip, OOP (out-of-pocket), 🐷 Piggy.
+export type LedgerTag = { kind: "card" | "bank" | "cat" | "oop" | "piggy"; text: string; color?: string };
+// dir "card" = a credit-card spend: listed for completeness on its date, but NOT counted (no cash left yet —
+// it leaves when the card bill is paid), so `running` is null and the total still ends at In-hand.
+// `atISO` = when it actually happened (paid / ticked / logged) — the sort key; `plannedDay` = the plan's day
+// when that differs. `boundary` rows (carried balance, Piggy held) sit on top.
+export type LedgerRow = { atISO: string | null; plannedDay: number | null; boundary: boolean; label: string; amount: number; dir: "in" | "out" | "card"; running: number | null; tags: LedgerTag[] };
 export type MemberLedger = { memberId: number; name: string; rows: LedgerRow[]; inHand: number };
 
 // Per-member DATED transaction ledger for one month — powers the Transactions tab. Opening carry + every
-// money-in / money-out event (income, transfers, bills, spends, Piggy sweep, set-aside bill payments),
-// sorted by day, with a running balance that ends EXACTLY at that member's In-Hand. It reuses the SAME
-// walk the In-Hand card uses (openingCarry + doneCashMove − cashSpent + piggyHeld − swept − set-aside), so
-// the final `running` equals the holding-now figure by construction.
+// money-in / money-out event (income, transfers, bills, spends, Piggy moves, set-aside bill payments), in
+// the order they REALLY happened (paid / ticked / logged time; a step ticked before its time was recorded
+// falls back to its planned day), with a running balance that ends EXACTLY at that member's In-Hand. It
+// reuses the SAME walk the In-Hand card uses (openingCarry + doneCashMove − cashSpent + piggyHeld − swept −
+// set-aside), so the final `running` equals the holding-now figure by construction. Credit-card spends are
+// listed (tagged, greyed) but never counted.
 export async function getTransactionLedger(householdId: number, periodId: number): Promise<MemberLedger[]> {
   const inhand = await getInHand(householdId, periodId);
   const plan = await getMoneyPlan(householdId, periodId, inhand);
   const piggyHandedOver = inhand.piggyHandoverStep?.done ?? false;
   const pendingPiggyLump = inhand.pendingPiggyHandover?.lump ?? 0;
-  const [spends, setAsidePays, cats] = await Promise.all([
+  const done = plan.steps.filter((s) => s.done && !s.hidden && !s.paidPriorMonth);
+  const ids = (f: (s: (typeof done)[number]) => number | null | undefined) => [...new Set(done.map(f).filter((x): x is number => x != null))];
+  const priorPeriodId = inhand.piggyHandoverStep?.priorPeriodId ?? null;
+  const [period, spends, setAsidePays, cats, recs, incomes, entries, manuals, advances, handovers, cardBills, priorPeriod] = await Promise.all([
+    prisma.period.findUnique({ where: { id: periodId }, select: { year: true, month: true } }),
     prisma.spend.findMany({
       where: { periodId },
-      select: { memberId: true, amount: true, createdAt: true, label: true, category: { select: { name: true } }, cardAccount: { select: { type: true } } },
+      select: { memberId: true, amount: true, createdAt: true, label: true, subCategory: true, category: { select: { name: true, section: true, tracked: true } }, cardAccount: { select: { type: true, name: true, color: true } } },
       orderBy: { createdAt: "asc" },
     }),
     prisma.billPayment.findMany({ where: { periodId, fromSetAside: { gt: 0 } }, select: { memberId: true, categoryId: true, fromSetAside: true, paidAt: true } }),
     prisma.category.findMany({ where: { householdId }, select: { id: true, name: true, billEveryMonths: true } }),
+    prisma.settlementRecord.findMany({ where: { id: { in: ids((s) => s.recordId) } }, select: { id: true, settledAt: true } }),
+    prisma.incomeEntry.findMany({ where: { id: { in: [...ids((s) => s.incomeId), ...done.flatMap((s) => s.piggyIncomeIds ?? [])] } }, select: { id: true, receivedAt: true } }),
+    prisma.expenseEntry.findMany({ where: { id: { in: ids((s) => s.billId) } }, select: { id: true, paidAt: true, vendorPaidAt: true } }),
+    prisma.manualPlanStep.findMany({ where: { id: { in: ids((s) => s.manualId) } }, select: { id: true, doneAt: true } }),
+    prisma.advance.findMany({ where: { id: { in: ids((s) => s.advanceId) } }, select: { id: true, settledAt: true, paybackSettledAt: true } }),
+    prisma.poolHandover.findMany({ where: { id: { in: done.flatMap((s) => s.recordIds ?? []) } }, select: { id: true, handedOverAt: true } }),
+    prisma.personalCardBill.findMany({ where: { cardAccountId: { in: ids((s) => (s.cardBill ? s.cardId : null)) } }, select: { cardAccountId: true, cycleEnd: true, paidAt: true } }),
+    priorPeriodId != null ? prisma.period.findUnique({ where: { id: priorPeriodId }, select: { piggyHandedOverAt: true } }) : Promise.resolve(null),
   ]);
   const catOf = new Map(cats.map((c) => [c.id, c]));
-  const dayOf = (d: Date | null | undefined) => (d ? istDateParts(d).day : null);
+  const recAt = new Map(recs.map((r) => [r.id, r.settledAt]));
+  const incAt = new Map(incomes.map((r) => [r.id, r.receivedAt]));
+  const entryOf = new Map(entries.map((r) => [r.id, r]));
+  const manAt = new Map(manuals.map((r) => [r.id, r.doneAt]));
+  const advOf = new Map(advances.map((r) => [r.id, r]));
+  const hoAt = new Map(handovers.map((r) => [r.id, r.handedOverAt]));
   const r2 = (n: number) => Math.round(n * 100) / 100;
+  const latest = (ds: (Date | null | undefined)[]) => ds.filter((d): d is Date => d != null).sort((a, b) => b.getTime() - a.getTime())[0] ?? null;
+  // When a done plan step REALLY happened — its record's paid/ticked time (null = not recorded).
+  const stepAt = (s: (typeof done)[number]): Date | null => {
+    if (s.kind === "income") return s.incomeId != null ? incAt.get(s.incomeId) ?? null : null;
+    if (s.kind === "manual") return s.manualId != null ? manAt.get(s.manualId) ?? null : null;
+    if (s.kind === "advance") { const a = s.advanceId != null ? advOf.get(s.advanceId) : undefined; return (s.payback ? a?.paybackSettledAt : a?.settledAt) ?? null; }
+    if (s.kind === "pool-handover") return (s.piggyIncomeIds?.length ?? 0) > 0 ? latest(s.piggyIncomeIds!.map((i) => incAt.get(i))) : latest((s.recordIds ?? []).map((i) => hoAt.get(i)));
+    if (s.kind === "transfer-in" || s.kind === "transfer-out") return s.recordId != null ? recAt.get(s.recordId) ?? null : null;
+    if (s.kind === "bill" && s.cardBill && s.cardId != null && s.cycleEndISO) {
+      const end = new Date(s.cycleEndISO).getTime();
+      return cardBills.find((b) => b.cardAccountId === s.cardId && Math.abs(b.cycleEnd.getTime() - end) < 36 * 3600 * 1000)?.paidAt ?? null;
+    }
+    if ((s.kind === "bill" || s.kind === "allowance") && s.billId != null) { const e = entryOf.get(s.billId); return (s.poolVendorLeg ? e?.vendorPaidAt ?? e?.paidAt : e?.paidAt) ?? null; }
+    return null;
+  };
+  // Fallback for an untimed step: its planned day, at IST noon of this month (so it sorts within that day).
+  const plannedAt = (day: number | null) => (period && day != null && day > 0 ? new Date(Date.UTC(period.year, period.month - 1, day, 6, 30)) : null);
+  const MARKER = /\s*\[mp\d+\]\s*$/;
 
+  type Raw = { at: Date | null; plannedDay: number | null; boundary?: boolean; label: string; amount: number; dir: "in" | "out" | "card"; tags?: LedgerTag[] };
   const out: MemberLedger[] = [];
   for (const g of inhand.byPerson) {
     if (g.memberId == null) continue;
@@ -2617,35 +2661,70 @@ export async function getTransactionLedger(householdId: number, periodId: number
     const piggyGone = g.openingCarry != null && (isHolder ? piggyAmt <= 0.005 : piggyHandedOver);
     const sweptOut = g.openingCarry != null && piggyHeldParts({ swept, pendingPiggyHeld: 0, isHolder, piggyGone }).sweptOut;
     const opening = g.openingCarry ?? 0;
+    const pig: LedgerTag = { kind: "piggy", text: "🐷 Piggy" };
 
-    const raw: { day: number | null; label: string; amount: number; dir: "in" | "out" }[] = [];
-    // Boundary rows (day −1 so they sort before any dated October row).
-    raw.push({ day: -1, label: "Carried from last month", amount: Math.abs(opening), dir: opening >= 0 ? "in" : "out" });
-    if (sweptOut && Math.abs(swept) > 0.005) raw.push({ day: -1, label: "Last month's free → Piggy", amount: Math.abs(swept), dir: "out" });
-    if (isHolder && Math.abs(piggyAmt) > 0.005) raw.push({ day: -1, label: "🐷 General Piggy held (as holder)", amount: Math.abs(piggyAmt), dir: piggyAmt >= 0 ? "in" : "out" });
-    // Done cash moves — mirrors doneCashMoveDetailByMember (so it sums to doneCashMove) plus the step day.
-    for (const s of plan.steps) {
-      if (!s.done || s.hidden || s.paidPriorMonth) continue;
-      if (s.kind === "income") { if (s.toId === mid) raw.push({ day: s.day, label: s.source || "Income received", amount: s.amount, dir: "in" }); continue; }
-      if (s.kind === "bill") { if (!s.fund && !s.miscCard && s.payerId === mid) raw.push({ day: s.day, label: `Paid ${s.vendor || "bill"}`, amount: s.amount, dir: "out" }); continue; }
-      if (s.kind === "piggy") continue;
-      if (s.kind === "pool-handover" && (s.piggyIncomeIds?.length ?? 0) > 0) { if (s.toId === mid) raw.push({ day: s.day, label: s.fromName ? `From ${s.fromName} · Piggy` : "Piggy received", amount: s.amount, dir: "in" }); continue; }
-      if (s.fromId === mid) raw.push({ day: s.day, label: s.toName ? `Sent to ${s.toName}` : "Sent out", amount: s.amount, dir: "out" });
-      if (s.toId === mid) raw.push({ day: s.day, label: s.fromName ? `From ${s.fromName}` : "Received", amount: s.amount, dir: "in" });
+    const raw: Raw[] = [];
+    // Boundary rows (sort before any dated row).
+    raw.push({ at: null, plannedDay: null, boundary: true, label: "Carried from last month", amount: Math.abs(opening), dir: opening >= 0 ? "in" : "out" });
+    if (sweptOut && Math.abs(swept) > 0.005) {
+      // Last month's leftover → Piggy: dated to when the hand-over was ticked (else it stays a carried row).
+      const at = piggyHandedOver ? priorPeriod?.piggyHandedOverAt ?? null : null;
+      const holder = inhand.piggyHolderId != null && inhand.piggyHolderId !== mid ? inhand.byPerson.find((p) => p.memberId === inhand.piggyHolderId)?.name : null;
+      raw.push({ at, plannedDay: null, boundary: at == null, label: `Last month's leftover → Piggy${holder ? ` (to ${holder})` : ""}`, amount: Math.abs(swept), dir: "out", tags: [pig] });
     }
-    // Individual cash spends (non-credit-card — credit float isn't cash-out). Σ === cashSpent.
+    if (isHolder && Math.abs(piggyAmt) > 0.005) raw.push({ at: null, plannedDay: null, boundary: true, label: "General Piggy held (as holder)", amount: Math.abs(piggyAmt), dir: piggyAmt >= 0 ? "in" : "out", tags: [pig] });
+    // Done cash moves — mirrors doneCashMoveDetailByMember (so it sums to doneCashMove), dated by when they happened.
+    for (const s of done) {
+      const at = stepAt(s);
+      const base = { at, plannedDay: s.day };
+      if (s.kind === "income") { if (s.toId === mid) raw.push({ ...base, label: s.source || "Income received", amount: s.amount, dir: "in" }); continue; }
+      if (s.kind === "bill") {
+        if (!s.fund && !s.miscCard && s.payerId === mid) raw.push({ ...base, label: `Paid ${s.vendor || "bill"}`, amount: s.amount, dir: "out", tags: s.cardBill ? [{ kind: "card", text: "💳 card bill", color: s.cardColor }] : undefined });
+        continue;
+      }
+      if (s.kind === "piggy") continue; // the owner → holder leftover: shown above as the dated "→ Piggy" row
+      if (s.kind === "pool-handover" && (s.piggyIncomeIds?.length ?? 0) > 0) {
+        // Piggy money taken out for this month and handed to the treasurer. The holder's In-Hand never
+        // counted it (it moved Piggy → income), so show the pair: out of the Piggy (in) + handed over (out).
+        if (s.toId === mid) raw.push({ ...base, label: s.fromName ? `From ${s.fromName} · Piggy` : "Piggy received", amount: s.amount, dir: "in", tags: [pig] });
+        if (s.fromId === mid && s.toId !== mid) {
+          raw.push({ ...base, label: "Taken out of the Piggy", amount: s.amount, dir: "in", tags: [pig] });
+          raw.push({ ...base, label: s.toName ? `Piggy money → ${s.toName}` : "Piggy money handed over", amount: s.amount, dir: "out", tags: [pig] });
+        }
+        continue;
+      }
+      if (s.fromId === mid) raw.push({ ...base, label: s.toName ? `Sent to ${s.toName}` : "Sent out", amount: s.amount, dir: "out" });
+      if (s.toId === mid) raw.push({ ...base, label: s.fromName ? `From ${s.fromName}` : "Received", amount: s.amount, dir: "in" });
+    }
+    // Spends on their logged time. Cash / bank / debit = real cash out (Σ === cashSpent); a credit-card spend
+    // is listed but not counted. A negative spend (refund line) comes back in.
     for (const sp of spends) {
-      if (sp.memberId !== mid || sp.cardAccount?.type === "credit_card") continue;
-      raw.push({ day: dayOf(sp.createdAt), label: (sp.label?.trim() || sp.category?.name || "Spend"), amount: sp.amount, dir: "out" });
+      if (sp.memberId !== mid) continue;
+      const oop = /\(out-of-pocket\)/.test(sp.label ?? "");
+      const label = (sp.label?.trim() || sp.category?.name || "Spend").replace(MARKER, "").replace(/\s*\(out-of-pocket\)/, "");
+      const misc = sp.category?.section === "Misc";
+      const tags: LedgerTag[] = [{ kind: "cat", text: misc ? `Misc${sp.subCategory ? ` · ${sp.subCategory}` : ""}` : sp.category?.name ?? "Spend" }];
+      if (oop) tags.push({ kind: "oop", text: "OOP" });
+      const credit = sp.cardAccount?.type === "credit_card";
+      if (sp.cardAccount) tags.unshift({ kind: credit || sp.cardAccount.type === "debit_card" || sp.cardAccount.type === "prepaid_card" ? "card" : "bank", text: `${credit || sp.cardAccount.type === "debit_card" || sp.cardAccount.type === "prepaid_card" ? "💳" : "🏦"} ${sp.cardAccount.name}`, color: sp.cardAccount.color });
+      raw.push({ at: sp.createdAt, plannedDay: null, label, amount: Math.abs(sp.amount), dir: credit ? "card" : sp.amount < 0 ? "in" : "out", tags });
     }
     // Set-aside paid toward a MULTI-month bill (EB/Brio…) — real cash out that fromSetAside hides. Σ === setAsideConsumedCash.
     for (const p of setAsidePays) {
       if (p.memberId !== mid || (catOf.get(p.categoryId)?.billEveryMonths ?? 1) <= 1) continue;
-      raw.push({ day: dayOf(p.paidAt), label: `${catOf.get(p.categoryId)?.name ?? "Bill"} (paid from set-aside)`, amount: p.fromSetAside, dir: "out" });
+      raw.push({ at: p.paidAt, plannedDay: null, label: `${catOf.get(p.categoryId)?.name ?? "Bill"} (paid from set-aside)`, amount: p.fromSetAside, dir: "out" });
     }
-    raw.sort((a, b) => (a.day ?? 999) - (b.day ?? 999));
+    // Order: boundary rows first, then by when it happened (an untimed step at its planned day's noon).
+    const key = (x: Raw) => (x.boundary ? -Infinity : (x.at ?? plannedAt(x.plannedDay))?.getTime() ?? Infinity);
+    raw.sort((a, b) => key(a) - key(b));
     let running = 0;
-    const rows: LedgerRow[] = raw.map((x) => { running = r2(running + (x.dir === "in" ? x.amount : -x.amount)); return { ...x, running }; });
+    const rows: LedgerRow[] = raw.map((x) => {
+      if (x.dir !== "card") running = r2(running + (x.dir === "in" ? x.amount : -x.amount));
+      const at = x.at ?? null;
+      // show the planned day only when the step really happened on a different day (or wasn't timed)
+      const plannedDay = x.plannedDay != null && (!at || istDateParts(at).day !== x.plannedDay || (period != null && istDateParts(at).month !== period.month)) ? x.plannedDay : null;
+      return { atISO: at ? at.toISOString() : x.boundary ? null : plannedAt(x.plannedDay)?.toISOString() ?? null, plannedDay: at ? plannedDay : null, boundary: !!x.boundary, label: x.label, amount: x.amount, dir: x.dir, running: x.dir === "card" ? null : running, tags: x.tags ?? [] };
+    });
     out.push({ memberId: mid, name: g.name, rows, inHand: running });
   }
   return out;

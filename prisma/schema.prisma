@@ -904,6 +904,7 @@ model ManualPlanStep {
   day          Int? // fallback ordering / display if the anchor step is gone
   note         String?
   done         Boolean  @default(false)
+  doneAt       DateTime? // when it was ticked done (Transactions tab sorts by it); null = pending / ticked pre-column
   createdAt    DateTime @default(now())
 }
 
