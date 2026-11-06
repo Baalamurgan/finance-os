@@ -296,8 +296,10 @@ export function MoneyPlan({
             const title = isIncome ? `${s.toName ?? "?"} · ${s.source ?? "income"}` : isAllowance ? `${s.fromName} → ${s.toName}` : isHandover ? `${s.fromName ?? "Owner"} → ${s.toName}` : isPiggy ? `${s.fromName} → ${s.toName} · Piggy` : isManual || isAdvance || isTransfer || isPoolHandover ? `${s.fromName} → ${s.toName}` : `${s.payerName} → ${s.vendor}`;
             // Urgency (only while unpaid — a done step is never "overdue"): RED for overdue OR due
             // today (needs action now), AMBER for due in 1–2 days, plain otherwise.
-            const urgent = !s.done && (s.status === "overdue" || (s.status === "soon" && (s.days ?? 1) <= 0));
-            const soon = !s.done && s.status === "soon" && (s.days ?? 0) > 0;
+            // Every step kind follows the same rule; a step with no server urgency gets it from its day (current month only).
+            const urg = urgencyOf(s, currentDay);
+            const urgent = !s.done && (urg.status === "overdue" || (urg.status === "soon" && (urg.days ?? 1) <= 0));
+            const soon = !s.done && urg.status === "soon" && (urg.days ?? 0) > 0;
             // Who moves cash in this step (before → after): a bill's payer; a transfer's both sides.
             // Fund bills draw the sinking fund (no cash), so nobody's balance moves — nothing to show.
             const cashParties: { id: number; name: string }[] = (
@@ -341,7 +343,7 @@ export function MoneyPlan({
                   <div className={`break-words font-medium leading-snug ${s.done ? "text-slate-400 line-through" : "text-slate-800"}`}>{title}</div>
                   {g ? (
                     <div className="mt-1 flex flex-wrap items-center gap-1.5">
-                      <DayTag kind={s.kind} day={s.day} status={s.status ?? null} days={s.days ?? null} done={s.done} />
+                      <DayTag kind={s.kind} day={s.day} status={urg.status} days={urg.days} done={s.done} />
                       <span className="shrink-0 rounded-full bg-slate-100 px-1.5 py-0.5 text-[9px] font-medium text-slate-500">{g.length} parts · one transfer</span>
                     </div>
                   ) : (
@@ -354,12 +356,12 @@ export function MoneyPlan({
                     {/* Manual steps own their day and can edit it in ANY state (it's ad-hoc metadata;
                         position still follows the insert anchor). Handled here so it's not gated by !done. */}
                     {isManual && (() => {
-                      const tag = <DayTag kind="manual" day={s.day} status={s.status ?? null} days={s.days ?? null} done={s.done} />;
+                      const tag = <DayTag kind="manual" day={s.day} status={urg.status} days={urg.days} done={s.done} />;
                       if (!isHead || !datesEditable || s.manualId == null) return s.day != null ? tag : null;
                       return <StepDayEditor kind="manual" id={s.manualId} day={s.day} minDay={s.fundsBillKey ? plan.minEditDay : undefined} maxDay={s.fundsBillKey ? (s.disbMaxDay ?? s.day ?? undefined) : undefined}>{tag}</StepDayEditor>;
                     })()}
                     {!isManual && !s.done && (!isPiggy || isHandover) && (() => {
-                      const tag = <DayTag kind={s.kind} day={s.day} status={s.status ?? null} days={s.days ?? null} done={s.done} />;
+                      const tag = <DayTag kind={s.kind} day={s.day} status={urg.status} days={urg.days} done={s.done} />;
                       if (!isHead || !datesEditable) return tag;
                       // Row-backed steps → edit the row's day (+ pin): bill/allowance line, income entry,
                       // advance (its ExpenseEntry / IncomeEntry / advance id).
@@ -992,6 +994,17 @@ function ordinal(day: number) {
 
 // Urgency colours (red = overdue / due today, amber = due in 1–2 days) are ONLY for steps still to do.
 // A done step is history: a quiet grey "was due <day>" (or "on <day>" for income), never red/amber.
+// One urgency rule for every step: the server's status when it set one (bills use their real due date),
+// otherwise derived from the step's day vs today — only while viewing the current month (currentDay set).
+// Income is an arrival, never urgent. Overdue = day passed; soon = today or within 2 days.
+type Urgency = { status: "overdue" | "soon" | "normal" | null; days: number | null };
+function urgencyOf(s: { kind: string; day: number | null; status?: Urgency["status"]; days?: number | null }, currentDay: number | null): Urgency {
+  if (s.status != null || s.kind === "income") return { status: s.status ?? null, days: s.days ?? null };
+  if (currentDay == null || s.day == null) return { status: null, days: null };
+  const days = s.day - currentDay;
+  return { status: days < 0 ? "overdue" : days <= 2 ? "soon" : "normal", days };
+}
+
 function DayTag({ kind, day, status, days, done = false }: { kind: string; day: number | null; status: "overdue" | "soon" | "normal" | null; days: number | null; done?: boolean }) {
   const ord = day == null ? null : ordinal(day);
   if (done) return ord ? <span className="shrink-0 rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] font-normal text-slate-400">{kind === "income" ? `on ${ord}` : `was due ${ord}`}</span> : null;
@@ -1000,7 +1013,8 @@ function DayTag({ kind, day, status, days, done = false }: { kind: string; day: 
   // Disbursements (hub → member) go out once the hub has collected enough. They're scheduled to a
   // real target day (reimburse-day, or the day a funded bill falls due) — show it as "by <day>", and
   // only fall back to "after collection" when there's genuinely no date (the month-end residual).
-  if (kind === "transfer-out" || kind === "allowance") return <span className="shrink-0 rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-400">{ord ? `by ${ord}` : "after collection"}</span>;
+  // They still turn red/amber like any other step once their day is today or past (handled below).
+  if ((kind === "transfer-out" || kind === "allowance") && (day == null || (status !== "overdue" && status !== "soon"))) return <span className="shrink-0 rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-400">{ord ? `by ${ord}` : "after collection"}</span>;
   // No due date set = lowest priority (shown last). Make that explicit rather than blank.
   if (day == null) return <span className="shrink-0 rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-400">no date</span>;
   if (status === "overdue") {
