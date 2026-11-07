@@ -67,7 +67,7 @@ export default async function PersonalLoans({
           </div>
         </div>
 
-        <AddLoanModal members={otherMembers} />
+        <AddLoanModal members={otherMembers} pastNames={c.pastNames} />
 
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <LoanList title="You lent" loans={lent} accent="emerald" direction="lent" categories={catOpts} />

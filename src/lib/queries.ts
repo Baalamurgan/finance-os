@@ -135,7 +135,8 @@ export async function getMiscReview(householdId: number, periodId: number) {
         orderBy: { id: "desc" },
       }),
       getMatcherKeywords(householdId),
-      prisma.category.findMany({ where: { householdId, tracked: true, section: { not: "Misc" } }, select: { id: true, name: true } }),
+      // only THIS month's categories (a line or budget this month) — never suggest moving to an old spend card
+      prisma.category.findMany({ where: { householdId, tracked: true, section: { not: "Misc" }, OR: [{ expenses: { some: { periodId } } }, { budgets: { some: { periodId, planned: { gt: 0 } } } }] }, select: { id: true, name: true } }),
     ]);
     const nameById = new Map(trackedCats.map((c) => [c.id, c.name]));
 
@@ -2565,7 +2566,16 @@ export async function getMoneyPlanActivity(periodId: number): Promise<MoneyPlanA
     orderBy: { createdAt: "desc" },
     select: { id: true, memberName: true, action: true, entity: true, summary: true, createdAt: true },
   });
-  return rows.map((r) => ({ id: r.id, memberName: r.memberName, action: r.action, entity: r.entity, summary: r.summary, at: r.createdAt }));
+  return rows.map((r) => ({ id: r.id, memberName: r.memberName, action: r.action, entity: r.entity, summary: familySafeSummary(r.entity, r.summary), at: r.createdAt }));
+}
+
+// Older card-bill entries were logged with the WHOLE bill ("Paid Coral ICICI bill ₹30,054"), which includes the
+// owner's personal spends. The family activity shows no personal number, so drop that amount (new entries are
+// logged with the family side only — "… · family side ₹1,116" — and pass through unchanged).
+export function familySafeSummary(entity: string, summary: string): string {
+  if (entity !== "cardbill") return summary;
+  const m = summary.match(/^Paid (.+?) bill ₹[\d,]+(?:\.\d+)?$/);
+  return m ? `Paid ${m[1]} bill` : summary;
 }
 
 // Every daily spend for a month, newest first — who spent, on what, how much, when. Reads the Spend

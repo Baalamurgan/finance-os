@@ -1,3 +1,4 @@
+import { REMOVED_NOTE } from "@/lib/notes";
 import { redirect } from "next/navigation";
 import { cookies } from "next/headers";
 import { auth } from "@/auth";
@@ -134,19 +135,21 @@ export async function loadCommon(params?: { y?: string; m?: string }) {
       : null;
   const provisional = earlierOpen ? { workingLabel: earlierOpen.label } : null;
 
-  // One-off planned spend cards (miscCard) belong to the month they were made for. The category row
-  // lives on after that month, so mark which ones are live in the SELECTED month (a budget or an
-  // envelope line there) — the Add-spend picker hides the rest (last month's cards).
-  const miscIds = categories.filter((cat) => cat.miscCard).map((cat) => cat.id);
-  const liveMisc = new Set<number>();
-  if (selected && miscIds.length > 0) {
-    const [bud, env] = await Promise.all([
-      prisma.budget.findMany({ where: { periodId: selected.id, categoryId: { in: miscIds }, planned: { gt: 0 } }, select: { categoryId: true } }),
-      prisma.expenseEntry.findMany({ where: { periodId: selected.id, note: null, categoryId: { in: miscIds }, amount: { gt: 0 } }, select: { categoryId: true } }),
+  // Pickers show only THIS month's categories: those with a line or a budget on the selected month's Sheet
+  // (incl. planned spend cards). A category with nothing this month — an old spend card, a bill not in this
+  // month, a discontinued budget — is hidden from pickers (it still exists and shows wherever it has lines).
+  // The permanent Misc buckets (Personal/Misc, Giving, Someone else…) are always live: spends land there
+  // without a Sheet line of their own.
+  const liveIds = new Set<number>();
+  if (selected) {
+    const [bud, lines] = await Promise.all([
+      prisma.budget.findMany({ where: { periodId: selected.id, planned: { gt: 0 } }, select: { categoryId: true } }),
+      prisma.expenseEntry.findMany({ where: { periodId: selected.id, OR: [{ note: null }, { note: { not: REMOVED_NOTE } }] }, select: { categoryId: true }, distinct: ["categoryId"] }),
     ]);
-    for (const r of [...bud, ...env]) liveMisc.add(r.categoryId);
+    for (const r of [...bud, ...lines]) if (r.categoryId != null) liveIds.add(r.categoryId);
   }
-  const categoriesWithLive = categories.map((cat) => ({ ...cat, liveThisMonth: !cat.miscCard || liveMisc.has(cat.id) }));
+  const isLive = (cat: { id: number; section: string; miscCard: boolean }) => !selected || liveIds.has(cat.id) || (cat.section === "Misc" && !cat.miscCard);
+  const categoriesWithLive = categories.map((cat) => ({ ...cat, liveThisMonth: isLive(cat) }));
 
   return {
     household,

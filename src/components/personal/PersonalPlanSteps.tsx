@@ -4,13 +4,14 @@ import { useActionState, useEffect, useRef, useState, type ReactNode } from "rea
 import { useSavingToast } from "@/components/useSavingToast";
 import {
   tickPlanStep, untickPlanStep, redatePlanStep, setPlanStepSkipped, deletePlanStep, movePlanStep,
-  addPlanStep, editPlanStep, setPlanStepRoute, payCardBillStep,
+  addPlanStep, editPlanStep, setPlanStepRoute,
   tickPlanStepGroup, untickPlanStepGroup, movePlanStepGroup, rebuildPlanSteps,
   type PersonalSaveState,
 } from "@/app/personal/actions";
 import { useToast } from "@/components/Toast";
 import { ToastForm } from "@/components/ToastForm";
 import { formatINR } from "@/lib/format";
+import { PersonalCardBillPayModal } from "@/components/personal/PersonalCardBillPay";
 
 // A credit-card bill step's statement breakdown — the same figures the family In-Hand ("held for this card")
 // and the card page show, so the three always agree.
@@ -429,7 +430,7 @@ function StepRow({ s, accounts, isFirst, isLast }: { s: PlanStepView; accounts: 
       {panel === "route" && canEdit && <RouteEditor s={s} accounts={accounts} onClose={() => setPanel(null)} />}
       {panel === "edit" && canEdit && <EditStepModal s={s} onClose={() => setPanel(null)} />}
       {panel === "prompt" && <MarkPaidPrompt s={s} accounts={accounts} onClose={() => setPanel(null)} />}
-      {panel === "pay" && s.card && <CardBillPayModal s={s} card={s.card} accounts={accounts} onClose={() => setPanel(null)} />}
+      {panel === "pay" && s.card && <PersonalCardBillPayModal target={{ stepId: s.id }} card={s.card} accounts={accounts} onClose={() => setPanel(null)} />}
     </div>
   );
 }
@@ -528,136 +529,6 @@ function EditStepModal({ s, onClose }: { s: PlanStepView; onClose: () => void })
   );
 }
 
-function Row({ label, hint, value, strong, tone }: { label: string; hint?: string; value: number; strong?: boolean; tone?: string }) {
-  return (
-    <div className="flex items-baseline justify-between gap-2 text-sm">
-      <span className={strong ? "font-semibold text-slate-800" : "text-slate-600"}>{label} {hint && <span className="text-[11px] text-slate-400">{hint}</span>}</span>
-      <span className={`shrink-0 tabular-nums ${strong ? "font-semibold text-slate-800" : tone ?? "text-slate-600"}`}>{formatINR(value)}</span>
-    </div>
-  );
-}
-
-// Pay a credit-card bill: shows exactly how much is yours (leaves the personal account you pick) and how much
-// is the family's (taken from the family In-Hand — the same figure as "held for this card" there).
-function CardBillPayModal({ s, card, accounts, onClose }: { s: PlanStepView; card: CardBillView; accounts: Acct[]; onClose: () => void }) {
-  const toast = useToast();
-  const prevN = useRef(0);
-  const swipes = Math.round((card.personal + card.family) * 100) / 100;
-  const suggested = Math.round((swipes + card.annualFee) * 100) / 100;
-  const [amount, setAmount] = useState(String(suggested));
-  const bankAccts0 = accounts.filter((a) => BALANCE_TYPES.has(a.type));
-  // Where each share's money sits today: the family share in your family account, yours in your personal
-  // account (or your only account). The bill is paid in one go from whichever account you pick; a share
-  // sitting elsewhere becomes a transfer step into that account.
-  const personalDefault = String((bankAccts0.find((a) => a.personalPrimary) ?? (bankAccts0.length === 1 ? bankAccts0[0] : null))?.id ?? "");
-  const familyDefault = String(bankAccts0.find((a) => a.familyPrimary)?.id ?? "");
-  const [fromId, setFromId] = useState(personalDefault);
-  const [familyFromId, setFamilyFromId] = useState(familyDefault);
-  const [personalFromId, setPersonalFromId] = useState(personalDefault);
-  const [movedNow, setMovedNow] = useState(false); // OFF by default: the transfer steps wait for a tick
-  const [state, formAction, saving] = useActionState(payCardBillStep, { ok: false, n: 0 } as PersonalSaveState);
-  useSavingToast(saving);
-  useEffect(() => {
-    if (state.n > prevN.current) {
-      prevN.current = state.n;
-      if (state.ok) { toast("Card bill paid", "success"); onClose(); } else toast(state.error ?? "Couldn't pay", "error");
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state.n]);
-  const amountNum = Number(amount) || 0;
-  const diff = Math.round((amountNum - suggested) * 100) / 100;
-  const fromYou = Math.max(0, Math.round((amountNum - card.family) * 100) / 100);
-  const familyPart = Math.min(card.family, amountNum);
-  const bankAccts = bankAccts0;
-  const nameOf = (id: string) => bankAccts.find((a) => String(a.id) === id)?.name ?? "?";
-  const moves = [
-    familyPart > 0.005 && familyFromId && familyFromId !== fromId ? { from: familyFromId, amt: familyPart, what: "family share" } : null,
-    fromYou > 0.005 && personalFromId && personalFromId !== fromId ? { from: personalFromId, amt: fromYou, what: "your share" } : null,
-  ].filter((m): m is { from: string; amt: number; what: string } => m != null);
-  const due = card.dueISO ? new Date(card.dueISO).toLocaleDateString("en-IN", { day: "numeric", month: "short" }) : null;
-  return (
-    <Overlay hidden={saving} onClose={onClose} title={`Pay ${card.cardName} bill`}>
-      <form action={formAction} className="space-y-4 px-5 py-4">
-        <input type="hidden" name="id" value={s.id} />
-        <div className="space-y-1.5 rounded-xl p-3" style={{ backgroundColor: `${card.color}0d` }}>
-          <p className="text-[11px] font-semibold uppercase tracking-wide" style={{ color: card.color }}>Statement{due ? ` · due ${due}` : ""}</p>
-          <div className="rounded-lg bg-white/70 p-2">
-            <Row label="👪 Family spends" hint="taken from family In-Hand" value={card.family} strong />
-            {card.family > 0.005 && (
-              <div className="ml-4 mt-0.5 space-y-0.5 text-xs">
-                {card.familyBudgeted > 0.005 && <Row label="⛽ budgeted" hint="from the held budget" value={card.familyBudgeted} />}
-                {card.familyMisc > 0.005 && <Row label="🛒 misc / other" hint="from your in-hand" value={card.familyMisc} />}
-              </div>
-            )}
-          </div>
-          <div className="rounded-lg bg-white/70 p-2">
-            <Row label="👤 Your spends" hint="from your account" value={card.personal} strong />
-            {card.annualFee > 0.005 && <div className="ml-4 mt-0.5 text-xs"><Row label="🧾 Annual fee" value={card.annualFee} /></div>}
-          </div>
-          <div className="border-t border-slate-200 pt-1.5"><Row label="Statement total" value={suggested} strong /></div>
-        </div>
-        <div>
-          <label className="text-sm font-medium text-slate-600">Amount you paid (₹)</label>
-          <input name="amount" type="number" step="0.01" min="0" inputMode="decimal" required value={amount} onChange={(e) => setAmount(e.target.value)} style={{ borderColor: card.color }} className="mt-1.5 w-full rounded-xl border-2 px-4 py-3 text-2xl font-bold tabular-nums outline-none" />
-          {Math.abs(diff) > 0.005 && (
-            <p className={`mt-1 text-[11px] font-medium ${diff < 0 ? "text-emerald-700" : "text-amber-700"}`}>
-              {diff < 0 ? `${formatINR(-diff)} less than the statement → cashback / savings on this card.` : `${formatINR(diff)} more than the statement → fees / charges on this card.`}
-            </p>
-          )}
-        </div>
-        {bankAccts.length > 0 && (
-        <div className="space-y-3">
-          <div>
-            <label className="text-sm font-medium text-slate-600">Paid the whole bill from</label>
-            <select name="fromAccountId" required value={fromId} onChange={(e) => setFromId(e.target.value)} className="input mt-1.5 w-full">
-              <option value="" disabled>Pick the account</option>
-              {bankAccts.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
-            </select>
-            <p className="mt-1 text-[11px] text-slate-500">{formatINR(amountNum)} leaves {fromId ? nameOf(fromId) : "that account"} · the card&apos;s {formatINR(familyPart)} family share is cleared from the family In-Hand.</p>
-          </div>
-          <div className="grid grid-cols-2 gap-2">
-            {familyPart > 0.005 && (
-              <label className="block">
-                <span className="text-[11px] font-medium text-slate-500">👪 Family share {formatINR(familyPart)} is in</span>
-                <select name="familyFromId" required value={familyFromId} onChange={(e) => setFamilyFromId(e.target.value)} className="input mt-1 w-full py-1.5 text-sm">
-                  <option value="" disabled>Pick</option>
-                  {bankAccts.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
-                </select>
-              </label>
-            )}
-            {fromYou > 0.005 && (
-              <label className="block">
-                <span className="text-[11px] font-medium text-slate-500">👤 Your share {formatINR(fromYou)} is in</span>
-                <select name="personalFromId" required value={personalFromId} onChange={(e) => setPersonalFromId(e.target.value)} className="input mt-1 w-full py-1.5 text-sm">
-                  <option value="" disabled>Pick</option>
-                  {bankAccts.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
-                </select>
-              </label>
-            )}
-          </div>
-          {fromId && moves.length > 0 && (
-            <div className="rounded-lg bg-sky-50 p-2.5 text-[12px] text-sky-900">
-              <p className="font-medium">Adds {moves.length === 1 ? "a step" : "steps"} to your plan:</p>
-              <ul className="mt-0.5 space-y-0.5">
-                {moves.map((m) => <li key={m.what}>↔ {nameOf(m.from)} → {nameOf(fromId)} · {formatINR(m.amt)} <span className="text-sky-700">({m.what})</span></li>)}
-              </ul>
-              <label className="mt-1.5 flex cursor-pointer items-center gap-2 text-[12px] font-medium text-sky-900">
-                <input type="checkbox" name="movedNow" checked={movedNow} onChange={(e) => setMovedNow(e.target.checked)} className="h-4 w-4 accent-sky-600" />
-                Already moved — mark {moves.length === 1 ? "it" : "them"} done now
-              </label>
-              {!movedNow && <p className="mt-0.5 text-[11px] text-sky-700">{moves.length === 1 ? "It waits" : "They wait"} in your plan — tick when you move the money; balances follow.</p>}
-            </div>
-          )}
-        </div>
-        )}
-        <div className="flex items-center gap-3 border-t border-slate-100 pt-3">
-          <button type="button" onClick={onClose} className="min-h-11 flex-1 rounded-xl border-2 border-slate-200 px-4 py-2 text-base font-medium text-slate-600">Cancel</button>
-          <button type="submit" disabled={Number.isNaN(amountNum) || amountNum < 0 || (bankAccts.length > 0 && (!fromId || (familyPart > 0.005 && !familyFromId) || (fromYou > 0.005 && !personalFromId)))} style={{ backgroundColor: card.color }} className="min-h-11 flex-1 rounded-xl px-4 py-2 text-base font-semibold text-white disabled:opacity-40">Pay bill</button>
-        </div>
-      </form>
-    </Overlay>
-  );
-}
 
 // A compact per-step day field that re-dates the step when you leave it.
 function DayEdit({ id, day }: { id: number; day: number | null }) {

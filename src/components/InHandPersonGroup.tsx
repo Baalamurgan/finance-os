@@ -321,29 +321,8 @@ export function InHandPersonGroup({
           <span className={`text-[10px] text-slate-300 transition-transform ${expanded ? "rotate-180" : ""}`}>▾</span>
         </span>
       </button>
-      {/* Real-world match: the member's family bank account (e.g. SBI) vs what In-Hand says they hold. */}
-      {group.familyAccount && !isPreview && open && (() => {
-        const fa = group.familyAccount;
-        const toCome = fa.toCome ?? 0, toSend = fa.toSend ?? 0;
-        // a card-bill share still to move between accounts counts toward the match (it's on its way)
-        const diff = Math.round((fa.balance + toCome - toSend - holdingNow) * 100) / 100;
-        const ok = Math.abs(diff) < 1;
-        return (
-          <div className={`mt-1.5 rounded-md px-2 py-1 text-[11px] ${ok ? "bg-emerald-50 text-emerald-800" : "bg-amber-50 text-amber-800"}`}>
-            <div className="flex flex-wrap items-center justify-between gap-x-2">
-              <span>🏦 {fa.name} <b className="tabular-nums">{formatINR(fa.balance)}</b></span>
-              <span>{ok ? "✓ matches In-Hand" : `${formatINR(Math.abs(diff))} ${diff > 0 ? "more" : "less"} than In-Hand — check opening balance / unrecorded moves`}</span>
-            </div>
-            {(toCome > 0.005 || toSend > 0.005) && (
-              <div className="mt-0.5 text-[10px] text-slate-500">
-                {toCome > 0.005 && <span>{formatINR(toCome)} to come back (card bill)</span>}
-                {toCome > 0.005 && toSend > 0.005 && " · "}
-                {toSend > 0.005 && <span>{formatINR(toSend)} to send (card bill)</span>}
-              </div>
-            )}
-          </div>
-        );
-      })()}
+      {/* (The family-account vs In-Hand match moved to the member's personal Accounts tab — the family view only
+          shows the In-Hand figure.) */}
       {/* Collapsed hint: the two things worth seeing at a glance without expanding. */}
       {!expanded && (Math.abs(pendingCashMove) > 0.005 || toPayCount > 0) && (
         <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[10px] text-slate-400">

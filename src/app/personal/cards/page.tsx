@@ -3,6 +3,9 @@ import { formatINR } from "@/lib/format";
 import { loadPersonal } from "@/lib/loadPersonal";
 import { getWalletAccounts } from "@/lib/finance/queries";
 import { getCardDues } from "@/lib/personal/cash";
+import { getTransactionLedger } from "@/lib/queries";
+import { prisma } from "@/lib/prisma";
+import { Prisma } from "@prisma/client";
 import { PersonalNav } from "@/components/personal/PersonalNav";
 import { AddAccountModal } from "@/components/personal/AddAccountModal";
 
@@ -21,6 +24,28 @@ export default async function PersonalCardsPage({
   const c = await loadPersonal(sp);
   const financeDue = c.cardReminders.length > 0;
   const [wallet, dues] = await Promise.all([getWalletAccounts(c.member.id), getCardDues(c.member.id)]);
+
+  // Your FAMILY account (e.g. SBI) vs your family In-Hand: they should match. The comparison lives here (personal),
+  // never in the family view. A card-bill share still to move to/from it (an unticked plan step) counts as on its way.
+  const famAcct = wallet.find((w) => w.account.familyPrimary && w.balance != null) ?? null;
+  let famCheck: { inHand: number; diff: number } | null = null;
+  if (famAcct) {
+    const open = await prisma.period.findFirst({ where: { householdId: c.member.householdId, status: "open" }, orderBy: [{ year: "asc" }, { month: "asc" }], select: { id: true } });
+    if (open) {
+      const [ledger, moves] = await Promise.all([
+        getTransactionLedger(c.member.householdId, open.id).catch(() => []),
+        prisma.personalPlanStep.findMany({
+          where: { status: "pending", kind: "transfer", snapshot: { path: ["fundsCardBillStep"], not: Prisma.AnyNull }, OR: [{ fromAccountId: famAcct.account.id }, { toAccountId: famAcct.account.id }] },
+          select: { amount: true, fromAccountId: true, toAccountId: true },
+        }),
+      ]);
+      const mine = ledger.find((l) => l.memberId === c.member.id);
+      if (mine) {
+        const onItsWay = moves.reduce((t, m) => t + (m.toAccountId === famAcct.account.id ? m.amount : -m.amount), 0);
+        famCheck = { inHand: mine.inHand, diff: Math.round(((famAcct.balance ?? 0) + onItsWay - mine.inHand) * 100) / 100 };
+      }
+    }
+  }
 
   // Per credit card: the soonest unpaid cycle (what's due), else the latest settled one (bill paid).
   const dueByCard = new Map(dues.map((d) => {
@@ -58,6 +83,13 @@ export default async function PersonalCardsPage({
                         {meta}
                         {account.type === "credit_card" && summary?.hasLimit ? ` · ${Math.round(summary.utilPct ?? 0)}% used` : ""}
                       </div>
+                      {famCheck && famAcct?.account.id === account.id && (
+                        <div className={`mt-0.5 text-[10px] ${Math.abs(famCheck.diff) < 1 ? "text-emerald-600" : "text-amber-700"}`}>
+                          {Math.abs(famCheck.diff) < 1
+                            ? "👪 matches your family In-Hand"
+                            : `👪 Family In-Hand ${formatINR(famCheck.inHand)} · ${formatINR(Math.abs(famCheck.diff))} ${famCheck.diff > 0 ? "more" : "less"} here — check opening balance / unrecorded moves`}
+                        </div>
+                      )}
                     </div>
                   </div>
 

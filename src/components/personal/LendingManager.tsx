@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { ToastForm } from "@/components/ToastForm";
 import { formatINR } from "@/lib/format";
+import { NameInput } from "@/components/personal/NameInput";
 import {
   addPersonalLoan,
   recordPersonalLoanPayment,
@@ -28,7 +29,7 @@ function Modal({ title, onClose, children }: { title: string; onClose: () => voi
 
 // ── Create a manual lend / borrow — pick a household member (mirrors to their tab) or type a name;
 // a repay-by date is required so both sides get the reminder. ──
-export function AddLoanModal({ members = [] }: { members?: { id: number; name: string }[] }) {
+export function AddLoanModal({ members = [], pastNames = [] }: { members?: { id: number; name: string }[]; pastNames?: string[] }) {
   const [open, setOpen] = useState(false);
   const [direction, setDirection] = useState<"lent" | "borrowed">("lent");
   const [personSel, setPersonSel] = useState(""); // "" none · a member id · "other"
@@ -64,7 +65,7 @@ export function AddLoanModal({ members = [] }: { members?: { id: number; name: s
                       </optgroup>
                       <option value="other">Someone else (type a name)</option>
                     </select>
-                    {isOther && <input name="counterparty" required autoFocus placeholder="Name" className="input mt-2 w-full" />}
+                    {isOther && <div className="mt-2"><NameInput pastNames={pastNames} name="counterparty" required autoFocus placeholder="Name" /></div>}
                     {memberChosen && (
                       <>
                         <input type="hidden" name="counterpartyMemberId" value={personSel} />
@@ -75,7 +76,7 @@ export function AddLoanModal({ members = [] }: { members?: { id: number; name: s
                     )}
                   </>
                 ) : (
-                  <input name="counterparty" required placeholder="Who?" className="input mt-1 w-full" autoFocus />
+                  <div className="mt-1"><NameInput pastNames={pastNames} name="counterparty" required placeholder="Who?" autoFocus /></div>
                 )}
               </div>
 

@@ -1454,7 +1454,10 @@ export async function payFamilyCardBill(formData: FormData) {
   const diffMarker = `__cardbilldiff__:${cycleEnd.toISOString()}`;
   // The payment leaves cash in the OWNER's current personal month (mirrors the personal markCardBillPaid).
   const period = await ensurePersonalMonth(card.memberId);
-  // Where the difference goes (from the Pay modal). Absent (e.g. paid from the personal plan) → card ledger only.
+  // Where the difference goes (from the Pay modal). Absent → card ledger only.
+  // skipBankDebit=1 → paid from the PERSONAL pay window (payCardBillStep): it debits the whole amount from the
+  // account picked there and moves each share by transfer steps, so nothing here touches a bank account — the
+  // fee / extra / cashback choices are still booked (as spends / income / Piggy), just without account lines.
   const skipBank = formData.get("skipBankDebit") === "1";
   const diffCategoryId = Number(formData.get("diffCategoryId")) || 0;
   const cashbackTo = String(formData.get("cashbackTo") ?? ""); // "personal" | "piggy" | "category"
@@ -1462,20 +1465,20 @@ export async function payFamilyCardBill(formData: FormData) {
   const diffCat = diffCategoryId && household
     ? await prisma.category.findFirst({ where: { id: diffCategoryId, householdId: household.id, tracked: true }, select: { id: true, name: true } })
     : null;
-  if (difference > 0.005 && !skipBank && !extraMineEarly(formData) && formData.has("diffCategoryId") && !diffCat) return { ok: false, error: "Pick the category the extra charges go to." };
+  if (difference > 0.005 && !extraMineEarly(formData) && formData.has("diffCategoryId") && !diffCat) return { ok: false, error: "Pick the category the extra charges go to." };
   if (difference < -0.005 && cashbackTo === "category" && !diffCat) return { ok: false, error: "Pick the category the cashback goes to." };
   // Who bears card fees — chosen per payment in the Pay window (default: the family, as before).
   //  • annualFeeBy=me → the annual fee is the owner's personal spend, not taken from the family account.
   //  • extraTo=me     → the extra (late fee / GST…) is the owner's personal "card fee" instead of a family spend.
   const annualFee = cyc?.annualFee ?? 0;
-  const myAnnual = !skipBank && formData.get("annualFeeBy") === "me" ? annualFee : 0;
-  const extraMine = !skipBank && difference > 0.005 && formData.get("extraTo") === "me";
+  const myAnnual = formData.get("annualFeeBy") === "me" || (skipBank && !formData.has("annualFeeBy")) ? annualFee : 0;
+  const extraMine = difference > 0.005 && formData.get("extraTo") === "me";
   const myFee = Math.round((myAnnual + (extraMine ? difference : 0)) * 100) / 100;
   const feeFromId = Number(formData.get("feeFromAccountId")) || 0;
   const feeAcct = myFee > 0.005 && feeFromId
-    ? await prisma.financeAccount.findFirst({ where: { id: feeFromId, memberId: card.memberId, active: true, type: { in: ["bank", "cash"] } }, select: { id: true } })
+    ? await prisma.financeAccount.findFirst({ where: { id: feeFromId, memberId: card.memberId, active: true, ...(skipBank ? {} : { type: { in: ["bank", "cash"] } }) }, select: { id: true } })
     : null;
-  if (myFee > 0.005 && !feeAcct) return { ok: false, error: "Pick the account the card fee is paid from." };
+  if (myFee > 0.005 && !feeAcct && !skipBank) return { ok: false, error: "Pick the account the card fee is paid from." };
   const famOpen = await prisma.period.findFirst({ where: { status: "open", ...(household ? { householdId: household.id } : {}) }, orderBy: [{ year: "desc" }, { month: "desc" }], select: { id: true } });
   const primaryId = await familyPrimaryAccountId(card.memberId);
   const cycleISO = cycleEnd.toISOString();
@@ -1500,20 +1503,20 @@ export async function payFamilyCardBill(formData: FormData) {
         },
       });
     }
-    if (skipBank) return; // the personal plan's card step books its own account debit
-    // Real bank: the statement total leaves the owner's family account (SBI).
-    if (primaryId != null && statement > 0.005) {
+    // Real bank: the statement total leaves the owner's family account (SBI) — unless the personal pay
+    // window already debited the paying account.
+    if (!skipBank && primaryId != null && statement > 0.005) {
       await tx.accountTransaction.create({ data: { memberId: card.memberId, accountId: primaryId, date: new Date(), merchant: `Paid ${card.name} bill`, amount: Math.round(statement * 100) / 100, type: "transfer_out", category: famCardPayMark(cardAccountId, cycleISO), source: "manual" } });
     }
     const mirror = async (spendId: number, label: string, amt: number, catName: string) => {
-      if (primaryId == null) return;
+      if (primaryId == null || skipBank) return;
       await tx.accountTransaction.create({ data: { memberId: card.memberId, accountId: primaryId, date: new Date(), merchant: label, amount: amt, type: "spend", category: catName, source: "family", familySpendId: spendId } });
     };
-    if (myFee > 0.005 && feeAcct) {
+    if (myFee > 0.005 && (feeAcct || skipBank)) {
       // The owner's own card fee: a personal spend (lowers Can-spend), debited from the account they picked.
       const feeCat = await tx.personalCategory.upsert({ where: { memberId_name: { memberId: card.memberId, name: "Card fees" } }, update: { archived: false }, create: { memberId: card.memberId, name: "Card fees", icon: "💳" } });
-      const sp = await tx.personalSpend.create({ data: { memberId: card.memberId, periodId: period.id, categoryId: feeCat.id, amount: myFee, note: cardFeeNote(card.name), date: new Date(), pending: false, payAccountId: feeAcct.id } });
-      await tx.accountTransaction.create({ data: { memberId: card.memberId, accountId: feeAcct.id, date: new Date(), merchant: cardFeeNote(card.name), amount: myFee, type: "spend", category: SPEND_PAY_MARK_FAM(sp.id), source: "manual" } });
+      const sp = await tx.personalSpend.create({ data: { memberId: card.memberId, periodId: period.id, categoryId: feeCat.id, amount: myFee, note: cardFeeNote(card.name), date: new Date(), pending: false, payAccountId: feeAcct?.id ?? null } });
+      if (!skipBank && feeAcct) await tx.accountTransaction.create({ data: { memberId: card.memberId, accountId: feeAcct.id, date: new Date(), merchant: cardFeeNote(card.name), amount: myFee, type: "spend", category: SPEND_PAY_MARK_FAM(sp.id), source: "manual" } });
     }
     if (difference > 0.005 && !extraMine && diffCat && famOpen) {
       // EXTRA (fees / surcharge) → a family spend in the chosen category, this month, out of the family account.
@@ -1528,7 +1531,7 @@ export async function payFamilyCardBill(formData: FormData) {
         await mirror(sp.id, sp.label, -saved, diffCat.name);
       } else if (cashbackTo === "piggy" || cashbackTo === "personal") {
         // the saving stayed in the family account (less was paid) — put it back there, then route it
-        if (primaryId != null) await tx.accountTransaction.create({ data: { memberId: card.memberId, accountId: primaryId, date: new Date(), merchant: `${card.name} bill cashback`, amount: saved, type: "topup", category: famCardCbMark(cardAccountId, cycleISO), source: "manual" } });
+        if (primaryId != null && !skipBank) await tx.accountTransaction.create({ data: { memberId: card.memberId, accountId: primaryId, date: new Date(), merchant: `${card.name} bill cashback`, amount: saved, type: "topup", category: famCardCbMark(cardAccountId, cycleISO), source: "manual" } });
         if (cashbackTo === "piggy" && household && famOpen) {
           await tx.piggyEntry.create({ data: { householdId: household.id, periodId: famOpen.id, kind: "piggy", amount: saved, note: `${cardCashbackLabel(card.name)} ${famCardCbMark(cardAccountId, cycleISO)}` } });
         } else if (cashbackTo === "personal") {
@@ -1538,11 +1541,20 @@ export async function payFamilyCardBill(formData: FormData) {
     }
   });
   log.info("payFamilyCardBill", "ok", { outcome: "ok", cardAccountId, amount, difference });
+  // The FAMILY's share of what was paid: its spends on the card, the annual fee if the family bears it, an
+  // extra booked as a family spend — less a saving kept on the family side (Piggy or back to a category).
+  // The personal pay window moves exactly this from where the family money sits.
+  const r2c = (x: number) => Math.round(x * 100) / 100;
+  const famExtra = difference > 0.005 && !extraMine && diffCat && famOpen ? difference : 0;
+  const famSaved = difference < -0.005 && ((cashbackTo === "category" && diffCat && famOpen) || (cashbackTo === "piggy" && household && famOpen)) ? -difference : 0;
+  const familyShare = cyc ? Math.min(amount, Math.max(0, r2c(cyc.familyTotal + (annualFee - myAnnual) + famExtra - famSaved))) : 0;
   const famPeriod = await prisma.period.findFirst({ where: { status: "open" }, orderBy: [{ year: "desc" }, { month: "desc" }], select: { id: true } });
-  await logActivity("cardbill", "created", `Paid ${card.name} bill ${formatINR(amount)}`, famPeriod?.id ?? null);
+  // Family activity shows only the FAMILY part of the bill (the owner's personal spends stay private).
+  const familyPart = cyc ? Math.round(Math.min(amount, cyc.familyTotal) * 100) / 100 : 0;
+  await logActivity("cardbill", "created", familyPart > 0.005 ? `Paid ${card.name} bill · family side ${formatINR(familyPart)}` : `Paid ${card.name} bill`, famPeriod?.id ?? null);
   revalidateFamily();
   revalidatePath("/personal", "layout");
-  return { ok: true };
+  return { ok: true, familyShare };
 }
 
 // Undo a family card-bill payment — deletes the settle record so the cycle reappears as unpaid on both

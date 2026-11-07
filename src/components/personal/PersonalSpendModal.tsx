@@ -1,5 +1,7 @@
 "use client";
 
+import { NameInput } from "@/components/personal/NameInput";
+import { PaidWithTiles } from "@/components/PaidWithTiles";
 import { useActionState, useEffect, useRef, useState } from "react";
 import { useSavingToast } from "@/components/useSavingToast";
 import { addPersonalSpend, updatePersonalSpend, type PersonalSaveState } from "@/app/personal/actions";
@@ -272,34 +274,26 @@ export function PersonalSpendModal({
                 {cards.length > 0 && (
                   <div>
                     <label className="text-xs font-medium text-slate-500">💳 Paid with</label>
-                    <select
-                      name="cardAccountId" value={cardId}
-                      onChange={(e) => {
-                        const v = e.target.value;
-                        setCardId(v);
-                      }}
-                      className="input mt-1 w-full"
-                    >
-                      <option value="">{personalAcct ? `UPI · ${personalAcct.name} (your personal account)` : "Cash / UPI (from this month)"}</option>
-                      {myCards.length > 0 && (
-                        <optgroup label="My cards & accounts">
-                          {myCards.map((c) => (
-                            <option key={c.id} value={c.id}>
-                              {c.name}{c.type === "credit_card" ? " — pay at card bill" : c.type === "prepaid_card" ? " — from wallet balance" : c.type === "debit_card" ? " — from card balance" : c.type === "bank" ? " — from bank balance" : c.type === "cash" ? " — cash on hand" : ""}
-                            </option>
-                          ))}
-                        </optgroup>
-                      )}
-                      {peerCards.length > 0 && (
-                        <optgroup label="Family members' cards">
-                          {peerCards.map((c) => (
-                            <option key={c.id} value={c.id}>
-                              {c.name} — {c.ownerName}&apos;s{c.type === "credit_card" ? " credit card" : c.type === "prepaid_card" ? " wallet" : " card"}
-                            </option>
-                          ))}
-                        </optgroup>
-                      )}
-                    </select>
+                    <div className="mt-1">
+                      <PaidWithTiles
+                        name="cardAccountId"
+                        value={cardId}
+                        onChange={setCardId}
+                        options={[
+                          personalAcct
+                            ? { value: "", title: `UPI · ${personalAcct.name}`, sub: "your personal account", color: personalAcct.color, type: "upi", group: "Mine" }
+                            : { value: "", title: "Cash / UPI", sub: "from this month", type: "upi", group: "Mine" },
+                          ...myCards.map((c) => ({
+                            value: String(c.id), title: c.name, color: c.color, type: c.type, group: "Mine",
+                            sub: c.type === "credit_card" ? "pay at card bill" : c.type === "prepaid_card" ? "from wallet balance" : c.type === "debit_card" ? "from card balance" : c.type === "bank" ? "from bank balance" : c.type === "cash" ? "cash on hand" : undefined,
+                          })),
+                          ...peerCards.map((c) => ({
+                            value: String(c.id), title: c.name, color: c.color, type: c.type, group: "Family members' cards",
+                            sub: `${c.ownerName}'s${c.type === "credit_card" ? " credit card" : c.type === "prepaid_card" ? " wallet" : " card"}`,
+                          })),
+                        ]}
+                      />
+                    </div>
                     {peerCard ? (
                       <div className="mt-1.5 space-y-2 rounded-lg bg-amber-50 p-2.5">
                         <p className="text-[11px] leading-relaxed text-amber-800">
@@ -366,7 +360,7 @@ export function PersonalSpendModal({
                                 </optgroup>
                                 <option value="other">Someone else (type a name)</option>
                               </select>
-                              {reimbIsOther && <input name="reimburseName" required placeholder="Name" defaultValue={init?.reimbMemberId == null ? (init?.reimbName ?? "") : ""} onChange={() => setSplitDirty(true)} className="input mt-1 w-full py-1.5 text-sm" />}
+                              {reimbIsOther && <div className="mt-1"><NameInput pastNames={pastNames} name="reimburseName" required placeholder="Name" defaultValue={init?.reimbMemberId == null ? (init?.reimbName ?? "") : ""} onChange={() => setSplitDirty(true)} className="input w-full py-1.5 text-sm" /></div>}
                               {reimbMember && (
                                 <p className="mt-1 rounded-lg bg-emerald-50 px-2.5 py-1.5 text-[11px] leading-relaxed text-emerald-800">
                                   🔗 Shows in <b>{reimbMember.name}</b>&apos;s Lending as money they owe you — they get a one-time heads-up. Settling either side clears both.
@@ -374,7 +368,7 @@ export function PersonalSpendModal({
                               )}
                             </>
                           ) : (
-                            <input name="reimburseName" placeholder="Who owes you back?" defaultValue={init?.reimbName ?? ""} onChange={() => setSplitDirty(true)} className="input mt-0.5 w-full py-1.5 text-sm" />
+                            <div className="mt-0.5"><NameInput pastNames={pastNames} name="reimburseName" placeholder="Who owes you back?" defaultValue={init?.reimbName ?? ""} onChange={() => setSplitDirty(true)} className="input w-full py-1.5 text-sm" /></div>
                           )}
                         </div>
                         <p className="text-xs text-slate-500">

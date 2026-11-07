@@ -43,6 +43,7 @@ export function AddSpendModal({
   const [categoryId, setCategoryId] = useState<number | null>(fixedCategory?.id ?? null);
   const [justSaved, setJustSaved] = useState(false);
   const [keepAdding, setKeepAdding] = useState(false);
+  const [moreOpen, setMoreOpen] = useState(false); // "More accounts" tiles shown
   const [subCategory, setSubCategory] = useState("");
   const [kindTouched, setKindTouched] = useState(false); // user picked the kind by hand → stop auto-filling
   const [labelText, setLabelText] = useState(""); // controlled so chips can drive it
@@ -60,7 +61,6 @@ export function AddSpendModal({
   // "Paid with": Cash + the one most-used card as quick chips; every other card lives in a dropdown.
   const featuredCard = cards.find((c) => c.id === topCardId) ?? cards[0];
   const otherCards = cards.filter((c) => c.id !== featuredCard?.id);
-  const cardLabel = (c: Card) => `${c.name}${c.last4 ? ` XX${c.last4}` : ""} — ${c.ownerName} · ${payTypeLabel(c.type)}`;
   // Cash / UPI posts to the spender's family account (if they set one), lowering its balance as well as In-Hand.
   const myFamilyAccount = cards.find((c) => c.ownerId === currentMemberId && c.familyPrimary);
   // Misc (Personal/Misc) spends must carry a reporting sub-category (Food, Travel…).
@@ -482,24 +482,43 @@ export function AddSpendModal({
                           </button>
                         )}
                       </div>
-                      {/* Every other card in a dropdown so the two common choices stay one tap away. */}
-                      {otherCards.length > 0 && (
-                        <select
-                          value={cardId != null && cardId !== featuredCard?.id ? cardId : ""}
-                          onChange={(e) => setCardId(e.target.value ? Number(e.target.value) : null)}
-                          className={`mt-2 w-full rounded-xl border-2 px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-indigo-100 ${cardId != null && cardId !== featuredCard?.id ? "border-indigo-500 bg-indigo-50 text-indigo-700" : "border-slate-200 text-slate-600"}`}
-                        >
-                          <option value="">More accounts…</option>
-                          {PAY_GROUPS.map((g) => {
-                            const list = otherCards.filter((c) => g.types.includes(c.type));
-                            return list.length === 0 ? null : (
-                              <optgroup key={g.key} label={g.label}>
-                                {list.map((c) => <option key={c.id} value={c.id}>{payTypeIcon(c.type)} {cardLabel(c)}</option>)}
-                              </optgroup>
-                            );
-                          })}
-                        </select>
-                      )}
+                      {/* Every other account behind a "More accounts" toggle — same tiles, so the two common
+                          choices stay one tap away. Opens by itself when one of them is the pick. */}
+                      {otherCards.length > 0 && (() => {
+                        const otherPicked = cardId != null && cardId !== featuredCard?.id;
+                        const showMore = moreOpen || otherPicked;
+                        return (
+                          <>
+                            <button type="button" onClick={() => setMoreOpen((v) => !v)} className="mt-2 text-xs font-medium text-indigo-600">
+                              {showMore ? "▴ Fewer accounts" : `▾ More accounts (${otherCards.length})`}
+                            </button>
+                            {showMore && PAY_GROUPS.map((g) => {
+                              const list = otherCards.filter((c) => g.types.includes(c.type));
+                              return list.length === 0 ? null : (
+                                <div key={g.key} className="mt-2">
+                                  <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-slate-400">{g.label}</div>
+                                  <div className="grid grid-cols-2 gap-2">
+                                    {list.map((c) => (
+                                      <button
+                                        key={c.id}
+                                        type="button"
+                                        onClick={() => setCardId(c.id)}
+                                        className={`min-h-12 rounded-xl border-2 px-3 py-2.5 text-left transition ${cardId === c.id ? "border-indigo-500 bg-indigo-50" : "border-slate-200 active:border-slate-400"}`}
+                                      >
+                                        <span className="flex items-center gap-1.5 text-sm font-medium text-slate-700">
+                                          <span className="inline-block h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: c.color }} />
+                                          <span className="truncate">{payTypeIcon(c.type)} {c.name}{c.last4 ? ` XX${c.last4}` : ""}</span>
+                                        </span>
+                                        <span className="mt-0.5 block truncate text-[11px] text-slate-400">{c.ownerName} · {payTypeLabel(c.type)}</span>
+                                      </button>
+                                    ))}
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </>
+                        );
+                      })()}
                       {cardId === null && myFamilyAccount && (
                         <p className="mt-1.5 text-xs text-emerald-700">Comes out of your {myFamilyAccount.name} balance too.</p>
                       )}

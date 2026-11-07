@@ -1,5 +1,6 @@
 "use client";
 
+import { NameInput } from "@/components/personal/NameInput";
 import { useMemo, useState } from "react";
 import { formatINR } from "@/lib/format";
 
@@ -129,11 +130,11 @@ export function PersonalSplitModal({
                     <option value="other">Someone else (type a name)</option>
                   </select>
                   {r.memberId == null && (
-                    <input value={r.name} onChange={(e) => setRow(r.id, { name: e.target.value })} placeholder="Name *" list={pastNames.length ? "split-past-names" : undefined} className="input py-1.5 text-sm" />
+                    <NameInput pastNames={pastNames} value={r.name} onChange={(v) => setRow(r.id, { name: v })} placeholder="Name *" className="input w-full py-1.5 text-sm" />
                   )}
                 </div>
               ) : (
-                <input value={r.name} onChange={(e) => setRow(r.id, { name: e.target.value })} placeholder="Name *" list={pastNames.length ? "split-past-names" : undefined} className="input flex-1 py-2" />
+                <div className="flex-1"><NameInput pastNames={pastNames} value={r.name} onChange={(v) => setRow(r.id, { name: v })} placeholder="Name *" className="input w-full py-2" /></div>
               )}
               {method === "shares" && (
                 <div className="flex items-center rounded-lg border border-slate-200">
@@ -155,16 +156,6 @@ export function PersonalSplitModal({
           <button type="button" onClick={addPerson} className="mt-1 w-full rounded-lg border border-dashed border-emerald-300 py-2 text-sm font-medium text-emerald-700 hover:bg-emerald-50">
             + Add person
           </button>
-          {pastNames.length > 0 && (
-            <>
-              {/* Autocomplete source for the "Someone else" name boxes — reuse a person you've split/lent
-                  with before instead of retyping. */}
-              <datalist id="split-past-names">
-                {pastNames.map((n) => <option key={n} value={n} />)}
-              </datalist>
-              <p className="text-[11px] text-slate-400">💡 For “Someone else”, tap the name box to pick someone you’ve split or lent with before.</p>
-            </>
-          )}
           {hasMembers && (
             <p className="text-[11px] leading-relaxed text-slate-400">
               🔗 Pick a family member and this split shows in <b>their</b> Lending too — they get a one-time heads-up. Settling or deleting either side clears both.

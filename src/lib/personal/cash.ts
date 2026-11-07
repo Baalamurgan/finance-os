@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { currentCycle } from "@/lib/finance/cycle";
 import { computeCreditDashboard } from "@/lib/finance/creditDashboard";
 import { computeBalance } from "@/lib/finance/balance";
+import { REMOVED_NOTE } from "@/lib/notes";
 
 // Cash math for a personal month. Every spend counts AT SPEND TIME — a credit-card spend
 // (or card fixed bill) reduces your spendable in the month you make it, exactly like cash,
@@ -367,4 +368,21 @@ export async function getPersonalAccount(memberId: number): Promise<{ id: number
     toCome: moves.filter((m) => m.toAccountId === pick.id).reduce((t, m) => t + m.amount, 0),
     otherName,
   };
+}
+
+// The family's tracked categories that are live THIS (open) family month — where a card bill's extra charge
+// or cashback can be booked from the personal pay window. Same rule as the family pickers (lib/load isLive):
+// a budget or a Sheet line this month, or a permanent Misc bucket.
+export async function getFamilyBookingCategories(memberId: number): Promise<{ id: number; name: string }[]> {
+  const m = await prisma.member.findUnique({ where: { id: memberId }, select: { householdId: true } });
+  if (!m) return [];
+  const open = await prisma.period.findFirst({ where: { householdId: m.householdId, status: "open" }, orderBy: [{ year: "desc" }, { month: "desc" }], select: { id: true } });
+  const cats = await prisma.category.findMany({ where: { householdId: m.householdId, tracked: true }, orderBy: [{ section: "asc" }, { name: "asc" }], select: { id: true, name: true, section: true, miscCard: true } });
+  if (!open) return cats.map((c) => ({ id: c.id, name: c.name }));
+  const [bud, lines] = await Promise.all([
+    prisma.budget.findMany({ where: { periodId: open.id, planned: { gt: 0 } }, select: { categoryId: true } }),
+    prisma.expenseEntry.findMany({ where: { periodId: open.id, OR: [{ note: null }, { note: { not: REMOVED_NOTE } }] }, select: { categoryId: true }, distinct: ["categoryId"] }),
+  ]);
+  const live = new Set([...bud, ...lines].map((r) => r.categoryId).filter((x): x is number => x != null));
+  return cats.filter((c) => live.has(c.id) || (c.section === "Misc" && !c.miscCard)).map((c) => ({ id: c.id, name: c.name }));
 }

@@ -15,7 +15,7 @@ import { validateSpendLabel } from "@/lib/spendCategorize";
 import { log } from "@/lib/log";
 import { isPersonalUnlocked } from "@/lib/personal-lock";
 import { ensurePersonalMonth, ensurePersonalPreview, rebuildPersonalPreview, seedPersonalCategories } from "@/lib/personal";
-import { getCardBillReminders, getCardDues, getPersonalCash } from "@/lib/personal/cash";
+import { getCardBillReminders, getCardDues, getPersonalCash, getFamilyBookingCategories } from "@/lib/personal/cash";
 import { loadPersonal } from "@/lib/loadPersonal";
 import { ensurePlanSteps, orderSteps, cardBillTemplateId, decodeCardBillTemplateId } from "@/lib/personal/planSteps";
 import { templateDate } from "@/lib/personal/templates";
@@ -1743,8 +1743,6 @@ export async function payCardBillStep(prev: PersonalSaveState, formData: FormDat
   const due = dues.find((d) => d.cardId === cardId);
   const cyc = due?.cycles.find((c) => cardBillTemplateId(cardId, new Date(c.cycleEndISO)) === step.templateId);
   if (!due || !cyc) return { ok: false, error: "This bill is no longer open — refresh the plan.", n };
-  const family = Math.min(amount, Math.round(cyc.familyTotal * 100) / 100); // the family's share of what was paid
-  const personalShare = Math.max(0, Math.round((amount - family) * 100) / 100); // yours
   const r2 = (x: number) => Math.round(x * 100) / 100;
   // The WHOLE bill leaves the one account you paid from. Each share whose money sits in a different account
   // (the family's in your family account, yours in your personal account) becomes a transfer step INTO the
@@ -1758,8 +1756,6 @@ export async function payCardBillStep(prev: PersonalSaveState, formData: FormDat
     const a = await ownAccount(member.id, formData.get(key));
     return a && BALANCE_ACCOUNT_TYPES.has(a.type) ? a.id : null;
   };
-  const familyFrom = family > 0.005 ? await sourceOf("familyFromId") : null;
-  const personalFrom = personalShare > 0.005 ? await sourceOf("personalFromId") : null;
   const movedNow = formData.get("movedNow") === "on"; // "I've moved it already" → the transfer steps are created ticked
 
   const fd = new FormData();
@@ -1767,8 +1763,20 @@ export async function payCardBillStep(prev: PersonalSaveState, formData: FormDat
   fd.set("cycleEnd", cyc.cycleEndISO);
   fd.set("amount", String(amount));
   fd.set("skipBankDebit", "1"); // this step debits the account picked in its own modal
+  // The same choices as the family pay window: who bears the annual fee / an extra, where a saving goes.
+  // payFamilyCardBill validates each (the category must be the household's tracked one, the card the caller's).
+  for (const k of ["annualFeeBy", "extraTo", "diffCategoryId", "cashbackTo"]) {
+    const v = formData.get(k);
+    if (v != null && String(v) !== "") fd.set(k, String(v));
+  }
+  if (payFrom) fd.set("feeFromAccountId", String(payFrom.id)); // a fee you bear is part of what left this account
   const res = await payFamilyCardBill(fd);
   if (!res.ok) return { ok: false, error: ("error" in res && res.error) || "Couldn't record the payment.", n };
+  // The family's share of what was paid (its spends + any fee / extra it bears − a saving it keeps); the rest is yours.
+  const family = r2(("familyShare" in res && typeof res.familyShare === "number") ? res.familyShare : Math.min(amount, cyc.familyTotal));
+  const personalShare = Math.max(0, r2(amount - family));
+  const familyFrom = family > 0.005 ? await sourceOf("familyFromId") : null;
+  const personalFrom = personalShare > 0.005 ? await sourceOf("personalFromId") : null;
 
   const now = new Date();
   const day = Math.min(28, Number(new Intl.DateTimeFormat("en-GB", { timeZone: "Asia/Kolkata", day: "numeric" }).format(now)));
@@ -1804,6 +1812,68 @@ export async function payCardBillStep(prev: PersonalSaveState, formData: FormDat
   rev();
   revalidateFamily();
   return { ok: true, n };
+}
+
+// What the personal card-bill pay window needs that its page may not have loaded: your balance accounts
+// (to pick where the bill leaves from / where each share sits) and the family categories live this month
+// (to book an extra charge or a cashback). Your own data only.
+export async function getPayWindowData(): Promise<{ accounts: { id: number; name: string; type: string; color: string; familyPrimary: boolean; personalPrimary: boolean }[]; categories: { id: number; name: string }[] }> {
+  const member = await me();
+  if (!member) return { accounts: [], categories: [] };
+  const [accounts, categories] = await Promise.all([
+    prisma.financeAccount.findMany({ where: { memberId: member.id, active: true, type: { in: [...BALANCE_ACCOUNT_TYPES] } }, orderBy: [{ sortOrder: "asc" }, { id: "asc" }], select: { id: true, name: true, type: true, color: true, familyPrimary: true, personalPrimary: true } }),
+    getFamilyBookingCategories(member.id),
+  ]);
+  return { accounts, categories };
+}
+
+// Pay a card bill from the card itself (Spends / Accounts → Cards) — the same personal pay window as the
+// Money Plan's card step, so it takes the same route: find this cycle's card-bill step (or add one to the
+// current month when the plan hasn't got it — a bill not due yet), then pay it through payCardBillStep.
+// Owner-only: the card must be the caller's (payFamilyCardBill re-checks).
+export async function payCardBillFromCard(prev: PersonalSaveState, formData: FormData): Promise<PersonalSaveState> {
+  const n = (prev?.n ?? 0) + 1;
+  const member = await me();
+  if (!member) return { ok: false, error: "Signed out.", n };
+  const cardId = Number(formData.get("cardId")) || 0;
+  const cycleEnd = new Date(String(formData.get("cycleEnd") ?? ""));
+  if (!cardId || isNaN(cycleEnd.getTime())) return { ok: false, error: "Bad input.", n };
+  const card = await prisma.financeAccount.findFirst({ where: { id: cardId, memberId: member.id, type: "credit_card" }, select: { name: true } });
+  if (!card) return { ok: false, error: "Only the card owner can pay this bill.", n };
+  const templateId = cardBillTemplateId(cardId, cycleEnd);
+  let step = await prisma.personalPlanStep.findFirst({ where: { memberId: member.id, kind: "cardbill", templateId, status: "pending" }, orderBy: { periodId: "desc" }, select: { id: true } });
+  if (!step) {
+    const period = await ensurePersonalMonth(member.id);
+    const done = await prisma.personalPlanStep.findFirst({ where: { memberId: member.id, kind: "cardbill", templateId, status: "done" }, select: { id: true } });
+    if (done) return { ok: false, error: "Already paid.", n };
+    const amount = parseAmount(formData.get("amount")) ?? 0;
+    step = await prisma.personalPlanStep.create({
+      data: { memberId: member.id, periodId: period.id, kind: "cardbill", label: `${card.name} bill`, amount, dayOfMonth: 1, templateKind: "cardbill", templateId },
+      select: { id: true },
+    });
+  }
+  const fd = new FormData();
+  for (const [k, v] of formData.entries()) if (typeof v === "string") fd.set(k, v);
+  fd.set("id", String(step.id));
+  return payCardBillStep(prev, fd);
+}
+
+// Undo a card-bill payment from the card page: through its plan step when it has one (that also removes the
+// account debit and the transfer steps it added), otherwise just the settle record.
+export async function unpayCardBillFromCard(formData: FormData) {
+  const member = await me();
+  if (!member) return { ok: false, error: "Signed out." };
+  const cardId = Number(formData.get("cardId")) || 0;
+  const cycleEnd = new Date(String(formData.get("cycleEnd") ?? ""));
+  if (!cardId || isNaN(cycleEnd.getTime())) return { ok: false, error: "Bad input." };
+  const step = await prisma.personalPlanStep.findFirst({ where: { memberId: member.id, kind: "cardbill", templateId: cardBillTemplateId(cardId, cycleEnd), status: "done" }, select: { id: true } });
+  if (step) {
+    const fd = new FormData();
+    fd.set("id", String(step.id));
+    await untickPlanStep(fd);
+    return { ok: true };
+  }
+  return unpayFamilyCardBill(formData);
 }
 
 // Set HOW a step moves and WHICH accounts it runs between. Allowed until it is done (untick to change a done one).

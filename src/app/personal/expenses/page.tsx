@@ -6,7 +6,7 @@ import { PlannedSpends } from "@/components/personal/PlannedSpends";
 import { PersonalNav } from "@/components/personal/PersonalNav";
 import { PersonalSpendFab } from "@/components/personal/PersonalSpendFab";
 import { PersonalSpendsView } from "@/components/personal/PersonalSpendsView";
-import { PendingMoveNote } from "@/components/personal/PendingMoveNote";
+import { InAccountCard } from "@/components/personal/InAccountCard";
 import { PersonalEmpty } from "@/components/personal/PersonalEmpty";
 import { CardDuesStrip } from "@/components/personal/CardDuesStrip";
 import { CardBillReminderBanner } from "@/components/personal/CardBillReminderBanner";
@@ -70,15 +70,12 @@ export default async function PersonalExpenses({
   //  inAccount   = actual cash in your bank RIGHT NOW. Card spends haven't left yet, so that money is
   //                still there (+ card dues); money you've lent out has left (− owed); money you've
   //                borrowed is sitting in your account (+ borrowed) until you repay it.
-  //  afterSettle = what you keep once every card is paid AND every due/lend/borrow is settled. The card
-  //                cash, the receivables and the borrowings all reverse out, landing back on canSpend.
   // Sheet + Spends + Lending only — nothing from the Money Plan: every Sheet bill already counts as spent
   // (it's out of Can spend), ticked or not. Card spends haven't left yet (+ dues); lent out (−); borrowed in (+).
   const calcInAccount = canSpend + unpaidCardDues - owed + borrowed;
   // "In account now" = the REAL balance of your personal account (e.g. Jupiter) when there is one; the
   // calculated figure stays as a check — a gap means something moved that isn't logged yet.
   const inAccount = personalAcct ? personalAcct.balance : calcInAccount;
-  const afterSettle = canSpend;
 
   // The category donut reflects your NET spend (your share of splits) — the exact spend you did.
   const byCat = new Map<number, number>();
@@ -160,32 +157,25 @@ export default async function PersonalExpenses({
         {/* due-bill reminders (soon / overdue) */}
         <CardBillReminderBanner reminders={c.cardReminders} />
 
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           {/* 1 — what you can still spend against this month's budget (Spent folded into the sub-line) */}
           <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4">
             <div className="text-[11px] font-medium uppercase tracking-wide text-emerald-700">Can spend</div>
             <div className={`mt-1 text-xl font-bold ${canSpend >= 0 ? "text-emerald-800" : "text-red-600"}`}>{formatINR(canSpend)}</div>
             <div className="text-[10px] text-slate-500">of {formatINR(Math.max(0, personalExpense))} · spent {formatINR(netSpent)}</div>
           </div>
-          {/* 2 — money actually in your account now: card cash hasn't left (+), lends out (−), borrowed in (+) */}
-          <div className="rounded-xl border border-slate-200 bg-white p-4">
-            <div className="text-[11px] font-medium uppercase tracking-wide text-slate-400">In account now{personalAcct ? ` · ${personalAcct.name}` : ""}</div>
-            <div className={`mt-1 text-xl font-bold ${inAccount >= 0 ? "text-slate-800" : "text-red-600"}`}>{formatINR(inAccount)}</div>
-            <div className="text-[10px] text-slate-400">
-              {[
-                unpaidCardDues > 0 ? `${formatINR(unpaidCardDues)} held for cards` : null,
-                owed > 0 ? `${formatINR(owed)} out on loan` : null,
-                borrowed > 0 ? `${formatINR(borrowed)} to repay` : null,
-              ].filter(Boolean).join(" · ") || "cash in hand"}
-            </div>
-            <PendingMoveNote acct={personalAcct} />
-          </div>
-          {/* 3 — after paying every card and collecting every due/lend; nets back to your budget headroom */}
-          <div className="rounded-xl border border-slate-200 bg-white p-4">
-            <div className="text-[11px] font-medium uppercase tracking-wide text-slate-400">After settling</div>
-            <div className={`mt-1 text-xl font-bold ${afterSettle >= 0 ? "text-slate-800" : "text-red-600"}`}>{formatINR(afterSettle)}</div>
-            <div className="text-[10px] text-slate-400">cards paid · dues collected</div>
-          </div>
+          {/* 2 — money actually in your account now, tap to see what it's made of */}
+          <InAccountCard
+            accountName={personalAcct?.name ?? null}
+            balance={personalAcct ? inAccount : null}
+            canSpend={canSpend}
+            cards={cardDues.filter((d) => d.unpaidTotal > 0.005).map((d) => ({ name: d.cardName, color: d.color, amount: d.unpaidTotal }))}
+            lent={owed}
+            toRepay={borrowed}
+            toSend={personalAcct?.toSend ?? 0}
+            toCome={personalAcct?.toCome ?? 0}
+            otherName={personalAcct?.otherName ?? null}
+          />
         </div>
 
         {/* all cards — credit bills (deferred spends) + debit/prepaid balances, with their spends */}

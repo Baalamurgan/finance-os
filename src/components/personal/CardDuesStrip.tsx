@@ -1,6 +1,6 @@
 import { formatINR } from "@/lib/format";
-import { unpayFamilyCardBill } from "@/app/actions";
-import { PayCardBillModal } from "@/components/PayCardBillModal";
+import { unpayCardBillFromCard } from "@/app/personal/actions";
+import { PersonalPayCardBillButton } from "@/components/personal/PersonalCardBillPay";
 import { ToastForm } from "@/components/ToastForm";
 import type { CardDue, CardDueItem, BalanceCardView } from "@/lib/personal/cash";
 
@@ -69,7 +69,7 @@ function CardBlock({ d, showPaid }: { d: CardDue; showPaid: boolean }) {
                     <b className="tabular-nums text-slate-800">{formatINR(cycleFull)}</b>
                   </span>
                   {c.generated ? (
-                    <PayCardBillModal cardId={d.cardId} cardName={d.cardName} color={d.color} cycleEndISO={c.cycleEndISO} dueISO={c.dueISO ?? c.cycleEndISO} familyBudgeted={c.familyBudgeted} familyBudgetedByMonth={c.familyBudgetedByMonth} familyMisc={Math.round((c.familyTotal - c.familyBudgeted) * 100) / 100} personalAmount={c.total} annualFee={c.annualFee} />
+                    <PersonalPayCardBillButton cardId={d.cardId} cycleEndISO={c.cycleEndISO} card={{ cardName: d.cardName, color: d.color, dueISO: c.dueISO ?? c.cycleEndISO, personal: c.total, annualFee: c.annualFee, family: c.familyTotal, familyBudgeted: c.familyBudgeted, familyMisc: Math.round((c.familyTotal - c.familyBudgeted) * 100) / 100 }} />
                   ) : (
                     <span className="rounded-full bg-white px-2 py-0.5 text-[11px] font-medium text-slate-400 ring-1 ring-slate-200">
                       bill generates {fmtDate(c.cycleEndISO)}
@@ -87,7 +87,7 @@ function CardBlock({ d, showPaid }: { d: CardDue; showPaid: boolean }) {
             <li key={p.billId} className="rounded-lg px-3 py-1 text-xs text-slate-400">
               <div className="flex items-center justify-between gap-2">
                 <span>✓ Paid — bill {fmtDate(p.cycleEndISO)} · {formatINR(p.amount)}</span>
-                <ToastForm action={unpayFamilyCardBill} successMessage="Bill payment undone">
+                <ToastForm action={unpayCardBillFromCard} successMessage="Bill payment undone">
                   <input type="hidden" name="cardId" value={d.cardId} />
                   <input type="hidden" name="cycleEnd" value={p.cycleEndISO} />
                   <button className="font-medium text-slate-400 hover:text-red-600">undo</button>
