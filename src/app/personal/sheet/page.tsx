@@ -2,10 +2,11 @@ import { formatINR } from "@/lib/format";
 import { prisma } from "@/lib/prisma";
 import { loadPersonal } from "@/lib/loadPersonal";
 import { personalMonthLabel, personalCycleRange } from "@/lib/personal";
-import { getPersonalCash, getUnpaidCardDues, getPersonalLending } from "@/lib/personal/cash";
+import { getPersonalCash, getUnpaidCardDues, getPersonalLending, getPersonalAccount } from "@/lib/personal/cash";
 import { BALANCE_ACCOUNT_TYPES } from "@/lib/finance/types";
 import { PersonalNav } from "@/components/personal/PersonalNav";
 import { PersonalFixedModal } from "@/components/personal/PersonalFixedModal";
+import { PendingMoveNote } from "@/components/personal/PendingMoveNote";
 import { PersonalFixedRowActions } from "@/components/personal/PersonalFixedRowActions";
 import { PersonalSpendFab } from "@/components/personal/PersonalSpendFab";
 import { PersonalEmpty } from "@/components/personal/PersonalEmpty";
@@ -60,10 +61,15 @@ export default async function PersonalSheet({
   //  In account now = actual bank balance: can-spend + card cash still there (dues) − money lent out
   //                   (owed) + money you've borrowed that's in your account (borrowed)
   //  Spent          = net spend (your share only)
-  const { totalIn, personalExpense, netSpent, canSpend, plannedUnpaid } = cash;
+  const { totalIn, personalExpense, netSpent, canSpend } = cash;
   const owed = lending.owed;
   const borrowed = lending.borrowed;
-  const inAccount = canSpend + plannedUnpaid + unpaidCardDues - owed + borrowed;
+  // Sheet + Spends + Lending only — nothing from the Money Plan: every Sheet bill already counts as spent
+  // (it's out of Can spend), ticked or not. Card spends haven't left yet (+ dues); lent out (−); borrowed in (+).
+  const calcInAccount = canSpend + unpaidCardDues - owed + borrowed;
+  // The personal account's REAL balance when there is one (the calculated figure is the check).
+  const personalAcct = await getPersonalAccount(c.member.id);
+  const inAccount = personalAcct ? personalAcct.balance : calcInAccount;
   const spentPct = personalExpense > 0 ? Math.min(100, (netSpent / personalExpense) * 100) : 0;
 
   // group monthly expenses by category (collapsible)
@@ -201,8 +207,9 @@ export default async function PersonalSheet({
           </div>
           <div className="mt-2 grid grid-cols-2 gap-3 border-t border-slate-100 pt-2 text-sm">
             <div>
-              <div className="text-[11px] uppercase tracking-wide text-slate-400">In account now</div>
+              <div className="text-[11px] uppercase tracking-wide text-slate-400">In account now{personalAcct ? ` · ${personalAcct.name}` : ""}</div>
               <div className={`font-bold tabular-nums ${inAccount < 0 ? "text-red-600" : "text-slate-800"}`}>{formatINR(inAccount)}</div>
+              <PendingMoveNote acct={personalAcct} />
             </div>
             <div>
               <div className="text-[11px] uppercase tracking-wide text-slate-400">Spent (your share)</div>

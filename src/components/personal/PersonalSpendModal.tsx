@@ -13,6 +13,7 @@ type Cat = { id: number; name: string; icon: string | null };
 type Card = {
   id: number; name: string; color: string; type?: string; ownerName?: string; mine?: boolean;
   statementDay?: number | null; dueOffsetDays?: number | null;
+  personal?: boolean; // your personal account — a spend with no account picked (UPI) comes out of it
 };
 export type SpendCard = Card;
 // An existing spend's split/reimbursement, for the edit modal. `locked` = something already moved on it
@@ -89,7 +90,9 @@ export function PersonalSpendModal({
   const selectedCard = cards.find((c) => String(c.id) === cardId);
   const peerCard = selectedCard && selectedCard.mine === false ? selectedCard : null;
   const isCardType = (t?: string) => t === "credit_card" || t === "debit_card" || t === "prepaid_card";
-  const myCards = cards.filter((c) => c.mine !== false);
+  const personalAcct = cards.find((c) => c.personal) ?? null;
+  // your personal account is the default (blank) option, so it isn't listed a second time
+  const myCards = cards.filter((c) => c.mine !== false && !c.personal);
   // Peer usage only makes sense for a CARD (they front the charge, you owe them) — not someone's
   // bank/cash account, which you can't spend from. So peers are limited to card accounts.
   const peerCards = cards.filter((c) => c.mine === false && isCardType(c.type));
@@ -275,7 +278,7 @@ export function PersonalSpendModal({
                       }}
                       className="input mt-1 w-full"
                     >
-                      <option value="">Cash / UPI (from this month)</option>
+                      <option value="">{personalAcct ? `UPI · ${personalAcct.name} (your personal account)` : "Cash / UPI (from this month)"}</option>
                       {myCards.length > 0 && (
                         <optgroup label="My cards & accounts">
                           {myCards.map((c) => (

@@ -1,56 +1,11 @@
 import { prisma } from "@/lib/prisma";
-import { Prisma } from "@prisma/client";
 import { CATEGORY_KINDS } from "@/lib/misc";
 import { getPersonalCash } from "@/lib/personal/cash";
 import { istNow } from "@/lib/time";
+import { ensureTemplates, seedFromTemplates } from "@/lib/personal/templates";
+import { ensurePlanSteps } from "@/lib/personal/planSteps";
 
 const MONTHS = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"];
-
-// Carry a recurring template's day-of-month into the target (year, month), clamped to that month's length
-// (so a "31st" template still lands on Feb 28). `month` is 1-based.
-function recurDate(year: number, month: number, template: Date): Date {
-  const day = Math.min(template.getDate(), new Date(year, month, 0).getDate());
-  return new Date(year, month - 1, day);
-}
-
-// Clone the member's recurring templates (set in Personal setup) from `fromPeriodId` into the new month
-// `to`, each stamped with its own day-of-month. Income, fixed expenses AND daily spends all recur; the
-// cloned rows stay `recurring: true` so they roll forward again next month. Runs inside a transaction.
-async function seedRecurring(
-  tx: Prisma.TransactionClient,
-  memberId: number,
-  fromPeriodId: number,
-  to: { id: number; year: number; month: number },
-) {
-  const [incomes, expenses, spends, edited] = await Promise.all([
-    tx.personalIncome.findMany({ where: { periodId: fromPeriodId, recurring: true } }),
-    tx.personalExpense.findMany({ where: { periodId: fromPeriodId, recurring: true } }),
-    tx.personalSpend.findMany({ where: { periodId: fromPeriodId, recurring: true } }),
-    // Month-only edits made in the Money Plan keep the ORIGINAL Setup values on the step's snapshot — clone
-    // from those, so an edit (or a removal) in one month never leaks into the next.
-    tx.personalPlanStep.findMany({
-      where: { periodId: fromPeriodId, templateKind: { in: ["income", "expense", "spend"] }, snapshot: { not: Prisma.DbNull } },
-      select: { templateKind: true, templateId: true, snapshot: true },
-    }),
-  ]);
-  const snap = new Map<string, Record<string, unknown>>();
-  for (const st of edited) if (st.snapshot && typeof st.snapshot === "object") snap.set(`${st.templateKind}:${st.templateId}`, st.snapshot as Record<string, unknown>);
-  const num = (v: unknown, d: number) => (typeof v === "number" ? v : d);
-  const str = <T extends string | null>(v: unknown, d: T): T | string => (typeof v === "string" ? v : v === null ? null as T : d);
-  const idOrNull = (v: unknown, d: number | null) => (typeof v === "number" ? v : v === null ? null : d);
-  for (const e of incomes) {
-    const o = snap.get(`income:${e.id}`) ?? {};
-    await tx.personalIncome.create({ data: { memberId, periodId: to.id, source: str(o.source, e.source) ?? e.source, amount: num(o.amount, e.amount), date: recurDate(to.year, to.month, e.date), recurring: true, accountId: idOrNull(o.accountId, e.accountId) } });
-  }
-  for (const e of expenses) {
-    const o = snap.get(`expense:${e.id}`) ?? {};
-    await tx.personalExpense.create({ data: { memberId, periodId: to.id, label: str(o.label, e.label) ?? e.label, categoryId: e.categoryId, amount: num(o.amount, e.amount), note: e.note, recurring: true, pending: true, cardAccountId: idOrNull(o.cardAccountId, e.cardAccountId), payAccountId: idOrNull(o.payAccountId, e.payAccountId), date: recurDate(to.year, to.month, e.date) } });
-  }
-  for (const e of spends) {
-    const o = snap.get(`spend:${e.id}`) ?? {};
-    await tx.personalSpend.create({ data: { memberId, periodId: to.id, categoryId: e.categoryId, amount: num(o.amount, e.amount), note: str(o.note, e.note), recurring: true, pending: true, cardAccountId: idOrNull(o.cardAccountId, e.cardAccountId), payAccountId: idOrNull(o.payAccountId, e.payAccountId), date: recurDate(to.year, to.month, e.date) } });
-  }
-}
 
 export function personalMonthLabel(month: number, year: number) {
   return `${MONTHS[month - 1]} ${year}`;
@@ -114,6 +69,7 @@ export async function ensurePersonalMonth(memberId: number, now = new Date()) {
   // below (the preview becomes the live month, keeping its edited salary + predicted lines).
   if (existing && existing.status !== "draft") return existing;
 
+  await ensureTemplates(memberId); // Setup lives in PersonalTemplate (one-time switch-over from the month rows)
   // Drafts (next-month previews) are excluded from "latest" so they never drive carry/clone.
   const latest = await prisma.personalPeriod.findFirst({
     where: { memberId, status: { not: "draft" } },
@@ -125,7 +81,7 @@ export async function ensurePersonalMonth(memberId: number, now = new Date()) {
   // month ARE deducted — exactly matching what the Sheet/Expenses show.
   const carryForward = latest ? (await getPersonalCash(latest)).canSpend : 0;
 
-  return prisma.$transaction(async (tx) => {
+  const created = await prisma.$transaction(async (tx) => {
     let p;
     if (existing) {
       // promote the draft → open, with the real carry recomputed (its lines/salary stay)
@@ -155,7 +111,7 @@ export async function ensurePersonalMonth(memberId: number, now = new Date()) {
           carryForward,
         },
       });
-      if (latest) await seedRecurring(tx, memberId, latest.id, p);
+      await seedFromTemplates(tx, memberId, p); // Setup → this month's own lines
     }
     if (latest) {
       await tx.personalPeriod.update({
@@ -165,6 +121,9 @@ export async function ensurePersonalMonth(memberId: number, now = new Date()) {
     }
     return p;
   });
+  // The new month's Money Plan steps exist from the moment the month does (no need to open the plan).
+  await ensurePlanSteps(memberId, created.id);
+  return created;
 }
 
 // The next calendar month after (year, month).
@@ -186,13 +145,16 @@ export async function ensurePersonalPreview(memberId: number) {
   const already = await prisma.personalPeriod.findUnique({ where: { memberId_year_month: { memberId, year, month } } });
   if (already) return already;
   const carryForward = (await getPersonalCash(latest)).canSpend;
-  return prisma.$transaction(async (tx) => {
+  await ensureTemplates(memberId);
+  const draft = await prisma.$transaction(async (tx) => {
     const p = await tx.personalPeriod.create({
       data: { memberId, year, month, label: personalMonthLabel(month, year), status: "draft", income: latest.income, incomeAccountId: latest.incomeAccountId, carryForward },
     });
-    await seedRecurring(tx, memberId, latest.id, p);
+    await seedFromTemplates(tx, memberId, p);
     return p;
   });
+  await ensurePlanSteps(memberId, draft.id); // the preview's plan is ready straight away too
+  return draft;
 }
 
 // Re-seed a draft from the latest real month (drops generated recurring lines + refreshes
@@ -206,14 +168,34 @@ export async function rebuildPersonalPreview(memberId: number, draftId: number) 
   });
   if (!latest) return;
   const carryForward = (await getPersonalCash(latest)).canSpend;
+  await ensureTemplates(memberId);
   await prisma.$transaction(async (tx) => {
-    // drop the previously-generated recurring rows, then re-clone from the latest real month's templates
+    // drop the previously-generated recurring rows, then re-copy from Setup's templates
     await Promise.all([
       tx.personalIncome.deleteMany({ where: { periodId: draftId, recurring: true } }),
       tx.personalExpense.deleteMany({ where: { periodId: draftId, recurring: true } }),
       tx.personalSpend.deleteMany({ where: { periodId: draftId, recurring: true } }),
     ]);
-    await seedRecurring(tx, memberId, latest.id, draft);
+    await seedFromTemplates(tx, memberId, draft);
     await tx.personalPeriod.update({ where: { id: draftId }, data: { income: latest.income, incomeAccountId: latest.incomeAccountId, carryForward } });
   });
+  await ensurePlanSteps(memberId, draftId);
+}
+
+// Cron entry: roll every personal member into the current month (closing the previous one, copying Setup's
+// templates in) and make sure that month's Money Plan steps exist — so on the 1st everything is ready without
+// anyone opening the app. Idempotent: an existing month is left alone apart from creating any missing steps.
+export async function rollPersonalMonths(now = new Date()): Promise<{ members: number; failed: number }> {
+  const members = await prisma.member.findMany({ where: { personalOnboarded: true }, select: { id: true } });
+  let failed = 0;
+  for (const m of members) {
+    try {
+      const p = await ensurePersonalMonth(m.id, now);
+      await ensurePlanSteps(m.id, p.id);
+    } catch (e) {
+      failed++;
+      console.error("rollPersonalMonths", m.id, e);
+    }
+  }
+  return { members: members.length, failed };
 }

@@ -1,5 +1,6 @@
 "use client";
 
+import { HoldingPicker } from "@/components/personal/HoldingPicker";
 import { useActionState, useEffect, useRef, useState } from "react";
 import { addPlanItem, updatePlanItem, type PlanItemState } from "@/app/personal/finance/actions";
 import { formatINR } from "@/lib/format";
@@ -11,6 +12,7 @@ type Acct = { id: number; name: string; balance: number };
 type Initial = {
   id: number; kind: string; label: string; amount: number;
   dayOfMonth: number | null; fromAccountId: number | null; toAccountId: number | null; note: string | null;
+  holdingId?: number | null;
 };
 
 // Create/edit form for a recurring money-plan move. Controlled by RecurringMoves; keyed on the item id
@@ -20,8 +22,10 @@ export function PlanItemModal({
   open,
   onOpenChange,
   initial,
+  holdings = [],
 }: {
   accounts: Acct[];
+  holdings?: { id: number; name: string }[];
   open: boolean;
   onOpenChange: (v: boolean) => void;
   initial?: Initial | null;
@@ -105,10 +109,13 @@ export function PlanItemModal({
             <Field label="Note (optional)">
               <input name="note" defaultValue={initial?.note ?? ""} placeholder="reminder to yourself" className="input w-full" />
             </Field>
+            {!isTransfer && (
+              <HoldingPicker holdings={holdings} initialId={initial?.holdingId} suggestedName={initial?.label ?? ""} label="📈 Into holding (Net worth)" />
+            )}
             <p className="text-[11px] text-slate-400">
               {isTransfer
                 ? "Shows on your plan each month. “Do it” records the move on both accounts’ balances."
-                : "Shows on your plan each month. “Do it” sets the amount aside into your savings pot."}
+                : "Shows on your plan each month. Ticking it takes the money out of the account and adds it to the savings pot (and the holding, if picked)."}
             </p>
           </div>
           <div className="flex justify-end gap-2 border-t border-slate-100 px-5 py-3">

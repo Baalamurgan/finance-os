@@ -17,6 +17,8 @@ import { isPersonalUnlocked } from "@/lib/personal-lock";
 import { ensurePersonalMonth, ensurePersonalPreview, rebuildPersonalPreview, seedPersonalCategories } from "@/lib/personal";
 import { getCardBillReminders, getCardDues } from "@/lib/personal/cash";
 import { ensurePlanSteps, orderSteps, cardBillTemplateId, decodeCardBillTemplateId } from "@/lib/personal/planSteps";
+import { templateDate } from "@/lib/personal/templates";
+import { addContribution, removeContributions, resolveHoldingFromForm } from "@/lib/finance/networth";
 import { payFamilyCardBill, unpayFamilyCardBill } from "@/app/actions";
 import { currentCycle } from "@/lib/finance/cycle";
 import { BALANCE_ACCOUNT_TYPES } from "@/lib/finance/types";
@@ -263,9 +265,16 @@ function resolveCollectBy(
 // the month's spendable, cash-in-hand and credit dues still run through the card TAG (getPersonalCash /
 // getCardDues) unchanged — the ledger line is additive. Idempotent: upserts on the spend link, or removes
 // the line if the spend moved to cash. Deleting the spend cascades the line away via the FK.
+// The member's PERSONAL account (marked, or their only bank/cash/wallet account) — where a "UPI" spend with
+// no account picked, and lending money in/out, actually moves. null = none → those just don't post.
+async function personalAccountIdOf(tx: Prisma.TransactionClient, memberId: number): Promise<number | null> {
+  const accts = await tx.financeAccount.findMany({ where: { memberId, active: true, type: { in: [...BALANCE_ACCOUNT_TYPES] } }, select: { id: true, personalPrimary: true } });
+  return (accts.find((a) => a.personalPrimary) ?? (accts.length === 1 ? accts[0] : null))?.id ?? null;
+}
+
 async function syncPersonalSpendLedger(
   tx: Prisma.TransactionClient,
-  a: { spendId: number; card: SpendCard | null; amount: number; label: string; date: Date; categoryName: string | null; payerName: string },
+  a: { spendId: number; card: SpendCard | null; amount: number; label: string; date: Date; categoryName: string | null; payerName: string; memberId?: number },
 ) {
   if (a.card) {
     // The ledger line lives on the card OWNER (their money/limit is what moves). Peer usage → source
@@ -279,7 +288,20 @@ async function syncPersonalSpendLedger(
       create: { memberId: a.card.ownerId, accountId: a.card.id, date: a.date, merchant, amount: a.amount, type: "spend", category: a.categoryName, source, personalSpendId: a.spendId },
     });
   } else {
-    await tx.accountTransaction.deleteMany({ where: { personalSpendId: a.spendId } });
+    // No account picked (UPI) → it leaves the PERSONAL account, so its balance tracks your Can spend. Only for a
+    // spend in a month that's still running (an old month's spend was already in that account's balance), and
+    // not for a planned spend paid from a chosen bank (that one posts its own marked line).
+    const sp = a.memberId != null ? await tx.personalSpend.findUnique({ where: { id: a.spendId }, select: { payAccountId: true, pending: true, period: { select: { status: true } } } }) : null;
+    const personalId = a.memberId != null && sp && !sp.pending && sp.payAccountId == null && sp.period.status !== "closed" ? await personalAccountIdOf(tx, a.memberId) : null;
+    if (personalId != null) {
+      await tx.accountTransaction.upsert({
+        where: { personalSpendId: a.spendId },
+        update: { amount: a.amount, merchant: a.label, accountId: personalId, memberId: a.memberId!, source: "personal" },
+        create: { memberId: a.memberId!, accountId: personalId, date: a.date, merchant: a.label, amount: a.amount, type: "spend", category: a.categoryName, source: "personal", personalSpendId: a.spendId },
+      });
+    } else {
+      await tx.accountTransaction.deleteMany({ where: { personalSpendId: a.spendId } });
+    }
   }
 }
 
@@ -486,8 +508,10 @@ export async function finishPersonalOnboarding(formData: FormData) {
   const amts = formData.getAll("recurAmt").map((v) => Number(v));
   for (let i = 0; i < labels.length; i++) {
     if (labels[i] && catIds[i] && amts[i] > 0) {
+      // Setup template (repeats every month) + this month's own copy of it.
+      const t = await prisma.personalTemplate.create({ data: { memberId: member.id, kind: "expense", label: labels[i], categoryId: catIds[i], amount: amts[i], dayOfMonth: 1 } });
       await prisma.personalExpense.create({
-        data: { memberId: member.id, periodId: period.id, label: labels[i], categoryId: catIds[i], amount: amts[i], recurring: true },
+        data: { memberId: member.id, periodId: period.id, label: labels[i], categoryId: catIds[i], amount: amts[i], recurring: true, templateId: t.id },
       });
     }
   }
@@ -570,8 +594,11 @@ export async function addPersonalExpense(
     return { ok: false, error: "Enter a name, category and amount.", n };
   if (!(await ownsPeriod(member.id, periodId))) return { ok: false, error: "Not your month.", n };
   const cardAccountId = await ccCardId(member.id, formData);
-  await prisma.personalExpense.create({
-    data: { memberId: member.id, periodId, label, categoryId, amount, recurring, cardAccountId },
+  await prisma.$transaction(async (tx) => {
+    // "Repeat every month" → also a Setup template (from next month it's copied in like any other); this
+    // month's line is its own copy, so later edits to either never touch the other.
+    const t = recurring ? await tx.personalTemplate.create({ data: { memberId: member.id, kind: "expense", label, categoryId, amount, cardAccountId, dayOfMonth: new Date().getDate() > 28 ? 28 : new Date().getDate() } }) : null;
+    await tx.personalExpense.create({ data: { memberId: member.id, periodId, label, categoryId, amount, recurring, cardAccountId, templateId: t?.id ?? null } });
   });
   rev();
   return { ok: true, n };
@@ -588,21 +615,21 @@ export async function updatePersonalExpense(
   const label = String(formData.get("label") ?? "").trim();
   const categoryId = Number(formData.get("categoryId"));
   const amount = parseAmount(formData.get("amount"));
-  const recurring = formData.get("recurring") === "on";
   const e = await prisma.personalExpense.findUnique({ where: { id } });
   if (!e || e.memberId !== member.id) return { ok: false, error: "Not found.", n };
   if (!label || !categoryId || !amount || amount <= 0)
     return { ok: false, error: "Enter a name, category and amount.", n };
   const cardAccountId = await ccCardId(member.id, formData);
-  await prisma.personalExpense.update({ where: { id }, data: { label, categoryId, amount, recurring, cardAccountId } });
+  // This month's line only — Setup (its template) is never touched from the Sheet.
+  await prisma.personalExpense.update({ where: { id }, data: { label, categoryId, amount, cardAccountId } });
   rev();
   return { ok: true, n };
 }
 
 // ── Recurring setup templates (income / fixed expense / daily spend) ──────────────────────────────────
-// One upsert for all three. Each is a real entry in the CURRENT month flagged `recurring: true` + dated to
-// its day-of-month, so it shows this month AND clones forward every month (seedRecurring in personal.ts).
-// income: no category/card. expense + spend: a category (+ optional card as payment mode).
+// Setup = PersonalTemplate rows, kept apart from the months. Adding / editing / deleting one here only shapes
+// the months created AFTER it (each new month copies the active templates). The current month changes only
+// via "Apply to this month" (applyTemplateToMonth) — never as a side effect of editing Setup.
 export async function upsertPersonalRecurring(prev: PersonalSaveState, formData: FormData): Promise<PersonalSaveState> {
   const n = (prev?.n ?? 0) + 1;
   const member = await me();
@@ -610,79 +637,94 @@ export async function upsertPersonalRecurring(prev: PersonalSaveState, formData:
   const kind = String(formData.get("kind"));
   if (kind !== "income" && kind !== "expense" && kind !== "spend") return { ok: false, error: "Bad type.", n };
   const id = Number(formData.get("id")) || 0;
-  const periodId = Number(formData.get("periodId"));
   const label = String(formData.get("label") ?? "").trim();
   const amount = parseAmount(formData.get("amount"));
   const categoryId = Number(formData.get("categoryId")) || 0;
-  const day = Math.min(28, Math.max(1, Math.round(Number(formData.get("day")) || 1)));
+  const dayOfMonth = Math.min(28, Math.max(1, Math.round(Number(formData.get("day")) || 1)));
   if (!label || !amount || amount <= 0) return { ok: false, error: "Enter a name and amount.", n };
   if ((kind === "expense" || kind === "spend") && !categoryId) return { ok: false, error: "Pick a category.", n };
-  const period = await prisma.personalPeriod.findFirst({ where: { id: periodId, memberId: member.id }, select: { year: true, month: true } });
-  if (!period) return { ok: false, error: "Not your month.", n };
-  // `day` → a real date in this month, clamped to its length (so "28" is always valid).
-  const date = new Date(period.year, period.month - 1, Math.min(day, new Date(period.year, period.month, 0).getDate()));
-  // "Paid from" can be ANY of the member's accounts: a card (credit/debit/prepaid) goes on cardAccountId
-  // (card-deferred accounting), a bank/cash account on payAccountId (debited when the step is ticked).
+  if (categoryId) {
+    const cat = await prisma.personalCategory.findFirst({ where: { id: categoryId, memberId: member.id }, select: { id: true } });
+    if (!cat) return { ok: false, error: "Unknown category.", n };
+  }
+  // "Paid from" can be ANY of the member's accounts: a card (credit/debit/prepaid) → cardAccountId (card-deferred
+  // accounting), a bank/cash account → payAccountId (debited when the step is ticked).
   const payAcct = kind === "income" ? null : await ownAccount(member.id, formData.get("payAccountId"));
   const isCardAcct = payAcct != null && payAcct.type !== "bank" && payAcct.type !== "cash";
-  const cardAccountId = isCardAcct ? payAcct!.id : null;
-  const payAccountId = payAcct != null && !isCardAcct ? payAcct.id : null;
-  // Recurring income can name a target balance account (where it lands) → becomes the income step's account.
-  const incomeAccountId = kind === "income" ? await ownBalanceAccountId(member.id, formData.get("accountId")) : null;
-  if (kind === "income") {
-    const data = { source: label, amount, date, recurring: true, accountId: incomeAccountId };
-    if (id) {
-      const e = await prisma.personalIncome.findUnique({ where: { id } });
-      if (!e || e.memberId !== member.id) return { ok: false, error: "Not found.", n };
-      await prisma.personalIncome.update({ where: { id }, data });
-    } else await prisma.personalIncome.create({ data: { memberId: member.id, periodId, ...data } });
-  } else if (kind === "expense") {
-    const data = { label, categoryId, amount, date, recurring: true, cardAccountId, payAccountId };
-    if (id) {
-      const e = await prisma.personalExpense.findUnique({ where: { id } });
-      if (!e || e.memberId !== member.id) return { ok: false, error: "Not found.", n };
-      await prisma.personalExpense.update({ where: { id }, data });
-    } else await prisma.personalExpense.create({ data: { memberId: member.id, periodId, ...data, pending: true } }); // planned: it's a step this month too
-  } else {
-    const data = { categoryId, amount, note: label, date, recurring: true, cardAccountId, payAccountId };
-    if (id) {
-      const e = await prisma.personalSpend.findUnique({ where: { id } });
-      if (!e || e.memberId !== member.id) return { ok: false, error: "Not found.", n };
-      await prisma.personalSpend.update({ where: { id }, data });
-    } else await prisma.personalSpend.create({ data: { memberId: member.id, periodId, ...data, pending: true } });
-  }
+  // An investment bill/spend can name the holding each payment adds to (must be the member's own asset).
+  const holdingId = kind !== "income" ? await resolveHoldingFromForm(member.id, formData, label) : null;
+  const data = {
+    holdingId,
+    label: label.slice(0, 120), amount: Math.round(amount * 100) / 100, dayOfMonth,
+    categoryId: kind === "income" ? null : categoryId,
+    cardAccountId: isCardAcct ? payAcct!.id : null,
+    payAccountId: payAcct != null && !isCardAcct ? payAcct.id : null,
+    // Recurring income can name the balance account it lands in → the income step's account.
+    accountId: kind === "income" ? await ownBalanceAccountId(member.id, formData.get("accountId")) : null,
+  };
   if (id) {
-    // Editing the template in Setup supersedes any month-only edit: drop the step's snapshot (next month
-    // clones this row) and refresh the month's still-pending step so the plan shows the new details.
-    await prisma.personalPlanStep.updateMany({ where: { memberId: member.id, templateKind: kind, templateId: id }, data: { snapshot: Prisma.DbNull } });
-    await prisma.personalPlanStep.updateMany({
-      where: { memberId: member.id, templateKind: kind, templateId: id, status: "pending" },
-      data: kind === "income"
-        ? { label: label.slice(0, 80), amount, dayOfMonth: day, toAccountId: incomeAccountId }
-        : { label: label.slice(0, 80), amount, dayOfMonth: day, fromAccountId: payAcct?.id ?? null },
-    });
+    const t = await prisma.personalTemplate.findFirst({ where: { id, memberId: member.id, kind } });
+    if (!t) return { ok: false, error: "Not found.", n };
+    await prisma.personalTemplate.update({ where: { id }, data });
+  } else {
+    await prisma.personalTemplate.create({ data: { memberId: member.id, kind, ...data } });
   }
   rev();
   return { ok: true, n };
 }
 
+// Remove a Setup template: stops it repeating from next month. This month's copy (if any) stays as it is.
 export async function deletePersonalRecurring(formData: FormData) {
   const member = await me();
   if (!member) return;
-  const kind = String(formData.get("kind"));
   const id = Number(formData.get("id"));
   if (!id) return;
-  if (kind === "income") {
-    const e = await prisma.personalIncome.findUnique({ where: { id } });
-    if (e && e.memberId === member.id) await prisma.personalIncome.delete({ where: { id } });
-  } else if (kind === "expense") {
-    const e = await prisma.personalExpense.findUnique({ where: { id } });
-    if (e && e.memberId === member.id) await prisma.personalExpense.delete({ where: { id } });
-  } else if (kind === "spend") {
-    const e = await prisma.personalSpend.findUnique({ where: { id } });
-    if (e && e.memberId === member.id) await prisma.personalSpend.delete({ where: { id } });
-  }
+  await prisma.personalTemplate.deleteMany({ where: { id, memberId: member.id } });
   rev();
+}
+
+// "Apply to this month": copy a Setup template's CURRENT values onto the given month's own line (creating it if
+// the month has none). Refused once that line is paid/received — untick it first. Its pending plan step follows
+// the line (ensurePlanSteps syncs it).
+export async function applyTemplateToMonth(formData: FormData): Promise<{ ok: boolean; error?: string }> {
+  const member = await me();
+  if (!member) return { ok: false, error: "Signed out." };
+  const id = Number(formData.get("id"));
+  const periodId = Number(formData.get("periodId"));
+  const t = await prisma.personalTemplate.findFirst({ where: { id, memberId: member.id } });
+  const period = await prisma.personalPeriod.findFirst({ where: { id: periodId, memberId: member.id }, select: { id: true, year: true, month: true, status: true } });
+  if (!t || !period) return { ok: false, error: "Not found." };
+  if (period.status === "closed") return { ok: false, error: "That month is closed." };
+  const date = templateDate(period.year, period.month, t.dayOfMonth);
+  const err = await prisma.$transaction(async (tx): Promise<string | null> => {
+    if (t.kind === "income") {
+      const row = await tx.personalIncome.findFirst({ where: { periodId, templateId: t.id } });
+      if (row) {
+        const doneStep = await tx.personalPlanStep.findFirst({ where: { periodId, templateKind: "income", templateId: row.id, status: "done" }, select: { id: true } });
+        if (doneStep) return "Already received this month — untick it in the plan first.";
+        await tx.personalIncome.update({ where: { id: row.id }, data: { source: t.label, amount: t.amount, date, accountId: t.accountId } });
+      } else {
+        await tx.personalIncome.create({ data: { memberId: member.id, periodId, source: t.label, amount: t.amount, date, recurring: true, accountId: t.accountId, templateId: t.id } });
+      }
+    } else if (t.kind === "expense" && t.categoryId != null) {
+      const row = await tx.personalExpense.findFirst({ where: { periodId, templateId: t.id } });
+      if (row && !row.pending) return "Already paid this month — untick it in the plan first.";
+      const data = { label: t.label, categoryId: t.categoryId, amount: t.amount, date, cardAccountId: t.cardAccountId, payAccountId: t.payAccountId, holdingId: t.holdingId };
+      if (row) await tx.personalExpense.update({ where: { id: row.id }, data });
+      else await tx.personalExpense.create({ data: { memberId: member.id, periodId, ...data, recurring: true, pending: true, templateId: t.id } });
+    } else if (t.kind === "spend" && t.categoryId != null) {
+      const row = await tx.personalSpend.findFirst({ where: { periodId, templateId: t.id } });
+      if (row && !row.pending) return "Already paid this month — edit it in Spends instead.";
+      const data = { categoryId: t.categoryId, amount: t.amount, note: t.label, date, cardAccountId: t.cardAccountId, payAccountId: t.payAccountId, holdingId: t.holdingId };
+      if (row) await tx.personalSpend.update({ where: { id: row.id }, data });
+      else await tx.personalSpend.create({ data: { memberId: member.id, periodId, ...data, recurring: true, pending: true, templateId: t.id } });
+    }
+    return null;
+  });
+  if (err) return { ok: false, error: err };
+  await ensurePlanSteps(member.id, periodId);
+  rev();
+  return { ok: true };
 }
 
 export async function deletePersonalExpense(formData: FormData) {
@@ -746,7 +788,7 @@ export async function addPersonalSpend(
     const created = await tx.personalSpend.create({ data: { memberId: member.id, periodId, categoryId, amount, note, cardAccountId } });
     // A debit/prepaid card spend posts the FULL amount to the card ledger (that's what left the card).
     // A peer card posts it to the OWNER's ledger + creates the two-sided repay debt.
-    await syncPersonalSpendLedger(tx, { spendId: created.id, card, amount, label: note, date: created.date, categoryName: cat.name, payerName: member.name });
+    await syncPersonalSpendLedger(tx, { spendId: created.id, card, amount, label: note, date: created.date, categoryName: cat.name, payerName: member.name, memberId: member.id });
     await syncPeerCardLoans(tx, { spendId: created.id, payerId: member.id, payerName: member.name, card, amount, note, dueDate: peerRepay?.dueDate ?? null, notifyDaysBefore: peerRepay?.notifyDaysBefore ?? 3 });
     const sharedOthers = await writeSplitReceivables(tx, { member, spendId: created.id, note, amount, input: parsed, owed });
     if (sharedOthers != null) await tx.personalSpend.update({ where: { id: created.id }, data: { sharedOthers } });
@@ -821,7 +863,16 @@ export async function updatePersonalSpend(
 
   await prisma.$transaction(async (tx) => {
     await tx.personalSpend.update({ where: { id }, data: { categoryId, amount, note, cardAccountId, ...(spendSync ? { sharedOthers: spendSync.sharedOthers } : {}) } });
-    await syncPersonalSpendLedger(tx, { spendId: id, card, amount, label: note, date: s.date, categoryName: cat.name, payerName: member.name });
+    // A paid invest spend's holding contribution follows an amount edit (history + value move by the difference).
+    if (Math.abs(amount - s.amount) > 0.005) {
+      for (const e of await tx.netWorthEntry.findMany({ where: { memberId: member.id, kind: "contribution", spendId: id }, select: { id: true, itemId: true, amount: true } })) {
+        await tx.netWorthEntry.update({ where: { id: e.id }, data: { amount } });
+        await tx.netWorthItem.update({ where: { id: e.itemId }, data: { value: { increment: Math.round((amount - e.amount) * 100) / 100 } } });
+      }
+    }
+    await syncPersonalSpendLedger(tx, { spendId: id, card, amount, label: note, date: s.date, categoryName: cat.name, payerName: member.name, memberId: member.id });
+    // 3) A paid planned spend's bank debit (Mark paid from an account) follows an amount edit too.
+    if (Math.abs(amount - s.amount) > 0.005) await tx.accountTransaction.updateMany({ where: { memberId: member.id, category: SPEND_PAY_MARK(id) }, data: { amount } });
     await syncPeerCardLoans(tx, { spendId: id, payerId: member.id, payerName: member.name, card, amount, note, dueDate: peerRepay?.dueDate ?? null, notifyDaysBefore: peerRepay?.notifyDaysBefore ?? 3, date: s.date });
     if (splitInput) {
       // Rebuild: drop the old (untouched) split/reimbursement rows — both sides; peer-card debt rows carry a
@@ -854,6 +905,9 @@ export async function deletePersonalSpend(formData: FormData) {
     // sides) — and the card-ledger line (cascades via the personalSpendId FK). Nothing left dangling.
     await tx.personalLoan.deleteMany({ where: { spendId: id } });
     await tx.accountTransaction.deleteMany({ where: { memberId: member.id, category: SPEND_PAY_MARK(id) } }); // bank/cash debit from a Mark-paid
+    // …and any holding contribution its payment made (paid from Spends, or via its plan step).
+    await removeContributions(tx, member.id, { spendId: id });
+    for (const st of await tx.personalPlanStep.findMany({ where: { memberId: member.id, templateKind: "spend", templateId: id }, select: { id: true } })) await removeContributions(tx, member.id, { planStepId: st.id });
     await tx.personalSpend.delete({ where: { id } });
   });
   rev();
@@ -1069,20 +1123,46 @@ export async function addPersonalLoan(formData: FormData) {
     const linkGroup = randomUUID();
     const opp = direction === "borrowed" ? "lent" : "borrowed";
     const common = { amount, outstanding: amount, note, dueDate, notifyDaysBefore, linkGroup, initiatedById: member.id };
-    await prisma.personalLoan.createMany({
-      data: [
-        { memberId: member.id, direction, counterparty: cpMember.name, ...common },
-        { memberId: cpMember.id, direction: opp, counterparty: member.name, ...common },
-      ],
+    await prisma.$transaction(async (tx) => {
+      const a = await tx.personalLoan.create({ data: { memberId: member.id, direction, counterparty: cpMember.name, ...common } });
+      const b = await tx.personalLoan.create({ data: { memberId: cpMember.id, direction: opp, counterparty: member.name, ...common } });
+      await postLoanMoney(tx, [a, b], amount, "create"); // the money leaves the lender's account, lands in the borrower's
     });
   } else {
     const counterparty = String(formData.get("counterparty") ?? "").trim();
     if (!counterparty) return;
-    await prisma.personalLoan.create({
-      data: { memberId: member.id, direction, counterparty, amount, outstanding: amount, note, dueDate, notifyDaysBefore },
+    await prisma.$transaction(async (tx) => {
+      const a = await tx.personalLoan.create({ data: { memberId: member.id, direction, counterparty, amount, outstanding: amount, note, dueDate, notifyDaysBefore } });
+      await postLoanMoney(tx, [a], amount, "create");
     });
   }
   rev();
+}
+
+// Money in/out on a lending entry moves each side's PERSONAL account: the lender's goes up when repaid (down
+// when lending), the borrower's the other way. One marked line per row + event, so it's traceable.
+const LOAN_MARK = (loanId: number) => `__loan__:${loanId}`;
+async function postLoanMoney(
+  tx: Prisma.TransactionClient,
+  rows: { id: number; memberId: number; direction: string; counterparty: string; note: string | null }[],
+  amount: number, event: "repay" | "create",
+) {
+  if (amount <= 0.005) return;
+  for (const r of rows) {
+    const acct = await personalAccountIdOf(tx, r.memberId);
+    if (acct == null) continue;
+    // repay: lender receives (in), borrower pays (out) · create: lender pays out, borrower receives
+    const incoming = event === "repay" ? r.direction === "lent" : r.direction === "borrowed";
+    const what = r.note ? ` · ${r.note}` : "";
+    await tx.accountTransaction.create({
+      data: {
+        memberId: r.memberId, accountId: acct, date: new Date(), amount: Math.round(amount * 100) / 100,
+        type: incoming ? "transfer_in" : "transfer_out",
+        merchant: event === "repay" ? (incoming ? `From ${r.counterparty}${what}` : `To ${r.counterparty}${what}`) : (incoming ? `Borrowed from ${r.counterparty}${what}` : `Lent to ${r.counterparty}${what}`),
+        category: event === "create" ? LOAN_MARK(r.id) : `${LOAN_MARK(r.id)}:paid`, source: "manual",
+      },
+    });
+  }
 }
 
 // A peer-card loan has TWO rows (borrower + lender) sharing a linkGroup. Any mutation applies to the
@@ -1105,12 +1185,13 @@ export async function recordPersonalLoanPayment(formData: FormData) {
   const loan = await prisma.personalLoan.findUnique({ where: { id } });
   if (!loan || loan.memberId !== member.id || !pay || pay <= 0) return;
   const outstanding = Math.max(0, loan.outstanding - pay);
-  // Lending only ever moves "In account", never "Can spend" (it isn't budget). A lent repayment coming
-  // BACK settles the receivable (owed drops → In-account rises); a borrowed repayment going OUT clears the
-  // borrowing (borrowed drops → In-account falls). Either way just adjust the loan — no spend is logged.
-  await prisma.personalLoan.updateMany({
-    where: loanGroupWhere(loan),
-    data: { outstanding, status: outstanding <= 0.005 ? "settled" : "open" },
+  const moved = Math.min(pay, loan.outstanding);
+  // Lending never moves "Can spend" (it isn't budget) — it moves real money: the repayment lands in the
+  // lender's personal account and leaves the borrower's (both sides of a linked pair).
+  await prisma.$transaction(async (tx) => {
+    const rows = await tx.personalLoan.findMany({ where: loanGroupWhere(loan), select: { id: true, memberId: true, direction: true, counterparty: true, note: true } });
+    await tx.personalLoan.updateMany({ where: loanGroupWhere(loan), data: { outstanding, status: outstanding <= 0.005 ? "settled" : "open" } });
+    await postLoanMoney(tx, rows, moved, "repay");
   });
   rev();
 }
@@ -1121,8 +1202,12 @@ export async function settlePersonalLoan(formData: FormData) {
   const id = Number(formData.get("id"));
   const loan = await prisma.personalLoan.findUnique({ where: { id } });
   if (!loan || loan.memberId !== member.id) return;
-  // Clears the whole debt. Like a payment, this only moves "In account" (owed/borrowed drops) — no spend.
-  await prisma.personalLoan.updateMany({ where: loanGroupWhere(loan), data: { outstanding: 0, status: "settled" } });
+  // Clears the whole debt: what was still outstanding moves between the two personal accounts — no spend.
+  await prisma.$transaction(async (tx) => {
+    const rows = await tx.personalLoan.findMany({ where: loanGroupWhere(loan), select: { id: true, memberId: true, direction: true, counterparty: true, note: true } });
+    await tx.personalLoan.updateMany({ where: loanGroupWhere(loan), data: { outstanding: 0, status: "settled" } });
+    await postLoanMoney(tx, rows, loan.outstanding, "repay");
+  });
   rev();
 }
 
@@ -1140,7 +1225,13 @@ export async function deletePersonalLoan(formData: FormData) {
       await tx.personalLoan.deleteMany({ where: { spendId: loan.spendId } });
       await tx.personalSpend.deleteMany({ where: { id: loan.spendId } });
     } else {
-      // A manual lend/borrow with no parent spend → just clear it (and its linked mirror, via linkGroup).
+      // A manual lend/borrow with no parent spend → just clear it (and its linked mirror, via linkGroup), and
+      // undo the money its creation moved (a mistaken entry). Repayments already made stay — they happened.
+      // Only for an untouched entry: once anything was repaid, both legs really happened — keep them.
+      if (loan.status === "open" && Math.abs(loan.outstanding - loan.amount) < 0.005) {
+        const rows = await tx.personalLoan.findMany({ where: loanGroupWhere(loan), select: { id: true } });
+        await tx.accountTransaction.deleteMany({ where: { category: { in: rows.map((r) => LOAN_MARK(r.id)) } } });
+      }
       await tx.personalLoan.deleteMany({ where: loanGroupWhere(loan) });
     }
   });
@@ -1217,6 +1308,7 @@ type PlanStepRow = {
   templateKind: string | null; templateId: number | null; fromAccountId: number | null; toAccountId: number | null;
   transferOutId: number | null; transferInId: number | null; savingsId: number | null;
   snapshot?: Prisma.JsonValue | null;
+  holdingId?: number | null; // ticking adds a contribution to this net-worth holding
 };
 
 const PLAN_METHODS = new Set(["upi", "cash", "card", "other"]);
@@ -1248,45 +1340,27 @@ async function isOneOffRow(tx: Prisma.TransactionClient, memberId: number, step:
   return false;
 }
 
-// A step's `snapshot` is either the ORIGINAL Setup values behind a month-only row edit ({label|source|note,
-// amount, cardAccountId, payAccountId, accountId}) and/or the bare marker {edited: true}: "the member touched
-// this step this month". Marked steps are never overwritten by a Sync with Setup.
+// A step's `snapshot` {edited: true} marks "the member touched this step this month" (informational; Setup no
+// longer syncs into a month, so nothing overwrites it either way).
 const EDIT_MARK = { edited: true } as const;
-function hasRealSnapshot(v: Prisma.JsonValue | null | undefined): boolean {
-  return v != null && typeof v === "object" && !Array.isArray(v) && Object.keys(v).some((k) => k !== "edited");
-}
 async function markEdited(tx: Prisma.TransactionClient, stepId: number) {
   const cur = await tx.personalPlanStep.findUnique({ where: { id: stepId }, select: { snapshot: true } });
   if (cur?.snapshot == null) await tx.personalPlanStep.update({ where: { id: stepId }, data: { snapshot: EDIT_MARK } });
 }
 
-// Rewrite the income / bill / spend ROW behind a template step for THIS month. The first edit of a recurring
-// template stashes its original Setup values on the step's snapshot so next month still clones them.
+// Rewrite the income / bill / spend ROW behind a step — THIS month's own line only. Setup lives in
+// PersonalTemplate, so a month edit can never leak into it (no snapshot bookkeeping needed any more).
 async function editStepRow(
   tx: Prisma.TransactionClient, memberId: number, step: PlanStepRow,
   patch: { label?: string; amount?: number; cardAccountId?: number | null; payAccountId?: number | null; accountId?: number | null },
 ) {
   if (!step.templateId) return;
-  const fresh = await tx.personalPlanStep.findUnique({ where: { id: step.id }, select: { snapshot: true } });
-  const hasSnap = hasRealSnapshot(fresh?.snapshot);
   if (step.kind === "expense") {
-    const row = await tx.personalExpense.findFirst({ where: { id: step.templateId, memberId } });
-    if (!row) return;
-    const changed = (patch.label !== undefined && patch.label !== row.label) || (patch.amount !== undefined && patch.amount !== row.amount) || (patch.cardAccountId !== undefined && patch.cardAccountId !== row.cardAccountId) || (patch.payAccountId !== undefined && patch.payAccountId !== row.payAccountId);
-    if (row.recurring && !hasSnap && changed) await tx.personalPlanStep.update({ where: { id: step.id }, data: { snapshot: { edited: true, label: row.label, amount: row.amount, cardAccountId: row.cardAccountId, payAccountId: row.payAccountId } } });
-    await tx.personalExpense.update({ where: { id: row.id }, data: { ...(patch.label !== undefined ? { label: patch.label } : {}), ...(patch.amount !== undefined ? { amount: patch.amount } : {}), ...(patch.cardAccountId !== undefined ? { cardAccountId: patch.cardAccountId } : {}), ...(patch.payAccountId !== undefined ? { payAccountId: patch.payAccountId } : {}) } });
+    await tx.personalExpense.updateMany({ where: { id: step.templateId, memberId }, data: { ...(patch.label !== undefined ? { label: patch.label } : {}), ...(patch.amount !== undefined ? { amount: patch.amount } : {}), ...(patch.cardAccountId !== undefined ? { cardAccountId: patch.cardAccountId } : {}), ...(patch.payAccountId !== undefined ? { payAccountId: patch.payAccountId } : {}) } });
   } else if (step.kind === "spend") {
-    const row = await tx.personalSpend.findFirst({ where: { id: step.templateId, memberId } });
-    if (!row) return;
-    const changed = (patch.label !== undefined && patch.label !== row.note) || (patch.amount !== undefined && patch.amount !== row.amount) || (patch.cardAccountId !== undefined && patch.cardAccountId !== row.cardAccountId) || (patch.payAccountId !== undefined && patch.payAccountId !== row.payAccountId);
-    if (row.recurring && !hasSnap && changed) await tx.personalPlanStep.update({ where: { id: step.id }, data: { snapshot: { edited: true, note: row.note, amount: row.amount, cardAccountId: row.cardAccountId, payAccountId: row.payAccountId } } });
-    await tx.personalSpend.update({ where: { id: row.id }, data: { ...(patch.label !== undefined ? { note: patch.label } : {}), ...(patch.amount !== undefined ? { amount: patch.amount } : {}), ...(patch.cardAccountId !== undefined ? { cardAccountId: patch.cardAccountId } : {}), ...(patch.payAccountId !== undefined ? { payAccountId: patch.payAccountId } : {}) } });
+    await tx.personalSpend.updateMany({ where: { id: step.templateId, memberId }, data: { ...(patch.label !== undefined ? { note: patch.label } : {}), ...(patch.amount !== undefined ? { amount: patch.amount } : {}), ...(patch.cardAccountId !== undefined ? { cardAccountId: patch.cardAccountId } : {}), ...(patch.payAccountId !== undefined ? { payAccountId: patch.payAccountId } : {}) } });
   } else if (step.kind === "income" && step.templateKind === "income") {
-    const row = await tx.personalIncome.findFirst({ where: { id: step.templateId, memberId } });
-    if (!row) return;
-    const changed = (patch.label !== undefined && patch.label !== row.source) || (patch.amount !== undefined && patch.amount !== row.amount) || (patch.accountId !== undefined && patch.accountId !== row.accountId);
-    if (row.recurring && !hasSnap && changed) await tx.personalPlanStep.update({ where: { id: step.id }, data: { snapshot: { edited: true, source: row.source, amount: row.amount, accountId: row.accountId } } });
-    await tx.personalIncome.update({ where: { id: row.id }, data: { ...(patch.label !== undefined ? { source: patch.label } : {}), ...(patch.amount !== undefined ? { amount: patch.amount } : {}), ...(patch.accountId !== undefined ? { accountId: patch.accountId } : {}) } });
+    await tx.personalIncome.updateMany({ where: { id: step.templateId, memberId }, data: { ...(patch.label !== undefined ? { source: patch.label } : {}), ...(patch.amount !== undefined ? { amount: patch.amount } : {}), ...(patch.accountId !== undefined ? { accountId: patch.accountId } : {}) } });
   }
 }
 
@@ -1343,6 +1417,7 @@ async function renumberSteps(tx: Prisma.TransactionClient, periodId: number, mov
 
 // Undo a done step's ledger effect (shared by untick + deleting a done one-off). Leaves the step row alone.
 async function reversePlanStepEffect(tx: Prisma.TransactionClient, step: PlanStepRow, memberId: number) {
+  await removeContributions(tx, memberId, { planStepId: step.id }); // a holding contribution it made (if any)
   if (step.kind === "income") {
     if (step.templateKind === "baseincome") {
       if (step.templateId) await tx.accountTransaction.deleteMany({ where: { memberId, category: `__baseincome__:${step.templateId}` } });
@@ -1355,6 +1430,7 @@ async function reversePlanStepEffect(tx: Prisma.TransactionClient, step: PlanSte
     if (ids.length) await tx.accountTransaction.deleteMany({ where: { id: { in: ids }, memberId } });
   } else if (step.kind === "save") {
     if (step.savingsId) await tx.personalSavings.deleteMany({ where: { id: step.savingsId, memberId } });
+    await tx.accountTransaction.deleteMany({ where: { memberId, category: STEP_MARK(step.id) } }); // its account debit
   } else if (step.kind === "expense") {
     if (step.templateId) await tx.personalExpense.updateMany({ where: { id: step.templateId, memberId }, data: { pending: true } });
     await tx.accountTransaction.deleteMany({ where: { memberId, category: STEP_MARK(step.id) } });
@@ -1432,12 +1508,17 @@ export async function tickPlanStep(formData: FormData) {
       await tx.personalPlanStep.update({ where: { id: step.id }, data: { status: "done", doneAt: date, transferOutId: out.id, transferInId: inn.id } });
     } else if (step.kind === "save") {
       const dep = await tx.personalSavings.create({ data: { memberId: member.id, amount: amt, note: step.label || "Recurring saving" } });
+      await postStepOutflow(tx, member.id, step, date, amt); // the money leaves the account it's saved from
       await tx.personalPlanStep.update({ where: { id: step.id }, data: { status: "done", doneAt: date, savingsId: dep.id } });
+      if (step.holdingId) await addContribution(tx, { memberId: member.id, itemId: step.holdingId, amount: amt, date, note: step.label, planStepId: step.id });
     } else if (step.kind === "expense") {
       // Bill paid → the row is no longer "planned" (it already counted in the budget); debit the account.
       if (step.templateId) await tx.personalExpense.updateMany({ where: { id: step.templateId, memberId: member.id }, data: { pending: false } });
       await postStepOutflow(tx, member.id, step, date, amt);
       await tx.personalPlanStep.update({ where: { id: step.id }, data: { status: "done", doneAt: date } });
+      // An investment bill (Invest category, linked to a holding) adds to that holding's history + value.
+      const holdingId = step.holdingId ?? (step.templateId ? (await tx.personalExpense.findFirst({ where: { id: step.templateId, memberId: member.id }, select: { holdingId: true } }))?.holdingId : null);
+      if (holdingId) await addContribution(tx, { memberId: member.id, itemId: holdingId, amount: amt, date, note: step.label, planStepId: step.id });
     } else if (step.kind === "spend") {
       // Spend paid → it becomes a real logged spend (moves from "planned" to "spent", Can-spend unchanged); if
       // on a card/balance account post the card ledger mirror, otherwise debit the chosen bank/cash account.
@@ -1445,6 +1526,8 @@ export async function tickPlanStep(formData: FormData) {
         const spend = await tx.personalSpend.findFirst({ where: { id: step.templateId, memberId: member.id } });
         if (spend) {
           await tx.personalSpend.update({ where: { id: spend.id }, data: { pending: false } });
+          const holdingId = step.holdingId ?? spend.holdingId;
+          if (holdingId) await addContribution(tx, { memberId: member.id, itemId: holdingId, amount: spend.amount, date, note: step.label, planStepId: step.id });
           if (spend.cardAccountId) {
             await tx.accountTransaction.upsert({
               where: { personalSpendId: spend.id },
@@ -1461,6 +1544,7 @@ export async function tickPlanStep(formData: FormData) {
   });
   if (routeError) log.warn("tickPlanStep", "blocked", { outcome: "blocked", reason: routeError, memberId: member.id, id });
   rev();
+  if (found.kind === "transfer") revalidateFamily(); // may move the family account (a card-bill share)
 }
 
 // Un-mark a done step: reverses its ledger effect exactly. A card-bill step also un-settles the card cycle
@@ -1480,10 +1564,15 @@ export async function untickPlanStep(formData: FormData) {
       fd.set("cycleEnd", bill.cycleEnd.toISOString());
       await unpayFamilyCardBill(fd);
     }
-    await prisma.$transaction([
-      ...(step.transferOutId ? [prisma.accountTransaction.deleteMany({ where: { id: step.transferOutId, memberId: member.id } })] : []),
-      prisma.personalPlanStep.update({ where: { id: step.id }, data: { status: "pending", doneAt: null, transferOutId: null } }),
-    ]);
+    await prisma.$transaction(async (tx) => {
+      if (step.transferOutId) await tx.accountTransaction.deleteMany({ where: { id: step.transferOutId, memberId: member.id } });
+      // The transfer steps this payment created go with it (and the money they moved, if ticked).
+      const funding = await tx.personalPlanStep.findMany({ where: { memberId: member.id, periodId: step.periodId, snapshot: { path: ["fundsCardBillStep"], equals: step.id } }, select: { id: true, transferOutId: true, transferInId: true } });
+      const legIds = funding.flatMap((f) => [f.transferOutId, f.transferInId]).filter((x): x is number => x != null);
+      if (legIds.length) await tx.accountTransaction.deleteMany({ where: { id: { in: legIds }, memberId: member.id } });
+      if (funding.length) await tx.personalPlanStep.deleteMany({ where: { id: { in: funding.map((f) => f.id) } } });
+      await tx.personalPlanStep.update({ where: { id: step.id }, data: { status: "pending", doneAt: null, transferOutId: null } });
+    });
     rev();
     revalidateFamily();
     return;
@@ -1493,6 +1582,7 @@ export async function untickPlanStep(formData: FormData) {
     await tx.personalPlanStep.update({ where: { id: step.id }, data: { status: "pending", doneAt: null, transferOutId: null, transferInId: null, savingsId: null } });
   });
   rev();
+  if (step.kind === "transfer") revalidateFamily();
 }
 
 // ── Planned recurring spends live in the SPENDS tab ──────────────────────────────────────────────
@@ -1521,15 +1611,18 @@ export async function payPlannedSpend(formData: FormData) {
   await prisma.$transaction(async (tx) => {
     await tx.personalSpend.update({ where: { id: spend.id }, data: { pending: false, cardAccountId, payAccountId } });
     const label = spend.note?.trim() || "Spend";
+    if (spend.holdingId) await addContribution(tx, { memberId: member.id, itemId: spend.holdingId, amount: spend.amount, date, note: label, spendId: spend.id });
     if (cardAccountId) {
       await tx.accountTransaction.upsert({
         where: { personalSpendId: spend.id },
         update: { amount: spend.amount, merchant: label, accountId: cardAccountId },
         create: { memberId: member.id, accountId: cardAccountId, date, merchant: label, amount: spend.amount, type: "spend", category: null, source: "personal", personalSpendId: spend.id },
       });
-    } else if (payAccountId) {
-      const acct = await tx.financeAccount.findFirst({ where: { id: payAccountId, memberId: member.id, active: true }, select: { id: true, type: true } });
-      if (acct && (acct.type === "bank" || acct.type === "cash")) {
+    } else {
+      // A bank/cash account picked → that one; none (UPI) → the personal account.
+      const payId = payAccountId ?? (await personalAccountIdOf(tx, member.id));
+      const acct = payId ? await tx.financeAccount.findFirst({ where: { id: payId, memberId: member.id, active: true }, select: { id: true, type: true } }) : null;
+      if (acct && BALANCE_ACCOUNT_TYPES.has(acct.type)) {
         await tx.accountTransaction.deleteMany({ where: { memberId: member.id, category: SPEND_PAY_MARK(spend.id) } });
         await tx.accountTransaction.create({ data: { memberId: member.id, accountId: acct.id, date, merchant: label, amount: Math.round(spend.amount * 100) / 100, type: "spend", category: SPEND_PAY_MARK(spend.id), source: "manual" } });
       }
@@ -1560,41 +1653,14 @@ export async function restorePlannedSpend(formData: FormData) {
   rev();
 }
 
-// SYNC WITH SETUP: bring this month's plan back in line with Setup. Missing steps are created, stale pending
-// ones dropped, and every pending step you have NOT touched this month is reset to its Setup template —
-// name, amount, day and accounts (planned transfers/savings, recurring income and spends alike). Left alone:
-// done steps, steps you removed, steps you edited / re-dated / re-routed (they carry the edited mark), and
-// one-off steps you added.
+// Re-check the month's steps against THIS month's own lines (re-creates a missing step, refreshes a pending
+// one). Setup is not consulted — Setup reaches a month only at its creation or via "Apply to this month".
 export async function rebuildPlanSteps(formData: FormData) {
   const member = await me();
   if (!member) return;
   const periodId = Number(formData.get("periodId"));
   if (!(await ownsPeriod(member.id, periodId))) return;
   await ensurePlanSteps(member.id, periodId);
-  const [steps, incomes, items, bills] = await Promise.all([
-    prisma.personalPlanStep.findMany({ where: { periodId, memberId: member.id, status: "pending", snapshot: { equals: Prisma.DbNull }, templateId: { not: null } } }),
-    prisma.personalIncome.findMany({ where: { periodId, recurring: true } }),
-    prisma.personalPlanItem.findMany({ where: { memberId: member.id, active: true } }),
-    prisma.personalExpense.findMany({ where: { periodId, pending: true } }),
-  ]);
-  const inc = new Map(incomes.map((r) => [r.id, r]));
-  const itm = new Map(items.map((r) => [r.id, r]));
-  const bil = new Map(bills.map((r) => [r.id, r]));
-  const ops: Prisma.PrismaPromise<unknown>[] = [];
-  for (const st of steps) {
-    const id = st.templateId as number;
-    if (st.templateKind === "income") {
-      const r = inc.get(id);
-      if (r) ops.push(prisma.personalPlanStep.update({ where: { id: st.id }, data: { label: r.source, amount: r.amount, dayOfMonth: r.date.getDate(), toAccountId: r.accountId } }));
-    } else if (st.templateKind === "planitem") {
-      const r = itm.get(id);
-      if (r) ops.push(prisma.personalPlanStep.update({ where: { id: st.id }, data: { kind: r.kind, label: r.label, amount: r.amount, dayOfMonth: r.dayOfMonth, fromAccountId: r.fromAccountId, toAccountId: r.toAccountId, note: r.note } }));
-    } else if (st.templateKind === "expense") {
-      const r = bil.get(id);
-      if (r) ops.push(prisma.personalPlanStep.update({ where: { id: st.id }, data: { label: r.label || "Bill", amount: r.amount, dayOfMonth: r.date.getDate(), fromAccountId: r.cardAccountId ?? r.payAccountId } }));
-    }
-  }
-  if (ops.length) await prisma.$transaction(ops);
   rev();
 }
 
@@ -1676,10 +1742,24 @@ export async function payCardBillStep(prev: PersonalSaveState, formData: FormDat
   const due = dues.find((d) => d.cardId === cardId);
   const cyc = due?.cycles.find((c) => cardBillTemplateId(cardId, new Date(c.cycleEndISO)) === step.templateId);
   if (!due || !cyc) return { ok: false, error: "This bill is no longer open — refresh the plan.", n };
-  const family = Math.round(cyc.familyTotal * 100) / 100;
-  const personalOut = Math.max(0, Math.round((amount - family) * 100) / 100); // what leaves the personal account
+  const family = Math.min(amount, Math.round(cyc.familyTotal * 100) / 100); // the family's share of what was paid
+  const personalShare = Math.max(0, Math.round((amount - family) * 100) / 100); // yours
+  const r2 = (x: number) => Math.round(x * 100) / 100;
+  // The WHOLE bill leaves the one account you paid from. Each share whose money sits in a different account
+  // (the family's in your family account, yours in your personal account) becomes a transfer step INTO the
+  // paying account — so every balance ends right once they're done. A member with no accounts: nothing posts
+  // (as if the money already moved).
+  const balanceAccts = await prisma.financeAccount.count({ where: { memberId: member.id, active: true, type: { in: [...BALANCE_ACCOUNT_TYPES] } } });
   const payFrom = await ownAccount(member.id, formData.get("fromAccountId"));
+  if (balanceAccts > 0 && !payFrom) return { ok: false, error: "Pick the account you paid it from.", n };
   if (payFrom && !BALANCE_ACCOUNT_TYPES.has(payFrom.type)) return { ok: false, error: "Pay from a bank, cash or wallet account.", n };
+  const sourceOf = async (key: string) => {
+    const a = await ownAccount(member.id, formData.get(key));
+    return a && BALANCE_ACCOUNT_TYPES.has(a.type) ? a.id : null;
+  };
+  const familyFrom = family > 0.005 ? await sourceOf("familyFromId") : null;
+  const personalFrom = personalShare > 0.005 ? await sourceOf("personalFromId") : null;
+  const movedNow = formData.get("movedNow") === "on"; // "I've moved it already" → the transfer steps are created ticked
 
   const fd = new FormData();
   fd.set("cardId", String(cardId));
@@ -1689,13 +1769,36 @@ export async function payCardBillStep(prev: PersonalSaveState, formData: FormDat
   const res = await payFamilyCardBill(fd);
   if (!res.ok) return { ok: false, error: ("error" in res && res.error) || "Couldn't record the payment.", n };
 
+  const now = new Date();
+  const day = Math.min(28, Number(new Intl.DateTimeFormat("en-GB", { timeZone: "Asia/Kolkata", day: "numeric" }).format(now)));
   await prisma.$transaction(async (tx) => {
     let outId: number | null = null;
-    if (payFrom && personalOut > 0.004) {
-      const t = await tx.accountTransaction.create({ data: { memberId: member.id, accountId: payFrom.id, date: new Date(), merchant: `Paid ${due.cardName} bill`, amount: personalOut, type: "transfer_out", category: `__billpay__:${cyc.cycleEndISO}`, source: "manual" } });
+    if (payFrom && amount > 0.004) {
+      const t = await tx.accountTransaction.create({ data: { memberId: member.id, accountId: payFrom.id, date: now, merchant: `Paid ${due.cardName} bill`, amount: r2(amount), type: "transfer_out", category: `__billpay__:${cyc.cycleEndISO}`, source: "manual" } });
       outId = t.id;
     }
-    await tx.personalPlanStep.update({ where: { id: step.id }, data: { status: "done", doneAt: new Date(), fromAccountId: payFrom?.id ?? null, amount, transferOutId: outId } });
+    await tx.personalPlanStep.update({ where: { id: step.id }, data: { status: "done", doneAt: now, fromAccountId: payFrom?.id ?? null, amount, transferOutId: outId } });
+    if (!payFrom) return;
+    const names = new Map((await tx.financeAccount.findMany({ where: { memberId: member.id }, select: { id: true, name: true } })).map((a) => [a.id, a.name]));
+    for (const m of [
+      { from: familyFrom, amt: family, what: "family share" },
+      { from: personalFrom, amt: personalShare, what: "your share" },
+    ]) {
+      if (m.from == null || m.from === payFrom.id || m.amt <= 0.005) continue;
+      const label = `${due.cardName} bill · ${m.what}`;
+      const created = await tx.personalPlanStep.create({
+        data: {
+          memberId: member.id, periodId: step.periodId, kind: "transfer", label, amount: r2(m.amt), dayOfMonth: day,
+          fromAccountId: m.from, toAccountId: payFrom.id, note: `${names.get(m.from) ?? "?"} → ${names.get(payFrom.id) ?? "?"}`,
+          snapshot: { fundsCardBillStep: step.id }, // removed again if the bill payment is undone
+        },
+      });
+      if (movedNow) {
+        const o = await tx.accountTransaction.create({ data: { memberId: member.id, accountId: m.from, date: now, merchant: label, amount: r2(m.amt), type: "transfer_out", source: "manual" } });
+        const i = await tx.accountTransaction.create({ data: { memberId: member.id, accountId: payFrom.id, date: now, merchant: label, amount: r2(m.amt), type: "transfer_in", source: "manual" } });
+        await tx.personalPlanStep.update({ where: { id: created.id }, data: { status: "done", doneAt: now, transferOutId: o.id, transferInId: i.id } });
+      }
+    }
   });
   rev();
   revalidateFamily();

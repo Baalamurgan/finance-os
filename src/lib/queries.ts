@@ -1,3 +1,4 @@
+import { Prisma } from "@prisma/client";
 import { piggyHeldParts, splitPiggyLump } from "@/lib/piggyHeld";
 import { unstable_cache } from "next/cache";
 import { prisma } from "@/lib/prisma";
@@ -1971,8 +1972,22 @@ export async function _getInHand(householdId: number, periodId: number, settleme
   const famTxns = famAccts.length
     ? await prisma.accountTransaction.findMany({ where: { accountId: { in: famAccts.map((a) => a.id) } }, select: { accountId: true, date: true, amount: true, type: true } })
     : [];
+  // A card bill paid from one account leaves a pending transfer for the other share (e.g. "Jupiter → SBI ₹22,778"):
+  // until it's ticked that money is "to come back" to (or "to send" from) the family account — the In-Hand
+  // match counts it, so it still lines up. Only the amount is used here (no personal details).
+  const billMoves = famAccts.length
+    ? await prisma.personalPlanStep.findMany({
+        where: { status: "pending", kind: "transfer", snapshot: { path: ["fundsCardBillStep"], not: Prisma.AnyNull }, OR: [{ toAccountId: { in: famAccts.map((a) => a.id) } }, { fromAccountId: { in: famAccts.map((a) => a.id) } }] },
+        select: { amount: true, fromAccountId: true, toAccountId: true },
+      })
+    : [];
   const familyAccountByMember = new Map(
-    famAccts.map((a) => [a.memberId, { name: a.name, balance: computeBalance(a.openingBalance, famTxns.filter((t) => t.accountId === a.id)) }]),
+    famAccts.map((a) => [a.memberId, {
+      name: a.name,
+      balance: computeBalance(a.openingBalance, famTxns.filter((t) => t.accountId === a.id)),
+      toCome: billMoves.filter((m) => m.toAccountId === a.id).reduce((t, m) => t + m.amount, 0),
+      toSend: billMoves.filter((m) => m.fromAccountId === a.id).reduce((t, m) => t + m.amount, 0),
+    }]),
   );
   const byPerson = members.map((m) => {
     const g = build(m.id, m.name);

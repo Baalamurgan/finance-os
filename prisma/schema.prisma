@@ -154,6 +154,9 @@ model Member {
   personalPinFailedAttempts Int      @default(0)
   personalPinLockedUntil   DateTime?
   personalWindDownDay      Int?
+  // When the member's Setup templates were first built from their month's recurring lines (one-time
+  // switch-over to PersonalTemplate). null = not yet → built on next load.
+  personalTemplatesAt      DateTime?
   personalOnboarded        Boolean   @default(false)
   // Personal OS assistant (per-member, bring-your-own-key). The API key itself lives
   // encrypted in Integration (provider=anthropic|openai, kind=apikey) — never here.
@@ -177,6 +180,7 @@ model Member {
   personalCardBills  PersonalCardBill[]
   personalSavings    PersonalSavings[]
   personalPlanItems  PersonalPlanItem[]
+  personalTemplates  PersonalTemplate[]
   personalPlanSteps  PersonalPlanStep[]
   integrations       Integration[]
 
@@ -267,6 +271,9 @@ model PersonalIncome {
   // — mirrors the recurring flag on PersonalExpense. `date` is the day it lands (so it can be shown/ordered).
   date      DateTime @default(now())
   recurring Boolean  @default(false)
+  // The Setup template this month's line was copied from (PersonalTemplate.id; plain id, no FK). Editing the
+  // line never touches the template, and vice versa. null = a one-off line.
+  templateId Int?
   createdAt DateTime @default(now())
 }
 
@@ -284,6 +291,9 @@ model PersonalPeriod {
   incomeAccount   FinanceAccount? @relation("PeriodIncomeAccount", fields: [incomeAccountId], references: [id], onDelete: SetNull)
   incomeAccountId Int?
   carryForward Float @default(0) // previous month's remaining, carried in
+  // When this month's plan steps were first created from Setup's transfers/savings (PersonalPlanItem). After
+  // that, Setup changes never add/remove/edit this month's steps (use "Apply to this month" instead).
+  planSeededAt DateTime?
   closedAt  DateTime?
   expenses  PersonalExpense[]
   spends    PersonalSpend[]
@@ -321,6 +331,8 @@ model PersonalExpense {
   // Bank / cash account a (recurring) bill is paid from — a plain id (cards use cardAccountId above). The
   // Money-Plan step's "paid from"; ticking it debits this account.
   payAccountId  Int?
+  templateId Int? // the Setup template this line was copied from (see PersonalIncome.templateId)
+  holdingId  Int? // invest bill: the NetWorthItem its payment adds to (copied from Setup; this month's own)
   createdAt  DateTime @default(now())
 }
 
@@ -358,6 +370,8 @@ model PersonalSpend {
   // Receivables created from a split/reimbursement of THIS spend (one per person owing, or one for a
   // full reimbursement). Lets the spend row show your real out-of-pocket as people pay / are dropped.
   splitLoans PersonalLoan[]  @relation("SpendSplits")
+  templateId Int? // the Setup template this spend was copied from (see PersonalIncome.templateId)
+  holdingId  Int? // invest spend: the NetWorthItem its payment adds to (copied from Setup; this month's own)
   createdAt  DateTime @default(now())
 }
 
@@ -410,14 +424,54 @@ model NetWorthItem {
   category    String   // asset | liability
   type        String   // stock | mutual_fund | fd | epf | ppf | nps | gold | cash | bank | property | land | vehicle | insurance | *_loan | other_*
   name        String
-  value       Float    // current ₹ value (liabilities stored as a positive number)
+  value       Float    // CURRENT ₹ value (liabilities stored as a positive number). A contribution raises it by
+                       // the same amount until the member next sets it (a "value" history entry).
   quantity    Float?   // units held (stocks / MF / gold) — optional
   institution String?  // broker / bank / fund house — optional
   notes       String?
+  startDate    DateTime? // when it started (FD booking date, first SIP…) — optional
+  tenureMonths Int?      // FD / RD tenure — drives the maturity date
+  interestRate Float?    // FD / RD annual % — drives the maturity value
+  valueAsOf    DateTime? // when the current value was last set by hand (null = never → it equals invested)
+  entries     NetWorthEntry[]
   updatedAt   DateTime @updatedAt
   createdAt   DateTime @default(now())
 
   @@index([memberId])
+}
+
+// A holding's dated history: the money that went in/out and every value update. Invested = Σ opening +
+// contribution − withdrawal. A contribution made by ticking a Money Plan step (planStepId) or paying a planned
+// spend (spendId) is removed again when that's undone.
+model NetWorthEntry {
+  id         Int      @id @default(autoincrement())
+  memberId   Int
+  item       NetWorthItem @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  itemId     Int
+  date       DateTime
+  kind       String   // opening | contribution | withdrawal | value
+  amount     Float    // ₹ (for "value": the value it was set to)
+  note       String?
+  planStepId Int?     // contribution from ticking this PersonalPlanStep
+  spendId    Int?     // contribution from paying this planned PersonalSpend
+  createdAt  DateTime @default(now())
+
+  @@index([itemId])
+  @@index([memberId])
+}
+
+// Month-end net worth for the trend line (upserted whenever the Net worth tab loads, and at month roll).
+model NetWorthSnapshot {
+  id          Int      @id @default(autoincrement())
+  memberId    Int
+  year        Int
+  month       Int
+  netWorth    Float
+  assets      Float
+  liabilities Float
+  updatedAt   DateTime @default(now()) @updatedAt
+
+  @@unique([memberId, year, month])
 }
 
 // ── Finance (Wallet) — foundation for cards, and later bank/loan/investment ──────
@@ -443,6 +497,9 @@ model FinanceAccount {
   // family In-Hand. At most one per member. Family Cash/UPI spends post to it (lowering its balance), and
   // the In-Hand card shows its balance beside the holding figure so the two can be matched.
   familyPrimary Boolean @default(false)
+  // The member's PERSONAL money account (e.g. Jupiter): the personal app's "In account now" is its real balance.
+  // At most one per member (enforced in code). None set + exactly one bank/cash account → that one is used.
+  personalPrimary Boolean @default(false)
   sortOrder   Int      @default(0)
   // Debit/prepaid only: the balance when tracking started. Current balance = openingBalance + top-ups
   // + refunds − spends − fees (see src/lib/finance/balance.ts). Null/0 for credit cards.
@@ -508,6 +565,31 @@ model PersonalSavings {
 // surface as plan steps; a step reads as "done this month" when a matching ledger entry exists that
 // month (a transfer_out on the source for a transfer, a PersonalSavings deposit for a save), so
 // there's no per-month done flag to keep in sync — same read-derived principle as the rest of the plan.
+// Setup's recurring income / bill / spend templates — the member's monthly setup, kept APART from any month.
+// Each new month (and a preview) copies the active ones into its own rows (linked by templateId); editing a
+// template only affects months created after it, and editing a month's row never touches the template.
+model PersonalTemplate {
+  id            Int      @id @default(autoincrement())
+  member        Member   @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  memberId      Int
+  kind          String   // income | expense | spend
+  label         String   // income source / bill label / spend note
+  amount        Float
+  dayOfMonth    Int      @default(1) // 1–28
+  categoryId    Int?     // expense + spend
+  cardAccountId Int?     // expense + spend paid on a card (credit/debit/prepaid)
+  payAccountId  Int?     // expense + spend paid from a bank / cash account
+  accountId     Int?     // income: the balance account it lands in
+  holdingId     Int?     // an INVEST-category bill/spend: the NetWorthItem each payment adds to
+  note          String?
+  active        Boolean  @default(true)
+  sortOrder     Int      @default(0)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @default(now()) @updatedAt
+
+  @@index([memberId])
+}
+
 model PersonalPlanItem {
   id            Int      @id @default(autoincrement())
   member        Member   @relation(fields: [memberId], references: [id], onDelete: Cascade)
@@ -522,6 +604,7 @@ model PersonalPlanItem {
   fromAccountId Int?
   toAccount     FinanceAccount? @relation("PlanItemTo", fields: [toAccountId], references: [id], onDelete: SetNull)
   toAccountId   Int?
+  holdingId     Int?     // a save/transfer into an investment: the NetWorthItem each tick adds to
   note          String?
   active        Boolean  @default(true)
   sortOrder     Int      @default(0)
@@ -558,6 +641,7 @@ model PersonalPlanStep {
   // month; this keeps the ORIGINAL template values ({label|source, amount, cardAccountId|accountId}) so
   // next month still clones the Setup template, not this month's edit.
   snapshot    Json?
+  holdingId   Int?     // ticking it adds a contribution to this NetWorthItem (investment bills / saves)
   note        String?
   // Provenance so monthly generation is idempotent. templateKind "income" → templateId = PersonalIncome.id;
   // "planitem" → templateId = PersonalPlanItem.id. Both null = a one-off step added this month.

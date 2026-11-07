@@ -11,8 +11,8 @@ import { revertAutoBills, replanUnplanned } from "@/lib/personal/autoBills";
 // The diff is pure so it is unit-tested directly.
 
 export type IncomeTemplate = { id: number; source: string; amount: number; dayOfMonth: number | null; accountId: number | null };
-export type PlanItemTemplate = { id: number; kind: string; label: string; amount: number; dayOfMonth: number | null; fromAccountId: number | null; toAccountId: number | null; note: string | null };
-export type BillTemplate = { id: number; label: string; amount: number; dayOfMonth: number | null; fromAccountId: number | null };
+export type PlanItemTemplate = { id: number; kind: string; label: string; amount: number; dayOfMonth: number | null; fromAccountId: number | null; toAccountId: number | null; note: string | null; holdingId?: number | null };
+export type BillTemplate = { id: number; label: string; amount: number; dayOfMonth: number | null; fromAccountId: number | null; holdingId?: number | null };
 export type ExistingStep = { id: number; templateKind: string | null; templateId: number | null; status: string };
 // A credit-card bill due this month (or earlier and still unpaid): one step per card+cycle.
 export type CardBillTemplate = { templateId: number; cardId: number; label: string; amount: number; dayOfMonth: number | null; dueNote: string | null };
@@ -34,6 +34,7 @@ export type NewStepData = {
   kind: string; label: string; amount: number; dayOfMonth: number | null;
   fromAccountId: number | null; toAccountId: number | null; note: string | null;
   templateKind: string; templateId: number; sortOrder: number;
+  holdingId?: number | null; // ticking it adds a contribution to this net-worth holding
 };
 
 const tKey = (kind: string | null, id: number | null) => `${kind}:${id}`;
@@ -76,7 +77,7 @@ export function diffPlanSteps(
       toCreate.push({
         kind: it.kind, label: it.label, amount: it.amount, dayOfMonth: it.dayOfMonth,
         fromAccountId: it.fromAccountId, toAccountId: it.toAccountId, note: it.note,
-        templateKind: "planitem", templateId: it.id, sortOrder: order++,
+        templateKind: "planitem", templateId: it.id, sortOrder: order++, holdingId: it.holdingId ?? null,
       });
     }
   }
@@ -88,7 +89,7 @@ export function diffPlanSteps(
         toCreate.push({
           kind, label: b.label, amount: b.amount, dayOfMonth: b.dayOfMonth,
           fromAccountId: b.fromAccountId, toAccountId: null, note: null,
-          templateKind: kind, templateId: b.id, sortOrder: order++,
+          templateKind: kind, templateId: b.id, sortOrder: order++, holdingId: b.holdingId ?? null,
         });
       }
     }
@@ -144,21 +145,21 @@ export async function ensurePlanSteps(memberId: number, periodId: number): Promi
     }),
     prisma.personalPlanItem.findMany({
       where: { memberId, active: true },
-      select: { id: true, kind: true, label: true, amount: true, dayOfMonth: true, fromAccountId: true, toAccountId: true, note: true },
+      select: { id: true, kind: true, label: true, amount: true, dayOfMonth: true, fromAccountId: true, toAccountId: true, note: true, holdingId: true },
     }),
     // Still-unpaid planned bills (Setup's recurring expenses + one-offs added in the plan) are steps: ticking one
     // pays it from its account. They count in the month's budget from day one either way. Pre-cutover months
     // (rows default pending=false) stay on the old model.
     prisma.personalExpense.findMany({
       where: { periodId, pending: true },
-      select: { id: true, label: true, amount: true, date: true, cardAccountId: true, payAccountId: true },
+      select: { id: true, label: true, amount: true, date: true, cardAccountId: true, payAccountId: true, holdingId: true },
     }),
     // Recurring SPENDS are not steps: they're copied into the Spends tab as planned entries and marked paid there.
     prisma.personalPlanStep.findMany({
       where: { periodId },
-      select: { id: true, templateKind: true, templateId: true, status: true, amount: true, label: true, toAccountId: true, fromAccountId: true, snapshot: true },
+      select: { id: true, templateKind: true, templateId: true, status: true, amount: true, label: true, toAccountId: true, fromAccountId: true, snapshot: true, holdingId: true },
     }),
-    prisma.personalPeriod.findUnique({ where: { id: periodId }, select: { income: true, incomeAccountId: true, year: true, month: true } }),
+    prisma.personalPeriod.findUnique({ where: { id: periodId }, select: { income: true, incomeAccountId: true, year: true, month: true, planSeededAt: true } }),
     getCardDues(memberId),
     prisma.personalCardBill.findMany({ where: { memberId }, select: { cardAccountId: true, cycleEnd: true } }),
   ]);
@@ -186,10 +187,13 @@ export async function ensurePlanSteps(memberId: number, periodId: number): Promi
     }
   }
 
+  // Setup's transfers/savings are copied into a month ONCE (when it's first seeded). After that the month's
+  // steps are its own: a Setup add/edit/remove never reaches it (Setup offers "Apply to this month" instead).
+  const seedPlanItems = !period?.planSeededAt;
   const { toCreate, prunePendingIds: pruneCandidates } = diffPlanSteps(
     incomes.map((i) => ({ id: i.id, source: i.source, amount: i.amount, dayOfMonth: i.date.getDate(), accountId: i.accountId })),
-    planItems,
-    expenses.map((e) => ({ id: e.id, label: e.label || "Bill", amount: e.amount, dayOfMonth: e.date.getDate(), fromAccountId: e.cardAccountId ?? e.payAccountId })),
+    seedPlanItems ? planItems : [],
+    expenses.map((e) => ({ id: e.id, label: e.label || "Bill", amount: e.amount, dayOfMonth: e.date.getDate(), fromAccountId: e.cardAccountId ?? e.payAccountId, holdingId: e.holdingId })),
     [], // spends: Spends tab, not the plan (a pending spend step from before this change is pruned by the diff)
     period ? { periodId, amount: period.income, accountId: period.incomeAccountId } : null,
     existing,
@@ -204,6 +208,7 @@ export async function ensurePlanSteps(memberId: number, periodId: number): Promi
   const prunePendingIds: number[] = [];
   for (const id of pruneCandidates) {
     const e = stepById.get(id);
+    if (e?.templateKind === "planitem") continue; // this month's own transfer/saving step — never pruned by Setup
     if (e?.templateKind === "cardbill" && e.templateId != null && paidKeys.has(e.templateId)) markDoneIds.push(id);
     else prunePendingIds.push(id);
   }
@@ -214,10 +219,11 @@ export async function ensurePlanSteps(memberId: number, periodId: number): Promi
   // Keep a still-pending, never-edited-this-month step in step with its Setup row: change the amount / name /
   // account in Setup and the plan shows it. A month-only edit leaves a snapshot on the step, so those are
   // left alone (the day is never synced — re-dating a step is its own month-only choice).
-  const synced: { id: number; data: { label?: string; amount?: number; fromAccountId?: number | null; toAccountId?: number | null } }[] = [];
+  const synced: { id: number; data: { label?: string; amount?: number; fromAccountId?: number | null; toAccountId?: number | null; holdingId?: number | null } }[] = [];
   for (const e of existing) {
-    if (e.status !== "pending" || e.templateId == null || e.snapshot != null) continue;
-    let want: { label: string; amount: number; fromAccountId?: number | null; toAccountId?: number | null } | null = null;
+    // The step mirrors THIS month's own row (edited only from this month — Setup no longer writes to it).
+    if (e.status !== "pending" || e.templateId == null) continue;
+    let want: { label: string; amount: number; fromAccountId?: number | null; toAccountId?: number | null; holdingId?: number | null } | null = null;
     if (e.templateKind === "income") {
       const r = incomes.find((x) => x.id === e.templateId);
       if (r) want = { label: r.source, amount: r.amount, toAccountId: r.accountId };
@@ -225,19 +231,22 @@ export async function ensurePlanSteps(memberId: number, periodId: number): Promi
       want = { label: e.label, amount: period.income, toAccountId: period.incomeAccountId };
     } else if (e.templateKind === "expense") {
       const r = expenses.find((x) => x.id === e.templateId);
-      if (r) want = { label: r.label || "Bill", amount: r.amount, fromAccountId: r.cardAccountId ?? r.payAccountId };
+      if (r) want = { label: r.label || "Bill", amount: r.amount, fromAccountId: r.cardAccountId ?? r.payAccountId, holdingId: r.holdingId };
     }
     if (!want) continue;
-    const data: { label?: string; amount?: number; fromAccountId?: number | null; toAccountId?: number | null } = {};
+    const data: { label?: string; amount?: number; fromAccountId?: number | null; toAccountId?: number | null; holdingId?: number | null } = {};
     if (want.label !== e.label) data.label = want.label;
     if (Math.abs(want.amount - e.amount) > 0.005) data.amount = want.amount;
     if (want.fromAccountId !== undefined && want.fromAccountId !== e.fromAccountId) data.fromAccountId = want.fromAccountId;
     if (want.toAccountId !== undefined && want.toAccountId !== e.toAccountId) data.toAccountId = want.toAccountId;
+    if (want.holdingId !== undefined && (want.holdingId ?? null) !== (e.holdingId ?? null)) data.holdingId = want.holdingId ?? null;
     if (Object.keys(data).length) synced.push({ id: e.id, data });
   }
 
-  if (toCreate.length === 0 && prunePendingIds.length === 0 && markDoneIds.length === 0 && refresh.length === 0 && synced.length === 0) return;
+  const markSeeded = seedPlanItems && period != null;
+  if (!markSeeded && toCreate.length === 0 && prunePendingIds.length === 0 && markDoneIds.length === 0 && refresh.length === 0 && synced.length === 0) return;
   await prisma.$transaction([
+    ...(markSeeded ? [prisma.personalPeriod.update({ where: { id: periodId }, data: { planSeededAt: new Date() } })] : []),
     ...toCreate.map((s) => prisma.personalPlanStep.create({ data: { memberId, periodId, ...s } })),
     ...(prunePendingIds.length ? [prisma.personalPlanStep.deleteMany({ where: { id: { in: prunePendingIds } } })] : []),
     ...(markDoneIds.length ? [prisma.personalPlanStep.updateMany({ where: { id: { in: markDoneIds } }, data: { status: "done", doneAt: new Date() } })] : []),

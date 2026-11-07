@@ -1,3 +1,4 @@
+import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { currentCycle } from "@/lib/finance/cycle";
 import { computeCreditDashboard } from "@/lib/finance/creditDashboard";
@@ -80,15 +81,15 @@ export async function getPersonalCash(period: {
 
 // Lending that moves the member's ACTUAL cash:
 //  • owed     = open "lent" loans (manual lends + shared-spend receivables) — cash that's left your hand.
-//  • borrowed = open MANUAL "borrowed" loans (cardAccountId null) — real cash someone gave you that's
-//    sitting in your account. Card-fronted "borrowed" (peer card) is EXCLUDED: no cash came to you, you
-//    just spent on someone's card, and that debt squares at the card bill — not cash-in-hand.
+//  • borrowed = every open "borrowed" debt — cash someone lent you AND a spend on someone else's card. The
+//    card one counts too: it's in your Can spend, but no money left your account until you repay them, so
+//    that cash is still with you (e.g. ID card protector on Harish's Amazon Pay → +₹324 until you pay him).
 // Drives cash-in-hand: canSpend + unpaid card dues − owed + borrowed. Neither touches "Can spend"
 // (lending/borrowing isn't budget) — they only move "In account".
 export async function getPersonalLending(memberId: number): Promise<{ owed: number; borrowed: number }> {
   const [lentAgg, borrowedAgg] = await Promise.all([
     prisma.personalLoan.aggregate({ where: { memberId, direction: "lent", status: "open" }, _sum: { outstanding: true } }),
-    prisma.personalLoan.aggregate({ where: { memberId, direction: "borrowed", status: "open", cardAccountId: null }, _sum: { outstanding: true } }),
+    prisma.personalLoan.aggregate({ where: { memberId, direction: "borrowed", status: "open" }, _sum: { outstanding: true } }),
   ]);
   return { owed: lentAgg._sum.outstanding ?? 0, borrowed: borrowedAgg._sum.outstanding ?? 0 };
 }
@@ -339,4 +340,31 @@ export async function getCardBillReminders(memberId: number, now = new Date()): 
     });
   }
   return out.sort((a, b) => a.daysUntilDue - b.daysUntilDue);
+}
+
+// The member's PERSONAL money account and its real balance — what "In account now" shows. The account marked
+// personalPrimary wins; with none marked, a member who has exactly ONE bank/cash/wallet account uses that one.
+// null = can't tell (several accounts, none marked) → the page falls back to the calculated figure.
+export async function getPersonalAccount(memberId: number): Promise<{ id: number; name: string; balance: number; toCome: number; toSend: number; otherName: string | null } | null> {
+  const accts = await prisma.financeAccount.findMany({
+    where: { memberId, active: true, type: { in: ["bank", "cash", "debit_card", "prepaid_card"] } },
+    select: { id: true, name: true, openingBalance: true, personalPrimary: true },
+  });
+  const pick = accts.find((a) => a.personalPrimary) ?? (accts.length === 1 ? accts[0] : null);
+  if (!pick) return null;
+  const txns = await prisma.accountTransaction.findMany({ where: { accountId: pick.id }, select: { date: true, amount: true, type: true } });
+  // A card bill paid from another account leaves a pending transfer for your share (e.g. "Jupiter → SBI"):
+  // until it's ticked, that money is still here but owed to the other account (or the reverse).
+  const moves = await prisma.personalPlanStep.findMany({
+    where: { memberId, status: "pending", kind: "transfer", snapshot: { path: ["fundsCardBillStep"], not: Prisma.AnyNull }, OR: [{ fromAccountId: pick.id }, { toAccountId: pick.id }] },
+    select: { amount: true, fromAccountId: true, toAccountId: true },
+  });
+  const other = moves.map((m) => (m.fromAccountId === pick.id ? m.toAccountId : m.fromAccountId)).find((x) => x != null) ?? null;
+  const otherName = other != null ? (await prisma.financeAccount.findUnique({ where: { id: other }, select: { name: true } }))?.name ?? null : null;
+  return {
+    id: pick.id, name: pick.name, balance: computeBalance(pick.openingBalance, txns),
+    toSend: moves.filter((m) => m.fromAccountId === pick.id).reduce((t, m) => t + m.amount, 0),
+    toCome: moves.filter((m) => m.toAccountId === pick.id).reduce((t, m) => t + m.amount, 0),
+    otherName,
+  };
 }

@@ -1,6 +1,6 @@
 import { redirect } from "next/navigation";
 
-// The Cards tab became the Finance section. Keep the old URL working.
+// Old credit-card URL — cards (and bank/cash accounts) live under the Accounts tab now.
 export default function LegacyCC() {
-  redirect("/personal/finance");
+  redirect("/personal/cards"); // credit cards live under Accounts
 }

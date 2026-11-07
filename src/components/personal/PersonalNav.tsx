@@ -13,20 +13,21 @@ import { AutoLock } from "@/components/AutoLock";
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
-const TABS = [
-  { key: "today", label: "Today", href: "/personal/today", icon: "🌤️" },
+// Three everyday tabs up front; everything else under "⋯ More" (same on phone and desktop).
+const PRIMARY = [
   { key: "expenses", label: "Spends", href: "/personal/expenses", icon: "🧾" },
   { key: "sheet", label: "Sheet", href: "/personal/sheet", icon: "📋" },
-  { key: "loans", label: "Lending", href: "/personal/loans", icon: "🤝" },
   { key: "plan", label: "Money plan", href: "/personal/plan", icon: "💸" },
-  { key: "cards", label: "Cards", href: "/personal/cards", icon: "💳" },
-  { key: "finance", label: "Finance", href: "/personal/finance", icon: "📈" },
+] as const;
+const MORE = [
+  { key: "loans", label: "Lending", href: "/personal/loans", icon: "🤝" },
+  { key: "cards", label: "Accounts", href: "/personal/cards", icon: "🏦" },
+  { key: "networth", label: "Net worth", href: "/personal/networth", icon: "💎" },
   { key: "analysis", label: "Analysis", href: "/personal/analysis", icon: "📊" },
+  { key: "today", label: "Today", href: "/personal/today", icon: "🌤️" },
   { key: "setup", label: "Setup", href: "/personal/setup", icon: "⚙️" },
 ] as const;
-
-const PRIMARY = TABS.slice(0, 4); // Today · Spends · Sheet · Lending (bottom bar)
-const MORE = TABS.slice(4); // Money plan · Cards · Finance · Analysis · Setup (overflow)
+const TABS = [...PRIMARY, ...MORE];
 
 export function PersonalNav({
   active,
@@ -35,17 +36,17 @@ export function PersonalNav({
   selMonth,
   financeDue = false,
 }: {
-  active: "today" | "sheet" | "expenses" | "analysis" | "finance" | "setup" | "loans" | "cards" | "plan";
+  active: "today" | "sheet" | "expenses" | "analysis" | "finance" | "setup" | "loans" | "cards" | "plan" | "networth";
   name: string;
   selYear: number;
   selMonth: number;
-  financeDue?: boolean; // a card bill is due soon/overdue → red dot on the Finance tab
+  financeDue?: boolean; // a card bill is due soon/overdue → red dot on Accounts (and the More button)
 }) {
   const router = useRouter();
   const now = new Date();
   const curYear = now.getFullYear();
   const curMonth = now.getMonth() + 1;
-  const activeHref = TABS.find((t) => t.key === active)?.href ?? "/personal";
+  const activeHref = TABS.find((t) => t.key === active)?.href ?? (active === "finance" ? "/personal/networth" : "/personal");
   const q = `?y=${selYear}&m=${selMonth}`;
   const go = (y: number, m: number) => router.replace(`${activeHref}?y=${y}&m=${m}`);
   const years: number[] = [];
@@ -70,7 +71,7 @@ export function PersonalNav({
 
           {/* desktop tabs (mobile uses the bottom bar) */}
           <nav className="hidden items-center gap-1 sm:flex">
-            {TABS.map((t) => (
+            {PRIMARY.map((t) => (
               <Link
                 key={t.key}
                 href={`${t.href}${q}`}
@@ -80,9 +81,9 @@ export function PersonalNav({
                 }`}
               >
                 {t.label}
-                {t.key === "cards" && financeDue && <span className="absolute right-1 top-1 h-1.5 w-1.5 rounded-full bg-red-500" />}
               </Link>
             ))}
+            <DesktopMore active={active} q={q} financeDue={financeDue} />
           </nav>
 
           <div className="ml-auto flex flex-nowrap items-center gap-1.5 sm:gap-2">
@@ -145,9 +146,10 @@ function PersonalBottomNav({ active, q, financeDue }: { active: string; q: strin
                 href={`${t.href}${q}`}
                 replace
                 onClick={() => setOpen(false)}
-                className={`block px-5 py-4 text-base ${active === t.key ? "bg-emerald-50 font-medium text-emerald-700" : "text-slate-700"}`}
+                className={`relative block px-5 py-4 text-base ${active === t.key ? "bg-emerald-50 font-medium text-emerald-700" : "text-slate-700"}`}
               >
                 <span className="mr-2">{t.icon}</span> {t.label}
+                {t.key === "cards" && financeDue && <span className="ml-2 inline-block h-2 w-2 rounded-full bg-red-500" title="A card bill is due" />}
               </Link>
             ))}
           </div>
@@ -162,7 +164,6 @@ function PersonalBottomNav({ active, q, financeDue }: { active: string; q: strin
           <Link key={t.key} href={`${t.href}${q}`} replace onClick={() => setOpen(false)} className={cell(active === t.key)}>
             <span className="text-xl leading-none">{t.icon}</span>
             {t.label}
-            {t.key === "finance" && financeDue && <span className="absolute right-1/4 top-1 h-1.5 w-1.5 rounded-full bg-red-500" />}
           </Link>
         ))}
         <button type="button" onClick={() => setOpen((v) => !v)} className={cell(moreActive || open)}>
@@ -172,5 +173,43 @@ function PersonalBottomNav({ active, q, financeDue }: { active: string; q: strin
         </button>
       </nav>
     </>
+  );
+}
+
+// Desktop "⋯ More" — the same overflow list as the phone's bottom sheet, as a small dropdown.
+function DesktopMore({ active, q, financeDue }: { active: string; q: string; financeDue: boolean }) {
+  const [open, setOpen] = useState(false);
+  const current = MORE.find((t) => t.key === active);
+  return (
+    <div className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        className={`relative rounded-md px-3 py-1.5 text-sm font-medium transition ${current ? "bg-emerald-600 text-white" : "text-emerald-800 hover:bg-emerald-100"}`}
+      >
+        {current ? `${current.label} ▾` : "⋯ More"}
+        {financeDue && <span className="absolute right-1 top-1 h-1.5 w-1.5 rounded-full bg-red-500" />}
+      </button>
+      {open && (
+        <>
+          <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
+          <div className="absolute left-0 z-50 mt-1 w-48 overflow-hidden rounded-xl border border-slate-200 bg-white py-1 shadow-lg">
+            {MORE.map((t) => (
+              <Link
+                key={t.key}
+                href={`${t.href}${q}`}
+                replace
+                onClick={() => setOpen(false)}
+                className={`flex items-center gap-2 px-3.5 py-2 text-sm ${active === t.key ? "bg-emerald-50 font-medium text-emerald-700" : "text-slate-700 hover:bg-slate-50"}`}
+              >
+                <span>{t.icon}</span>{t.label}
+                {t.key === "cards" && financeDue && <span className="ml-auto h-1.5 w-1.5 rounded-full bg-red-500" title="A card bill is due" />}
+              </Link>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
   );
 }

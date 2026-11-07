@@ -7,7 +7,7 @@ import { getCardDues } from "@/lib/personal/cash";
 import { PersonalNav } from "@/components/personal/PersonalNav";
 import { CardDuesStrip } from "@/components/personal/CardDuesStrip";
 import { ConfirmForm } from "@/components/ConfirmForm";
-import { setFamilyPrimary, setCreditConfig, deleteTransaction, addManualTransaction, addPointsRedemption, topUpCard, updateAccount, deleteAccount } from "@/app/personal/finance/actions";
+import { setFamilyPrimary, setPersonalPrimary, setCreditConfig, deleteTransaction, addManualTransaction, addPointsRedemption, topUpCard, updateAccount, deleteAccount } from "@/app/personal/finance/actions";
 import { TXN_TYPES, BALANCE_ACCOUNT_TYPES, CARD_NETWORKS } from "@/lib/finance/types";
 import { CardColorPicker } from "@/components/CardColorPicker";
 import { ToastForm } from "@/components/ToastForm";
@@ -70,6 +70,15 @@ export default async function CreditCardDetail({
                 <span className="mt-0.5 block">The account that physically holds your family In-Hand. Family Cash / UPI spends you log come out of it, and In-Hand shows its balance next to your holding so you can match them.</span>
               </span>
               <button className={`shrink-0 rounded-lg px-3 py-1.5 text-xs font-semibold ${account.familyPrimary ? "border border-slate-200 text-slate-600 hover:bg-slate-50" : "bg-emerald-600 text-white hover:bg-emerald-700"}`}>{account.familyPrimary ? "Clear" : "Set"}</button>
+            </ToastForm>
+            <ToastForm action={setPersonalPrimary} successMessage={account.personalPrimary ? "Personal account cleared" : "Set as your personal account"} className="flex items-start justify-between gap-3 rounded-xl border border-slate-200 bg-white p-4">
+              <input type="hidden" name="id" value={account.id} />
+              <input type="hidden" name="on" value={account.personalPrimary ? "0" : "1"} />
+              <span className="min-w-0 text-xs text-slate-500">
+                <b className="text-slate-700">{account.personalPrimary ? "✓ This is your personal account" : "Use as my personal account"}</b>
+                <span className="mt-0.5 block">The account your personal money lives in. Spends &amp; Sheet show its real balance as &ldquo;In account now&rdquo;, and flag it if your logged spends say something different.</span>
+              </span>
+              <button className={`shrink-0 rounded-lg px-3 py-1.5 text-xs font-semibold ${account.personalPrimary ? "border border-slate-200 text-slate-600 hover:bg-slate-50" : "bg-emerald-600 text-white hover:bg-emerald-700"}`}>{account.personalPrimary ? "Clear" : "Set"}</button>
             </ToastForm>
             <ToastForm action={topUpCard} successMessage="Topped up" className="flex flex-wrap items-end gap-3 rounded-xl border border-slate-200 bg-white p-4">
               <input type="hidden" name="accountId" value={account.id} />

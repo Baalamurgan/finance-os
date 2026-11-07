@@ -1,11 +1,14 @@
 "use client";
 
 import { useActionState, useEffect, useRef, useState } from "react";
-import { upsertPersonalRecurring, deletePersonalRecurring, type PersonalSaveState } from "@/app/personal/actions";
+import { upsertPersonalRecurring, deletePersonalRecurring, applyTemplateToMonth, type PersonalSaveState } from "@/app/personal/actions";
+import { ApplyToMonth, type MonthNote } from "@/components/personal/ApplyToMonth";
+import { HoldingPicker } from "@/components/personal/HoldingPicker";
 import { useToast } from "@/components/Toast";
 import { formatINR } from "@/lib/format";
 
-type Cat = { id: number; name: string; icon: string | null };
+type Cat = { id: number; name: string; icon: string | null; bucket?: string | null };
+type HoldingOpt = { id: number; name: string };
 type PayAcct = { id: number; name: string; type: string };
 const PAY_GROUPS: { label: string; types: string[] }[] = [
   { label: "Bank / UPI", types: ["bank"] },
@@ -16,17 +19,21 @@ const PAY_GROUPS: { label: string; types: string[] }[] = [
 type Acct = { id: number; name: string };
 export type RecurringKind = "income" | "expense" | "spend";
 // cardAccountId = the account a bill/spend is PAID FROM (any bank, cash or card); accountId = where an income lands.
-export type RecurringItem = { id: number; label: string; amount: number; day: number; categoryId: number | null; cardAccountId: number | null; accountId: number | null };
+// `month` = this month's own copy vs. the template (null = no month to compare against).
+export type RecurringItem = { id: number; label: string; amount: number; day: number; categoryId: number | null; cardAccountId: number | null; accountId: number | null; holdingId?: number | null; month?: MonthNote | null };
 const INIT: PersonalSaveState = { ok: false, n: 0 };
 const NOUN: Record<RecurringKind, string> = { income: "income", expense: "expense", spend: "spend" };
 
 // Add / edit one recurring template. The same server action (upsertPersonalRecurring) handles every kind;
 // `kind` decides which fields show — income has no category/card, expense & spend do.
-function RecurringModal({ kind, periodId, categories, payAccounts, accounts, initial, open, setOpen }: {
-  kind: RecurringKind; periodId: number; categories: Cat[]; payAccounts: PayAcct[]; accounts: Acct[];
+function RecurringModal({ kind, periodId, categories, payAccounts, accounts, holdings, initial, open, setOpen }: {
+  kind: RecurringKind; periodId: number | null; categories: Cat[]; payAccounts: PayAcct[]; accounts: Acct[]; holdings: HoldingOpt[];
   initial?: RecurringItem; open: boolean; setOpen: (v: boolean) => void;
 }) {
   const isEdit = !!initial;
+  // An Invest-category bill/spend can feed a net-worth holding: each payment ticked adds to it.
+  const [catId, setCatId] = useState(initial?.categoryId ? String(initial.categoryId) : "");
+  const isInvest = categories.find((c) => String(c.id) === catId)?.bucket === "invest";
   const toast = useToast();
   const formRef = useRef<HTMLFormElement>(null);
   const prevN = useRef(0);
@@ -53,7 +60,7 @@ function RecurringModal({ kind, periodId, categories, payAccounts, accounts, ini
         <form ref={formRef} action={formAction} className="flex flex-col">
           <div className="space-y-4 px-5 py-4">
             <input type="hidden" name="kind" value={kind} />
-            <input type="hidden" name="periodId" value={periodId} />
+            {periodId != null && <input type="hidden" name="periodId" value={periodId} />}
             {isEdit && <input type="hidden" name="id" value={initial!.id} />}
             <div>
               <label className="text-xs font-medium text-slate-500">{nameLabel}</label>
@@ -62,7 +69,7 @@ function RecurringModal({ kind, periodId, categories, payAccounts, accounts, ini
             {kind !== "income" && (
               <div>
                 <label className="text-xs font-medium text-slate-500">Category</label>
-                <select name="categoryId" required defaultValue={initial?.categoryId ? String(initial.categoryId) : ""} className="input mt-1 w-full">
+                <select name="categoryId" required value={catId} onChange={(e) => setCatId(e.target.value)} className="input mt-1 w-full">
                   <option value="" disabled>Pick a category</option>
                   {categories.map((c) => <option key={c.id} value={c.id}>{c.icon ? `${c.icon} ` : ""}{c.name}</option>)}
                 </select>
@@ -105,6 +112,9 @@ function RecurringModal({ kind, periodId, categories, payAccounts, accounts, ini
                 <p className="mt-1 text-[11px] text-slate-400">Any of your accounts. Marking the step done in your plan debits it (a credit card settles at its bill).</p>
               </div>
             )}
+            {kind !== "income" && isInvest && (
+              <HoldingPicker holdings={holdings} initialId={initial?.holdingId} suggestedName={initial?.label ?? ""} />
+            )}
           </div>
           <div className="flex justify-end gap-2 border-t border-slate-100 px-5 py-3">
             <button type="button" onClick={() => setOpen(false)} className="rounded-md px-3 py-2 text-sm text-slate-500 hover:bg-slate-100">Cancel</button>
@@ -118,9 +128,9 @@ function RecurringModal({ kind, periodId, categories, payAccounts, accounts, ini
 
 // One setup section for a recurring kind: the list (with edit/delete) + an "add" button. `day` is shown as
 // a chip so you can see when each lands. A read-only list shows when there's no open month to add into.
-export function PersonalRecurringSection({ kind, title, hint, items, periodId, categories, payAccounts, accounts }: {
+export function PersonalRecurringSection({ kind, title, hint, items, periodId, categories, payAccounts, accounts, holdings = [] }: {
   kind: RecurringKind; title: string; hint: string; items: RecurringItem[];
-  periodId: number | null; categories: Cat[]; payAccounts: PayAcct[]; accounts: Acct[];
+  periodId: number | null; categories: Cat[]; payAccounts: PayAcct[]; accounts: Acct[]; holdings?: HoldingOpt[];
 }) {
   const [adding, setAdding] = useState(false);
   const [editing, setEditing] = useState<RecurringItem | null>(null);
@@ -135,34 +145,36 @@ export function PersonalRecurringSection({ kind, title, hint, items, periodId, c
           <p className="py-2 text-sm text-slate-400">None yet.</p>
         ) : (
           items.map((e) => (
-            <div key={e.id} className="flex items-center justify-between gap-2 py-2 text-sm">
+            <div key={e.id} className="py-2 text-sm">
+            <div className="flex items-center justify-between gap-2">
               <span className="flex min-w-0 items-center gap-1.5 truncate text-slate-700">
                 <span className="shrink-0 rounded bg-slate-100 px-1.5 py-0.5 text-[11px] font-medium tabular-nums text-slate-500" title="Day of month">{e.day}</span>
                 <span className="truncate">{catOf(e.categoryId)?.icon} {e.label}</span>
+                {e.holdingId && <span className="shrink-0 rounded-full bg-emerald-50 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700" title="Adds to this net-worth holding when ticked">📈 {holdings.find((h) => h.id === e.holdingId)?.name ?? "holding"}</span>}
               </span>
               <span className="flex shrink-0 items-center gap-2">
                 <span className="tabular-nums font-medium text-slate-800">{formatINR(e.amount)}</span>
-                {periodId != null && (
-                  <button type="button" onClick={() => setEditing(e)} className="rounded-md border border-slate-200 px-2 py-0.5 text-xs text-slate-500 hover:bg-slate-100">Edit</button>
-                )}
+                <button type="button" onClick={() => setEditing(e)} className="rounded-md border border-slate-200 px-2 py-0.5 text-xs text-slate-500 hover:bg-slate-100">Edit</button>
                 <form action={deletePersonalRecurring}>
                   <input type="hidden" name="kind" value={kind} />
                   <input type="hidden" name="id" value={e.id} />
-                  <button type="submit" className="rounded-md px-1.5 py-0.5 text-sm text-slate-300 hover:text-red-600" aria-label="Delete">✕</button>
+                  <button type="submit" className="rounded-md px-1.5 py-0.5 text-sm text-slate-300 hover:text-red-600" aria-label="Delete" title="Stop repeating from next month (this month's copy stays)">✕</button>
                 </form>
               </span>
+            </div>
+            <ApplyToMonth note={e.month ?? null} id={e.id} periodId={periodId} action={applyTemplateToMonth} />
             </div>
           ))
         )}
       </div>
-      {periodId != null && (
+      {(
         <>
           <button type="button" onClick={() => setAdding(true)} className="mt-3 w-full rounded-lg border border-dashed border-emerald-300 px-3 py-2 text-sm font-medium text-emerald-700 hover:bg-emerald-50">
             + Add recurring {NOUN[kind]}
           </button>
-          <RecurringModal kind={kind} periodId={periodId} categories={categories} payAccounts={payAccounts} accounts={accounts} open={adding} setOpen={setAdding} />
+          <RecurringModal kind={kind} periodId={periodId} categories={categories} payAccounts={payAccounts} accounts={accounts} holdings={holdings} open={adding} setOpen={setAdding} />
           {editing && (
-            <RecurringModal key={editing.id} kind={kind} periodId={periodId} categories={categories} payAccounts={payAccounts} accounts={accounts} initial={editing} open setOpen={(v) => { if (!v) setEditing(null); }} />
+            <RecurringModal key={editing.id} kind={kind} periodId={periodId} categories={categories} payAccounts={payAccounts} accounts={accounts} holdings={holdings} initial={editing} open setOpen={(v) => { if (!v) setEditing(null); }} />
           )}
         </>
       )}

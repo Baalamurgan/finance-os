@@ -6,10 +6,11 @@ import { PlannedSpends } from "@/components/personal/PlannedSpends";
 import { PersonalNav } from "@/components/personal/PersonalNav";
 import { PersonalSpendFab } from "@/components/personal/PersonalSpendFab";
 import { PersonalSpendsView } from "@/components/personal/PersonalSpendsView";
+import { PendingMoveNote } from "@/components/personal/PendingMoveNote";
 import { PersonalEmpty } from "@/components/personal/PersonalEmpty";
 import { CardDuesStrip } from "@/components/personal/CardDuesStrip";
 import { CardBillReminderBanner } from "@/components/personal/CardBillReminderBanner";
-import { getPersonalCash, getCardDues, getBalanceCards, getPersonalLending } from "@/lib/personal/cash";
+import { getPersonalCash, getCardDues, getBalanceCards, getPersonalLending, getPersonalAccount } from "@/lib/personal/cash";
 import { MoneyFlowDonut } from "@/components/Charts";
 import { addPersonalCategory, archivePersonalCategory } from "@/app/personal/actions";
 
@@ -58,7 +59,8 @@ export default async function PersonalExpenses({
     prisma.personalSpend.findMany({ where: { periodId: period.id, pending: false }, orderBy: [{ date: "desc" }, { id: "desc" }], include: { splitLoans: true } }),
     getPersonalLending(c.member.id),
   ]);
-  const { personalExpense, netSpent, canSpend, plannedUnpaid } = cash;
+  const personalAcct = await getPersonalAccount(c.member.id);
+  const { personalExpense, netSpent, canSpend } = cash;
   const unpaidCardDues = cardDues.reduce((s, d) => s + d.unpaidTotal, 0);
   const owed = lending.owed;
   const borrowed = lending.borrowed;
@@ -70,8 +72,12 @@ export default async function PersonalExpenses({
   //                borrowed is sitting in your account (+ borrowed) until you repay it.
   //  afterSettle = what you keep once every card is paid AND every due/lend/borrow is settled. The card
   //                cash, the receivables and the borrowings all reverse out, landing back on canSpend.
-  // plannedUnpaid: planned bills/spends already set aside from Can-spend but not yet paid — still in the account.
-  const inAccount = canSpend + plannedUnpaid + unpaidCardDues - owed + borrowed;
+  // Sheet + Spends + Lending only — nothing from the Money Plan: every Sheet bill already counts as spent
+  // (it's out of Can spend), ticked or not. Card spends haven't left yet (+ dues); lent out (−); borrowed in (+).
+  const calcInAccount = canSpend + unpaidCardDues - owed + borrowed;
+  // "In account now" = the REAL balance of your personal account (e.g. Jupiter) when there is one; the
+  // calculated figure stays as a check — a gap means something moved that isn't logged yet.
+  const inAccount = personalAcct ? personalAcct.balance : calcInAccount;
   const afterSettle = canSpend;
 
   // The category donut reflects your NET spend (your share of splits) — the exact spend you did.
@@ -163,15 +169,16 @@ export default async function PersonalExpenses({
           </div>
           {/* 2 — money actually in your account now: card cash hasn't left (+), lends out (−), borrowed in (+) */}
           <div className="rounded-xl border border-slate-200 bg-white p-4">
-            <div className="text-[11px] font-medium uppercase tracking-wide text-slate-400">In account now</div>
+            <div className="text-[11px] font-medium uppercase tracking-wide text-slate-400">In account now{personalAcct ? ` · ${personalAcct.name}` : ""}</div>
             <div className={`mt-1 text-xl font-bold ${inAccount >= 0 ? "text-slate-800" : "text-red-600"}`}>{formatINR(inAccount)}</div>
             <div className="text-[10px] text-slate-400">
               {[
                 unpaidCardDues > 0 ? `${formatINR(unpaidCardDues)} held for cards` : null,
                 owed > 0 ? `${formatINR(owed)} out on loan` : null,
-                borrowed > 0 ? `${formatINR(borrowed)} borrowed in` : null,
+                borrowed > 0 ? `${formatINR(borrowed)} to repay` : null,
               ].filter(Boolean).join(" · ") || "cash in hand"}
             </div>
+            <PendingMoveNote acct={personalAcct} />
           </div>
           {/* 3 — after paying every card and collecting every due/lend; nets back to your budget headroom */}
           <div className="rounded-xl border border-slate-200 bg-white p-4">

@@ -7,7 +7,7 @@ import { useToast } from "@/components/Toast";
 
 const INIT: ItemFormState = { ok: false, n: 0 };
 
-type Initial = { id: number; type: string; name: string; value: number; quantity: number | null; institution: string | null; notes: string | null };
+type Initial = { id: number; type: string; name: string; value: number; quantity: number | null; institution: string | null; notes: string | null; startDate?: string | null; tenureMonths?: number | null; interestRate?: number | null };
 
 // Add or edit a net-worth holding. One component, two modes (mirrors PersonalFixedModal).
 export function NetWorthItemModal({
@@ -26,6 +26,8 @@ export function NetWorthItemModal({
   const prevN = useRef(0);
   const [state, formAction] = useActionState(isEdit ? updateNetWorthItem : addNetWorthItem, INIT);
   const types = category === "asset" ? ASSET_TYPES : LIABILITY_TYPES;
+  const [type, setType] = useState(initial?.type ?? "");
+  const isDeposit = type === "fd" || type === "rd";
 
   useEffect(() => {
     if (state.n > prevN.current) {
@@ -33,6 +35,7 @@ export function NetWorthItemModal({
       if (state.ok) {
         toast(isEdit ? "Updated" : "Added", "success");
         if (!isEdit) formRef.current?.reset();
+        // eslint-disable-next-line react-hooks/set-state-in-effect -- one-shot close after the server action resolves
         setOpen(false);
       } else toast(state.error ?? "Couldn't save", "error");
     }
@@ -67,7 +70,7 @@ export function NetWorthItemModal({
                   {isEdit ? (
                     <input value={types.find((t) => t.key === initial!.type)?.label ?? initial!.type} disabled className="input w-full bg-slate-50 text-slate-500" />
                   ) : (
-                    <select name="type" required defaultValue="" className="input w-full">
+                    <select name="type" required value={type} onChange={(e) => setType(e.target.value)} className="input w-full">
                       <option value="" disabled>Choose…</option>
                       {types.map((t) => <option key={t.key} value={t.key}>{t.icon} {t.label}</option>)}
                     </select>
@@ -75,17 +78,50 @@ export function NetWorthItemModal({
                 </Field>
 
                 <Field label="Name *">
-                  <input name="name" required defaultValue={initial?.name ?? ""} placeholder={category === "asset" ? "e.g. HDFC MF, SBI FD, Flat in Chennai" : "e.g. HDFC home loan"} className="input w-full" />
+                  <input name="name" required defaultValue={initial?.name ?? ""} placeholder={category === "asset" ? "e.g. Groww MF, SBI MOD FD, Gold ETF" : "e.g. HDFC home loan"} className="input w-full" />
                 </Field>
 
-                <div className="grid grid-cols-2 gap-3">
-                  <Field label="Current value (₹) *">
-                    <input name="value" inputMode="numeric" required defaultValue={initial?.value ?? ""} placeholder="500000" className="input w-full" />
-                  </Field>
-                  <Field label="Quantity (optional)">
-                    <input name="quantity" inputMode="numeric" defaultValue={initial?.quantity ?? ""} placeholder="units / grams" className="input w-full" />
-                  </Field>
-                </div>
+                {/* An asset's value changes through "Update value" / money in-out once it exists (so it's in the
+                    history); a liability's balance is edited here. */}
+                {!(isEdit && category === "asset") && (
+                  <div className="grid grid-cols-2 gap-3">
+                    <Field label={category === "asset" ? "Worth today (₹) *" : "Balance owed (₹) *"}>
+                      <input name="value" inputMode="decimal" required defaultValue={initial?.value ?? ""} placeholder="500000" className="input w-full" />
+                    </Field>
+                    {category === "asset" && !isEdit ? (
+                      <Field label="Invested so far (₹)">
+                        <input name="invested" inputMode="decimal" placeholder="same as worth" className="input w-full" />
+                      </Field>
+                    ) : (
+                      <Field label="Quantity (optional)">
+                        <input name="quantity" inputMode="decimal" defaultValue={initial?.quantity ?? ""} placeholder="units / grams" className="input w-full" />
+                      </Field>
+                    )}
+                  </div>
+                )}
+                {category === "asset" && (
+                  <div className="grid grid-cols-2 gap-3">
+                    <Field label={isDeposit ? "Booked on" : "Started on (optional)"}>
+                      <input name="startDate" type="date" required={isDeposit} defaultValue={initial?.startDate ? initial.startDate.slice(0, 10) : ""} className="input w-full" />
+                    </Field>
+                    {isEdit && !isDeposit && (
+                      <Field label="Quantity (optional)">
+                        <input name="quantity" inputMode="decimal" defaultValue={initial?.quantity ?? ""} placeholder="units / grams" className="input w-full" />
+                      </Field>
+                    )}
+                  </div>
+                )}
+                {category === "asset" && isDeposit && (
+                  <div className="grid grid-cols-2 gap-3">
+                    <Field label="Tenure (years) *">
+                      <input name="tenureYears" inputMode="decimal" required defaultValue={initial?.tenureMonths != null ? String(Math.round((initial.tenureMonths / 12) * 100) / 100) : ""} placeholder="e.g. 1 or 2.5" className="input w-full" />
+                    </Field>
+                    <Field label="Interest (% a year) *">
+                      <input name="interestRate" inputMode="decimal" required defaultValue={initial?.interestRate ?? ""} placeholder="e.g. 7.1" className="input w-full" />
+                    </Field>
+                    <p className="col-span-2 -mt-1 text-[11px] text-slate-400">Maturity date and value are worked out for you (quarterly compounding, like Indian bank FDs).</p>
+                  </div>
+                )}
 
                 <Field label="Institution (optional)">
                   <input name="institution" defaultValue={initial?.institution ?? ""} placeholder="broker / bank / fund house" className="input w-full" />

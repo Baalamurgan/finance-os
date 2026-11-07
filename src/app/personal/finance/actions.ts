@@ -1,6 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { resolveHoldingFromForm } from "@/lib/finance/networth";
 import { prisma } from "@/lib/prisma";
 import { auth } from "@/auth";
 import { ACCOUNT_TYPES, TXN_TYPES, BALANCE_ACCOUNT_TYPES, type TxnType } from "@/lib/finance/types";
@@ -113,6 +114,22 @@ export async function setFamilyPrimary(formData: FormData) {
   revalidatePath("/", "layout"); // family In-Hand + Add-spend read it too
 }
 
+// Mark (or clear) the member's PERSONAL money account — the personal app's "In account now" is its balance.
+// At most one per member.
+export async function setPersonalPrimary(formData: FormData) {
+  const member = await me();
+  if (!member) return;
+  const id = Number(formData.get("id"));
+  const on = formData.get("on") === "1";
+  const account = await prisma.financeAccount.findFirst({ where: { id, memberId: member.id, active: true } });
+  if (!account || !BALANCE_ACCOUNT_TYPES.has(account.type)) return;
+  await prisma.$transaction([
+    prisma.financeAccount.updateMany({ where: { memberId: member.id }, data: { personalPrimary: false } }),
+    ...(on ? [prisma.financeAccount.update({ where: { id }, data: { personalPrimary: true } })] : []),
+  ]);
+  rev();
+}
+
 // Load money onto a debit/prepaid card — a "topup" ledger line that raises its balance.
 export async function topUpCard(formData: FormData) {
   const member = await me();
@@ -190,6 +207,8 @@ async function readPlanItem(memberId: number, formData: FormData) {
   const dayRaw = num(formData.get("dayOfMonth"));
   const dayOfMonth = dayRaw == null ? null : Math.min(28, Math.max(1, Math.round(dayRaw)));
   if (kind !== "transfer" && kind !== "save") return { error: "Pick a type." as string };
+  // A saving can name the net-worth holding each tick adds to (the member's own asset).
+  const holdingId = kind === "save" ? await resolveHoldingFromForm(memberId, formData, label) : null;
   if (!label) return { error: "Name the move." };
   if (!amount || amount <= 0) return { error: "Enter an amount." };
   if (kind === "transfer") {
@@ -211,6 +230,7 @@ async function readPlanItem(memberId: number, formData: FormData) {
       fromAccountId: fromId,
       toAccountId: kind === "transfer" ? toId : null,
       note: String(formData.get("note") ?? "").trim().slice(0, 120) || null,
+      holdingId,
     },
   };
 }
@@ -235,15 +255,30 @@ export async function updatePlanItem(prev: PlanItemState, formData: FormData): P
   if (!existing) return { ok: false, error: "Not found.", n };
   const r = await readPlanItem(member.id, formData);
   if (r.error) return { ok: false, error: r.error, n };
+  // Setup only: from next month on. This month's step is its own (use "Apply to this month" to copy it there).
   await prisma.personalPlanItem.update({ where: { id }, data: r.data! });
-  // Setup is the template: show the edit on this month's still-pending step (a done step already happened).
-  const d = r.data!;
-  await prisma.personalPlanStep.updateMany({
-    where: { memberId: member.id, templateKind: "planitem", templateId: id, status: "pending" },
-    data: { label: d.label, amount: d.amount, dayOfMonth: d.dayOfMonth, fromAccountId: d.fromAccountId, toAccountId: d.toAccountId, note: d.note },
-  });
   rev();
   return { ok: true, n };
+}
+
+// "Apply to this month" for a recurring transfer/saving: copy its CURRENT Setup values onto the month's step
+// (creating the step if the month has none). Refused once the step is done — untick it first.
+export async function applyPlanItemToMonth(formData: FormData): Promise<{ ok: boolean; error?: string }> {
+  const member = await me();
+  if (!member) return { ok: false, error: "Signed out." };
+  const id = Number(formData.get("id"));
+  const periodId = Number(formData.get("periodId"));
+  const item = await prisma.personalPlanItem.findFirst({ where: { id, memberId: member.id } });
+  const period = await prisma.personalPeriod.findFirst({ where: { id: periodId, memberId: member.id }, select: { id: true, status: true } });
+  if (!item || !period) return { ok: false, error: "Not found." };
+  if (period.status === "closed") return { ok: false, error: "That month is closed." };
+  const data = { kind: item.kind, label: item.label, amount: item.amount, dayOfMonth: item.dayOfMonth, fromAccountId: item.fromAccountId, toAccountId: item.toAccountId, note: item.note, holdingId: item.holdingId };
+  const step = await prisma.personalPlanStep.findFirst({ where: { periodId, templateKind: "planitem", templateId: id } });
+  if (step?.status === "done") return { ok: false, error: "Already done this month — untick it in the plan first." };
+  if (step) await prisma.personalPlanStep.update({ where: { id: step.id }, data: { ...data, status: "pending" } });
+  else await prisma.personalPlanStep.create({ data: { memberId: member.id, periodId, ...data, templateKind: "planitem", templateId: id } });
+  rev();
+  return { ok: true };
 }
 
 export async function deletePlanItem(formData: FormData) {
@@ -387,6 +422,21 @@ export async function deleteTransaction(formData: FormData) {
 // ── Net-worth holdings ─────────────────────────────────────────────────────────
 export type ItemFormState = { ok: boolean; error?: string; n: number };
 
+// Optional holding details (FD/RD booking date, tenure, rate) read from the add/edit form.
+function holdingDetails(formData: FormData) {
+  const startRaw = String(formData.get("startDate") ?? "").trim();
+  const startDate = /^\d{4}-\d{2}-\d{2}$/.test(startRaw) ? new Date(`${startRaw}T00:00:00`) : null;
+  const tenure = num(formData.get("tenureMonths"));
+  const years = num(formData.get("tenureYears"));
+  const months = tenure ?? (years != null ? years * 12 : null);
+  const rate = num(formData.get("interestRate"));
+  return {
+    startDate,
+    tenureMonths: months != null && months > 0 ? Math.round(months) : null,
+    interestRate: rate != null && rate >= 0 && rate < 100 ? Math.round(rate * 100) / 100 : null,
+  };
+}
+
 export async function addNetWorthItem(prev: ItemFormState, formData: FormData): Promise<ItemFormState> {
   const n = (prev?.n ?? 0) + 1;
   const member = await me();
@@ -398,22 +448,35 @@ export async function addNetWorthItem(prev: ItemFormState, formData: FormData): 
   if (category !== "asset" && category !== "liability") return { ok: false, error: "Pick asset or liability.", n };
   if (!type || !name) return { ok: false, error: "Name it and pick a type.", n };
   if (value == null || value < 0) return { ok: false, error: "Enter a valid amount.", n };
-  await prisma.netWorthItem.create({
-    data: {
-      memberId: member.id,
-      category,
-      type,
-      name: name.slice(0, 120),
-      value: Math.round(value * 100) / 100,
-      quantity: num(formData.get("quantity")),
-      institution: String(formData.get("institution") ?? "").trim() || null,
-      notes: String(formData.get("notes") ?? "").trim() || null,
-    },
+  // What you've put in so far (defaults to today's value). Recorded as the holding's opening history entry.
+  const investedRaw = num(formData.get("invested"));
+  const invested = category === "asset" ? (investedRaw != null && investedRaw >= 0 ? investedRaw : value) : 0;
+  const d = holdingDetails(formData);
+  const r = (x: number) => Math.round(x * 100) / 100;
+  await prisma.$transaction(async (tx) => {
+    const item = await tx.netWorthItem.create({
+      data: {
+        memberId: member.id, category, type, name: name.slice(0, 120), value: r(value),
+        quantity: num(formData.get("quantity")),
+        institution: String(formData.get("institution") ?? "").trim() || null,
+        notes: String(formData.get("notes") ?? "").trim() || null,
+        ...d,
+        valueAsOf: category === "asset" && Math.abs(value - invested) > 0.005 ? new Date() : null,
+      },
+    });
+    if (category === "asset" && invested > 0) {
+      await tx.netWorthEntry.create({ data: { memberId: member.id, itemId: item.id, date: d.startDate ?? new Date(), kind: "opening", amount: r(invested), note: "Invested before tracking" } });
+    }
+    if (category === "asset" && Math.abs(value - invested) > 0.005) {
+      await tx.netWorthEntry.create({ data: { memberId: member.id, itemId: item.id, date: new Date(), kind: "value", amount: r(value), note: "Value when added" } });
+    }
   });
   rev();
   return { ok: true, n };
 }
 
+// Edit a holding's details (name, institution, notes, units, FD terms). The value moves only through
+// "Update value" / money in-out, so every change to it is in the history.
 export async function updateNetWorthItem(prev: ItemFormState, formData: FormData): Promise<ItemFormState> {
   const n = (prev?.n ?? 0) + 1;
   const member = await me();
@@ -422,18 +485,81 @@ export async function updateNetWorthItem(prev: ItemFormState, formData: FormData
   const item = await prisma.netWorthItem.findFirst({ where: { id, memberId: member.id } });
   if (!item) return { ok: false, error: "Not found.", n };
   const value = num(formData.get("value"));
+  const d = holdingDetails(formData);
   await prisma.netWorthItem.update({
     where: { id },
     data: {
       name: String(formData.get("name") ?? item.name).trim() || item.name,
-      value: value != null && value >= 0 ? Math.round(value * 100) / 100 : item.value,
+      // a liability's balance is edited directly (no history for loans)
+      ...(item.category === "liability" && value != null && value >= 0 ? { value: Math.round(value * 100) / 100 } : {}),
       quantity: num(formData.get("quantity")),
       institution: String(formData.get("institution") ?? "").trim() || null,
       notes: String(formData.get("notes") ?? "").trim() || null,
+      ...d,
     },
   });
   rev();
   return { ok: true, n };
+}
+
+// Set a holding's CURRENT value (checked Groww / the bank). Recorded in its history with the date.
+export async function setHoldingValue(prev: ItemFormState, formData: FormData): Promise<ItemFormState> {
+  const n = (prev?.n ?? 0) + 1;
+  const member = await me();
+  if (!member) return { ok: false, error: "Signed out.", n };
+  const id = Number(formData.get("id"));
+  const value = num(formData.get("value"));
+  const item = await prisma.netWorthItem.findFirst({ where: { id, memberId: member.id, category: "asset" } });
+  if (!item) return { ok: false, error: "Not found.", n };
+  if (value == null || value < 0) return { ok: false, error: "Enter the value.", n };
+  const v = Math.round(value * 100) / 100;
+  const now = new Date();
+  await prisma.$transaction([
+    prisma.netWorthEntry.create({ data: { memberId: member.id, itemId: id, date: now, kind: "value", amount: v, note: String(formData.get("note") ?? "").trim() || null } }),
+    prisma.netWorthItem.update({ where: { id }, data: { value: v, valueAsOf: now } }),
+  ]);
+  rev();
+  return { ok: true, n };
+}
+
+// Money in / out of a holding by hand (a lump-sum top-up, a partial redemption) — dated history entry; the
+// value moves by the same amount.
+export async function addHoldingMoney(prev: ItemFormState, formData: FormData): Promise<ItemFormState> {
+  const n = (prev?.n ?? 0) + 1;
+  const member = await me();
+  if (!member) return { ok: false, error: "Signed out.", n };
+  const id = Number(formData.get("id"));
+  const kind = String(formData.get("kind")) === "withdrawal" ? "withdrawal" : "contribution";
+  const amount = num(formData.get("amount"));
+  const dateRaw = String(formData.get("date") ?? "").trim();
+  const date = /^\d{4}-\d{2}-\d{2}$/.test(dateRaw) ? new Date(`${dateRaw}T12:00:00`) : new Date();
+  const item = await prisma.netWorthItem.findFirst({ where: { id, memberId: member.id, category: "asset" } });
+  if (!item) return { ok: false, error: "Not found.", n };
+  if (!amount || amount <= 0) return { ok: false, error: "Enter an amount.", n };
+  const a = Math.round(amount * 100) / 100;
+  if (kind === "withdrawal" && a > item.value + 0.005) return { ok: false, error: "More than it's worth right now.", n };
+  await prisma.$transaction([
+    prisma.netWorthEntry.create({ data: { memberId: member.id, itemId: id, date, kind, amount: a, note: String(formData.get("note") ?? "").trim() || null } }),
+    prisma.netWorthItem.update({ where: { id }, data: { value: kind === "withdrawal" ? { decrement: a } : { increment: a } } }),
+  ]);
+  rev();
+  return { ok: true, n };
+}
+
+// Remove a history entry you added by hand (a Money Plan / Spends one is undone by unticking it there).
+// Money in/out reverses its effect on the value; a value entry just leaves the history (value stays).
+export async function deleteHoldingEntry(formData: FormData) {
+  const member = await me();
+  if (!member) return;
+  const id = Number(formData.get("id"));
+  const e = await prisma.netWorthEntry.findFirst({ where: { id, memberId: member.id } });
+  if (!e || e.planStepId != null || e.spendId != null) return;
+  await prisma.$transaction(async (tx) => {
+    if (e.kind === "contribution" || e.kind === "opening") await tx.netWorthItem.update({ where: { id: e.itemId }, data: { value: { decrement: e.amount } } });
+    else if (e.kind === "withdrawal") await tx.netWorthItem.update({ where: { id: e.itemId }, data: { value: { increment: e.amount } } });
+    await tx.netWorthEntry.delete({ where: { id } });
+  });
+  rev();
 }
 
 export async function deleteNetWorthItem(formData: FormData) {

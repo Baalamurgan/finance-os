@@ -73,24 +73,30 @@ export async function loadPersonal(params?: { y?: string; m?: string }) {
   // (peer usage: you spend, they front the cash, you owe them). Own cards first, then each member's,
   // tagged with owner so the modal can group them and derive the cross-person debt. Credit stays
   // tag-only (dues run through getCardDues); debit/prepaid post to the owner's ledger + balance.
-  const spendCards = (
-    await prisma.financeAccount.findMany({
+  const spendCardsRaw = await prisma.financeAccount.findMany({
       where: { active: true, member: { householdId: member.householdId } },
       orderBy: [{ sortOrder: "asc" }, { id: "asc" }],
       select: {
-        id: true, name: true, color: true, type: true, memberId: true, member: { select: { name: true } },
+        id: true, name: true, color: true, type: true, memberId: true, member: { select: { name: true } }, personalPrimary: true,
         credit: { select: { statementDay: true, dueOffsetDays: true } },
       },
-    })
-  )
+    });
+  const spendCards = spendCardsRaw
     // statementDay/dueOffsetDays let the spend modal auto-derive a "collect by" date for a split paid on
     // a credit card (mirrors the peer-card cycle logic, client-side, so it can be shown disabled).
     .map((a) => ({
       id: a.id, name: a.name, color: a.color, type: a.type, ownerId: a.memberId, ownerName: a.member.name,
-      mine: a.memberId === member.id,
+      mine: a.memberId === member.id, personal: false as boolean,
       statementDay: a.credit?.statementDay ?? null, dueOffsetDays: a.credit?.dueOffsetDays ?? null,
     }))
     .sort((a, b) => Number(b.mine) - Number(a.mine)); // your cards first
+  // Your PERSONAL account (marked, or your only bank/cash/wallet account): a spend with no account picked
+  // ("UPI") comes out of it — the spend modal names it.
+  {
+    const own = spendCardsRaw.filter((a) => a.memberId === member.id && ["bank", "cash", "debit_card", "prepaid_card"].includes(a.type));
+    const pid = (own.find((a) => a.personalPrimary) ?? (own.length === 1 ? own[0] : null))?.id ?? null;
+    for (const c of spendCards) c.personal = c.id === pid;
+  }
 
   // Other household members — the split/reimburse picker mirrors a shared spend into their Lending tab
   // and notifies them, exactly like a peer-card spend does for the card owner.

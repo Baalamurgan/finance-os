@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { autoCloseElapsedMonths, ensureCurrentMonth } from "@/lib/ensureMonth";
 import { revalidateFamily } from "@/lib/revalidate";
+import { rollPersonalMonths } from "@/lib/personal";
 
 // Month-end wind-down cron. Runs at 23:59 IST on the last day of each month (see vercel.json:
 // `59 18 28-31 * *` = 18:29 UTC, and autoCloseElapsedMonths only closes the current month when
@@ -18,5 +19,8 @@ export async function GET(req: Request) {
   const result = await ensureCurrentMonth();
   // These flip period.status (open/draft/closed), which the cached getInHand/getRollup read — bust the tag.
   revalidateFamily();
-  return NextResponse.json({ ok: true, closed, ...result });
+  // Personal months roll too: each member's new month + its Money Plan steps exist right after midnight IST
+  // on the 1st (this cron fires 00:29 IST; the 1st-of-month ensure cron is the safety net). Idempotent.
+  const personal = await rollPersonalMonths();
+  return NextResponse.json({ ok: true, closed, ...result, personal });
 }

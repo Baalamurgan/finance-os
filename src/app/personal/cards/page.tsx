@@ -35,7 +35,7 @@ export default async function PersonalCardsPage({
       <main className="mx-auto max-w-3xl space-y-5 p-4 pb-24 sm:p-6">
         <div className="flex items-start justify-between gap-3">
           <div>
-            <h1 className="text-xl font-bold text-slate-900">Cards &amp; accounts</h1>
+            <h1 className="text-xl font-bold text-slate-900">Accounts</h1>
             <p className="text-sm text-slate-500">Your cards, bank &amp; cash accounts — bills, due dates and balances.</p>
           </div>
           <AddAccountModal />

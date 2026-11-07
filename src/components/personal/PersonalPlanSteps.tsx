@@ -23,7 +23,7 @@ export type PlanStepView = {
   fromId: number | null; toId: number | null; fromName: string | null; toName: string | null;
   oneOff: boolean; card: CardBillView | null;
 };
-type Acct = { id: number; name: string; type: string };
+type Acct = { id: number; name: string; type: string; familyPrimary?: boolean; personalPrimary?: boolean };
 type Cat = { id: number; name: string; icon: string | null };
 
 const METHODS = [
@@ -146,9 +146,9 @@ export function PersonalPlanSteps({ steps, accounts, categories, periodId, setup
         </div>
         <div className="flex shrink-0 flex-col items-end gap-1">
           {active.length > 0 && <span className="text-[11px] font-medium text-slate-400">{doneCount}/{active.length} done</span>}
-          <ToastForm action={rebuildPlanSteps} successMessage="Plan synced with Setup">
+          <ToastForm action={rebuildPlanSteps} successMessage="Plan refreshed">
             <input type="hidden" name="periodId" value={periodId} />
-            <button type="submit" title="Re-create missing steps and reset every step you haven't edited to your Setup. Done, removed and edited steps are left alone." className="rounded-md border border-slate-200 px-2 py-1 text-[11px] font-medium text-slate-600 hover:bg-slate-50">↻ Sync with Setup</button>
+            <button type="submit" title="Re-check the steps against this month's own lines (Sheet / Spends). Setup changes reach a month only via Setup's “Apply to this month”." className="rounded-md border border-slate-200 px-2 py-1 text-[11px] font-medium text-slate-600 hover:bg-slate-50">↻ Refresh</button>
           </ToastForm>
         </div>
       </div>
@@ -157,11 +157,10 @@ export function PersonalPlanSteps({ steps, accounts, categories, periodId, setup
         <div className="mt-3 rounded-lg border border-dashed border-slate-300 p-3 text-sm text-slate-500">
           <p>No steps this month.</p>
           <p className="mt-1 text-xs">
-            Setup has <b>{setup.incomes}</b> recurring income{setup.incomes === 1 ? "" : "s"}, <b>{setup.moves}</b> transfer/saving{setup.moves === 1 ? "" : "s"}, and <b>{setup.bills}</b> recurring bill{setup.bills === 1 ? "" : "s"} waiting to be paid this month
-            {setup.incomes + setup.moves + setup.bills > 0 ? " — press ↻ Sync with Setup to bring them in." : "."}
+            This month has <b>{setup.incomes}</b> recurring income{setup.incomes === 1 ? "" : "s"} and <b>{setup.bills}</b> bill{setup.bills === 1 ? "" : "s"} waiting to be paid; Setup has <b>{setup.moves}</b> transfer/saving{setup.moves === 1 ? "" : "s"}.
           </p>
           <p className="mt-1 text-xs">
-            Add them in <a className="font-medium text-emerald-700 underline" href="/personal/setup">Setup</a>, or add a step below.
+            New months get their steps from <a className="font-medium text-emerald-700 underline" href="/personal/setup">Setup</a> automatically. To bring a Setup item into this month, use its <b>Apply to this month</b> there — or add a step below.
           </p>
         </div>
       ) : (
@@ -543,7 +542,16 @@ function CardBillPayModal({ s, card, accounts, onClose }: { s: PlanStepView; car
   const swipes = Math.round((card.personal + card.family) * 100) / 100;
   const suggested = Math.round((swipes + card.annualFee) * 100) / 100;
   const [amount, setAmount] = useState(String(suggested));
-  const [fromId, setFromId] = useState("");
+  const bankAccts0 = accounts.filter((a) => BALANCE_TYPES.has(a.type));
+  // Where each share's money sits today: the family share in your family account, yours in your personal
+  // account (or your only account). The bill is paid in one go from whichever account you pick; a share
+  // sitting elsewhere becomes a transfer step into that account.
+  const personalDefault = String((bankAccts0.find((a) => a.personalPrimary) ?? (bankAccts0.length === 1 ? bankAccts0[0] : null))?.id ?? "");
+  const familyDefault = String(bankAccts0.find((a) => a.familyPrimary)?.id ?? "");
+  const [fromId, setFromId] = useState(personalDefault);
+  const [familyFromId, setFamilyFromId] = useState(familyDefault);
+  const [personalFromId, setPersonalFromId] = useState(personalDefault);
+  const [movedNow, setMovedNow] = useState(false); // OFF by default: the transfer steps wait for a tick
   const [state, formAction] = useActionState(payCardBillStep, { ok: false, n: 0 } as PersonalSaveState);
   useEffect(() => {
     if (state.n > prevN.current) {
@@ -555,7 +563,13 @@ function CardBillPayModal({ s, card, accounts, onClose }: { s: PlanStepView; car
   const amountNum = Number(amount) || 0;
   const diff = Math.round((amountNum - suggested) * 100) / 100;
   const fromYou = Math.max(0, Math.round((amountNum - card.family) * 100) / 100);
-  const bankAccts = accounts.filter((a) => BALANCE_TYPES.has(a.type));
+  const familyPart = Math.min(card.family, amountNum);
+  const bankAccts = bankAccts0;
+  const nameOf = (id: string) => bankAccts.find((a) => String(a.id) === id)?.name ?? "?";
+  const moves = [
+    familyPart > 0.005 && familyFromId && familyFromId !== fromId ? { from: familyFromId, amt: familyPart, what: "family share" } : null,
+    fromYou > 0.005 && personalFromId && personalFromId !== fromId ? { from: personalFromId, amt: fromYou, what: "your share" } : null,
+  ].filter((m): m is { from: string; amt: number; what: string } => m != null);
   const due = card.dueISO ? new Date(card.dueISO).toLocaleDateString("en-IN", { day: "numeric", month: "short" }) : null;
   return (
     <Overlay onClose={onClose} title={`Pay ${card.cardName} bill`}>
@@ -587,19 +601,54 @@ function CardBillPayModal({ s, card, accounts, onClose }: { s: PlanStepView; car
             </p>
           )}
         </div>
-        <div>
-          <label className="text-sm font-medium text-slate-600">Your part leaves which account?</label>
-          <select name="fromAccountId" value={fromId} onChange={(e) => setFromId(e.target.value)} className="input mt-1.5 w-full">
-            <option value="">— don&apos;t debit an account —</option>
-            {bankAccts.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
-          </select>
-          <p className="mt-1.5 text-[11px] text-slate-500">
-            {formatINR(fromYou)} {fromId ? "leaves that account" : "is not debited from any account"} · {formatINR(Math.min(card.family, amountNum))} is cleared from the family In-Hand.
-          </p>
+        {bankAccts.length > 0 && (
+        <div className="space-y-3">
+          <div>
+            <label className="text-sm font-medium text-slate-600">Paid the whole bill from</label>
+            <select name="fromAccountId" required value={fromId} onChange={(e) => setFromId(e.target.value)} className="input mt-1.5 w-full">
+              <option value="" disabled>Pick the account</option>
+              {bankAccts.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+            </select>
+            <p className="mt-1 text-[11px] text-slate-500">{formatINR(amountNum)} leaves {fromId ? nameOf(fromId) : "that account"} · the card&apos;s {formatINR(familyPart)} family share is cleared from the family In-Hand.</p>
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            {familyPart > 0.005 && (
+              <label className="block">
+                <span className="text-[11px] font-medium text-slate-500">👪 Family share {formatINR(familyPart)} is in</span>
+                <select name="familyFromId" required value={familyFromId} onChange={(e) => setFamilyFromId(e.target.value)} className="input mt-1 w-full py-1.5 text-sm">
+                  <option value="" disabled>Pick</option>
+                  {bankAccts.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+                </select>
+              </label>
+            )}
+            {fromYou > 0.005 && (
+              <label className="block">
+                <span className="text-[11px] font-medium text-slate-500">👤 Your share {formatINR(fromYou)} is in</span>
+                <select name="personalFromId" required value={personalFromId} onChange={(e) => setPersonalFromId(e.target.value)} className="input mt-1 w-full py-1.5 text-sm">
+                  <option value="" disabled>Pick</option>
+                  {bankAccts.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+                </select>
+              </label>
+            )}
+          </div>
+          {fromId && moves.length > 0 && (
+            <div className="rounded-lg bg-sky-50 p-2.5 text-[12px] text-sky-900">
+              <p className="font-medium">Adds {moves.length === 1 ? "a step" : "steps"} to your plan:</p>
+              <ul className="mt-0.5 space-y-0.5">
+                {moves.map((m) => <li key={m.what}>↔ {nameOf(m.from)} → {nameOf(fromId)} · {formatINR(m.amt)} <span className="text-sky-700">({m.what})</span></li>)}
+              </ul>
+              <label className="mt-1.5 flex cursor-pointer items-center gap-2 text-[12px] font-medium text-sky-900">
+                <input type="checkbox" name="movedNow" checked={movedNow} onChange={(e) => setMovedNow(e.target.checked)} className="h-4 w-4 accent-sky-600" />
+                Already moved — mark {moves.length === 1 ? "it" : "them"} done now
+              </label>
+              {!movedNow && <p className="mt-0.5 text-[11px] text-sky-700">{moves.length === 1 ? "It waits" : "They wait"} in your plan — tick when you move the money; balances follow.</p>}
+            </div>
+          )}
         </div>
+        )}
         <div className="flex items-center gap-3 border-t border-slate-100 pt-3">
           <button type="button" onClick={onClose} className="min-h-11 flex-1 rounded-xl border-2 border-slate-200 px-4 py-2 text-base font-medium text-slate-600">Cancel</button>
-          <button type="submit" disabled={Number.isNaN(amountNum) || amountNum < 0} style={{ backgroundColor: card.color }} className="min-h-11 flex-1 rounded-xl px-4 py-2 text-base font-semibold text-white disabled:opacity-40">Pay bill</button>
+          <button type="submit" disabled={Number.isNaN(amountNum) || amountNum < 0 || (bankAccts.length > 0 && (!fromId || (familyPart > 0.005 && !familyFromId) || (fromYou > 0.005 && !personalFromId)))} style={{ backgroundColor: card.color }} className="min-h-11 flex-1 rounded-xl px-4 py-2 text-base font-semibold text-white disabled:opacity-40">Pay bill</button>
         </div>
       </form>
     </Overlay>

@@ -70,7 +70,8 @@ export default async function PersonalPlanPage({
     prisma.financeAccount.findMany({
       where: { memberId: c.member.id, active: true },
       orderBy: [{ sortOrder: "asc" }, { id: "asc" }],
-      select: { id: true, name: true, type: true },
+      // family/personal flags → the card-bill pay box pre-selects where each share's money sits
+      select: { id: true, name: true, type: true, familyPrimary: true, personalPrimary: true },
     }),
     // What Setup would generate this month — so an empty plan can say why.
     prisma.personalIncome.count({ where: { periodId: c.selected.id, recurring: true } }),
