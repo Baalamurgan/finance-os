@@ -1,10 +1,11 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { exitToFamily, lockPersonalNow } from "@/app/personal/lock/actions";
 import { CardDueHighAlert } from "@/components/personal/CardDueHighAlert";
+import { PlanDueAlert } from "@/components/PlanDueAlert";
 import { PeerCardUsePopup } from "@/components/personal/PeerCardUsePopup";
 import { RemindersBell } from "@/components/personal/RemindersBell";
 import { PersonalDock } from "@/components/personal/PersonalDock";
@@ -59,6 +60,7 @@ export function PersonalNav({
           it's always enabled here. */}
       <AutoLock enabled lockAction={lockPersonalNow} storageKey="personal:hiddenAt" />
       <CardDueHighAlert context="personal" />
+      <PlanDueAlert context="personal" />
       <PeerCardUsePopup />
       <header className="sticky top-0 z-40 border-b border-emerald-100 bg-emerald-50/90 backdrop-blur">
         <div className="mx-auto flex max-w-3xl flex-nowrap items-center gap-x-2 px-4 py-2.5 sm:flex-wrap sm:gap-x-3 sm:py-3 sm:px-6">
@@ -127,6 +129,21 @@ export function PersonalNav({
 
 function PersonalBottomNav({ active, q, financeDue }: { active: string; q: string; financeDue: boolean }) {
   const [open, setOpen] = useState(false);
+  const sheetRef = useRef<HTMLDivElement>(null);
+  const btnRef = useRef<HTMLButtonElement>(null);
+  // "inside" = the sheet or the More button (so tapping More again toggles instead of close-then-reopen)
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: PointerEvent) => {
+      const t = e.target as Node;
+      if (sheetRef.current?.contains(t) || btnRef.current?.contains(t)) return;
+      setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false); };
+    document.addEventListener("pointerdown", onDown, true);
+    document.addEventListener("keydown", onKey);
+    return () => { document.removeEventListener("pointerdown", onDown, true); document.removeEventListener("keydown", onKey); };
+  }, [open]);
   const moreActive = MORE.some((t) => t.key === active);
   const cell = (activeHere: boolean) =>
     `relative flex flex-1 flex-col items-center justify-center gap-0.5 py-2 text-[11px] font-medium ${activeHere ? "text-emerald-600" : "text-slate-500"}`;
@@ -136,6 +153,7 @@ function PersonalBottomNav({ active, q, financeDue }: { active: string; q: strin
       {open && (
         <div className="fixed inset-0 z-50 bg-black/30 sm:hidden" onClick={() => setOpen(false)}>
           <div
+            ref={sheetRef}
             className="absolute inset-x-0 mx-2 overflow-hidden rounded-2xl border border-slate-200 bg-white py-1 shadow-xl"
             style={{ bottom: "calc(env(safe-area-inset-bottom) + 4rem)" }}
             onClick={(e) => e.stopPropagation()}
@@ -166,7 +184,7 @@ function PersonalBottomNav({ active, q, financeDue }: { active: string; q: strin
             {t.label}
           </Link>
         ))}
-        <button type="button" onClick={() => setOpen((v) => !v)} className={cell(moreActive || open)}>
+        <button ref={btnRef} type="button" onClick={() => setOpen((v) => !v)} className={cell(moreActive || open)}>
           <span className="text-xl leading-none">⋯</span>
           More
           {financeDue && <span className="absolute right-1/4 top-1 h-1.5 w-1.5 rounded-full bg-red-500" />}
@@ -176,12 +194,28 @@ function PersonalBottomNav({ active, q, financeDue }: { active: string; q: strin
   );
 }
 
+// Close a menu on any tap/click OUTSIDE it (and on Esc). A document listener — not a full-screen backdrop —
+// because the sticky header's backdrop-blur makes "fixed" children cover only the header, so a backdrop
+// there never caught clicks on the page below.
+function useCloseOnOutside(open: boolean, setOpen: (v: boolean) => void, ref: React.RefObject<HTMLElement | null>) {
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: PointerEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false); };
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false); };
+    document.addEventListener("pointerdown", onDown, true);
+    document.addEventListener("keydown", onKey);
+    return () => { document.removeEventListener("pointerdown", onDown, true); document.removeEventListener("keydown", onKey); };
+  }, [open, setOpen, ref]);
+}
+
 // Desktop "⋯ More" — the same overflow list as the phone's bottom sheet, as a small dropdown.
 function DesktopMore({ active, q, financeDue }: { active: string; q: string; financeDue: boolean }) {
   const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useCloseOnOutside(open, setOpen, ref);
   const current = MORE.find((t) => t.key === active);
   return (
-    <div className="relative">
+    <div ref={ref} className="relative">
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
@@ -193,7 +227,6 @@ function DesktopMore({ active, q, financeDue }: { active: string; q: string; fin
       </button>
       {open && (
         <>
-          <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
           <div className="absolute left-0 z-50 mt-1 w-48 overflow-hidden rounded-xl border border-slate-200 bg-white py-1 shadow-lg">
             {MORE.map((t) => (
               <Link

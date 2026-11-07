@@ -1,6 +1,7 @@
 "use client";
 
 import { useActionState, useEffect, useRef, useState } from "react";
+import { useSavingToast } from "@/components/useSavingToast";
 import { addIncomeAction, updateIncome, type SaveState } from "@/app/actions";
 import { useToast } from "@/components/Toast";
 
@@ -42,6 +43,7 @@ export function IncomeModal({
     isEdit ? updateIncome : addIncomeAction,
     { ok: false, n: 0 },
   );
+  useSavingToast(pending); // hide + "Saving…" while the server works; the result toast replaces it
 
   useEffect(() => {
     if (!open) return;
@@ -78,7 +80,7 @@ export function IncomeModal({
 
       {open && (
         <div
-          className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/40 p-4 sm:items-center"
+          className={`fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/40 p-4 sm:items-center${pending ? " hidden" : ""}`}
           onClick={() => setOpen(false)}
         >
           <div

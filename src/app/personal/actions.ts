@@ -15,11 +15,12 @@ import { validateSpendLabel } from "@/lib/spendCategorize";
 import { log } from "@/lib/log";
 import { isPersonalUnlocked } from "@/lib/personal-lock";
 import { ensurePersonalMonth, ensurePersonalPreview, rebuildPersonalPreview, seedPersonalCategories } from "@/lib/personal";
-import { getCardBillReminders, getCardDues } from "@/lib/personal/cash";
+import { getCardBillReminders, getCardDues, getPersonalCash } from "@/lib/personal/cash";
+import { loadPersonal } from "@/lib/loadPersonal";
 import { ensurePlanSteps, orderSteps, cardBillTemplateId, decodeCardBillTemplateId } from "@/lib/personal/planSteps";
 import { templateDate } from "@/lib/personal/templates";
 import { addContribution, removeContributions, resolveHoldingFromForm } from "@/lib/finance/networth";
-import { payFamilyCardBill, unpayFamilyCardBill } from "@/app/actions";
+import { payFamilyCardBill, unpayFamilyCardBill, getMyDueTodaySteps } from "@/app/actions";
 import { currentCycle } from "@/lib/finance/cycle";
 import { BALANCE_ACCOUNT_TYPES } from "@/lib/finance/types";
 
@@ -1985,4 +1986,49 @@ export async function deletePlanStep(formData: FormData) {
     await tx.personalPlanStep.delete({ where: { id: step.id } });
   });
   rev();
+}
+
+// Everything the add-spend box needs, for the floating "₹ Spend" button on ANY personal tab (so it opens in
+// place instead of jumping to Spends). The current month; null when there's no month yet.
+export async function getQuickSpendData() {
+  const c = await loadPersonal();
+  if (!c.selected) return null;
+  const cash = await getPersonalCash(c.selected);
+  return {
+    periodId: c.selected.id,
+    categories: c.categories.map((k) => ({ id: k.id, name: k.name, icon: k.icon })),
+    cards: c.spendCards,
+    members: c.members,
+    pastNames: c.pastNames,
+    remaining: cash.canSpend,
+  };
+}
+
+// ── Money Plan alert (pop-up in BOTH views, once a day) ──────────────────────────────────────────────
+// The current member's plan steps that are THEIRS to do and due today or overdue: family Money-plan steps
+// (bill payer / transfer sender) and personal plan steps (anything but incoming money). In the family view the
+// personal part is a COUNT only — its detail stays behind the personal PIN.
+export type PlanAlertStep = { label: string; amount: number; overdue: boolean };
+export type PlanAlerts = { family: PlanAlertStep[]; familyQ: string; personal: PlanAlertStep[]; personalCount: number; personalOverdue: boolean };
+export async function getMyPlanAlerts(context: "family" | "personal"): Promise<PlanAlerts> {
+  const empty: PlanAlerts = { family: [], familyQ: "", personal: [], personalCount: 0, personalOverdue: false };
+  const member = await meRead();
+  if (!member) return empty;
+  const fam = await getMyDueTodaySteps().catch(() => ({ periodQ: "", steps: [] as { label: string; amount: number; overdue: boolean }[] }));
+  // personal: the open personal month's pending steps whose day has come (income is money IN — not a to-do)
+  const period = await prisma.personalPeriod.findFirst({ where: { memberId: member.id, status: "open" }, orderBy: [{ year: "desc" }, { month: "desc" }], select: { id: true, year: true, month: true } });
+  const today = Number(new Intl.DateTimeFormat("en-GB", { timeZone: "Asia/Kolkata", day: "numeric" }).format(new Date()));
+  const ist = new Intl.DateTimeFormat("en-GB", { timeZone: "Asia/Kolkata", year: "numeric", month: "numeric" }).formatToParts(new Date());
+  const curY = Number(ist.find((p) => p.type === "year")?.value), curM = Number(ist.find((p) => p.type === "month")?.value);
+  const pastMonth = period != null && (period.year < curY || (period.year === curY && period.month < curM)); // a month that's already over → all its days have passed
+  const steps = period
+    ? await prisma.personalPlanStep.findMany({
+        where: { periodId: period.id, memberId: member.id, status: "pending", kind: { not: "income" }, dayOfMonth: { not: null, ...(pastMonth ? {} : { lte: today }) } },
+        orderBy: [{ dayOfMonth: "asc" }, { id: "asc" }],
+        select: { label: true, amount: true, dayOfMonth: true },
+      })
+    : [];
+  const personal = steps.map((s) => ({ label: s.label, amount: s.amount, overdue: pastMonth || (s.dayOfMonth ?? today) < today }));
+  const showPersonal = context === "personal" && (await isPersonalUnlocked(member.id));
+  return { family: fam.steps, familyQ: fam.periodQ, personal: showPersonal ? personal : [], personalCount: personal.length, personalOverdue: personal.some((s) => s.overdue) };
 }

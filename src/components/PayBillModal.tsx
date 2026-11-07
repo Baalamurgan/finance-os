@@ -1,6 +1,7 @@
 "use client";
 
 import { useActionState, useEffect, useState } from "react";
+import { useSavingToast } from "@/components/useSavingToast";
 import { payPeriodicBill, type PayBillState } from "@/app/actions";
 import { formatINR } from "@/lib/format";
 import { useToast } from "@/components/Toast";
@@ -44,7 +45,8 @@ export function PayBillModal({
   const toast = useToast();
   // All four "pay" forms submit the same action; one useActionState drives them so we can toast
   // the result (a blocked action used to just close the modal and look like it did nothing).
-  const [state, formAction] = useActionState(payPeriodicBill, INIT);
+  const [state, formAction, saving] = useActionState(payPeriodicBill, INIT);
+  useSavingToast(saving); // hide + "Saving…" while the server works; the result toast replaces it
   // The ACTUAL amount to pay — bills like EB/WiFi vary month to month; defaults to the
   // configured amount. Whatever the fund doesn't need is simply left in the fund.
   const [amountStr, setAmountStr] = useState(String(bill));
@@ -106,7 +108,7 @@ export function PayBillModal({
       </button>
 
       {open && (
-        <div className="fixed inset-0 z-50 flex items-end justify-center overflow-y-auto bg-black/40 sm:items-center sm:p-4" onClick={() => setOpen(false)}>
+        <div className={`fixed inset-0 z-50 flex items-end justify-center overflow-y-auto bg-black/40 sm:items-center sm:p-4${saving ? " hidden" : ""}`} onClick={() => setOpen(false)}>
           <div className="w-full max-w-sm rounded-t-3xl bg-white shadow-xl sm:rounded-2xl" onClick={(e) => e.stopPropagation()} style={{ paddingBottom: "env(safe-area-inset-bottom)" }}>
             <div className="flex items-center justify-between border-b border-slate-100 px-5 py-4">
               <h2 className="text-base font-bold text-slate-900">Pay {name}{carriedFrom ? <span className="ml-1 text-xs font-medium text-rose-500">· overdue from {carriedFrom}</span> : null}</h2>

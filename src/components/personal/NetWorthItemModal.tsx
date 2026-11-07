@@ -1,6 +1,7 @@
 "use client";
 
 import { useActionState, useEffect, useRef, useState } from "react";
+import { useSavingToast } from "@/components/useSavingToast";
 import { addNetWorthItem, updateNetWorthItem, type ItemFormState } from "@/app/personal/finance/actions";
 import { ASSET_TYPES, LIABILITY_TYPES } from "@/lib/finance/types";
 import { useToast } from "@/components/Toast";
@@ -24,7 +25,8 @@ export function NetWorthItemModal({
   const [open, setOpen] = useState(false);
   const formRef = useRef<HTMLFormElement>(null);
   const prevN = useRef(0);
-  const [state, formAction] = useActionState(isEdit ? updateNetWorthItem : addNetWorthItem, INIT);
+  const [state, formAction, saving] = useActionState(isEdit ? updateNetWorthItem : addNetWorthItem, INIT);
+  useSavingToast(saving); // hide + "Saving…" while the server works; the result toast replaces it
   const types = category === "asset" ? ASSET_TYPES : LIABILITY_TYPES;
   const [type, setType] = useState(initial?.type ?? "");
   const isDeposit = type === "fd" || type === "rd";
@@ -53,7 +55,7 @@ export function NetWorthItemModal({
       )}
 
       {open && (
-        <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/40 p-4 sm:items-center" onClick={() => setOpen(false)}>
+        <div className={`fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/40 p-4 sm:items-center${saving ? " hidden" : ""}`} onClick={() => setOpen(false)}>
           <div className="my-auto flex w-full max-w-md flex-col rounded-2xl bg-white shadow-xl" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between border-b border-slate-100 px-5 py-3">
               <h2 className="text-lg font-bold text-slate-900">

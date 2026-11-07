@@ -1,6 +1,7 @@
 "use client";
 
 import { useActionState, useEffect, useState } from "react";
+import { useSavingToast } from "@/components/useSavingToast";
 import { payMiscBill, type MiscPayState } from "@/app/actions";
 import { formatINR } from "@/lib/format";
 import { useToast } from "@/components/Toast";
@@ -24,7 +25,8 @@ export function MiscPayModal({
 }) {
   const [open, setOpen] = useState(false);
   const toast = useToast();
-  const [state, formAction] = useActionState(payMiscBill, INIT);
+  const [state, formAction, saving] = useActionState(payMiscBill, INIT);
+  useSavingToast(saving); // hide + "Saving…" while the server works; the result toast replaces it
   const [amountStr, setAmountStr] = useState(String(estimate));
 
   useEffect(() => {
@@ -62,7 +64,7 @@ export function MiscPayModal({
       </button>
 
       {open && (
-        <div className="fixed inset-0 z-50 flex items-end justify-center overflow-y-auto bg-black/40 sm:items-center sm:p-4" onClick={() => setOpen(false)}>
+        <div className={`fixed inset-0 z-50 flex items-end justify-center overflow-y-auto bg-black/40 sm:items-center sm:p-4${saving ? " hidden" : ""}`} onClick={() => setOpen(false)}>
           <div className="w-full max-w-sm rounded-t-3xl bg-white shadow-xl sm:rounded-2xl" onClick={(e) => e.stopPropagation()} style={{ paddingBottom: "env(safe-area-inset-bottom)" }}>
             <div className="flex items-center justify-between border-b border-slate-100 px-5 py-4">
               <h2 className="text-base font-bold text-slate-900">Pay {name}</h2>

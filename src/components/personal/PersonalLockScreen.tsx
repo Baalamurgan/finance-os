@@ -13,7 +13,7 @@ const INITIAL: PersonalUnlockState = { ok: false };
 export function PersonalLockScreen({
   greetingName,
   hasBiometric,
-  next = "/personal/today",
+  next = "/personal/expenses",
 }: {
   greetingName: string | null;
   hasBiometric: boolean;

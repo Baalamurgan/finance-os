@@ -1,6 +1,7 @@
 "use client";
 
 import { useActionState, useEffect, useRef, useState } from "react";
+import { useSavingToast } from "@/components/useSavingToast";
 import { addPersonalSpend, updatePersonalSpend, type PersonalSaveState } from "@/app/personal/actions";
 import { useToast } from "@/components/Toast";
 import { suggestSpendKind } from "@/lib/spendCategorize";
@@ -104,6 +105,7 @@ export function PersonalSpendModal({
   const amountNum = amountEval ?? 0;
   const showCalc = hasArithmeticOp(amount) && amountEval != null;
   const [state, formAction, pending] = useActionState(isEdit ? updatePersonalSpend : addPersonalSpend, INIT);
+  useSavingToast(pending); // hide + "Saving…" while the server works; the result toast replaces it
 
   // "Collect by" for a split/reimbursement paid on YOUR OWN credit card is auto-derived from that
   // card's cycle (shown disabled). Any other method (cash/UPI, debit/prepaid) → you must pick a date.
@@ -180,7 +182,7 @@ export function PersonalSpendModal({
       )}
 
       {open && (
-        <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto overscroll-contain bg-black/40 p-4 sm:items-center" onClick={() => setOpen(false)}>
+        <div className={`fixed inset-0 z-50 flex items-start justify-center overflow-y-auto overscroll-contain bg-black/40 p-4 sm:items-center${pending ? " hidden" : ""}`} onClick={() => setOpen(false)}>
           <div className="my-auto flex w-full max-w-md flex-col rounded-2xl bg-white shadow-xl" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between border-b border-slate-100 px-5 py-3">
               <h2 className="text-lg font-bold text-slate-900">{isEdit ? "Edit spend" : "Add spend"}</h2>

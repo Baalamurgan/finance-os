@@ -1,6 +1,7 @@
 "use client";
 
 import { useActionState, useEffect, useRef, useState } from "react";
+import { useSavingToast } from "@/components/useSavingToast";
 import { saveExpenseAction, type SaveState } from "@/app/actions";
 import { formatINR } from "@/lib/format";
 import { useToast } from "@/components/Toast";
@@ -92,6 +93,7 @@ export function ExpenseModal({
     ok: false,
     n: 0,
   });
+  useSavingToast(pending); // hide + "Saving…" while the server works; the result toast replaces it
 
   // balance cap applies only when adding a new expense (create) and a balance is known
   const capped = !initial && typeof balance === "number";
@@ -206,7 +208,7 @@ export function ExpenseModal({
 
       {open && (
         <div
-          className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/40 p-4 sm:items-center"
+          className={`fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/40 p-4 sm:items-center${pending ? " hidden" : ""}`}
           onClick={() => setOpen(false)}
         >
           <div

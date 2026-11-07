@@ -1,6 +1,7 @@
 "use client";
 
 import { payTypeLabel, payTypeIcon } from "@/lib/accountLabels";
+import { useSavingToast } from "@/components/useSavingToast";
 import { useActionState, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { editSpendAction, type EditSpendState } from "@/app/actions";
@@ -34,6 +35,7 @@ export function EditSpendModal({
   const [subCategory, setSubCategory] = useState(spend.subCategory ?? "");
   const [cardId, setCardId] = useState<number | null>(spend.cardAccountId ?? null);
   const [state, formAction, pending] = useActionState<EditSpendState, FormData>(editSpendAction, { ok: false, n: 0 });
+  useSavingToast(pending); // hide + "Saving…" while the server works; the result toast replaces it
   const prevN = useRef(0);
   const selectedCard = cardId != null ? cards.find((c) => c.id === cardId) : undefined;
 
@@ -70,7 +72,7 @@ export function EditSpendModal({
       {open && mounted &&
         createPortal(
           <div
-            className="fixed inset-0 z-50 flex items-end justify-center overflow-y-auto bg-black/40 sm:items-center sm:p-4"
+            className={`fixed inset-0 z-50 flex items-end justify-center overflow-y-auto bg-black/40 sm:items-center sm:p-4${pending ? " hidden" : ""}`}
             onClick={() => setOpen(false)}
           >
             <div

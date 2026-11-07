@@ -7,7 +7,7 @@ import { AddSpendModal } from "@/components/AddSpendModal";
 import { AutoLock } from "@/components/AutoLock";
 import { UserMenu } from "@/components/UserMenu";
 import { WindDownBanner } from "@/components/WindDownBanner";
-import { DueTodayBanner } from "@/components/DueTodayBanner";
+import { PlanDueAlert } from "@/components/PlanDueAlert";
 import { ProvisionalBanner } from "@/components/ProvisionalBanner";
 import { WindDownPopup } from "@/components/WindDownPopup";
 import { CardDueHighAlert } from "@/components/personal/CardDueHighAlert";
@@ -258,7 +258,6 @@ export function NavHeader({
       </div>
     )}
     {windDownReminder && <WindDownBanner />}
-    <DueTodayBanner />
     {provisional && periodId && <ProvisionalBanner workingLabel={provisional.workingLabel} periodId={periodId} canEdit={!!canEdit} />}
     </div>
 
@@ -266,6 +265,8 @@ export function NavHeader({
         own credit-card bill due within 3 days (shown in family view too, amount-free). */}
     {windDownReminder && <WindDownPopup q={q} />}
     <CardDueHighAlert context="family" />
+    {/* Money Plan steps due today / overdue — outside the blurred header so the pop-up covers the screen */}
+    <PlanDueAlert context="family" />
     <BillDueHighAlert />
 
     {/* big thumb-reachable "Add Spend" button on mobile (the easy daily action) */}

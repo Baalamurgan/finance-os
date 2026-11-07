@@ -1,6 +1,7 @@
 "use client";
 
 import { useActionState, useEffect, useRef, useState, type ReactNode } from "react";
+import { useSavingToast } from "@/components/useSavingToast";
 import {
   tickPlanStep, untickPlanStep, redatePlanStep, setPlanStepSkipped, deletePlanStep, movePlanStep,
   addPlanStep, editPlanStep, setPlanStepRoute, payCardBillStep,
@@ -63,14 +64,14 @@ function needsAccount(s: PlanStepView): boolean {
   return false;
 }
 
-function Overlay({ onClose, title, children }: { onClose: () => void; title: string; children: ReactNode }) {
+function Overlay({ onClose, title, children, hidden = false }: { onClose: () => void; title: string; children: ReactNode; hidden?: boolean }) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
   return (
-    <div className="fixed inset-0 z-50 flex items-end justify-center overflow-y-auto bg-black/40 sm:items-center sm:p-4" onClick={onClose}>
+    <div className={`fixed inset-0 z-50 flex items-end justify-center overflow-y-auto bg-black/40 sm:items-center sm:p-4${hidden ? " hidden" : ""}`} onClick={onClose}>
       <div className="flex w-full max-w-md flex-col rounded-t-3xl bg-white shadow-xl sm:rounded-2xl" onClick={(e) => e.stopPropagation()} style={{ paddingBottom: "env(safe-area-inset-bottom)" }}>
         <div className="flex items-center justify-between border-b border-slate-100 px-5 py-3">
           <h2 className="text-lg font-bold text-slate-900">{title}</h2>
@@ -438,7 +439,8 @@ function RouteEditor({ s, accounts, onClose }: { s: PlanStepView; accounts: Acct
   const toast = useToast();
   const prevN = useRef(0);
   const [method, setMethod] = useState<string | null>(s.method);
-  const [state, formAction] = useActionState(setPlanStepRoute, { ok: false, n: 0 } as PersonalSaveState);
+  const [state, formAction, saving] = useActionState(setPlanStepRoute, { ok: false, n: 0 } as PersonalSaveState);
+  useSavingToast(saving);
   useEffect(() => {
     if (state.n > prevN.current) {
       prevN.current = state.n;
@@ -483,7 +485,8 @@ function MarkPaidPrompt({ s, accounts, onClose }: { s: PlanStepView; accounts: A
 function EditStepModal({ s, onClose }: { s: PlanStepView; onClose: () => void }) {
   const toast = useToast();
   const prevN = useRef(0);
-  const [state, formAction] = useActionState(editPlanStep, { ok: false, n: 0 } as PersonalSaveState);
+  const [state, formAction, saving] = useActionState(editPlanStep, { ok: false, n: 0 } as PersonalSaveState);
+  useSavingToast(saving);
   useEffect(() => {
     if (state.n > prevN.current) {
       prevN.current = state.n;
@@ -493,7 +496,7 @@ function EditStepModal({ s, onClose }: { s: PlanStepView; onClose: () => void })
   }, [state.n]);
   const isCard = s.kind === "cardbill";
   return (
-    <Overlay onClose={onClose} title="Edit step">
+    <Overlay hidden={saving} onClose={onClose} title="Edit step">
       <form action={formAction} className="space-y-4 px-5 py-4">
         <input type="hidden" name="id" value={s.id} />
         <p className="rounded-lg bg-slate-50 px-3 py-2 text-[11px] text-slate-500">Changes apply to <b>this month only</b> — your Setup stays as it is.</p>
@@ -552,7 +555,8 @@ function CardBillPayModal({ s, card, accounts, onClose }: { s: PlanStepView; car
   const [familyFromId, setFamilyFromId] = useState(familyDefault);
   const [personalFromId, setPersonalFromId] = useState(personalDefault);
   const [movedNow, setMovedNow] = useState(false); // OFF by default: the transfer steps wait for a tick
-  const [state, formAction] = useActionState(payCardBillStep, { ok: false, n: 0 } as PersonalSaveState);
+  const [state, formAction, saving] = useActionState(payCardBillStep, { ok: false, n: 0 } as PersonalSaveState);
+  useSavingToast(saving);
   useEffect(() => {
     if (state.n > prevN.current) {
       prevN.current = state.n;
@@ -572,7 +576,7 @@ function CardBillPayModal({ s, card, accounts, onClose }: { s: PlanStepView; car
   ].filter((m): m is { from: string; amt: number; what: string } => m != null);
   const due = card.dueISO ? new Date(card.dueISO).toLocaleDateString("en-IN", { day: "numeric", month: "short" }) : null;
   return (
-    <Overlay onClose={onClose} title={`Pay ${card.cardName} bill`}>
+    <Overlay hidden={saving} onClose={onClose} title={`Pay ${card.cardName} bill`}>
       <form action={formAction} className="space-y-4 px-5 py-4">
         <input type="hidden" name="id" value={s.id} />
         <div className="space-y-1.5 rounded-xl p-3" style={{ backgroundColor: `${card.color}0d` }}>

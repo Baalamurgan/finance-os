@@ -1,6 +1,7 @@
 "use client";
 
 import { useActionState, useEffect, useRef, useState } from "react";
+import { useSavingToast } from "@/components/useSavingToast";
 import { addAccount, type AccountFormState } from "@/app/personal/finance/actions";
 import { CARD_NETWORKS, type AccountType } from "@/lib/finance/types";
 import { CardColorPicker } from "@/components/CardColorPicker";
@@ -22,7 +23,8 @@ export function AddAccountModal() {
   const [type, setType] = useState<AccountType>("credit_card");
   const formRef = useRef<HTMLFormElement>(null);
   const prevN = useRef(0);
-  const [state, formAction] = useActionState(addAccount, INIT);
+  const [state, formAction, saving] = useActionState(addAccount, INIT);
+  useSavingToast(saving); // hide + "Saving…" while the server works; the result toast replaces it
 
   useEffect(() => {
     if (state.n > prevN.current) {
@@ -52,7 +54,7 @@ export function AddAccountModal() {
       </button>
 
       {open && (
-        <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/40 p-4 sm:items-center" onClick={() => setOpen(false)}>
+        <div className={`fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/40 p-4 sm:items-center${saving ? " hidden" : ""}`} onClick={() => setOpen(false)}>
           <div className="my-auto flex w-full max-w-md flex-col rounded-2xl bg-white shadow-xl" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between border-b border-slate-100 px-5 py-3">
               <h2 className="text-lg font-bold text-slate-900">Add {isAccount ? "account" : "card"}</h2>

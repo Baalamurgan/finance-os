@@ -29,7 +29,7 @@ export async function verifyPersonalPin(
   const member = await currentMember();
   if (!member) return { ok: false, error: "Signed out." };
   const nextRaw = formData.get("next");
-  const next = typeof nextRaw === "string" && nextRaw.startsWith("/personal") && !nextRaw.startsWith("//") ? nextRaw : "/personal/today";
+  const next = typeof nextRaw === "string" && nextRaw.startsWith("/personal") && !nextRaw.startsWith("//") ? nextRaw : "/personal/expenses";
   if (!member.personalPinHash || !member.personalPinSalt) {
     await setPersonalUnlock(member.id);
     redirect(next);

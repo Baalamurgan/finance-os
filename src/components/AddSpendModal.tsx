@@ -286,7 +286,7 @@ export function AddSpendModal({
         mounted &&
         createPortal(
           <div
-            className="fixed inset-0 z-50 flex items-end justify-center overflow-y-auto overscroll-contain bg-black/40 sm:items-center sm:p-4"
+            className={`fixed inset-0 z-50 flex items-end justify-center overflow-y-auto overscroll-contain bg-black/40 sm:items-center sm:p-4${pending ? " hidden" : ""}`}
             onClick={closeModal}
           >
             <div

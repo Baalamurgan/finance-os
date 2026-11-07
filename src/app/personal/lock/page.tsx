@@ -23,7 +23,7 @@ export default async function PersonalLockPage({ searchParams }: { searchParams:
     (await prisma.webAuthnCredential.count({ where: { memberId: member.id, purpose: "personal" } })) > 0;
 
   const sp = await searchParams;
-  const next = typeof sp?.next === "string" && sp.next.startsWith("/personal") && !sp.next.startsWith("//") ? sp.next : "/personal/today";
+  const next = typeof sp?.next === "string" && sp.next.startsWith("/personal") && !sp.next.startsWith("//") ? sp.next : "/personal/expenses";
 
   return (
     <main className="flex min-h-screen items-center justify-center bg-[#faf9f6] px-6 py-10">

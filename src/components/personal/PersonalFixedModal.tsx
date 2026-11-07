@@ -1,6 +1,7 @@
 "use client";
 
 import { useActionState, useEffect, useRef, useState } from "react";
+import { useSavingToast } from "@/components/useSavingToast";
 import { addPersonalExpense, updatePersonalExpense, type PersonalSaveState } from "@/app/personal/actions";
 import { useToast } from "@/components/Toast";
 
@@ -42,6 +43,7 @@ export function PersonalFixedModal({
   const formRef = useRef<HTMLFormElement>(null);
   const prevN = useRef(0);
   const [state, formAction, pending] = useActionState(isEdit ? updatePersonalExpense : addPersonalExpense, INIT);
+  useSavingToast(pending); // hide + "Saving…" while the server works; the result toast replaces it
 
   useEffect(() => {
     if (state.n > prevN.current) {
@@ -68,7 +70,7 @@ export function PersonalFixedModal({
       )}
 
       {open && (
-        <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/40 p-4 sm:items-center" onClick={() => setOpen(false)}>
+        <div className={`fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/40 p-4 sm:items-center${pending ? " hidden" : ""}`} onClick={() => setOpen(false)}>
           <div className="my-auto flex w-full max-w-md flex-col rounded-2xl bg-white shadow-xl" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between border-b border-slate-100 px-5 py-3">
               <h2 className="text-lg font-bold text-slate-900">{isEdit ? "Edit fixed expense" : "Add fixed expense"}</h2>
