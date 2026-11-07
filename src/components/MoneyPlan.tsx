@@ -785,7 +785,7 @@ export function MoneyPlan({
       {/* Add-a-step modal: a real member↔member (or ↔ hub) move, inserted at the chosen spot. */}
       {insert && (
         <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 sm:items-center sm:p-4" onClick={() => setInsert(null)}>
-          <div className="w-full max-w-sm rounded-t-2xl bg-white p-4 shadow-xl sm:rounded-2xl" onClick={(e) => e.stopPropagation()} style={{ paddingBottom: "max(1rem, env(safe-area-inset-bottom))" }}>
+          <div className="modal-panel w-full max-w-sm rounded-t-2xl bg-white p-4 shadow-xl sm:rounded-2xl" onClick={(e) => e.stopPropagation()} style={{ paddingBottom: "max(1rem, env(safe-area-inset-bottom))" }}>
             <h3 className="mb-3 text-sm font-semibold text-slate-900">Add a step</h3>
             <form action={withToast(addManualStep, { success: "Step added" })} onSubmit={() => setInsert(null)} className="space-y-2.5">
               <input type="hidden" name="periodId" value={periodId} />
@@ -827,7 +827,7 @@ export function MoneyPlan({
       {balances && (
         <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 sm:items-center sm:p-4" onClick={() => setBalances(null)}>
           <div
-            className="w-full max-w-sm rounded-t-2xl bg-white p-4 shadow-xl sm:rounded-2xl"
+            className="modal-panel w-full max-w-sm rounded-t-2xl bg-white p-4 shadow-xl sm:rounded-2xl"
             onClick={(e) => e.stopPropagation()}
             style={{ paddingBottom: "max(1rem, env(safe-area-inset-bottom))" }}
           >

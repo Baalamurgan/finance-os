@@ -76,7 +76,7 @@ export function EditSpendModal({
             onClick={() => setOpen(false)}
           >
             <div
-              className="flex max-h-[92vh] w-full max-w-md flex-col rounded-t-3xl bg-white shadow-xl sm:my-auto sm:rounded-2xl"
+              className="modal-panel flex max-h-[92vh] w-full max-w-md flex-col rounded-t-3xl bg-white shadow-xl sm:my-auto sm:rounded-2xl"
               onClick={(e) => e.stopPropagation()}
               style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
             >
@@ -194,7 +194,7 @@ export function EditSpendModal({
                   )}
                 </div>
 
-                <div className="flex items-center gap-3 border-t border-slate-100 px-5 py-4">
+                <div className="modal-foot flex items-center gap-3 border-t border-slate-100 px-5 py-4">
                   <button
                     type="button"
                     onClick={() => setOpen(false)}

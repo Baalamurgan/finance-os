@@ -41,7 +41,7 @@ export function WindDownPopup({ q }: { q: string }) {
   return (
     <div className="fixed inset-0 z-[90] flex items-end justify-center overflow-y-auto bg-black/40 sm:items-center sm:p-4" onClick={close}>
       <div
-        className="w-full max-w-sm rounded-t-3xl bg-white shadow-xl sm:rounded-3xl"
+        className="modal-panel w-full max-w-sm rounded-t-3xl bg-white shadow-xl sm:rounded-3xl"
         onClick={(e) => e.stopPropagation()}
         style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
       >

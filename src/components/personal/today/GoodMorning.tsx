@@ -168,7 +168,7 @@ function SettingsSheet({ prefs, onSave, onClose, supported, voices, voiceURI, on
 }) {
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 sm:items-center sm:p-4" onClick={onClose}>
-      <div className="w-full max-w-sm rounded-t-2xl bg-white text-slate-900 shadow-xl sm:rounded-2xl" onClick={(e) => e.stopPropagation()} style={{ paddingBottom: "env(safe-area-inset-bottom)" }}>
+      <div className="modal-panel w-full max-w-sm rounded-t-2xl bg-white text-slate-900 shadow-xl sm:rounded-2xl" onClick={(e) => e.stopPropagation()} style={{ paddingBottom: "env(safe-area-inset-bottom)" }}>
         <div className="flex items-center justify-between border-b border-slate-100 px-5 py-3">
           <h2 className="text-base font-bold">Your morning briefing</h2>
           <button onClick={onClose} className="rounded-md px-2 text-slate-400 hover:bg-slate-100" aria-label="Close">✕</button>

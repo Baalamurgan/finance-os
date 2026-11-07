@@ -50,7 +50,7 @@ export function PlanDueAlert({ context }: { context: "family" | "personal" }) {
   return (
     <div className="fixed inset-0 z-[94] flex items-end justify-center overflow-y-auto bg-black/40 sm:items-center sm:p-4" onClick={() => close("later")}>
       <div
-        className={`w-full max-w-sm rounded-t-3xl bg-white shadow-xl ring-2 sm:rounded-3xl ${anyOverdue ? "ring-red-400" : "ring-amber-300"}`}
+        className={`modal-panel w-full max-w-sm rounded-t-3xl bg-white shadow-xl ring-2 sm:rounded-3xl ${anyOverdue ? "ring-red-400" : "ring-amber-300"}`}
         onClick={(e) => e.stopPropagation()}
         style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
       >

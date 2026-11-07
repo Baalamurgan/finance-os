@@ -51,7 +51,7 @@ function Overlay({ onClose, title, children, hidden }: { onClose: () => void; ti
   }, [onClose]);
   return (
     <div className={`fixed inset-0 z-50 flex items-end justify-center overflow-y-auto bg-black/40 sm:items-center sm:p-4${hidden ? " hidden" : ""}`} onClick={onClose}>
-      <div className="flex w-full max-w-md flex-col rounded-t-3xl bg-white shadow-xl sm:rounded-2xl" onClick={(e) => e.stopPropagation()} style={{ paddingBottom: "env(safe-area-inset-bottom)" }}>
+      <div className="modal-panel flex w-full max-w-md flex-col rounded-t-3xl bg-white shadow-xl sm:rounded-2xl" onClick={(e) => e.stopPropagation()} style={{ paddingBottom: "env(safe-area-inset-bottom)" }}>
         <div className="flex items-center justify-between border-b border-slate-100 px-5 py-3">
           <h2 className="text-lg font-bold text-slate-900">{title}</h2>
           <button type="button" onClick={onClose} className="rounded-md px-2 text-slate-400 hover:bg-slate-100" aria-label="Close">✕</button>
@@ -130,15 +130,22 @@ function PayWindow({ target, card, accounts, categories, onClose }: { target: Ta
 
   return (
     <Overlay hidden={saving} onClose={onClose} title={`Pay ${card.cardName} bill`}>
-      <form action={formAction} className="space-y-4 px-5 py-4">
+      <form action={formAction} className="space-y-3 px-5 pt-3">
         {"stepId" in target ? <input type="hidden" name="id" value={target.stepId} /> : (
           <>
             <input type="hidden" name="cardId" value={target.cardId} />
             <input type="hidden" name="cycleEnd" value={target.cycleEndISO} />
           </>
         )}
-        <div className="space-y-1.5 rounded-xl p-3" style={{ backgroundColor: `${card.color}0d` }}>
-          <p className="text-[11px] font-semibold uppercase tracking-wide" style={{ color: card.color }}>Statement{due ? ` · due ${due}` : ""}</p>
+        <details className="group rounded-xl px-3 py-2" style={{ backgroundColor: `${card.color}0d` }}>
+          <summary className="flex cursor-pointer list-none items-center justify-between gap-2 [&::-webkit-details-marker]:hidden">
+            <span className="min-w-0">
+              <span className="block text-[11px] font-semibold uppercase tracking-wide" style={{ color: card.color }}>Statement{due ? ` · due ${due}` : ""}</span>
+              <span className="block truncate text-[11px] text-slate-500">👪 {formatINR(card.family)} · 👤 {formatINR(card.personal)}{card.annualFee > 0.005 ? ` · 🧾 ${formatINR(card.annualFee)}` : ""}</span>
+            </span>
+            <span className="flex shrink-0 items-center gap-1.5 text-base font-bold tabular-nums text-slate-800">{formatINR(suggested)}<span className="text-[10px] text-slate-400 transition-transform group-open:rotate-180">▾</span></span>
+          </summary>
+          <div className="mt-2 space-y-1.5">
           <div className="rounded-lg bg-white/70 p-2">
             <Row label="👪 Family spends" hint="taken from family In-Hand" value={card.family} strong />
             {card.family > 0.005 && (
@@ -152,12 +159,12 @@ function PayWindow({ target, card, accounts, categories, onClose }: { target: Ta
             <Row label="👤 Your spends" hint="from your account" value={card.personal} strong />
           </div>
           {card.annualFee > 0.005 && <Row label="🧾 Annual fee" hint={annualBy === "me" ? "you pay it" : "family pays it"} value={card.annualFee} />}
-          <div className="border-t border-slate-200 pt-1.5"><Row label="Statement total" value={suggested} strong /></div>
-        </div>
+          </div>
+        </details>
 
         <div>
           <label className="text-sm font-medium text-slate-600">Amount you paid (₹)</label>
-          <input name="amount" type="number" step="0.01" min="0" inputMode="decimal" required value={amount} onChange={(e) => setAmount(e.target.value)} style={{ borderColor: card.color }} className="mt-1.5 w-full rounded-xl border-2 px-4 py-3 text-2xl font-bold tabular-nums outline-none" />
+          <input name="amount" type="number" step="0.01" min="0" inputMode="decimal" required value={amount} onChange={(e) => setAmount(e.target.value)} style={{ borderColor: card.color }} className="mt-1 w-full rounded-xl border-2 px-3 py-2 text-xl font-bold tabular-nums outline-none" />
           {Math.abs(diff) > 0.005 && (
             <p className={`mt-1 text-[11px] font-medium ${diff < 0 ? "text-emerald-700" : "text-amber-700"}`}>
               {diff < 0 ? `${formatINR(-diff)} less than the statement → cashback / savings on this card.` : `${formatINR(diff)} more than the statement → fees / charges on this card.`}
@@ -214,7 +221,7 @@ function PayWindow({ target, card, accounts, categories, onClose }: { target: Ta
               </div>
               <p className="mt-1 text-[11px] text-slate-500">{formatINR(amountNum)} leaves {fromId ? nameOf(fromId) : "that account"}.</p>
             </div>
-            <div className="rounded-xl border border-slate-200 p-3">
+            <div className="rounded-xl border border-slate-200 p-2.5">
               <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">Who pays what</p>
               <div className="mt-1 grid grid-cols-2 gap-2">
                 <label className="block">
@@ -252,7 +259,7 @@ function PayWindow({ target, card, accounts, categories, onClose }: { target: Ta
             )}
           </div>
         )}
-        <div className="flex items-center gap-3 border-t border-slate-100 pt-3">
+        <div className="modal-foot -mx-5 flex items-center gap-3 border-t border-slate-100 px-5 py-3">
           <button type="button" onClick={onClose} className="min-h-11 flex-1 rounded-xl border-2 border-slate-200 px-4 py-2 text-base font-medium text-slate-600">Cancel</button>
           <button type="submit" disabled={blocked} style={{ backgroundColor: card.color }} className="min-h-11 flex-1 rounded-xl px-4 py-2 text-base font-semibold text-white disabled:opacity-40">Pay bill</button>
         </div>

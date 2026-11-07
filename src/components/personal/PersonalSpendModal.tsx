@@ -185,7 +185,7 @@ export function PersonalSpendModal({
 
       {open && (
         <div className={`fixed inset-0 z-50 flex items-start justify-center overflow-y-auto overscroll-contain bg-black/40 p-4 sm:items-center${pending ? " hidden" : ""}`} onClick={() => setOpen(false)}>
-          <div className="my-auto flex w-full max-w-md flex-col rounded-2xl bg-white shadow-xl" onClick={(e) => e.stopPropagation()}>
+          <div className="modal-panel my-auto flex w-full max-w-md flex-col rounded-2xl bg-white shadow-xl" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between border-b border-slate-100 px-5 py-3">
               <h2 className="text-lg font-bold text-slate-900">{isEdit ? "Edit spend" : "Add spend"}</h2>
               <button type="button" onClick={() => setOpen(false)} className="rounded-md px-2 text-slate-400 hover:bg-slate-100" aria-label="Close">
@@ -418,7 +418,7 @@ export function PersonalSpendModal({
                   </div>
                 )}
               </div>
-              <div className="flex justify-end gap-2 border-t border-slate-100 px-5 py-3">
+              <div className="modal-foot flex justify-end gap-2 border-t border-slate-100 px-5 py-3">
                 <button type="button" onClick={() => setOpen(false)} className="rounded-md px-3 py-2 text-sm text-slate-500 hover:bg-slate-100">Cancel</button>
                 <button type="submit" disabled={pending} className="rounded-md bg-emerald-600 px-3 py-2 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-40">
                   {pending ? "Saving…" : isEdit ? "Save" : "Add"}

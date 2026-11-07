@@ -61,7 +61,7 @@ export function InHandCardBlock({
       ))}
       {open && (
         <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 p-0 sm:items-center sm:p-4" onClick={() => setOpen(false)}>
-          <div className="max-h-[85vh] w-full max-w-md overflow-y-auto rounded-t-2xl bg-white p-4 shadow-xl sm:rounded-2xl" onClick={(e) => e.stopPropagation()}>
+          <div className="modal-panel max-h-[85vh] w-full max-w-md overflow-y-auto rounded-t-2xl bg-white p-4 shadow-xl sm:rounded-2xl" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-start justify-between gap-2">
               <div>
                 <div className="text-sm font-semibold" style={{ color }}>💳 {name}</div>

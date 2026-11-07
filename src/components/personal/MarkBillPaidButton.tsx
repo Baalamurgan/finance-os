@@ -43,7 +43,7 @@ export function MarkBillPaidButton({
       {open && (
         <div className="fixed inset-0 z-50 flex items-end justify-center overflow-y-auto bg-black/40 sm:items-center sm:p-4" onClick={() => setOpen(false)}>
           <div
-            className="w-full max-w-md rounded-t-3xl bg-white shadow-xl sm:rounded-2xl"
+            className="modal-panel w-full max-w-md rounded-t-3xl bg-white shadow-xl sm:rounded-2xl"
             onClick={(e) => e.stopPropagation()}
             style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
           >

@@ -140,3 +140,24 @@ main {
   .animate-float-slow, .animate-float-slower { animation: none; }
   .shimmer-block::after { animation: none; }
 }
+
+/* Every modal panel fits the screen: never taller than the viewport (a phone bottom-sheet keeps a sliver of
+   the page above it, a centred card its padding), scrolls inside itself, and keeps its title bar (the first child with a bottom border)
+   and a `.modal-foot` action row pinned while the body scrolls. */
+.modal-panel {
+  max-height: calc(100dvh - 2rem);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.modal-panel > .border-b:first-child {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--color-white);
+}
+.modal-panel .modal-foot {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  background: var(--color-white);
+}

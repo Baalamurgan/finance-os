@@ -55,7 +55,7 @@ export function AddAccountModal() {
 
       {open && (
         <div className={`fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/40 p-4 sm:items-center${saving ? " hidden" : ""}`} onClick={() => setOpen(false)}>
-          <div className="my-auto flex w-full max-w-md flex-col rounded-2xl bg-white shadow-xl" onClick={(e) => e.stopPropagation()}>
+          <div className="modal-panel my-auto flex w-full max-w-md flex-col rounded-2xl bg-white shadow-xl" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between border-b border-slate-100 px-5 py-3">
               <h2 className="text-lg font-bold text-slate-900">Add {isAccount ? "account" : "card"}</h2>
               <button type="button" onClick={() => setOpen(false)} className="rounded-md px-2 text-slate-400 hover:bg-slate-100" aria-label="Close">✕</button>
@@ -142,7 +142,7 @@ export function AddAccountModal() {
                   </div>
                 )}
               </div>
-              <div className="flex justify-end gap-2 border-t border-slate-100 px-5 py-3">
+              <div className="modal-foot flex justify-end gap-2 border-t border-slate-100 px-5 py-3">
                 <button type="button" onClick={() => setOpen(false)} className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm text-slate-600">Cancel</button>
                 <button type="submit" className="rounded-lg bg-emerald-600 px-4 py-1.5 text-sm font-semibold text-white hover:bg-emerald-700">Add</button>
               </div>

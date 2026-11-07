@@ -69,7 +69,7 @@ export function PlannedSpends({ items, accounts, removed = [] }: { items: Planne
       )}
       {asking && (
         <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 sm:items-center sm:p-4" onClick={() => setAsking(null)}>
-          <div className="w-full max-w-md rounded-t-3xl bg-white shadow-xl sm:rounded-2xl" onClick={(e) => e.stopPropagation()} style={{ paddingBottom: "env(safe-area-inset-bottom)" }}>
+          <div className="modal-panel w-full max-w-md rounded-t-3xl bg-white shadow-xl sm:rounded-2xl" onClick={(e) => e.stopPropagation()} style={{ paddingBottom: "env(safe-area-inset-bottom)" }}>
             <div className="flex items-center justify-between border-b border-slate-100 px-5 py-3">
               <h3 className="text-lg font-bold text-slate-900">Paid: {asking.label}</h3>
               <button type="button" onClick={() => setAsking(null)} className="rounded-md px-2 text-slate-400 hover:bg-slate-100" aria-label="Close">✕</button>
@@ -87,7 +87,7 @@ export function PlannedSpends({ items, accounts, removed = [] }: { items: Planne
                   );
                 })}
               </select>
-              <div className="flex justify-end gap-2 border-t border-slate-100 pt-3">
+              <div className="modal-foot flex justify-end gap-2 border-t border-slate-100 pt-3 pb-3">
                 <button type="button" onClick={() => setAsking(null)} className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm text-slate-600">Cancel</button>
                 <button type="submit" className="rounded-lg bg-emerald-600 px-4 py-1.5 text-sm font-semibold text-white hover:bg-emerald-700">Mark paid</button>
               </div>

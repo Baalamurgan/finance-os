@@ -115,7 +115,7 @@ export function LendModal({
 
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 sm:items-center sm:p-4" onClick={onClose}>
-      <div className="max-h-[90vh] w-full max-w-sm overflow-y-auto rounded-t-2xl bg-white p-4 shadow-xl sm:rounded-2xl" onClick={(e) => e.stopPropagation()} style={{ paddingBottom: "max(1rem, env(safe-area-inset-bottom))" }}>
+      <div className="modal-panel max-h-[90vh] w-full max-w-sm overflow-y-auto rounded-t-2xl bg-white p-4 shadow-xl sm:rounded-2xl" onClick={(e) => e.stopPropagation()} style={{ paddingBottom: "max(1rem, env(safe-area-inset-bottom))" }}>
         <h3 className="text-sm font-semibold text-slate-900">🌉 Bridge “{label}”</h3>
         <p className="mt-1 text-xs text-amber-700">⚠ {payerName} is short <b>{formatINR(target)}</b>{day != null ? ` on the ${ordinal(day)}` : ""}. Pick who covers it — the plan has filled in the best mix.</p>
 

@@ -1608,9 +1608,11 @@ export async function payPlannedSpend(formData: FormData) {
     cardAccountId = isCard ? a!.id : null;
     payAccountId = a != null && !isCard ? a.id : null;
   }
+  // A planned spend is dated by Setup (e.g. the 15th); once paid it takes the day it was ACTUALLY paid —
+  // that's what the Spends list shows and sorts by, and the day its card cycle / account line uses.
   const date = new Date();
   await prisma.$transaction(async (tx) => {
-    await tx.personalSpend.update({ where: { id: spend.id }, data: { pending: false, cardAccountId, payAccountId } });
+    await tx.personalSpend.update({ where: { id: spend.id }, data: { pending: false, cardAccountId, payAccountId, date } });
     const label = spend.note?.trim() || "Spend";
     if (spend.holdingId) await addContribution(tx, { memberId: member.id, itemId: spend.holdingId, amount: spend.amount, date, note: label, spendId: spend.id });
     if (cardAccountId) {

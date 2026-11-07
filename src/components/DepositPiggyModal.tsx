@@ -36,7 +36,7 @@ export function DepositPiggyModal({ sinkingFunds }: { sinkingFunds: Fund[] }) {
           onClick={() => setOpen(false)}
         >
           <div
-            className="w-full max-w-md rounded-t-3xl bg-white shadow-xl sm:rounded-2xl"
+            className="modal-panel w-full max-w-md rounded-t-3xl bg-white shadow-xl sm:rounded-2xl"
             onClick={(e) => e.stopPropagation()}
             style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
           >

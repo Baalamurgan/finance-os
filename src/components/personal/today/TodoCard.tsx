@@ -261,7 +261,7 @@ export function TodoCard({ lists, tasksConnected, initial, autoAdd = false }: { 
       {mounted && composerOpen && createPortal(
         <div className="fixed inset-0 z-50 flex flex-col justify-end bg-black/25 sm:hidden" onClick={closeComposer}>
           <div
-            className="rounded-t-[1.75rem] bg-white shadow-[0_-8px_40px_rgba(0,0,0,0.18)]"
+            className="modal-panel rounded-t-[1.75rem] bg-white shadow-[0_-8px_40px_rgba(0,0,0,0.18)]"
             onClick={(e) => e.stopPropagation()}
             style={{ paddingBottom: "max(env(safe-area-inset-bottom), 0.5rem)" }}
           >
@@ -376,7 +376,7 @@ function EditModal({ task, onClose, onSave, onDelete }: { task: TaskWithList; on
 
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 sm:items-center sm:p-4" onClick={onClose}>
-      <div className="w-full max-w-sm rounded-t-2xl bg-white shadow-xl sm:rounded-2xl" onClick={(e) => e.stopPropagation()} style={{ paddingBottom: "env(safe-area-inset-bottom)" }}>
+      <div className="modal-panel w-full max-w-sm rounded-t-2xl bg-white shadow-xl sm:rounded-2xl" onClick={(e) => e.stopPropagation()} style={{ paddingBottom: "env(safe-area-inset-bottom)" }}>
         <div className="flex items-center justify-between border-b border-slate-100 px-5 py-3">
           <h2 className="text-base font-bold text-slate-900">Edit to-do <span className="text-xs font-normal text-slate-400">· {task.listTitle}</span></h2>
           <button type="button" onClick={onClose} className="rounded-md px-2 text-slate-400 hover:bg-slate-100" aria-label="Close">✕</button>
@@ -394,7 +394,7 @@ function EditModal({ task, onClose, onSave, onDelete }: { task: TaskWithList; on
             <label className="text-xs font-medium text-slate-500">Due date</label>
             <input type="date" value={due} onChange={(e) => setDue(e.target.value)} className="input mt-1 w-full" />
           </div>
-          <div className="flex items-center justify-between border-t border-slate-100 pt-3">
+          <div className="modal-foot flex items-center justify-between border-t border-slate-100 pt-3 pb-3">
             <button type="button" onClick={onDelete} className="rounded-md px-3 py-2 text-sm font-medium text-red-600 hover:bg-red-50">Delete</button>
             <div className="flex gap-2">
               <button type="button" onClick={onClose} className="rounded-md px-3 py-2 text-sm text-slate-500 hover:bg-slate-100">Cancel</button>

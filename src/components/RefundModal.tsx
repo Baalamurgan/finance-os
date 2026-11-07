@@ -88,7 +88,7 @@ export function RefundModal({ members, householdId, categories }: { members: { i
       </button>
       {open && (
         <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 sm:items-center sm:p-4" onClick={close}>
-          <div className="max-h-[90vh] w-full max-w-md overflow-y-auto rounded-t-2xl bg-white p-4 shadow-xl sm:rounded-2xl" onClick={(e) => e.stopPropagation()} style={{ paddingBottom: "max(1rem, env(safe-area-inset-bottom))" }}>
+          <div className="modal-panel max-h-[90vh] w-full max-w-md overflow-y-auto rounded-t-2xl bg-white p-4 shadow-xl sm:rounded-2xl" onClick={(e) => e.stopPropagation()} style={{ paddingBottom: "max(1rem, env(safe-area-inset-bottom))" }}>
             <h2 className="text-base font-bold text-slate-900">↩ Refund a spend</h2>
             <p className="mt-0.5 text-xs text-slate-500">Fixes a spend without editing it — the original stays as it was, and the correction is booked this month.</p>
 

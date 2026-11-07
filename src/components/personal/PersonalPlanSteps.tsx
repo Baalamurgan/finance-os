@@ -73,7 +73,7 @@ function Overlay({ onClose, title, children, hidden = false }: { onClose: () => 
   }, [onClose]);
   return (
     <div className={`fixed inset-0 z-50 flex items-end justify-center overflow-y-auto bg-black/40 sm:items-center sm:p-4${hidden ? " hidden" : ""}`} onClick={onClose}>
-      <div className="flex w-full max-w-md flex-col rounded-t-3xl bg-white shadow-xl sm:rounded-2xl" onClick={(e) => e.stopPropagation()} style={{ paddingBottom: "env(safe-area-inset-bottom)" }}>
+      <div className="modal-panel flex w-full max-w-md flex-col rounded-t-3xl bg-white shadow-xl sm:rounded-2xl" onClick={(e) => e.stopPropagation()} style={{ paddingBottom: "env(safe-area-inset-bottom)" }}>
         <div className="flex items-center justify-between border-b border-slate-100 px-5 py-3">
           <h2 className="text-lg font-bold text-slate-900">{title}</h2>
           <button type="button" onClick={onClose} className="rounded-md px-2 text-slate-400 hover:bg-slate-100" aria-label="Close">✕</button>
@@ -326,7 +326,7 @@ function ClumpRow({ steps, accounts, isFirst, isLast }: { steps: PlanStepView[];
               <option value="">No account (just mark paid)</option>
               {accounts.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
             </select>
-            <div className="flex justify-end gap-2 border-t border-slate-100 pt-3">
+            <div className="modal-foot flex justify-end gap-2 border-t border-slate-100 pt-3 pb-3">
               <button type="button" onClick={() => setAsking(false)} className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm text-slate-600">Cancel</button>
               <button type="submit" className="rounded-lg bg-emerald-600 px-4 py-1.5 text-sm font-semibold text-white hover:bg-emerald-700">Mark paid</button>
             </div>
@@ -473,7 +473,7 @@ function MarkPaidPrompt({ s, accounts, onClose }: { s: PlanStepView; accounts: A
           {formatINR(s.amount)} — {s.kind === "income" ? "which account did it land in?" : s.kind === "transfer" ? "which accounts did it move between?" : "which account did you pay from? Its balance drops by this amount."}
         </p>
         <RouteFields s={s} accounts={accounts} method={method} setMethod={setMethod} requireAll />
-        <div className="flex justify-end gap-2 border-t border-slate-100 pt-3">
+        <div className="modal-foot flex justify-end gap-2 border-t border-slate-100 pt-3 pb-3">
           <button type="button" onClick={onClose} className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm text-slate-600">Cancel</button>
           <button type="submit" className="rounded-lg bg-emerald-600 px-4 py-1.5 text-sm font-semibold text-white hover:bg-emerald-700">Mark {verb}</button>
         </div>
@@ -520,7 +520,7 @@ function EditStepModal({ s, onClose }: { s: PlanStepView; onClose: () => void })
           <label className="text-xs font-medium text-slate-500">Note (optional)</label>
           <input name="note" defaultValue={s.note ?? ""} maxLength={120} className="input mt-1 w-full" />
         </div>
-        <div className="flex justify-end gap-2 border-t border-slate-100 pt-3">
+        <div className="modal-foot flex justify-end gap-2 border-t border-slate-100 pt-3 pb-3">
           <button type="button" onClick={onClose} className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm text-slate-600">Cancel</button>
           <button type="submit" className="rounded-lg bg-emerald-600 px-4 py-1.5 text-sm font-semibold text-white hover:bg-emerald-700">Save</button>
         </div>
@@ -629,7 +629,7 @@ function AddStepModal({ periodId, accounts, categories, after, onClose }: { peri
             </div>
           )}
         </div>
-        <div className="flex justify-end gap-2 border-t border-slate-100 px-5 py-3">
+        <div className="modal-foot flex justify-end gap-2 border-t border-slate-100 px-5 py-3">
           <button type="button" onClick={onClose} className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm text-slate-600">Cancel</button>
           <button type="submit" className="rounded-lg bg-emerald-600 px-4 py-1.5 text-sm font-semibold text-white hover:bg-emerald-700">Add</button>
         </div>

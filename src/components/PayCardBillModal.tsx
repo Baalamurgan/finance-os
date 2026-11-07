@@ -105,12 +105,12 @@ export function PayCardBillModal({
 
       {open && (
         <div className="fixed inset-0 z-50 flex items-end justify-center overflow-y-auto bg-black/40 sm:items-center sm:p-4" onClick={() => setOpen(false)}>
-          <div className="w-full max-w-md rounded-t-3xl bg-white shadow-xl sm:rounded-2xl" onClick={(e) => e.stopPropagation()} style={{ paddingBottom: "env(safe-area-inset-bottom)" }}>
-            <div className="flex items-center justify-between border-b border-slate-100 px-5 py-4">
+          <div className="modal-panel w-full max-w-md rounded-t-3xl bg-white shadow-xl sm:rounded-2xl" onClick={(e) => e.stopPropagation()} style={{ paddingBottom: "env(safe-area-inset-bottom)" }}>
+            <div className="flex items-center justify-between border-b border-slate-100 px-5 py-3">
               <h2 className="text-lg font-bold text-slate-900">Pay {cardName} bill</h2>
               <button type="button" onClick={() => setOpen(false)} aria-label="Close" className="rounded-md px-2 text-2xl leading-none text-slate-400 hover:bg-slate-100">✕</button>
             </div>
-            <form action={withToast(payFamilyCardBill, { success: "Card bill paid" })} onSubmit={() => setTimeout(() => setOpen(false), 0)} className="space-y-4 px-5 py-5">
+            <form action={withToast(payFamilyCardBill, { success: "Card bill paid" })} onSubmit={() => setTimeout(() => setOpen(false), 0)} className="space-y-3 px-5 pt-4">
               <input type="hidden" name="cardId" value={cardId} />
               <input type="hidden" name="cycleEnd" value={cycleEndISO} />
 
@@ -137,7 +137,7 @@ export function PayCardBillModal({
                   name="amount" type="number" step="0.01" min="0" inputMode="numeric" autoFocus required
                   value={amount} onChange={(e) => setAmount(e.target.value)}
                   style={{ borderColor: color }}
-                  className="mt-1.5 w-full rounded-xl border-2 px-4 py-3 text-3xl font-bold tabular-nums outline-none focus:ring-2 focus:ring-slate-100"
+                  className="mt-1 w-full rounded-xl border-2 px-3 py-2 text-2xl font-bold tabular-nums outline-none focus:ring-2 focus:ring-slate-100"
                 />
                 <p className="mt-1 text-[11px] text-slate-400">Defaults to the summed swipes{annualFee > 0.005 ? " + annual fee" : ""}. Edit to the exact statement amount you pay.</p>
                 {Math.abs(difference) > 0.005 && (
@@ -206,7 +206,7 @@ export function PayCardBillModal({
                 </div>
               )}
 
-              <div className="flex items-center gap-3 pt-1">
+              <div className="modal-foot -mx-5 flex items-center gap-3 border-t border-slate-100 px-5 py-3">
                 <button type="button" onClick={() => setOpen(false)} className="min-h-12 flex-1 rounded-xl border-2 border-slate-200 px-4 py-3 text-base font-medium text-slate-600">Cancel</button>
                 <button type="submit" disabled={amountNum < 0 || Number.isNaN(amountNum)} style={{ backgroundColor: color }} className="min-h-12 flex-1 rounded-xl px-4 py-3 text-base font-semibold text-white disabled:opacity-40">
                   Pay bill

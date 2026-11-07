@@ -84,7 +84,7 @@ export function IncomeModal({
           onClick={() => setOpen(false)}
         >
           <div
-            className="my-auto flex max-h-[88vh] w-full max-w-md flex-col rounded-2xl bg-white shadow-xl"
+            className="modal-panel my-auto flex max-h-[88vh] w-full max-w-md flex-col rounded-2xl bg-white shadow-xl"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center justify-between border-b border-slate-100 px-5 py-3">
@@ -177,7 +177,7 @@ export function IncomeModal({
                 </label>
               </div>
 
-              <div className="flex justify-end gap-2 border-t border-slate-100 px-5 py-3">
+              <div className="modal-foot flex justify-end gap-2 border-t border-slate-100 px-5 py-3">
                 <button
                   type="button"
                   onClick={() => setOpen(false)}
