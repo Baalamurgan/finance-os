@@ -79,19 +79,46 @@ function cadenceLabel(everyMonths: number | null | undefined): string | null {
   return map[everyMonths] ?? `Every ${everyMonths} months`;
 }
 // The bill's configured due date as "5 Oct" (or just "Oct" if no day is set). null = no due month.
-function dueDateLabel(cat: ExpRow["category"]): string | null {
+function dueDateLabel(cat: ExpRow["category"], periodMonth?: number): string | null {
   if (cat.billMonth == null) return null;
+  // A TAX bill (early-payment price / late penalty): its billMonth is the early-payment WINDOW; the half-year is
+  // due by the END of its last month (window + E − 1), e.g. the Oct–Mar half → "by 31 Mar".
+  if (isTaxBill(cat) && periodMonth != null && cat.billEveryMonths != null) {
+    const E = Math.max(1, cat.billEveryMonths);
+    const k = (((periodMonth - cat.billMonth) % E) + E) % E; // months into this half-year
+    const deadlineM = ((periodMonth - k + E - 1 - 1) % 12) + 1; // 1–12
+    const lastDay = new Date(2001, deadlineM, 0).getDate(); // non-leap year → Feb 28
+    return `by ${lastDay} ${new Date(2001, deadlineM - 1, 1).toLocaleString("en-US", { month: "short" })}`;
+  }
   const mon = new Date(2000, cat.billMonth - 1, 1).toLocaleString("en-US", { month: "short" });
   return cat.billDay != null ? `${cat.billDay} ${mon}` : mon;
 }
+// A tax-style bill: pay early in its window month for a discount (earlyAmount), else the full bill by the end of
+// the half-year, with a late penalty after.
+function isTaxBill(cat: ExpRow["category"]): boolean {
+  return cat.earlyAmount != null || cat.latePenaltyPct != null;
+}
+// "Apr / Oct" — the early-payment window months of a tax bill.
+function windowMonths(cat: ExpRow["category"]): string {
+  if (cat.billMonth == null || cat.billEveryMonths == null) return "";
+  const E = Math.max(1, cat.billEveryMonths);
+  const out: string[] = [];
+  for (let m = cat.billMonth; out.length < Math.max(1, Math.round(12 / E)); m += E) out.push(new Date(2001, (m - 1) % 12, 1).toLocaleString("en-US", { month: "short" }));
+  return out.join(" / ");
+}
 // Full detail set for the ⓘ popover — everything about the bill, so the row itself stays uncluttered.
-function billDetailRows(e: ExpRow, paidCard?: { name: string; last4: string | null; color: string } | null): { label: string; value: string }[] {
+function billDetailRows(e: ExpRow, paidCard?: { name: string; last4: string | null; color: string } | null, periodMonth?: number): { label: string; value: string }[] {
   const c = e.category;
   const rows: { label: string; value: string }[] = [];
   const cad = cadenceLabel(c.billEveryMonths);
   if (cad) rows.push({ label: "Recurs", value: c.billEveryMonths != null && c.billEveryMonths > 1 ? `${cad} (every ${c.billEveryMonths} mo)` : cad });
-  const due = dueDateLabel(c);
+  const due = dueDateLabel(c, periodMonth);
   if (due) rows.push({ label: "Due", value: due });
+  if (isTaxBill(c)) {
+    if (c.earlyAmount != null) rows.push({ label: "Early price", value: `${formatINR(c.earlyAmount)} if paid in ${windowMonths(c)}` });
+    if (c.billAmount != null) rows.push({ label: "Full bill", value: `${formatINR(c.billAmount)} after the early month` });
+    if (c.latePenaltyPct != null) rows.push({ label: "Late penalty", value: `${c.latePenaltyPct}% a month after the deadline` });
+  }
   if (c.fundingStyle === "auto") rows.push({ label: "Funded by", value: "Sinking fund — set aside monthly" });
   else if (c.fundingStyle === "fixed") rows.push({ label: "Funded by", value: "Sinking fund — fixed monthly" });
   else if (c.fundingStyle === "none") rows.push({ label: "Funded by", value: "Paid in full on the due month" });
@@ -133,7 +160,7 @@ const SECTION_LABEL: Record<string, string> = {
   Chits: "Chits",
   Monthly: "Monthly Expense",
   PiggyBudget: "Budgeted · leftover → Piggy",
-  Yearly: "Yearly / Periodic bills",
+  Yearly: "Periodic bills",
   Planned: "Planned expenses",
   Misc: "Miscellaneous",
 };
@@ -295,7 +322,7 @@ function ExpenseRow({
   // reads as a complete bill without clutter (the full breakdown lives in the popover).
   const periodic = isPeriodicBill(e.category);
   const cad = cadenceLabel(e.category.billEveryMonths);
-  const due = dueDateLabel(e.category);
+  const due = dueDateLabel(e.category, periodMonth);
   // Build the row's tags, in priority order. HIGH priority — phase (🧾 Bill / 💰 Incentive / ✂️ Trimmed /
   // 💳 card), then New, then kept/pinned — sits inline on wide screens and moves into the ⓘ on a phone (so
   // the name is never squeezed out; mobile row = name · ⓘ, with the done ✓ on the right by the amount).
@@ -338,7 +365,7 @@ function ExpenseRow({
       // edit-only ⋯ (name + repeat — its money fields are locked in the Edit window).
       keepActionsWhenDone={(budgetLike && isHead) || (done && canEditHere && !budgetLike && !isSetAside)}
       tags={tags}
-      details={periodic ? billDetailRows(e, paidCard) : undefined}
+      details={periodic ? billDetailRows(e, paidCard, periodMonth) : undefined}
       detailName={e.category.name}
     >
       {canEditHere && isSetAside && !done && (
@@ -893,7 +920,7 @@ export default async function SheetPage({
                       <path fill="currentColor" d="M7 5l6 5-6 5z" />
                     </svg>
                     <span className="text-[11px] font-bold uppercase tracking-wider text-teal-600">
-                      Yearly / periodic bills
+                      Periodic bills
                     </span>
                     <span className="text-[10px] text-slate-400">({yearlyRows.length})</span>
                   </span>
@@ -904,7 +931,7 @@ export default async function SheetPage({
                 <div className="pl-3">
                   <div className="divide-y divide-slate-100 px-2 pb-1">
                     {yearlyRows.length === 0 ? (
-                      <p className="py-2 text-xs text-slate-400">No annual / periodic bills due this month.</p>
+                      <p className="py-2 text-xs text-slate-400">No periodic bills this month.</p>
                     ) : (
                       yearlyRows.map((e) => (
                         <ExpenseRow
@@ -932,7 +959,7 @@ export default async function SheetPage({
                         periodId={c.selected!.id}
                         trigger="sheet"
                         balance={rollup.balance}
-                        sheetLabel="+ Add yearly bill"
+                        sheetLabel="+ Add periodic bill"
                         newCategoryDefaultSection="Yearly"
                       />
                     </div>
@@ -1121,6 +1148,11 @@ export default async function SheetPage({
                         {s.dueTag && (
                           <span className="shrink-0 rounded-full bg-amber-200 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-amber-800">
                             bill due {s.dueTag === "this" ? "this month" : "next month"}
+                          </span>
+                        )}
+                        {s.fund > 0.005 && (
+                          <span className="shrink-0 rounded-full bg-white px-1.5 py-0.5 text-[9px] font-medium text-teal-700 ring-1 ring-teal-200" title="Already set aside for this bill (its sinking fund)">
+                            🏦 {formatINR(s.fund)} saved
                           </span>
                         )}
                       </div>

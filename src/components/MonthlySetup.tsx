@@ -36,6 +36,43 @@ type MemberLite = { id: number; name: string };
 
 const SECTIONS = ["Loans", "Chits", "Monthly", "Yearly", "Misc"] as const;
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+// Tax-style bill wording (property / water tax): the due month is the EARLY-payment month; each period runs from
+// it to the month before the next one, e.g. every 6 months from Apr → early in Apr / Oct, full bill by Sep / Mar.
+function taxMonths(billMonth: number, cycle: number): { early: string; deadline: string } {
+  const E = Math.max(1, cycle);
+  const n = Math.max(1, Math.round(12 / E));
+  const early: string[] = [], deadline: string[] = [];
+  for (let i = 0; i < n; i++) {
+    const m = (billMonth - 1 + i * E) % 12;
+    early.push(MONTHS[m]);
+    deadline.push(MONTHS[(m + E - 1) % 12]);
+  }
+  return { early: early.join(" / "), deadline: deadline.join(" / ") };
+}
+
+// The early-price + late-penalty fields, explained in plain words with the actual months. Blank = a normal bill.
+function TaxFields({ billMonth, cycle, early, late, onEarly, onLate, readOnly = false }: {
+  billMonth: number; cycle: number; early: string; late: string;
+  onEarly: (v: string) => void; onLate: (v: string) => void; readOnly?: boolean;
+}) {
+  const t = taxMonths(billMonth, cycle);
+  return (
+    <div className="mt-1 w-full rounded-md bg-slate-50 px-2 py-1.5 text-[11px] text-slate-600">
+      <div className="font-medium text-slate-700">Early-payment discount <span className="font-normal text-slate-400">(property / water tax — optional)</span></div>
+      <div className="mt-1 flex flex-wrap items-center gap-1">
+        <span>Pay in <b>{t.early}</b> for ₹</span>
+        <input type="number" step="0.01" value={early} onChange={(e) => onEarly(e.target.value)} placeholder="early price" disabled={readOnly} className="input w-24 py-1 text-xs disabled:bg-slate-100" />
+        <span>· late fee</span>
+        <input type="number" step="0.1" value={late} onChange={(e) => onLate(e.target.value)} placeholder="%" disabled={readOnly} className="input w-14 py-1 text-xs disabled:bg-slate-100" />
+        <span>% a month after <b>{t.deadline}</b></span>
+      </div>
+      <div className="mt-0.5 text-[10px] text-slate-400">
+        Miss the early month and the full amount is due by the end of {t.deadline} — the app spreads it as a monthly share till then. Leave both blank for a normal bill.
+      </div>
+    </div>
+  );
+}
 const CYCLES: { v: string; label: string }[] = [
   { v: "1", label: "Monthly" },
   { v: "2", label: "Every 2 months" },
@@ -274,7 +311,7 @@ function SetupRow({ r, draft, patch, members, readOnly }: { r: Row; draft: Draft
         />
         <div className="mt-1 flex flex-wrap items-center gap-1">
           <select value={draft.section} onChange={(e) => patch({ section: e.target.value })} disabled={readOnly} className="input w-28 py-1 text-xs disabled:bg-slate-100 disabled:text-slate-400">
-            {SECTIONS.map((s) => <option key={s} value={s}>{s}</option>)}
+            {SECTIONS.map((s) => <option key={s} value={s}>{s === "Yearly" ? "Periodic" : s}</option>)}
           </select>
           {r.onHold && <span className="rounded-full bg-slate-200 px-2 py-0.5 text-[10px] font-medium text-slate-600">Hold</span>}
           {r.needsReview && (
@@ -337,12 +374,7 @@ function SetupRow({ r, draft, patch, members, readOnly }: { r: Row; draft: Draft
               )}
             </div>
             {/* Tax knobs (property/water): early-payment price + simple %/mo late penalty. Blank = off. */}
-            <div className="flex flex-wrap items-center gap-1 text-[11px] text-slate-500">
-              <span title="Discounted price if paid within the first 30 days of the due month. Blank = no early discount.">early ₹</span>
-              <input type="number" step="0.01" value={draft.earlyAmount} onChange={(e) => patch({ earlyAmount: e.target.value })} placeholder="none" disabled={readOnly} className="input w-20 py-1 text-xs disabled:bg-slate-100" />
-              <span title="Simple interest per month charged on the full amount after the deadline. Blank = no penalty.">late %/mo</span>
-              <input type="number" step="0.1" value={draft.latePenaltyPct} onChange={(e) => patch({ latePenaltyPct: e.target.value })} placeholder="none" disabled={readOnly} className="input w-14 py-1 text-xs disabled:bg-slate-100" />
-            </div>
+            <TaxFields billMonth={Number(draft.billMonth) || 1} cycle={Number(draft.cycle) || 1} early={draft.earlyAmount} late={draft.latePenaltyPct} onEarly={(v) => patch({ earlyAmount: v })} onLate={(v) => patch({ latePenaltyPct: v })} readOnly={readOnly} />
             {shareHint != null && <div className="text-[10px] text-slate-400">≈ {formatINR(shareHint)} set aside each time</div>}
             {draft.fundingStyle === "auto" && <OnUnpaidSelect draft={draft} patch={patch} readOnly={readOnly} />}
           </div>
@@ -469,7 +501,7 @@ function AddCategory({ householdId, members }: { householdId: number; members: M
         </select>
         <input type="number" step="0.01" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder={periodic ? "₹ full bill" : "₹ / month"} className="input w-28" />
         <select value={section} onChange={(e) => setSection(e.target.value)} className="input w-24 text-xs">
-          {SECTIONS.map((s) => <option key={s} value={s}>{s}</option>)}
+          {SECTIONS.map((s) => <option key={s} value={s}>{s === "Yearly" ? "Periodic" : s}</option>)}
         </select>
         <select value={paidBy} onChange={(e) => setPaidBy(e.target.value)} className="input w-28 text-xs" title={periodic ? "who saves & holds it" : "responsible member"}>
           <option value="">{periodic ? "Saved by…" : "Responsible…"}</option>
@@ -498,12 +530,11 @@ function AddCategory({ householdId, members }: { householdId: number; members: M
                 {cadencesFor(Number(cycle)).map((c) => <option key={c.v} value={String(c.v)}>{c.label}</option>)}
               </select>
             )}
-            <input type="number" step="0.01" value={earlyAmt} onChange={(e) => setEarlyAmt(e.target.value)} placeholder="early ₹" title="Discounted price if paid in the first 30 days of the due month (property/water tax). Blank = none." className="input w-20 py-1 text-xs" />
-            <input type="number" step="0.1" value={latePen} onChange={(e) => setLatePen(e.target.value)} placeholder="late %/mo" title="Simple interest per month after the deadline. Blank = none." className="input w-16 py-1 text-xs" />
             <select value={payer} onChange={(e) => setPayer(e.target.value)} className="input py-1 text-xs" title="who pays it on the due month">
               <option value="">paid by: same</option>
               {members.map((m) => <option key={m.id} value={String(m.id)}>paid by {m.name}</option>)}
             </select>
+            <TaxFields billMonth={Number(billMonth) || 1} cycle={Number(cycle) || 1} early={earlyAmt} late={latePen} onEarly={setEarlyAmt} onLate={setLatePen} />
           </span>
         )}
         <button disabled={!name.trim() || pending} className="btn disabled:opacity-40">{pending ? "Adding…" : "Add"}</button>

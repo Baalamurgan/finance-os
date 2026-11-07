@@ -7,7 +7,7 @@ import { MISC_SUBCATEGORIES } from "@/lib/misc";
 import { SURPLUS_NOTE, LEFTOVER_NOTE, CARRY_NOTE, PIGGY_INCOME_NOTE, POOL_NOTE, POOL_BILL_NOTE, REMOVED_NOTE, isPoolNote, isRefundIncomeNote } from "@/lib/notes";
 import { computeSettlement, ownerChargeActiveFor, type SettleTagged } from "@/lib/settlement-core";
 import { buildAllocation, getMiscCardEnvelopes } from "@/lib/allocation";
-import { planBillMonth, isLumpDue, monthsUntilNextDue, type FundingStyle } from "@/lib/schedule";
+import { planBillMonth, isLumpDue, monthsUntilNextDue, billCyclePhase, taxCycleMonth, type FundingStyle } from "@/lib/schedule";
 import { suggestCategoryName, normalizeItem, resolveCategoryId } from "@/lib/spendCategorize";
 import { withShareCount } from "@/lib/format";
 import { getCardDues, type MonthAmount } from "@/lib/personal/cash";
@@ -172,6 +172,23 @@ export async function getSkippedSetAsides(householdId: number, periodId: number)
   return cats
     .filter((c) => c.fundingStyle != null && c.billAmount != null && c.billMonth != null && c.billEveryMonths != null)
     .map((c) => {
+      const fund = Math.max(0, Math.round(fundOf(c.id) * 100) / 100); // already saved for this bill
+      // TAX bills (early-payment incentive / late penalty — property & water tax) run on their own half-year
+      // cycle: window month = pay early, then a share each month to the deadline (the month before the next
+      // window), spreading (bill − saved). Same model the month generator + "Add back" use (taxCycleMonth).
+      if (c.earlyAmount != null || c.latePenaltyPct != null) {
+        const E = Math.max(1, c.billEveryMonths!);
+        const { monthsIntoCycle } = billCyclePhase(c.billMonth!, E, curMonth);
+        const t = taxCycleMonth({ billAmount: c.billAmount!, earlyAmount: c.earlyAmount, latePenaltyPct: c.latePenaltyPct, everyMonths: E, monthsIntoCycle, saved: fund });
+        const amount = t.phase === "share" || t.phase === "deadline" ? t.amount : 0;
+        const monthsLeft = E - monthsIntoCycle; // this month … the deadline
+        const remaining = Math.max(0, Math.round((c.billAmount! - fund) * 100) / 100);
+        // skipping this month → the same (bill − saved) over the months after it, up to the deadline
+        const newShare = monthsLeft > 1 ? Math.round((remaining / (monthsLeft - 1)) * 100) / 100 : null;
+        const k = (((c.billMonth! - curMonth) % E) + E) % E;
+        const dueTag = monthsLeft === 1 ? "this" : monthsLeft === 2 ? "next" : k === 0 ? "this" : null;
+        return { categoryId: c.id, name: c.name, section: c.section, amount, newShare, dueTag, fund };
+      }
       const plan = planBillMonth({
         billAmount: c.billAmount!, billMonth: c.billMonth!, everyMonths: c.billEveryMonths!,
         fund: fundOf(c.id), fundingStyle: c.fundingStyle as FundingStyle, fixedShare: c.monthlyBudget, saveEveryMonths: c.saveEveryMonths, month: curMonth,
@@ -186,7 +203,7 @@ export async function getSkippedSetAsides(householdId: number, periodId: number)
       const cyc = Math.max(1, Math.round(c.billEveryMonths!));
       const k = ((((c.billMonth! - curMonth) % cyc) + cyc) % cyc); // 0 = due this month, 1 = next
       const dueTag = k === 0 ? "this" : k === 1 ? "next" : null;
-      return { categoryId: c.id, name: c.name, section: c.section, amount, newShare, dueTag };
+      return { categoryId: c.id, name: c.name, section: c.section, amount, newShare, dueTag, fund };
     });
 }
 
@@ -2486,7 +2503,7 @@ export async function getMonthChanges(householdId: number, periodId: number) {
     { section: "Chits", label: "Chits" },
     { section: "Monthly", label: "Monthly Expense" },
     { section: "PiggyBudget", label: "Budgeted" },
-    { section: "Yearly", label: "Yearly / Periodic bills" },
+    { section: "Yearly", label: "Periodic bills" },
   ];
   const toExp = (e: ExpRow) => ({ label: withShareCount(e.label, e.category?.billEveryMonths), amount: e.amount, isBill: isBillDue(e) });
   const expense = EXP_SECTIONS

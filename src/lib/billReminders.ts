@@ -42,6 +42,7 @@ export async function getBillReminders(householdId: number, now = new Date()): P
       select: {
         id: true, name: true, fixed: true, billEveryMonths: true, billMonth: true, billDay: true,
         billAmount: true, responsibleMemberId: true, payerMemberId: true, reminderDays: true,
+        earlyAmount: true, latePenaltyPct: true,
       },
     }),
     prisma.period.findMany({ where: { householdId }, select: { id: true, year: true, month: true, status: true } }),
@@ -84,6 +85,34 @@ export async function getBillReminders(householdId: number, now = new Date()): P
   for (const c of categories) {
     const day = c.billDay && c.billDay >= 1 && c.billDay <= 28 ? c.billDay : 1; // "assume the 1st if no date"
     const window = c.reminderDays ?? BILL_REMINDER_WINDOW_DAYS; // per-bill lead time (default 3)
+
+    // A0) TAX bills (early-payment incentive / late penalty — property & water tax): the "due month" is the
+    // early-payment WINDOW, not the deadline. A half-year runs window … window+E−1 and is due by the END of its
+    // last month (e.g. Oct–Mar → 31 Mar). Missing the window just loses the discount — it is NOT overdue. Paid =
+    // a BillPayment in any month of that half-year.
+    if (c.billMonth != null && (c.earlyAmount != null || c.latePenaltyPct != null)) {
+      const E = Math.max(1, Math.round(c.billEveryMonths ?? 12));
+      let best: { date: Date; days: number } | null = null;
+      for (let off = -3; off <= E + 1; off++) {
+        const first = new Date(today.getFullYear(), today.getMonth() + off, 1);
+        // a deadline month = the month just before a window month
+        const next = new Date(first.getFullYear(), first.getMonth() + 1, 1);
+        if (!isLumpDue(c.billMonth, E, { month: next.getMonth() + 1 })) continue;
+        const deadline = new Date(first.getFullYear(), first.getMonth() + 1, 0); // last day of the deadline month
+        let paid = false;
+        for (let k = 0; k < E; k++) {
+          const m = new Date(first.getFullYear(), first.getMonth() - k, 1);
+          const per = periodByYM.get(`${m.getFullYear()}:${m.getMonth() + 1}`);
+          if (per && paidSet.has(`${c.id}:${per.id}`)) { paid = true; break; }
+        }
+        if (paid) continue;
+        const days = Math.round((deadline.getTime() - today.getTime()) / 86400000);
+        if (!inWindow(days, window)) continue;
+        if (!best || Math.abs(days) < Math.abs(best.days)) best = { date: deadline, days };
+      }
+      if (best) push(best.date, c.id, c.name, c.billAmount, [c.payerMemberId, c.responsibleMemberId]);
+      continue;
+    }
 
     // A) periodic / annual due-month bills
     if (c.billMonth != null) {
