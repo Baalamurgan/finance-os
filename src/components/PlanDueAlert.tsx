@@ -1,6 +1,6 @@
 "use client";
 
-import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { getMyPlanAlerts, type PlanAlerts } from "@/app/personal/actions";
 import { formatINR } from "@/lib/format";
@@ -10,6 +10,7 @@ import { formatINR } from "@/lib/format";
 // personal part is a count only (its detail is behind the personal PIN). "Remind me later" hides it for 3
 // hours; "Dismiss for today" until tomorrow.
 export function PlanDueAlert({ context }: { context: "family" | "personal" }) {
+  const router = useRouter();
   const [data, setData] = useState<PlanAlerts | null>(null);
   const dayKey = `plan-alert:${context}:${new Date().toDateString()}`;
   const laterKey = `plan-alert-later:${context}`;
@@ -36,6 +37,12 @@ export function PlanDueAlert({ context }: { context: "family" | "personal" }) {
       else localStorage.setItem(laterKey, String(Date.now() + 3 * 3600 * 1000));
     } catch { /* ignore */ }
     setData(null);
+  };
+  // Go to a plan: start the navigation FIRST, then hide the pop-up. (A <Link> that unmounts itself in its
+  // own onClick could drop the navigation — the pop-up closed but the page never changed.)
+  const go = (href: string) => {
+    router.push(href);
+    close("today");
   };
   const anyOverdue = data.family.some((s) => s.overdue) || data.personalOverdue;
   const total = famN + perN;
@@ -76,14 +83,14 @@ export function PlanDueAlert({ context }: { context: "family" | "personal" }) {
         </div>
         <div className="flex flex-col gap-2 px-6 py-5">
           {famN > 0 && (
-            <Link href={`/in-hand${data.familyQ}`} onClick={() => close("today")} className="w-full rounded-xl bg-slate-900 px-4 py-3 text-center text-base font-semibold text-white hover:bg-slate-800">
+            <button type="button" onClick={() => go(`/in-hand${data.familyQ}`)} className="w-full rounded-xl bg-slate-900 px-4 py-3 text-center text-base font-semibold text-white hover:bg-slate-800">
               Open family Money Plan →
-            </Link>
+            </button>
           )}
           {perN > 0 && (
-            <Link href="/personal/plan" onClick={() => close("today")} className={`w-full rounded-xl px-4 py-3 text-center text-base font-semibold ${famN > 0 ? "border-2 border-emerald-600 text-emerald-700 hover:bg-emerald-50" : "bg-emerald-600 text-white hover:bg-emerald-700"}`}>
+            <button type="button" onClick={() => go("/personal/plan")} className={`w-full rounded-xl px-4 py-3 text-center text-base font-semibold ${famN > 0 ? "border-2 border-emerald-600 text-emerald-700 hover:bg-emerald-50" : "bg-emerald-600 text-white hover:bg-emerald-700"}`}>
               Open my Money Plan →
-            </Link>
+            </button>
           )}
           <div className="flex gap-2">
             <button type="button" onClick={() => close("later")} className="flex-1 rounded-xl px-4 py-2.5 text-sm font-medium text-slate-500 hover:bg-slate-100">Remind me later</button>

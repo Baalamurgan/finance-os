@@ -14,7 +14,7 @@ export default async function AssistantSettingsPage({
 
   return (
     <>
-      <PersonalNav active="setup" name={c.account.name} selYear={c.selYear} selMonth={c.selMonth} financeDue={c.cardReminders.length > 0} />
+      <PersonalNav active="setup" account={c.account} selYear={c.selYear} selMonth={c.selMonth} financeDue={c.cardReminders.length > 0} />
       <main className="mx-auto max-w-2xl space-y-4 p-4 sm:p-6">
         <div>
           <h1 className="text-xl font-bold text-slate-900">Assistant</h1>

@@ -289,3 +289,77 @@ function Avatar({
     </span>
   );
 }
+
+// The personal view's avatar menu — the same avatar pill and menu as the family header, with the way back
+// to Family (clears the personal unlock, like the old "← Family" button), theme, lock Personal, sign out.
+export function PersonalUserMenu({
+  name, email, image, switchToFamily, lockPersonal,
+}: {
+  name: string;
+  email: string;
+  image: string | null;
+  switchToFamily: () => Promise<void>;
+  lockPersonal: (next?: string | FormData) => Promise<void>;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const onClick = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false); };
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
+    window.addEventListener("mousedown", onClick);
+    window.addEventListener("keydown", onKey);
+    return () => { window.removeEventListener("mousedown", onClick); window.removeEventListener("keydown", onKey); };
+  }, [open]);
+  const initial = (name || email || "?").trim().charAt(0).toUpperCase();
+
+  return (
+    <div className="relative" ref={ref}>
+      <button
+        onClick={() => setOpen((v) => !v)}
+        aria-label="Account menu"
+        className="flex shrink-0 items-center gap-2 rounded-full border border-emerald-200 bg-white py-1 pl-1 pr-2 transition hover:bg-emerald-50 sm:pr-2.5"
+      >
+        <Avatar name={name} email={email} image={image} initial={initial} />
+        <span className="hidden max-w-[8rem] truncate text-sm font-medium text-slate-700 sm:inline">{name}</span>
+        <svg width="14" height="14" viewBox="0 0 20 20" className="text-slate-400"><path fill="currentColor" d="M5 7l5 5 5-5z" /></svg>
+      </button>
+
+      {open && (
+        <div className="absolute right-0 z-50 mt-2 w-64 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-lg">
+          <div className="flex items-center gap-3 border-b border-slate-100 p-4">
+            <Avatar name={name} email={email} image={image} initial={initial} size="lg" />
+            <div className="min-w-0">
+              <div className="truncate text-sm font-semibold text-slate-800">{name}</div>
+              <div className="truncate text-xs text-slate-500">{email}</div>
+              <span className="mt-1 inline-block rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-medium text-emerald-700">🔒 Personal</span>
+            </div>
+          </div>
+          <form action={switchToFamily} className="border-b border-slate-100">
+            <button className="flex w-full items-center gap-2 px-4 py-3 text-left text-sm font-medium text-indigo-700 hover:bg-indigo-50">
+              <span className="text-base leading-none">👪</span>
+              Switch to Family →
+            </button>
+          </form>
+          <div className="border-b border-slate-100">
+            <ThemeMenuRow />
+          </div>
+          <form action={lockPersonal} className="border-b border-slate-100">
+            <button className="flex w-full items-center gap-2 px-4 py-3 text-left text-sm text-slate-700 hover:bg-slate-50">
+              <LockGlyph />
+              Lock Personal now
+            </button>
+          </form>
+          <form action={doSignOut}>
+            <button className="flex w-full items-center gap-2 px-4 py-3 text-left text-sm text-slate-700 hover:bg-slate-50">
+              <svg width="16" height="16" viewBox="0 0 24 24" className="text-slate-400">
+                <path fill="currentColor" d="M16 17v-3H9v-4h7V7l5 5-5 5M14 2a2 2 0 0 1 2 2v2h-2V4H5v16h9v-2h2v2a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9z" />
+              </svg>
+              Sign out
+            </button>
+          </form>
+        </div>
+      )}
+    </div>
+  );
+}

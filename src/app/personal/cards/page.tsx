@@ -56,7 +56,7 @@ export default async function PersonalCardsPage({
 
   return (
     <>
-      <PersonalNav active="cards" name={c.account.name} selYear={c.selYear} selMonth={c.selMonth} financeDue={financeDue} />
+      <PersonalNav active="cards" account={c.account} selYear={c.selYear} selMonth={c.selMonth} financeDue={financeDue} />
       <main className="mx-auto max-w-3xl space-y-5 p-4 pb-24 sm:p-6">
         <div className="flex items-start justify-between gap-3">
           <div>

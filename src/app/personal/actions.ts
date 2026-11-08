@@ -139,6 +139,31 @@ export async function getMyIncomingPeerCardUses(): Promise<PeerCardUse[]> {
   }));
 }
 
+// FAMILY spends another member paid with YOUR card (family view pop-up). A family-card spend is filed under
+// the card's owner, so it never makes a Lending entry — this finds them by "my card, logged by someone else".
+// Only the last 14 days (so the first showing isn't the whole history); refund lines are left out.
+export type FamilyCardUse = { id: number; spender: string; cardName: string; label: string; category: string; amount: number; atISO: string };
+export async function getMyIncomingFamilyCardUses(): Promise<FamilyCardUse[]> {
+  const member = await meRead();
+  if (!member) return [];
+  const since = new Date(Date.now() - 14 * 24 * 3600 * 1000);
+  const spends = await prisma.spend.findMany({
+    where: {
+      cardAccount: { memberId: member.id },
+      loggedById: { not: null, notIn: [member.id] },
+      refundOfId: null,
+      amount: { gt: 0 },
+      createdAt: { gte: since },
+    },
+    select: { id: true, label: true, amount: true, createdAt: true, loggedBy: { select: { name: true } }, cardAccount: { select: { name: true } }, category: { select: { name: true } } },
+    orderBy: { createdAt: "desc" },
+  });
+  return spends.map((s) => ({
+    id: s.id, spender: s.loggedBy?.name ?? "Someone", cardName: s.cardAccount?.name ?? "your card",
+    label: s.label, category: s.category.name, amount: s.amount, atISO: s.createdAt.toISOString(),
+  }));
+}
+
 // Resolve the signed-in member WITHOUT touching the personal lock. Used by read-only actions
 // that also run in Family view (where the personal-unlock cookie is intentionally absent).
 async function meRead() {

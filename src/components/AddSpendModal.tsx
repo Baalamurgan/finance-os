@@ -476,7 +476,7 @@ export function AddSpendModal({
                           >
                             <span className="flex items-center gap-1.5 text-sm font-medium text-slate-700">
                               <span className="inline-block h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: featuredCard.color }} />
-                              <span className="truncate">{payTypeIcon(featuredCard.type)} {featuredCard.name}{featuredCard.last4 ? ` XX${featuredCard.last4}` : ""}</span>
+                              <span className="min-w-0 truncate">{payTypeIcon(featuredCard.type)} {featuredCard.name}</span>{featuredCard.last4 && <span className="shrink-0 tabular-nums text-slate-500">XX{featuredCard.last4}</span>}
                             </span>
                             <span className="mt-0.5 block truncate text-[11px] text-slate-400">{featuredCard.ownerName} · {payTypeLabel(featuredCard.type)}</span>
                           </button>
@@ -507,7 +507,7 @@ export function AddSpendModal({
                                       >
                                         <span className="flex items-center gap-1.5 text-sm font-medium text-slate-700">
                                           <span className="inline-block h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: c.color }} />
-                                          <span className="truncate">{payTypeIcon(c.type)} {c.name}{c.last4 ? ` XX${c.last4}` : ""}</span>
+                                          <span className="min-w-0 truncate">{payTypeIcon(c.type)} {c.name}</span>{c.last4 && <span className="shrink-0 tabular-nums text-slate-500">XX{c.last4}</span>}
                                         </span>
                                         <span className="mt-0.5 block truncate text-[11px] text-slate-400">{c.ownerName} · {payTypeLabel(c.type)}</span>
                                       </button>

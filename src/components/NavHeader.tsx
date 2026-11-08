@@ -8,6 +8,7 @@ import { AutoLock } from "@/components/AutoLock";
 import { UserMenu } from "@/components/UserMenu";
 import { WindDownBanner } from "@/components/WindDownBanner";
 import { PlanDueAlert } from "@/components/PlanDueAlert";
+import { FamilyCardUsePopup } from "@/components/FamilyCardUsePopup";
 import { ProvisionalBanner } from "@/components/ProvisionalBanner";
 import { WindDownPopup } from "@/components/WindDownPopup";
 import { CardDueHighAlert } from "@/components/personal/CardDueHighAlert";
@@ -268,6 +269,8 @@ export function NavHeader({
     {/* Money Plan steps due today / overdue — outside the blurred header so the pop-up covers the screen */}
     <PlanDueAlert context="family" />
     <BillDueHighAlert />
+    {/* a family spend another member paid with YOUR card — once per spend */}
+    <FamilyCardUsePopup />
 
     {/* big thumb-reachable "Add Spend" button on mobile (the easy daily action) */}
     {periodOpen && periodId && (

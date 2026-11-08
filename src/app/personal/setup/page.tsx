@@ -21,7 +21,7 @@ export default async function PersonalSetup({
 }) {
   const sp = await searchParams;
   const c = await loadPersonal(sp);
-  const nav = <PersonalNav active="setup" name={c.account.name} selYear={c.selYear} selMonth={c.selMonth} financeDue={c.cardReminders.length > 0} />;
+  const nav = <PersonalNav active="setup" account={c.account} selYear={c.selYear} selMonth={c.selMonth} financeDue={c.cardReminders.length > 0} />;
 
   const catList = c.categories.map((cat) => ({ id: cat.id, name: cat.name, icon: cat.icon, bucket: cat.bucket }));
   // Net-worth holdings an Invest bill / saving can feed (personal only).

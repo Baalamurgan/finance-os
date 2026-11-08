@@ -11,6 +11,7 @@ import { RemindersBell } from "@/components/personal/RemindersBell";
 import { PersonalDock } from "@/components/personal/PersonalDock";
 import { LendingDueBar } from "@/components/personal/LendingDueBar";
 import { AutoLock } from "@/components/AutoLock";
+import { PersonalUserMenu } from "@/components/UserMenu";
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
@@ -32,13 +33,13 @@ const TABS = [...PRIMARY, ...MORE];
 
 export function PersonalNav({
   active,
-  name,
+  account,
   selYear,
   selMonth,
   financeDue = false,
 }: {
   active: "today" | "sheet" | "expenses" | "analysis" | "finance" | "setup" | "loans" | "cards" | "plan" | "networth";
-  name: string;
+  account: { name: string; email: string; image: string | null };
   selYear: number;
   selMonth: number;
   financeDue?: boolean; // a card bill is due soon/overdue → red dot on Accounts (and the More button)
@@ -68,7 +69,7 @@ export function PersonalNav({
             <div className="flex items-center gap-1.5 text-[15px] font-bold text-emerald-900 sm:text-base">
               <span>🔒</span> Personal
             </div>
-            <div className="hidden text-[11px] text-emerald-600/70 sm:block">{name}</div>
+            <div className="hidden text-[11px] text-emerald-600/70 sm:block">{account.name}</div>
           </div>
 
           {/* desktop tabs (mobile uses the bottom bar) */}
@@ -110,12 +111,15 @@ export function PersonalNav({
 
             <RemindersBell context="personal" />
 
-            <form action={exitToFamily}>
-              <button aria-label="Back to Family" className="grid h-8 w-8 shrink-0 place-items-center rounded-full border border-emerald-200 bg-white text-emerald-800 sm:h-auto sm:w-auto sm:rounded-full sm:px-3 sm:py-1.5 sm:text-xs sm:font-medium">
-                <span className="sm:hidden">←</span>
-                <span className="hidden sm:inline">← Family</span>
-              </button>
-            </form>
+            <div className="border-l border-emerald-200 pl-2">
+              <PersonalUserMenu
+                name={account.name}
+                email={account.email}
+                image={account.image}
+                switchToFamily={exitToFamily}
+                lockPersonal={lockPersonalNow}
+              />
+            </div>
           </div>
         </div>
       </header>
