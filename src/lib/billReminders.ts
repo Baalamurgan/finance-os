@@ -49,6 +49,26 @@ export async function getBillReminders(householdId: number, now = new Date()): P
     prisma.billPayment.findMany({ where: { householdId }, select: { categoryId: true, periodId: true } }),
   ]);
 
+  // A bill only counts from its FIRST month on the sheet (the earliest month with a line or a payment for it):
+  // one added to Setup today has no history, so a half-year / due month that ended before then was never this
+  // app's to track — no "overdue" nag for it. (No line or payment anywhere yet → nothing skipped.)
+  const periodYM = new Map(periods.map((p) => [p.id, p.year * 12 + p.month]));
+  const catIds = categories.map((c) => c.id);
+  const lineSeen = catIds.length
+    ? await prisma.expenseEntry.findMany({ where: { categoryId: { in: catIds } }, select: { categoryId: true, periodId: true }, distinct: ["categoryId", "periodId"] })
+    : [];
+  const firstYM = new Map<number, number>();
+  for (const r of [...lineSeen, ...billPayments]) {
+    const ym = periodYM.get(r.periodId);
+    if (r.categoryId == null || ym == null) continue;
+    const cur = firstYM.get(r.categoryId);
+    if (cur == null || ym < cur) firstYM.set(r.categoryId, ym);
+  }
+  const beforeStart = (catId: number, year: number, month: number) => {
+    const f = firstYM.get(catId);
+    return f != null && year * 12 + month < f;
+  };
+
   const leaders = members.filter((m) => m.role === "head" || m.role === "manager").map((m) => m.id);
   const paidSet = new Set(billPayments.map((p) => `${p.categoryId}:${p.periodId}`));
   const periodByYM = new Map(periods.map((p) => [`${p.year}:${p.month}`, p]));
@@ -99,6 +119,7 @@ export async function getBillReminders(householdId: number, now = new Date()): P
         const next = new Date(first.getFullYear(), first.getMonth() + 1, 1);
         if (!isLumpDue(c.billMonth, E, { month: next.getMonth() + 1 })) continue;
         const deadline = new Date(first.getFullYear(), first.getMonth() + 1, 0); // last day of the deadline month
+        if (beforeStart(c.id, first.getFullYear(), first.getMonth() + 1)) continue; // half ended before the bill was on the sheet
         let paid = false;
         for (let k = 0; k < E; k++) {
           const m = new Date(first.getFullYear(), first.getMonth() - k, 1);
@@ -122,6 +143,7 @@ export async function getBillReminders(householdId: number, now = new Date()): P
         const d = new Date(today.getFullYear(), today.getMonth() + off, day);
         const ym = { year: d.getFullYear(), month: d.getMonth() + 1 };
         if (!isLumpDue(c.billMonth, cycle, { month: ym.month })) continue;
+        if (beforeStart(c.id, ym.year, ym.month)) continue; // due before the bill was on the sheet
         const per = periodByYM.get(`${ym.year}:${ym.month}`);
         if (per && paidSet.has(`${c.id}:${per.id}`)) continue; // paid → no nag
         const days = Math.round((d.getTime() - today.getTime()) / 86400000);

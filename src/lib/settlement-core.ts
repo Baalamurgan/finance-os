@@ -32,6 +32,8 @@ export const OWNER_CHARGE_FROM = { year: 2026, month: 11 } as const;
 export const ownerChargeActiveFor = (year: number, month: number) =>
   year > OWNER_CHARGE_FROM.year || (year === OWNER_CHARGE_FROM.year && month >= OWNER_CHARGE_FROM.month);
 
+export type SettleAdjustment = { memberId: number; label: string; amount: number; category: string; kind: "overspend" | "hold" };
+
 export function computeSettlement(opts: {
   members: SettleMember[];
   incomes: SettleIncome[];
@@ -45,8 +47,11 @@ export function computeSettlement(opts: {
   // it with the hub instead of the hub silently absorbing it. Gated ON only from a start month (see
   // queries.ts) — switching it on mid-month would un-settle already-paid transfers.
   applyOwnerCharge?: boolean;
+  // Wind-down groups (last month's close): "↩ overspend you paid" (+, the holder kept it from their own
+  // pocket) and "leftover you hold" (−, budget cash a holder kept that covered someone's overspend).
+  adjustments?: SettleAdjustment[];
 }) {
-  const { members, incomes, expenses, spends, records, treasurerId, prevLabel, applyOwnerCharge = false } = opts;
+  const { members, incomes, expenses, spends, records, treasurerId, prevLabel, applyOwnerCharge = false, adjustments = [] } = opts;
 
   const rows = members.map((m) => {
     const contributed = incomes
@@ -109,7 +114,10 @@ export function computeSettlement(opts: {
         kind: "charge" as const,
       }))
       .sort((a, b) => a.amount - b.amount);
-    const paidItems = [...sheetItems, ...spendItems, ...chargeItems];
+    const adjustItems = adjustments
+      .filter((a) => a.memberId === m.id && Math.abs(a.amount) >= 0.005)
+      .map((a) => ({ label: a.label, amount: a.amount, category: a.category, kind: a.kind }));
+    const paidItems = [...sheetItems, ...spendItems, ...chargeItems, ...adjustItems];
     const paid = paidItems.reduce((s, it) => s + it.amount, 0);
     return { id: m.id, name: m.name, contributed, paid, net: contributed - paid, paidItems };
   });

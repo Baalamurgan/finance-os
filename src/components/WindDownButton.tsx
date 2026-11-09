@@ -11,11 +11,13 @@ export function WindDownButton({
   label,
   leftovers,
   nextLabel,
+  grouped = false,
 }: {
   periodId: number;
   label: string;
   leftovers: number; // this month's under-budget leftovers (the general-Piggy contribution)
   nextLabel: string;
+  grouped?: boolean; // Nov 2026 on: leftovers/overspend follow the saved "where the money goes" card
 }) {
   const [open, setOpen] = useState(false);
   const [toIncome, setToIncome] = useState(false); // false = keep in Piggy (default)
@@ -52,8 +54,12 @@ export function WindDownButton({
               <input type="hidden" name="leftoversToIncome" value={toIncome ? "1" : "0"} />
 
               <p className="text-sm leading-relaxed text-slate-600">
-                Over-budget amounts and misc spends carry into {nextLabel} as expenses, the balance
-                carries forward, and {label} is <b>locked</b>. This can&apos;t be undone.
+                {grouped ? (
+                  <>Leftovers and overspends go as set in <b>Where the money goes</b> (save it first), misc spends carry into {nextLabel} as expenses, the spare balance becomes {nextLabel} income, and {label} is <b>locked</b>. This can&apos;t be undone.</>
+                ) : (
+                  <>Over-budget amounts and misc spends carry into {nextLabel} as expenses, the balance
+                  carries forward, and {label} is <b>locked</b>. This can&apos;t be undone.</>
+                )}
               </p>
 
               {hasLeftovers && (

@@ -4,8 +4,10 @@ import { unstable_cache } from "next/cache";
 import { prisma } from "@/lib/prisma";
 import { FAMILY_TAG } from "@/lib/revalidate";
 import { MISC_SUBCATEGORIES } from "@/lib/misc";
-import { SURPLUS_NOTE, LEFTOVER_NOTE, CARRY_NOTE, PIGGY_INCOME_NOTE, POOL_NOTE, POOL_BILL_NOTE, REMOVED_NOTE, isPoolNote, isRefundIncomeNote } from "@/lib/notes";
-import { computeSettlement, ownerChargeActiveFor, type SettleTagged } from "@/lib/settlement-core";
+import { SURPLUS_NOTE, LEFTOVER_NOTE, CARRY_NOTE, OVERFLOW_NOTE, PIGGY_INCOME_NOTE, POOL_NOTE, POOL_BILL_NOTE, REMOVED_NOTE, isPoolNote, isRefundIncomeNote } from "@/lib/notes";
+import { computeSettlement, ownerChargeActiveFor, type SettleTagged, type SettleAdjustment } from "@/lib/settlement-core";
+import { groupRuleActive } from "@/lib/windDownPlan";
+import { loadWindDownPlan } from "@/lib/windDownPlanLoad";
 import { buildAllocation, getMiscCardEnvelopes } from "@/lib/allocation";
 import { planBillMonth, isLumpDue, monthsUntilNextDue, billCyclePhase, taxCycleMonth, type FundingStyle } from "@/lib/schedule";
 import { suggestCategoryName, normalizeItem, resolveCategoryId } from "@/lib/spendCategorize";
@@ -635,7 +637,19 @@ export async function _getSettlement(
   // November's settlement — which settles October's spends — is the first to collect owners' cross-spend.
   const ownerChargeActive = period != null && ownerChargeActiveFor(period.year, period.month);
   // pure math (unit-tested in settlement-core.test.ts)
-  return computeSettlement({ members, incomes, expenses: expensesForCalc, spends, records, treasurerId, prevLabel, applyOwnerCharge: ownerChargeActive });
+  // Wind-down groups (from the Nov 2026 close): settle last month's overspend back to the budget holder
+  // and charge a holder whose leftover covered it — this month's settlement carries both as lines.
+  const adjustments: SettleAdjustment[] = [];
+  if (prevPeriod && groupRuleActive(prevPeriod.year, prevPeriod.month)) {
+    const plan = await loadWindDownPlan(prisma, prevPeriod);
+    const mon = prevPeriod.label.split(" ")[0];
+    const cap = (s: string) => s.charAt(0) + s.slice(1).toLowerCase();
+    for (const g of plan.groups) {
+      for (const c of g.credits) adjustments.push({ memberId: c.holderId, label: `↩ ${cap(mon)} ${c.name} overspend you paid`, amount: c.amount, category: c.name, kind: "overspend" });
+      for (const h of g.holds) adjustments.push({ memberId: h.holderId, label: `${cap(mon)} ${h.name} leftover you hold (covered ${g.rows.filter((r) => r.spent > r.budget).map((r) => r.name).join(" + ")})`, amount: -h.amount, category: h.name, kind: "hold" });
+    }
+  }
+  return computeSettlement({ members, incomes, expenses: expensesForCalc, spends, records, treasurerId, prevLabel, applyOwnerCharge: ownerChargeActive, adjustments });
 }
 
 // The Money Plan for a month: the settlement transfers + dated bill payments, ordered into one
@@ -2355,7 +2369,7 @@ function diffKey(label: string): string {
  * tombstone) — badging those would be noise since they're auto-rolled, not freshly added. No prior
  * month → empty (don't badge a first month wholesale). Mirror NOT_NEW_NOTES in the Sheet's kept-tag.
  */
-const NOT_NEW_NOTES = new Set<string>([SURPLUS_NOTE, LEFTOVER_NOTE, CARRY_NOTE, PIGGY_INCOME_NOTE, REMOVED_NOTE]);
+const NOT_NEW_NOTES = new Set<string>([SURPLUS_NOTE, LEFTOVER_NOTE, CARRY_NOTE, OVERFLOW_NOTE, PIGGY_INCOME_NOTE, REMOVED_NOTE]);
 export async function getNewSheetLineIds(householdId: number, periodId: number) {
   const empty = { expenses: new Set<number>(), incomes: new Set<number>() };
   try {

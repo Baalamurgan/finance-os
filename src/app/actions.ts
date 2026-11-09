@@ -20,6 +20,7 @@ import { ensurePersonalMonth } from "@/lib/personal";
 import { planBillMonth, billCyclePhase, taxCycleMonth, type FundingStyle } from "@/lib/schedule";
 import { getBillReminders } from "@/lib/billReminders";
 import { applyBudgetShortfall, windDownPeriod } from "@/lib/windDown";
+import { groupRuleActive } from "@/lib/windDownPlan";
 import { PAYBACK_REIMB_NOTE, SURPLUS_NOTE, CARRY_NOTE, DEFERRED_NOTE, PIGGY_INCOME_NOTE, POOL_NOTE, POOL_BILL_NOTE, REMOVED_NOTE, isPoolNote, isPaybackNote, isLendGroup, LEND_GROUP_PREFIX, POOL_LEND_GROUP_PREFIX, REFUND_GROUP_PREFIX, isRefundGroup, REFUND_INCOME_NOTE } from "@/lib/notes";
 import { currentCycle } from "@/lib/finance/cycle";
 import { istDateParts } from "@/lib/time";
@@ -3387,7 +3388,10 @@ async function addEstimatedSurplus(
     const rem = b - spentOf(cat.id);
     if (rem < 0) overspend += -rem;
   }
-  const carryOut = source.carryForward + (inc._sum.amount ?? 0) - (exp._sum.amount ?? 0) - overspend;
+  // From Nov 2026 month-end the spare balance never absorbs overspend (wind-down groups cut budgets instead).
+  const srcYM = await tx.period.findUnique({ where: { id: source.id }, select: { year: true, month: true } });
+  const absorbs = !srcYM || !groupRuleActive(srcYM.year, srcYM.month);
+  const carryOut = source.carryForward + (inc._sum.amount ?? 0) - (exp._sum.amount ?? 0) - (absorbs ? overspend : 0);
   await tx.incomeEntry.deleteMany({ where: { periodId: targetId, note: SURPLUS_NOTE } });
   if (carryOut > 0) {
     await tx.incomeEntry.create({
@@ -4291,11 +4295,57 @@ export async function windDownMonth(formData: FormData) {
   if (!(await canEdit())) return; // head or manager
   const periodId = Number(formData.get("periodId"));
   if (!periodId) return;
-  // Opt-in at wind-down: route THIS month's under-budget leftovers (the general-Piggy
-  // contribution) into NEXT month's income instead of parking them in the Piggy bank.
+  // Opt-in at wind-down (months before Nov 2026): route THIS month's under-budget leftovers into NEXT
+  // month's income instead of Piggy. From Nov 2026 on, each group's saved destination decides instead.
   const leftoversToIncome = formData.get("leftoversToIncome") === "1";
   await windDownPeriod(periodId, { leftoversToIncome });
   revalidateFamily();
+}
+
+// Save the Wind-down tab's "where the money goes" choices for an OPEN month: the groups (several; a
+// category in at most one), each group's leftover destination and its edited cut split. Replaces the
+// month's saved choices, then refreshes next month's preview (draft or provisional) so its budgets show
+// the cuts right away. Head/manager only.
+export async function saveWindDownChoices(input: {
+  periodId: number;
+  groups: { categoryIds: number[]; destination: "piggy" | "income"; cuts: { categoryId: number; amount: number }[] | null }[];
+}): Promise<{ ok: boolean; message: string }> {
+  if (!(await canEdit())) return { ok: false, message: "Only the head or a manager can change this." };
+  const period = await prisma.period.findUnique({ where: { id: input.periodId } });
+  if (!period || period.status !== "open") return { ok: false, message: "This month is already closed." };
+  if (!groupRuleActive(period.year, period.month)) return { ok: false, message: "Groups start from the November 2026 wind-down." };
+  const seen = new Set<number>();
+  const groups: { categoryIds: number[]; destination: "piggy" | "income"; cuts: { categoryId: number; amount: number }[] | null }[] = [];
+  for (const g of input.groups) {
+    const ids = [...new Set(g.categoryIds.map(Number))].filter((id) => Number.isInteger(id) && id > 0 && !seen.has(id));
+    if (ids.length === 0) continue;
+    ids.forEach((id) => seen.add(id));
+    const cuts = Array.isArray(g.cuts)
+      ? g.cuts.map((c) => ({ categoryId: Number(c.categoryId), amount: Math.round(Number(c.amount) * 100) / 100 })).filter((c) => c.categoryId > 0 && c.amount > 0)
+      : null;
+    groups.push({ categoryIds: ids, destination: g.destination === "income" ? "income" : "piggy", cuts: cuts && cuts.length ? cuts : null });
+  }
+  const cats = await prisma.category.findMany({ where: { id: { in: [...seen] }, householdId: period.householdId }, select: { id: true } });
+  if (cats.length !== seen.size) return { ok: false, message: "Unknown category." };
+
+  const next = nextYM(period.year, period.month);
+  const nextPeriod = await prisma.period.findUnique({ where: { householdId_year_month: { householdId: period.householdId, year: next.year, month: next.month } } });
+  await prisma.$transaction(async (tx) => {
+    await tx.windDownChoice.deleteMany({ where: { periodId: period.id } });
+    for (const g of groups) {
+      // a lone category left on the defaults (leftover → Piggy, automatic cut) needs no row
+      if (g.categoryIds.length === 1 && g.destination === "piggy" && !g.cuts) continue;
+      await tx.windDownChoice.create({
+        data: { householdId: period.householdId, periodId: period.id, categoryIds: g.categoryIds, destination: g.destination, cuts: g.cuts ?? undefined },
+      });
+    }
+    if (nextPeriod && nextPeriod.status !== "closed") {
+      await applyBudgetShortfall(tx, { id: period.id, householdId: period.householdId, carryForward: period.carryForward }, nextPeriod.id);
+    }
+  });
+  log.info("saveWindDownChoices", "ok", { periodId: period.id, groups: groups.length, preview: nextPeriod?.id ?? null });
+  revalidateFamily();
+  return { ok: true, message: nextPeriod ? `Saved — ${nextPeriod.label} preview updated.` : "Saved." };
 }
 
 // Mark a wound-down month's Piggy leftover as physically handed from the category owners to the

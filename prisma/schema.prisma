@@ -1130,6 +1130,9 @@ model Budget {
   category   Category @relation(fields: [categoryId], references: [id])
   categoryId Int
   planned    Float
+  // Part of `planned` taken off for last month's overspend (wind-down groups). Kept so a re-run on a
+  // hand-edited (pinned) budget can put the old cut back before taking the new one — never cut twice.
+  carryCut   Float    @default(0)
 
   @@unique([periodId, categoryId])
 }
@@ -1146,5 +1149,22 @@ model SetAsideSkip {
   createdAt   DateTime @default(now())
 
   @@unique([categoryId, periodId])
+  @@index([periodId])
+}
+
+// Wind-down "where the money goes" choices for ONE month (saved ahead on the Wind-down tab). Each row is a
+// group of budgeted categories settled together: their leftovers and overspends net out; a net overspend
+// is cut from next month's budgets (`cuts` = the edited split, [{categoryId, amount}], null = automatic),
+// a net leftover goes to `destination` ("piggy" | "income"). A single category with a non-default choice
+// is a group of one. No row = that category on its own, leftover → Piggy.
+model WindDownChoice {
+  id          Int      @id @default(autoincrement())
+  householdId Int
+  periodId    Int
+  categoryIds Int[]
+  destination String   @default("piggy")
+  cuts        Json?
+  updatedAt   DateTime @updatedAt
+
   @@index([periodId])
 }

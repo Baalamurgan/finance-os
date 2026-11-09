@@ -8,8 +8,10 @@ import { prisma } from "@/lib/prisma";
 import { generateMonth } from "@/lib/periodClone";
 import { planBillMonth, isLumpDue } from "@/lib/schedule";
 import { budgetShortfallReductions } from "@/lib/budgetCarry";
-import { CARRY_NOTE, SURPLUS_NOTE, LEFTOVER_NOTE } from "@/lib/notes";
+import { CARRY_NOTE, SURPLUS_NOTE, LEFTOVER_NOTE, OVERFLOW_NOTE } from "@/lib/notes";
 import { buildAllocation, getMiscCardEnvelopes } from "@/lib/allocation";
+import { groupRuleActive } from "@/lib/windDownPlan";
+import { loadWindDownPlan } from "@/lib/windDownPlanLoad";
 
 type Tx = Parameters<Parameters<typeof prisma.$transaction>[0]>[0];
 
@@ -29,6 +31,8 @@ export async function applyBudgetShortfall(
   source: { id: number; householdId: number; carryForward: number },
   targetId: number,
 ) {
+  const src = await tx.period.findUnique({ where: { id: source.id }, select: { year: true, month: true, label: true, status: true } });
+  if (src && groupRuleActive(src.year, src.month)) return applyGroupCuts(tx, { ...source, ...src }, targetId);
   const [inc, exp, budgets, spends, trackedCats] = await Promise.all([
     tx.incomeEntry.aggregate({ where: { periodId: source.id }, _sum: { amount: true } }),
     tx.expenseEntry.aggregate({ where: { periodId: source.id }, _sum: { amount: true } }),
@@ -64,6 +68,62 @@ export async function applyBudgetShortfall(
     const reduced = Math.max(0, Math.round((cat.monthlyBudget - (reductionByCat[cat.id] ?? 0)) * 100) / 100);
     await tx.budget.updateMany({ where: { periodId: targetId, categoryId: cat.id }, data: { planned: reduced } });
     await tx.expenseEntry.updateMany({ where: { periodId: targetId, categoryId: cat.id, oneOff: false }, data: { amount: reduced } });
+  }
+}
+
+// Nov 2026 month-end on (wind-down groups): next month's budgets are cut by the saved/automatic plan —
+// each group's NET overspend, split over regular budgets (never below 0; what can't fit becomes a one-off
+// pool expense, OVERFLOW_NOTE). A hand-edited (pinned) budget is cut too: its previous cut (Budget.carryCut)
+// is put back first, so a re-run never cuts twice. While the source month is still open, the leftovers
+// going to next month's income are estimated as well (wind-down writes the final line itself).
+async function applyGroupCuts(
+  tx: Tx,
+  source: { id: number; householdId: number; label: string; status: string },
+  targetId: number,
+) {
+  const plan = await loadWindDownPlan(tx, source);
+  const [targetBudgets, envelopes, cats] = await Promise.all([
+    tx.budget.findMany({ where: { periodId: targetId } }),
+    tx.expenseEntry.findMany({ where: { periodId: targetId, oneOff: false, categoryId: { in: plan.targets.map((t) => t.categoryId) } }, select: { id: true, categoryId: true, amount: true, pinned: true } }),
+    tx.category.findMany({ where: { id: { in: plan.targets.map((t) => t.categoryId) } }, select: { id: true, monthlyBudget: true } }),
+  ]);
+  for (const cat of cats) {
+    if (cat.monthlyBudget == null) continue;
+    const cut = plan.cutByCat.get(cat.id) ?? 0;
+    const b = targetBudgets.find((x) => x.categoryId === cat.id);
+    const env = envelopes.find((e) => e.categoryId === cat.id);
+    const pinned = !!env?.pinned;
+    const base = pinned ? (env!.amount + (b?.carryCut ?? 0)) : cat.monthlyBudget;
+    const next = Math.max(0, Math.round((base - cut) * 100) / 100);
+    const applied = Math.round((base - next) * 100) / 100;
+    if (b) await tx.budget.update({ where: { id: b.id }, data: { planned: next, carryCut: applied } });
+    if (env) await tx.expenseEntry.update({ where: { id: env.id }, data: { amount: next } });
+  }
+
+  // Overspend no budget could take → one-off pool expense next month (one per group, on its overspent category).
+  const mon = source.label.split(" ")[0];
+  await tx.expenseEntry.deleteMany({ where: { periodId: targetId, note: OVERFLOW_NOTE } });
+  for (const g of plan.groups) {
+    if (g.overflow <= 0.005) continue;
+    const catId = g.rows.find((r) => r.spent > r.budget)?.categoryId ?? g.categoryIds[0];
+    await tx.expenseEntry.create({
+      data: {
+        periodId: targetId, categoryId: catId, memberId: null, necessary: true, oneOff: true, note: OVERFLOW_NOTE,
+        label: `${mon} · ${g.rows.map((r) => r.name).join(" + ")} overspend (no budget left to cut)`,
+        amount: g.overflow,
+      },
+    });
+  }
+
+  // Estimate of the leftovers heading to next month's income (only while the source month is open).
+  if (source.status === "open") {
+    const toIncome = plan.groups.filter((g) => g.destination === "income").reduce((t, g) => t + g.leftoverTo.reduce((u, x) => u + x.amount, 0), 0);
+    await tx.incomeEntry.deleteMany({ where: { periodId: targetId, note: LEFTOVER_NOTE } });
+    if (toIncome > 0.005) {
+      await tx.incomeEntry.create({
+        data: { periodId: targetId, source: `Last month's leftovers (est., from ${source.label})`, amount: Math.round(toIncome * 100) / 100, oneOff: true, note: LEFTOVER_NOTE },
+      });
+    }
   }
 }
 
@@ -117,7 +177,13 @@ export async function windDownPeriod(periodId: number, opts: { leftoversToIncome
     const rem = b - spentOf(cat.id);
     if (rem < 0) overspendTotal += -rem;
   }
-  const carryOut = period.carryForward + income - expense - overspendTotal;
+  // From Nov 2026 month-end: the spare balance never absorbs overspend (overspend is cut from next
+  // month's budgets by the wind-down plan instead), and leftovers follow each group's saved destination.
+  const grouped = groupRuleActive(period.year, period.month);
+  const plan = grouped ? await loadWindDownPlan(prisma, period) : null;
+  const planLeft = new Map<number, { amount: number; destination: "piggy" | "income" }>();
+  if (plan) for (const g of plan.groups) for (const x of g.leftoverTo) planLeft.set(x.categoryId, { amount: x.amount, destination: g.destination });
+  const carryOut = period.carryForward + income - expense - (grouped ? 0 : overspendTotal);
 
   let movedToPiggy = 0;
   let leftoverIncome = 0; // under-budget leftovers routed to next month's income (opt-in)
@@ -151,6 +217,25 @@ export async function windDownPeriod(periodId: number, opts: { leftoversToIncome
             note: `${period.label} · ${cat.name}`,
           },
         });
+      } else if (budget > 0 && plan) {
+        // Wind-down groups: only what the plan sends on (after covering a group's overspend) moves.
+        const p = planLeft.get(cat.id);
+        if (p && p.amount > 0.005) {
+          if (p.destination === "income") {
+            leftoverIncome += p.amount;
+            if (cat.responsibleMemberId != null) {
+              const g = leftoverByOwner.get(cat.responsibleMemberId) ?? { amount: 0, cats: [] };
+              g.amount = Math.round((g.amount + p.amount) * 100) / 100;
+              g.cats.push(cat.name);
+              leftoverByOwner.set(cat.responsibleMemberId, g);
+            }
+          } else {
+            await tx.piggyEntry.create({
+              data: { householdId, periodId, categoryId: cat.id, kind: "piggy", amount: p.amount, note: `${period.label} · ${cat.name}` },
+            });
+            movedToPiggy += p.amount;
+          }
+        }
       } else if (budget > 0) {
         const remainder = budget - spent;
         if (remainder >= 0) {

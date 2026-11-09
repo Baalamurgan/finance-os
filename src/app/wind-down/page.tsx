@@ -5,6 +5,10 @@ import { getRollup, getTrackedExpenses } from "@/lib/queries";
 import { NavHeader } from "@/components/NavHeader";
 import { WindDownButton } from "@/components/WindDownButton";
 import { MoneyFlowDonut } from "@/components/Charts";
+import { WindDownPlanCard } from "@/components/WindDownPlanCard";
+import { prisma } from "@/lib/prisma";
+import { groupRuleActive } from "@/lib/windDownPlan";
+import { loadWindDownPlan } from "@/lib/windDownPlanLoad";
 
 const DONUT_COLORS = ["#6366f1", "#f59e0b", "#10b981", "#ef4444", "#8b5cf6", "#ec4899", "#14b8a6", "#f97316", "#3b82f6", "#84cc16", "#a855f7", "#64748b"];
 
@@ -68,6 +72,11 @@ export default async function WindDownPage({
     getTrackedExpenses(c.household.id, c.selected.id),
   ]);
   const open = c.selected.status === "open";
+  // From the Nov 2026 close: the "where the money goes" card (groups) replaces the Piggy / over-budget
+  // lists, and the spare balance always carries in full (overspend is cut from next month's budgets).
+  const grouped = open && groupRuleActive(c.selected.year, c.selected.month);
+  const wdPlan = grouped ? await loadWindDownPlan(prisma, { id: c.selected.id, householdId: c.household.id }) : null;
+  const memberNames = Object.fromEntries(c.members.map((m) => [m.id, m.name]));
   const sinkingIds = new Set(c.categories.filter((x) => x.sinking).map((x) => x.id));
 
   // what each tracked category contributes at close:
@@ -92,7 +101,7 @@ export default async function WindDownPage({
   // The month's surplus BEFORE over-budget is absorbed (carry-in + income − expense). Over-budget
   // spending eats into it; whatever's left over (if negative) is the net shortfall.
   const preOverspend = c.selected.carryForward + rollup.totalIncome - rollup.totalExpense;
-  const carryOut = preOverspend - overspendTotal;
+  const carryOut = grouped ? preOverspend : preOverspend - overspendTotal;
   const absorbed = Math.max(0, Math.min(preOverspend, overspendTotal));
   const nm = c.selected.month === 12 ? 1 : c.selected.month + 1;
   const ny = c.selected.month === 12 ? c.selected.year + 1 : c.selected.year;
@@ -194,11 +203,23 @@ export default async function WindDownPage({
                   : `What happens when ${c.selected.label} winds down`}
               </h2>
 
-              <Breakdown
-                title="→ General Piggy (under-budget leftovers)"
-                rows={piggyRows.map((t) => ({ name: t.name, amount: t.remaining }))}
-                total={piggyAdd}
-              />
+              {wdPlan ? (
+                <WindDownPlanCard
+                  periodId={c.selected.id}
+                  rows={wdPlan.rows}
+                  targets={wdPlan.targets}
+                  saved={wdPlan.choices}
+                  memberNames={memberNames}
+                  nextLabel={nextLabel}
+                  canEdit={!!c.canEdit}
+                />
+              ) : (
+                <Breakdown
+                  title="→ General Piggy (under-budget leftovers)"
+                  rows={piggyRows.map((t) => ({ name: t.name, amount: t.remaining }))}
+                  total={piggyAdd}
+                />
+              )}
               <Breakdown
                 title="↔ Sinking funds (share − bill: + accrues, − draws from the fund)"
                 rows={sinkingRows.map((t) => ({ name: t.name, amount: t.remaining }))}
@@ -210,23 +231,25 @@ export default async function WindDownPage({
                   saved fund, so the fund will go negative and catch up from next months&apos; shares.
                 </p>
               )}
-              <Breakdown
-                title="↓ Over-budget (reduces the balance carried forward)"
-                rows={overBudget.map((t) => ({ name: t.name, amount: t.remaining }))}
-                total={-overspendTotal}
-              />
+              {!wdPlan && (
+                <Breakdown
+                  title="↓ Over-budget (reduces the balance carried forward)"
+                  rows={overBudget.map((t) => ({ name: t.name, amount: t.remaining }))}
+                  total={-overspendTotal}
+                />
+              )}
               <Breakdown
                 title="→ Misc spends carried to next month (added as expenses there)"
                 rows={carriedRows}
                 total={carriedTotal}
               />
               <div className="flex justify-between border-t border-slate-100 pt-3 text-sm font-semibold text-slate-800">
-                <span>{carryOut < 0 ? "Net shortfall → next month's budget" : "Balance carried to next month"}</span>
+                <span>{grouped ? `Spare balance → ${nextLabel} income` : carryOut < 0 ? "Net shortfall → next month's budget" : "Balance carried to next month"}</span>
                 <span className={`tabular-nums ${carryOut < 0 ? "text-red-700" : ""}`}>
                   {formatINR(carryOut)}
                 </span>
               </div>
-              {carryOut < 0 && overspendTotal > 0 && (
+              {!grouped && carryOut < 0 && overspendTotal > 0 && (
                 <p className="rounded-lg bg-slate-50 px-3 py-2 text-xs leading-relaxed text-slate-500">
                   Why: this month&apos;s <b>{formatINR(preOverspend)}</b> surplus (carry-in + income − expense)
                   covered <b>{formatINR(absorbed)}</b> of the <b>{formatINR(overspendTotal)}</b> over-budget spending.
@@ -237,7 +260,7 @@ export default async function WindDownPage({
               )}
 
               {c.canEdit ? (
-                <WindDownButton periodId={c.selected.id} label={c.selected.label} leftovers={piggyAdd} nextLabel={nextLabel} />
+                <WindDownButton periodId={c.selected.id} label={c.selected.label} leftovers={grouped ? 0 : piggyAdd} nextLabel={nextLabel} grouped={grouped} />
               ) : (
                 <p className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-3 text-center text-sm text-slate-500">
                   🔒 This is a preview — only the head

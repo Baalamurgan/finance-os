@@ -10,6 +10,9 @@ export const SURPLUS_NOTE = "__surplus__";
 export const LEFTOVER_NOTE = "__leftover_income__";
 // Auto-carried "over-budget excess + misc spends" one-off expense lines.
 export const CARRY_NOTE = "__carry__";
+// Wind-down groups: the part of last month's overspend no budget could take (a cut can't take a budget
+// below 0) — a one-off pool expense next month instead. Rewritten by applyBudgetShortfall each run.
+export const OVERFLOW_NOTE = "__overspend_overflow__";
 // A "deferred" expense: added to the working month DURING its wind-down overhang (calendar
 // rolled to the next month but this one isn't wound down yet). A real expense of THIS month
 // (shows on the Sheet, counts in totals + carry) but kept OUT of the frozen settlement.

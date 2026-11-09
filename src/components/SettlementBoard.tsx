@@ -6,7 +6,7 @@ import { useRouter } from "next/navigation";
 import { formatINR } from "@/lib/format";
 import { setTreasurer } from "@/app/actions";
 
-type PaidItem = { label: string; amount: number; category: string; kind: "sheet" | "spend" | "charge" };
+type PaidItem = { label: string; amount: number; category: string; kind: "sheet" | "spend" | "charge" | "overspend" | "hold" };
 type Row = { id: number; name: string; contributed: number; paid: number; net: number; paidItems: PaidItem[] };
 type Transfer = {
   fromId: number; from: string; toId: number; to: string; amount: number;
@@ -212,9 +212,10 @@ function PaidBreakdown({ name, paid, items, y, m, memberId }: { name: string; pa
                 <span className="min-w-0">
                   <span className="text-slate-700">{it.label}</span>
                   <span className="ml-1 rounded bg-slate-100 px-1 text-[10px] text-slate-500">{it.category}</span>
-                  {it.kind === "charge" && <span className="ml-1 text-[10px] text-rose-600">owe pool</span>}
+                  {(it.kind === "charge" || it.kind === "hold") && <span className="ml-1 text-[10px] text-rose-600">owe pool</span>}
+                  {it.kind === "overspend" && <span className="ml-1 text-[10px] text-emerald-600">paid back</span>}
                 </span>
-                <span className={`shrink-0 tabular-nums ${it.kind === "charge" ? "text-rose-600" : "text-slate-700"}`}>{formatINR(it.amount)}</span>
+                <span className={`shrink-0 tabular-nums ${it.kind === "charge" || it.kind === "hold" ? "text-rose-600" : it.kind === "overspend" ? "text-emerald-700" : "text-slate-700"}`}>{formatINR(it.amount)}</span>
               </li>
               </Fragment>
             ))}
