@@ -107,7 +107,7 @@ export default async function SetupPage({
         viewingAsMember={c.viewingAsMember}
       />
 
-      <main className="mx-auto max-w-4xl space-y-5 p-6">
+      <main className="fo-rise mx-auto max-w-4xl space-y-5 p-6">
         <div>
           <h1 className="text-xl font-bold text-slate-900">Setup</h1>
           <p className="text-sm text-slate-500">

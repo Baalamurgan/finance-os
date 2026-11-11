@@ -7,6 +7,7 @@ import {
   PERSONAL_MORE, PERSONAL_PRIMARY, tabKeyFor,
 } from "@/components/navTabs";
 import { useNavSkeleton } from "@/components/NavProgress";
+import { PillTrack } from "@/components/motion/PillTrack";
 
 // The loading frame for a tab switch: the SAME header and bottom bar the page has (tapped tab already
 // lit), with shimmering cards where the content will land. The family header's name / Piggy / month come
@@ -82,11 +83,13 @@ export function FamilyLoadingFrame() {
               )}
               <div className="hidden text-[11px] text-slate-400 sm:block">Family Finance OS</div>
             </div>
-            <nav className="hidden items-center gap-1 sm:flex">
-              {FAMILY_PRIMARY.map((t) => (
-                <span key={t.key} className={`rounded-md px-3 py-1.5 text-sm font-medium ${active === t.key ? "bg-indigo-600 text-white" : "text-slate-600"}`}>{t.label}</span>
-              ))}
-              <span className={`rounded-md px-3 py-1.5 text-sm font-medium ${moreActive ? "bg-indigo-600 text-white" : "text-slate-600"}`}>More ▾</span>
+            <nav className="hidden sm:block">
+              <PillTrack scope="family-top" className="flex items-center gap-1" pillClassName="rounded-md bg-indigo-600 shadow-sm shadow-indigo-600/30">
+                {FAMILY_PRIMARY.map((t) => (
+                  <span key={t.key} data-tab data-active={active === t.key} className={`rounded-md px-3 py-1.5 text-sm font-medium ${active === t.key ? "bg-indigo-600 text-white" : "text-slate-600"}`}>{t.label}</span>
+                ))}
+                <span data-tab data-active={moreActive} className={`flex items-center gap-1 rounded-md px-3 py-1.5 text-sm font-medium ${moreActive ? "bg-indigo-600 text-white" : "text-slate-600"}`}>More<svg width="12" height="12" viewBox="0 0 20 20" aria-hidden><path fill="currentColor" d="M5 7l5 5 5-5z" /></svg></span>
+              </PillTrack>
             </nav>
             <div className="ml-auto flex shrink-0 items-center gap-1.5 sm:gap-2">
               {chrome && <span className="hidden rounded-full bg-amber-50 px-3 py-1 text-xs font-medium text-amber-700 sm:inline">🐷 {chrome.piggy}</span>}
@@ -105,13 +108,15 @@ export function FamilyLoadingFrame() {
       </div>
       <Bones />
       <nav className="fixed inset-x-0 bottom-0 z-50 flex border-t border-slate-200 bg-white/95 backdrop-blur sm:hidden" style={{ paddingBottom: "max(env(safe-area-inset-bottom), 0.75rem)" }}>
-        {FAMILY_PRIMARY.map((t) => (
-          <span key={t.key} className={cell(active === t.key)}>
-            <span className="text-xl leading-none">{FAMILY_TAB_ICON[t.key] ?? "•"}</span>
-            {t.label}
-          </span>
-        ))}
-        <span className={cell(moreActive)}><span className="text-xl leading-none">⋯</span>More</span>
+        <PillTrack scope="family-bottom" className="flex flex-1" inset={4} pillClassName="rounded-2xl bg-indigo-500/10 ring-1 ring-indigo-500/15">
+          {FAMILY_PRIMARY.map((t) => (
+            <span key={t.key} data-tab data-active={active === t.key} className={cell(active === t.key)}>
+              <span className={`text-xl leading-none ${active === t.key ? "scale-110" : ""}`}>{FAMILY_TAB_ICON[t.key] ?? "•"}</span>
+              {t.label}
+            </span>
+          ))}
+          <span data-tab data-active={moreActive} className={cell(moreActive)}><span className="text-xl leading-none">⋯</span>More</span>
+        </PillTrack>
       </nav>
     </div>
   );
@@ -134,11 +139,13 @@ export function PersonalLoadingFrame() {
           <div className="mr-1 min-w-0 sm:mr-2">
             <div className="flex items-center gap-1.5 text-[15px] font-bold text-emerald-900 sm:text-base"><span>🔒</span> Personal</div>
           </div>
-          <nav className="hidden items-center gap-1 sm:flex">
-            {PERSONAL_PRIMARY.map((t) => (
-              <span key={t.key} className={`rounded-md px-3 py-1.5 text-sm font-medium ${active === t.key ? "bg-emerald-600 text-white" : "text-emerald-800"}`}>{t.label}</span>
-            ))}
-            <span className={`rounded-md px-3 py-1.5 text-sm font-medium ${current ? "bg-emerald-600 text-white" : "text-emerald-800"}`}>{current ? `${current.label} ▾` : "⋯ More"}</span>
+          <nav className="hidden sm:block">
+            <PillTrack scope="personal-top" className="flex items-center gap-1" pillClassName="rounded-md bg-emerald-600 shadow-sm shadow-emerald-600/30">
+              {PERSONAL_PRIMARY.map((t) => (
+                <span key={t.key} data-tab data-active={active === t.key} className={`rounded-md px-3 py-1.5 text-sm font-medium ${active === t.key ? "bg-emerald-600 text-white" : "text-emerald-800"}`}>{t.label}</span>
+              ))}
+              <span data-tab data-active={!!current} className={`rounded-md px-3 py-1.5 text-sm font-medium ${current ? "bg-emerald-600 text-white" : "text-emerald-800"}`}>{current ? `${current.label} ▾` : "⋯ More"}</span>
+            </PillTrack>
           </nav>
           <div className="ml-auto flex items-center gap-2">
             <div className="h-7 w-24 rounded-md bg-emerald-100/80 dark:bg-slate-800" />
@@ -148,13 +155,15 @@ export function PersonalLoadingFrame() {
       </header>
       <Bones />
       <nav className="fixed inset-x-0 bottom-0 z-50 flex border-t border-slate-200 bg-white/95 backdrop-blur sm:hidden" style={{ paddingBottom: "max(env(safe-area-inset-bottom), 0.5rem)" }}>
-        {PERSONAL_PRIMARY.map((t) => (
-          <span key={t.key} className={cell(active === t.key)}>
-            <span className="text-xl leading-none">{t.icon}</span>
-            {t.label}
-          </span>
-        ))}
-        <span className={cell(!!current)}><span className="text-xl leading-none">⋯</span>More</span>
+        <PillTrack scope="personal-bottom" className="flex flex-1" inset={4} pillClassName="rounded-2xl bg-emerald-500/10 ring-1 ring-emerald-500/15">
+          {PERSONAL_PRIMARY.map((t) => (
+            <span key={t.key} data-tab data-active={active === t.key} className={cell(active === t.key)}>
+              <span className={`text-xl leading-none ${active === t.key ? "scale-110" : ""}`}>{t.icon}</span>
+              {t.label}
+            </span>
+          ))}
+          <span data-tab data-active={!!current} className={cell(!!current)}><span className="text-xl leading-none">⋯</span>More</span>
+        </PillTrack>
       </nav>
     </div>
   );

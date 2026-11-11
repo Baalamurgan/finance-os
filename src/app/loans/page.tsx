@@ -46,7 +46,7 @@ export default async function LoansPage({
         viewingAsMember={c.viewingAsMember}
       />
 
-      <main className="mx-auto max-w-4xl space-y-6 p-6">
+      <main className="fo-rise mx-auto max-w-4xl space-y-6 p-6">
         <div className="flex flex-wrap items-end justify-between gap-3">
           <div>
             <h1 className="text-xl font-bold text-slate-900">Loans &amp; Chits</h1>

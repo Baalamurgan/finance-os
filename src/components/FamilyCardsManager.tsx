@@ -5,6 +5,23 @@ import { addFamilyCard, updateFamilyCard, deleteFamilyCard, type CardFormState }
 import type { FamilyCard } from "@/lib/queries";
 import { useToast } from "@/components/Toast";
 import { CardColorPicker } from "@/components/CardColorPicker";
+import { CardWallet, type WalletCard } from "@/components/motion/CardWallet";
+
+const kindOf = (t: string) => (t === "credit_card" ? "Credit" : t === "prepaid_card" ? "Prepaid" : "Debit");
+const inr = (n: number) => `₹${n.toLocaleString("en-IN")}`;
+function toWallet(c: FamilyCard): WalletCard {
+  const back = [
+    { label: "Owner", value: c.member.name },
+    { label: "Type", value: [kindOf(c.type), c.institution].filter(Boolean).join(" · ") },
+    ...(c.credit?.creditLimit ? [{ label: "Limit", value: inr(c.credit.creditLimit) }] : []),
+    ...(c.credit?.statementDay ? [{ label: "Statement", value: `day ${c.credit.statementDay} · due +${c.credit.dueOffsetDays}d` }] : []),
+    ...(c.last4 ? [{ label: "Ends in", value: c.last4 }] : []),
+  ];
+  return {
+    id: c.id, name: c.name, color: c.color, last4: c.last4, holder: c.member.name, kind: kindOf(c.type),
+    network: c.network || null, institution: c.institution, back,
+  };
+}
 
 type Mem = { id: number; name: string };
 const NETWORKS = ["", "visa", "mastercard", "rupay", "amex", "diners"];
@@ -46,12 +63,18 @@ export function FamilyCardsManager({
         />
       )}
 
+      {cards.some((c) => c.active) && (
+        <section className="rounded-2xl border border-slate-200 bg-white px-4 pb-4 pt-6 sm:px-6">
+          <CardWallet cards={cards.filter((c) => c.active).map(toWallet)} />
+        </section>
+      )}
+
       {cards.length === 0 && !adding ? (
         <p className="rounded-xl border border-dashed border-slate-200 p-8 text-center text-sm text-slate-400">
           No cards yet. Add a debit or credit card to pick it when logging a spend.
         </p>
       ) : (
-        <ul className="space-y-2">
+        <ul className="fo-rise space-y-2">
           {cards.map((c) =>
             editId === c.id ? (
               <li key={c.id}>
@@ -65,7 +88,11 @@ export function FamilyCardsManager({
               </li>
             ) : (
               <li key={c.id} className={`flex items-center gap-3 rounded-xl border border-slate-200 bg-white p-3 ${c.active ? "" : "opacity-60"}`}>
-                <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg text-white" style={{ backgroundColor: c.color }} aria-hidden>💳</span>
+                <span className="relative h-7 w-11 shrink-0 overflow-hidden rounded-md shadow-sm" style={{ backgroundColor: c.color }} aria-hidden>
+                  <span className="absolute inset-0 bg-gradient-to-br from-[#fff]/20 to-black/25" />
+                  <span className="absolute left-1.5 top-1.5 h-2 w-3 rounded-[2px] bg-gradient-to-br from-amber-200 to-amber-400" />
+                  <span className="absolute bottom-1 right-1.5 text-[7px] font-bold tracking-wider text-[#fff]/90">{c.last4 ?? ""}</span>
+                </span>
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-1.5 text-sm font-semibold text-slate-800">
                     <span className="truncate">{c.name}</span>

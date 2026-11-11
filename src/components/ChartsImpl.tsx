@@ -214,14 +214,20 @@ export function MoneyFlowDonut({
         </div>
       </div>
       <ul className="w-full flex-1 space-y-1.5">
-        {segments.map((s) => (
-          <li key={s.name} className="flex items-center gap-2 text-sm">
-            <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ background: s.color }} />
-            <span className="flex-1 truncate text-slate-600">{s.name}</span>
-            <span className="tabular-nums font-medium text-slate-800">{inr(s.value)}</span>
-            <span className="w-9 text-right text-xs text-slate-400">
-              {pctLabel((s.value / total) * 100)}
-            </span>
+        {segments.map((s, i) => (
+          <li key={s.name} className="text-sm">
+            <div className="flex items-center gap-2">
+              <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ background: s.color }} />
+              <span className="flex-1 truncate text-slate-600">{s.name}</span>
+              <span className="tabular-nums font-medium text-slate-800">{inr(s.value)}</span>
+              <span className="w-9 text-right text-xs text-slate-400">
+                {pctLabel((s.value / total) * 100)}
+              </span>
+            </div>
+            {/* share of the whole, as a slim bar that fills in on arrival */}
+            <div className="ml-[18px] mr-11 mt-0.5 h-1 overflow-hidden rounded-full bg-slate-100" aria-hidden>
+              <div className="fo-bar h-full rounded-full" style={{ width: `${Math.max(1.5, (s.value / total) * 100)}%`, background: s.color, animationDelay: `${120 + i * 50}ms` }} />
+            </div>
           </li>
         ))}
       </ul>

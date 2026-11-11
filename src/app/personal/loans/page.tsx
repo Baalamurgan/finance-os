@@ -53,7 +53,7 @@ export default async function PersonalLoans({
   return (
     <>
       {nav}
-      <main className="mx-auto max-w-3xl space-y-5 p-4 sm:p-6">
+      <main className="fo-rise mx-auto max-w-3xl space-y-5 p-4 sm:p-6">
         <h1 className="text-xl font-bold text-slate-900">Lending &amp; borrowing</h1>
 
         <div className="grid grid-cols-2 gap-4">

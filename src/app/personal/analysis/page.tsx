@@ -40,7 +40,7 @@ export default async function PersonalAnalysis({
   return (
     <>
       {nav}
-      <main className="mx-auto max-w-3xl space-y-5 p-4 sm:p-6">
+      <main className="fo-rise mx-auto max-w-3xl space-y-5 p-4 sm:p-6">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <h1 className="text-xl font-bold text-slate-900">Analysis</h1>
           <PersonalRangeTabs active={rangeKey} />

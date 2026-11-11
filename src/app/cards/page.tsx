@@ -42,7 +42,7 @@ export default async function CardsPage({
         viewingAsMember={c.viewingAsMember}
       />
 
-      <main className="mx-auto max-w-2xl space-y-5 p-4 sm:p-6">
+      <main className="fo-rise mx-auto max-w-2xl space-y-5 p-4 sm:p-6">
         <div>
           <h1 className="text-xl font-bold text-slate-900">💳 Cards</h1>
           <p className="text-sm text-slate-500">Debit &amp; credit cards the family pays with.</p>

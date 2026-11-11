@@ -14,6 +14,8 @@ import { AutoLock } from "@/components/AutoLock";
 import { PersonalUserMenu } from "@/components/UserMenu";
 import { PERSONAL_MORE, PERSONAL_PRIMARY } from "@/components/navTabs";
 import { startNavProgress } from "@/components/NavProgress";
+import { PillTrack } from "@/components/motion/PillTrack";
+import { QuickJump } from "@/components/motion/QuickJump";
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
@@ -66,20 +68,24 @@ export function PersonalNav({
           </div>
 
           {/* desktop tabs (mobile uses the bottom bar) */}
-          <nav className="hidden items-center gap-1 sm:flex">
-            {PRIMARY.map((t) => (
-              <Link
-                key={t.key}
-                href={`${t.href}${q}`}
-                replace
-                className={`relative rounded-md px-3 py-1.5 text-sm font-medium transition ${
-                  active === t.key ? "bg-emerald-600 text-white" : "text-emerald-800 hover:bg-emerald-100"
-                }`}
-              >
-                {t.label}
-              </Link>
-            ))}
-            <DesktopMore active={active} q={q} financeDue={financeDue} />
+          <nav className="hidden sm:block">
+            <PillTrack scope="personal-top" className="flex items-center gap-1" pillClassName="rounded-md bg-emerald-600 shadow-sm shadow-emerald-600/30">
+              {PRIMARY.map((t) => (
+                <Link
+                  key={t.key}
+                  href={`${t.href}${q}`}
+                  replace
+                  data-tab
+                  data-active={active === t.key}
+                  className={`relative rounded-md px-3 py-1.5 text-sm font-medium transition ${
+                    active === t.key ? "bg-emerald-600 text-white" : "text-emerald-800 hover:bg-emerald-100"
+                  }`}
+                >
+                  {t.label}
+                </Link>
+              ))}
+              <DesktopMore active={active} q={q} financeDue={financeDue} />
+            </PillTrack>
           </nav>
 
           <div className="ml-auto flex flex-nowrap items-center gap-1.5 sm:gap-2">
@@ -101,6 +107,8 @@ export function PersonalNav({
             >
               {years.map((yr) => <option key={yr} value={yr}>{yr}</option>)}
             </select>
+
+            <QuickJump q={q} items={TABS} tone="personal" />
 
             <RemindersBell context="personal" />
 
@@ -175,17 +183,19 @@ function PersonalBottomNav({ active, q, financeDue }: { active: string; q: strin
         className="fixed inset-x-0 bottom-0 z-50 flex border-t border-slate-200 bg-white/95 backdrop-blur sm:hidden"
         style={{ paddingBottom: "max(env(safe-area-inset-bottom), 0.5rem)" }}
       >
-        {PRIMARY.map((t) => (
-          <Link key={t.key} href={`${t.href}${q}`} replace onClick={() => setOpen(false)} className={cell(active === t.key)}>
-            <span className="text-xl leading-none">{t.icon}</span>
-            {t.label}
-          </Link>
-        ))}
-        <button ref={btnRef} type="button" onClick={() => setOpen((v) => !v)} className={cell(moreActive || open)}>
-          <span className="text-xl leading-none">⋯</span>
-          More
-          {financeDue && <span className="absolute right-1/4 top-1 h-1.5 w-1.5 rounded-full bg-red-500" />}
-        </button>
+        <PillTrack scope="personal-bottom" className="flex flex-1" inset={4} pillClassName="rounded-2xl bg-emerald-500/10 ring-1 ring-emerald-500/15">
+          {PRIMARY.map((t) => (
+            <Link key={t.key} href={`${t.href}${q}`} replace data-tab data-active={active === t.key} onClick={() => setOpen(false)} className={cell(active === t.key)}>
+              <span className={`text-xl leading-none transition-transform duration-300 ${active === t.key ? "scale-110" : ""}`}>{t.icon}</span>
+              {t.label}
+            </Link>
+          ))}
+          <button ref={btnRef} type="button" data-tab data-no-pill data-active={moreActive} onClick={() => setOpen((v) => !v)} className={cell(moreActive || open)}>
+            <span className="text-xl leading-none">⋯</span>
+            More
+            {financeDue && <span className="absolute right-1/4 top-1 h-1.5 w-1.5 rounded-full bg-red-500" />}
+          </button>
+        </PillTrack>
       </nav>
     </>
   );
@@ -216,6 +226,9 @@ function DesktopMore({ active, q, financeDue }: { active: string; q: string; fin
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
+        data-tab
+        data-no-pill
+        data-active={!!current}
         aria-expanded={open}
         className={`relative rounded-md px-3 py-1.5 text-sm font-medium transition ${current ? "bg-emerald-600 text-white" : "text-emerald-800 hover:bg-emerald-100"}`}
       >

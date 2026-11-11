@@ -51,7 +51,7 @@ export default async function LoanDetailPage({
         viewingAsMember={c.viewingAsMember}
       />
 
-      <main className="mx-auto max-w-2xl space-y-5 p-4 sm:p-6">
+      <main className="fo-rise mx-auto max-w-2xl space-y-5 p-4 sm:p-6">
         <Link href="/loans" className="text-sm text-indigo-600 hover:underline">← Loans &amp; Chits</Link>
 
         <div className="flex flex-wrap items-start justify-between gap-2">

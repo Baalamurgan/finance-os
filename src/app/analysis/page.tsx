@@ -79,7 +79,7 @@ export default async function AnalysisPage({
     return (
       <>
         {nav}
-        <main className="mx-auto max-w-7xl space-y-4 p-6">
+        <main className="fo-rise mx-auto max-w-7xl space-y-4 p-6">
           {picker}
           <p className="p-12 text-center text-slate-500">No data to analyse for this month.</p>
         </main>
@@ -113,7 +113,7 @@ export default async function AnalysisPage({
   return (
     <>
       {nav}
-      <main className="mx-auto max-w-7xl space-y-8 p-6">
+      <main className="fo-rise mx-auto max-w-7xl space-y-8 p-6">
         {picker}
         <h1 className="text-xl font-bold text-slate-900">{title}</h1>
 

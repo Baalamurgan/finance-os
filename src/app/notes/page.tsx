@@ -41,7 +41,7 @@ export default async function NotesPage({
         actualIsHead={c.actualIsHead}
         viewingAsMember={c.viewingAsMember}
       />
-      <main className="mx-auto max-w-2xl space-y-4 p-4 sm:p-6">
+      <main className="fo-rise mx-auto max-w-2xl space-y-4 p-4 sm:p-6">
         <div>
           <h1 className="text-xl font-bold text-slate-900">📝 Family notes</h1>
           <p className="mt-0.5 text-sm text-slate-500">

@@ -152,7 +152,7 @@ export default async function PersonalExpenses({
   return (
     <>
       {nav}
-      <main className="mx-auto max-w-3xl space-y-4 p-4 pb-28 sm:p-6">
+      <main className="fo-rise mx-auto max-w-3xl space-y-4 p-4 pb-28 sm:p-6">
         <h1 className="text-xl font-bold text-slate-900">{period.label} — spends</h1>
 
         {/* due-bill reminders (soon / overdue) */}
