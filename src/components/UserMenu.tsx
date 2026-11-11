@@ -3,7 +3,6 @@
 import Link from "next/link";
 import { useEffect, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { startRegistration } from "@simplewebauthn/browser";
 import { doSignOut, setViewAs, refreshData } from "@/app/actions";
 import { lockNow, removeMyBiometric } from "@/app/lock/actions";
 import { ThemeMenuRow } from "@/components/ThemeToggle";
@@ -77,6 +76,8 @@ export function UserMenu({
       const optRes = await fetch("/api/webauthn/register/options", { method: "POST" });
       if (!optRes.ok) throw new Error("Couldn’t start biometric setup.");
       const options = await optRes.json();
+      // loaded on demand: only needed the moment someone turns on biometrics (keeps it off every page's bundle)
+      const { startRegistration } = await import("@simplewebauthn/browser");
       const attestation = await startRegistration(options);
       const verifyRes = await fetch("/api/webauthn/register/verify", {
         method: "POST",
@@ -127,7 +128,7 @@ export function UserMenu({
       </button>
 
       {open && (
-        <div className="absolute right-0 z-50 mt-2 w-64 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-lg">
+        <div className="fo-menu absolute right-0 z-50 mt-2 w-64 origin-top-right overflow-hidden rounded-xl border border-slate-200 bg-white shadow-lg">
           <div className="flex items-center gap-3 border-b border-slate-100 p-4">
             <Avatar name={name} email={email} image={image} initial={initial} size="lg" />
             <div className="min-w-0">
@@ -326,7 +327,7 @@ export function PersonalUserMenu({
       </button>
 
       {open && (
-        <div className="absolute right-0 z-50 mt-2 w-64 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-lg">
+        <div className="fo-menu absolute right-0 z-50 mt-2 w-64 origin-top-right overflow-hidden rounded-xl border border-slate-200 bg-white shadow-lg">
           <div className="flex items-center gap-3 border-b border-slate-100 p-4">
             <Avatar name={name} email={email} image={image} initial={initial} size="lg" />
             <div className="min-w-0">

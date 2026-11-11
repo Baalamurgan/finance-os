@@ -39,27 +39,28 @@ export default async function PersonalExpenses({
   const catList = c.categories.map((cat) => ({ id: cat.id, name: cat.name, icon: cat.icon }));
 
   // Planned recurring spends (copied from Setup, not paid yet) — minus any removed from this month's plan.
-  const removedSpends = await prisma.personalPlanStep.findMany({ where: { periodId: period.id, status: "skipped", templateKind: "spend" }, select: { templateId: true, label: true, amount: true } });
+  // All independent reads in one parallel round (the removed-from-plan filter is applied below in memory).
+  const [removedSpends, pendingSpends, myAccounts, cash, cardDues, balanceCards, spends, lending, personalAcct] = await Promise.all([
+    prisma.personalPlanStep.findMany({ where: { periodId: period.id, status: "skipped", templateKind: "spend" }, select: { templateId: true, label: true, amount: true } }),
+    prisma.personalSpend.findMany({ where: { periodId: period.id, pending: true }, orderBy: [{ date: "asc" }, { id: "asc" }] }),
+    prisma.financeAccount.findMany({ where: { memberId: c.member.id, active: true }, orderBy: [{ sortOrder: "asc" }, { id: "asc" }], select: { id: true, name: true, type: true } }),
+    getPersonalCash(period),
+    getCardDues(c.member.id),
+    getBalanceCards(c.member.id),
+    prisma.personalSpend.findMany({ where: { periodId: period.id, pending: false }, orderBy: [{ date: "desc" }, { id: "desc" }], include: { splitLoans: true } }),
+    getPersonalLending(c.member.id),
+    getPersonalAccount(c.member.id),
+  ]);
   const removedSpendIds = removedSpends.map((r) => r.templateId as number);
   const removedList = removedSpends.map((r) => ({ id: r.templateId as number, label: r.label, amount: r.amount }));
-  const [planned, myAccounts] = await Promise.all([
-    prisma.personalSpend.findMany({ where: { periodId: period.id, pending: true, id: { notIn: removedSpendIds.length ? removedSpendIds : [0] } }, orderBy: [{ date: "asc" }, { id: "asc" }] }),
-    prisma.financeAccount.findMany({ where: { memberId: c.member.id, active: true }, orderBy: [{ sortOrder: "asc" }, { id: "asc" }], select: { id: true, name: true, type: true } }),
-  ]);
+  const removedSet = new Set(removedSpendIds);
+  const planned = pendingSpends.filter((p) => !removedSet.has(p.id));
   const acctName = new Map(myAccounts.map((a) => [a.id, a.name]));
   const plannedItems = planned.map((p) => {
     const payId = p.cardAccountId ?? p.payAccountId;
     const cat = cats.get(p.categoryId);
     return { id: p.id, label: p.note?.trim() || cat?.name || "Spend", icon: cat?.icon ?? null, category: cat?.name ?? "Spend", amount: p.amount, day: p.date.getDate(), payId, payName: payId != null ? acctName.get(payId) ?? null : null };
   });
-  const [cash, cardDues, balanceCards, spends, lending] = await Promise.all([
-    getPersonalCash(period),
-    getCardDues(c.member.id),
-    getBalanceCards(c.member.id),
-    prisma.personalSpend.findMany({ where: { periodId: period.id, pending: false }, orderBy: [{ date: "desc" }, { id: "desc" }], include: { splitLoans: true } }),
-    getPersonalLending(c.member.id),
-  ]);
-  const personalAcct = await getPersonalAccount(c.member.id);
   const { personalExpense, netSpent, canSpend } = cash;
   const unpaidCardDues = cardDues.reduce((s, d) => s + d.unpaidTotal, 0);
   const owed = lending.owed;

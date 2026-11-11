@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import { getMyLendingReminders, type LendingReminder } from "@/app/personal/actions";
 import { formatINR } from "@/lib/format";
+import { recentCall } from "@/lib/recentCall";
 
 // Persistent top bar for repay-by dates on OPEN lending/borrowing. Unlike the dismissible card/step
 // banners, this one is NOT dismissible — it stays from `due − notifyDaysBefore` (or overdue) until the
@@ -15,7 +16,7 @@ export function LendingDueBar() {
 
   useEffect(() => {
     let alive = true;
-    getMyLendingReminders().then((r) => { if (alive) setItems(r); }).catch(() => {});
+    recentCall("lendingReminders", getMyLendingReminders).then((r) => { if (alive) setItems(r); }).catch(() => {});
     return () => { alive = false; };
   }, []);
 

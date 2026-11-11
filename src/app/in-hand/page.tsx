@@ -67,9 +67,9 @@ export default async function InHandPage({
   const isPreview = c.selected.status === "draft";
   const periodId = c.selected.id;
   // Real cash each person holds: budget left + bills to pay + savings held − misc spent.
-  const inHand = await getInHand(c.household.id, periodId);
-  const [plan, activity, cardsByMember] = await Promise.all([
-    getMoneyPlan(c.household.id, periodId, inHand),
+  // The plan needs In-Hand first; the activity and cards don't, so they load alongside both steps.
+  const [[inHand, plan], activity, cardsByMember] = await Promise.all([
+    getInHand(c.household.id, periodId).then(async (ih) => [ih, await getMoneyPlan(c.household.id, periodId, ih)] as const),
     getMoneyPlanActivity(periodId),
     // The payer's own credit cards power the "Paid with" picker on each bill's Pay modal.
     getFamilyCreditCards(c.household.id),

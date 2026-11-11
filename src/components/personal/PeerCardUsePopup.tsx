@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { getMyIncomingPeerCardUses, type PeerCardUse } from "@/app/personal/actions";
 import { formatINR } from "@/lib/format";
+import { recentCall } from "@/lib/recentCall";
 
 // A one-time popup for the receiving end of a household-linked spend you didn't make: your card was used
 // by another member (peer-card spend), OR someone split a spend / reimbursement with you and you now owe.
@@ -20,7 +21,7 @@ export function PeerCardUsePopup() {
 
   useEffect(() => {
     let alive = true;
-    getMyIncomingPeerCardUses()
+    recentCall("peerCardUses", getMyIncomingPeerCardUses)
       .then((all) => {
         if (!alive) return;
         const seen = new Set(readSeen());

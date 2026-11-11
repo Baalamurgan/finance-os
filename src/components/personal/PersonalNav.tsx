@@ -12,23 +12,13 @@ import { PersonalDock } from "@/components/personal/PersonalDock";
 import { LendingDueBar } from "@/components/personal/LendingDueBar";
 import { AutoLock } from "@/components/AutoLock";
 import { PersonalUserMenu } from "@/components/UserMenu";
+import { PERSONAL_MORE, PERSONAL_PRIMARY } from "@/components/navTabs";
+import { startNavProgress } from "@/components/NavProgress";
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
-// Three everyday tabs up front; everything else under "⋯ More" (same on phone and desktop).
-const PRIMARY = [
-  { key: "expenses", label: "Spends", href: "/personal/expenses", icon: "🧾" },
-  { key: "sheet", label: "Sheet", href: "/personal/sheet", icon: "📋" },
-  { key: "plan", label: "Money plan", href: "/personal/plan", icon: "💸" },
-] as const;
-const MORE = [
-  { key: "loans", label: "Lending", href: "/personal/loans", icon: "🤝" },
-  { key: "cards", label: "Accounts", href: "/personal/cards", icon: "🏦" },
-  { key: "networth", label: "Net worth", href: "/personal/networth", icon: "💎" },
-  { key: "analysis", label: "Analysis", href: "/personal/analysis", icon: "📊" },
-  { key: "today", label: "Today", href: "/personal/today", icon: "🌤️" },
-  { key: "setup", label: "Setup", href: "/personal/setup", icon: "⚙️" },
-] as const;
+const PRIMARY = PERSONAL_PRIMARY;
+const MORE = PERSONAL_MORE;
 const TABS = [...PRIMARY, ...MORE];
 
 export function PersonalNav({
@@ -50,7 +40,10 @@ export function PersonalNav({
   const curMonth = now.getMonth() + 1;
   const activeHref = TABS.find((t) => t.key === active)?.href ?? (active === "finance" ? "/personal/networth" : "/personal");
   const q = `?y=${selYear}&m=${selMonth}`;
-  const go = (y: number, m: number) => router.replace(`${activeHref}?y=${y}&m=${m}`);
+  const go = (y: number, m: number) => {
+    startNavProgress();
+    router.replace(`${activeHref}?y=${y}&m=${m}`);
+  };
   const years: number[] = [];
   for (let yr = curYear; yr >= 2000; yr--) years.push(yr);
 
@@ -231,7 +224,7 @@ function DesktopMore({ active, q, financeDue }: { active: string; q: string; fin
       </button>
       {open && (
         <>
-          <div className="absolute left-0 z-50 mt-1 w-48 overflow-hidden rounded-xl border border-slate-200 bg-white py-1 shadow-lg">
+          <div className="fo-menu absolute left-0 z-50 mt-1 w-48 overflow-hidden rounded-xl border border-slate-200 bg-white py-1 shadow-lg">
             {MORE.map((t) => (
               <Link
                 key={t.key}

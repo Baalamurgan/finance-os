@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import { getMyBillReminders, type MyBillReminder } from "@/app/actions";
 import { formatINR } from "@/lib/format";
+import { recentCall } from "@/lib/recentCall";
 
 // High-alert popup: a household bill due within 3 days (or overdue) that this member is
 // responsible for — or that they're the head / a manager of. Fires once a day, right after
@@ -15,7 +16,7 @@ export function BillDueHighAlert() {
     const key = `bill-highalert-shown:${new Date().toDateString()}`;
     if (localStorage.getItem(key) === "1") return;
     let alive = true;
-    getMyBillReminders().then((b) => {
+    recentCall("billReminders", getMyBillReminders).then((b) => {
       if (alive && b.length > 0) setBills(b);
     });
     return () => { alive = false; };

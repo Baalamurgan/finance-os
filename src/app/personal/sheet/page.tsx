@@ -44,17 +44,22 @@ export default async function PersonalSheet({
   const incomeAccounts = c.spendCards.filter((a) => a.mine && BALANCE_ACCOUNT_TYPES.has(a.type ?? ""));
 
   // Steps removed for this month (plan "skipped") are out of the budget, so out of this list too.
-  const removedBills = await prisma.personalPlanStep.findMany({ where: { periodId: period.id, status: "skipped", templateKind: { in: ["expense", "income"] } }, select: { templateKind: true, templateId: true } });
-  const removedExpenseIds = removedBills.filter((r) => r.templateKind === "expense").map((r) => r.templateId as number);
-  const removedIncomeIds = removedBills.filter((r) => r.templateKind === "income").map((r) => r.templateId as number);
-  const [expenses, extraIncomes, cash, unpaidCardDues, lending] = await Promise.all([
+  // All independent reads in one parallel round (the removed-from-plan filter is applied below in memory).
+  const [removedBills, allExpenses, allIncomes, cash, unpaidCardDues, lending, personalAcct] = await Promise.all([
+    prisma.personalPlanStep.findMany({ where: { periodId: period.id, status: "skipped", templateKind: { in: ["expense", "income"] } }, select: { templateKind: true, templateId: true } }),
     // ALL planned bills copied from Setup (paid or not) — the Money Plan is the budget.
-    prisma.personalExpense.findMany({ where: { periodId: period.id, id: { notIn: removedExpenseIds.length ? removedExpenseIds : [0] } }, orderBy: { amount: "desc" } }),
-    prisma.personalIncome.findMany({ where: { periodId: period.id, id: { notIn: removedIncomeIds.length ? removedIncomeIds : [0] } }, orderBy: { id: "desc" } }),
+    prisma.personalExpense.findMany({ where: { periodId: period.id }, orderBy: { amount: "desc" } }),
+    prisma.personalIncome.findMany({ where: { periodId: period.id }, orderBy: { id: "desc" } }),
     getPersonalCash(period),
     getUnpaidCardDues(c.member.id),
     getPersonalLending(c.member.id),
+    // The personal account's REAL balance when there is one (the calculated figure is the check).
+    getPersonalAccount(c.member.id),
   ]);
+  const removedExpenseIds = new Set(removedBills.filter((r) => r.templateKind === "expense").map((r) => r.templateId as number));
+  const removedIncomeIds = new Set(removedBills.filter((r) => r.templateKind === "income").map((r) => r.templateId as number));
+  const expenses = allExpenses.filter((e) => !removedExpenseIds.has(e.id));
+  const extraIncomes = allIncomes.filter((i) => !removedIncomeIds.has(i.id));
   const monthlyExpenses = expenses.reduce((s, e) => s + e.amount, 0); // the recurring expenses (bills) from Setup, set aside from day one
   // Every spend counts at spend time. Key figures (see the money model in lib/personal/cash.ts):
   //  Can spend      = personalExpense − your NET spend (splits net out others' shares)
@@ -67,8 +72,6 @@ export default async function PersonalSheet({
   // Sheet + Spends + Lending only — nothing from the Money Plan: every Sheet bill already counts as spent
   // (it's out of Can spend), ticked or not. Card spends haven't left yet (+ dues); lent out (−); borrowed in (+).
   const calcInAccount = canSpend + unpaidCardDues - owed + borrowed;
-  // The personal account's REAL balance when there is one (the calculated figure is the check).
-  const personalAcct = await getPersonalAccount(c.member.id);
   const inAccount = personalAcct ? personalAcct.balance : calcInAccount;
   const spentPct = personalExpense > 0 ? Math.min(100, (netSpent / personalExpense) * 100) : 0;
 

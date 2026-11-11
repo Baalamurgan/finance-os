@@ -36,10 +36,56 @@ export async function loadPersonal(params?: { y?: string; m?: string }) {
 
   await ensurePersonalMonth(member.id);
 
-  const periods = await prisma.personalPeriod.findMany({
-    where: { memberId: member.id },
-    orderBy: [{ year: "desc" }, { month: "desc" }],
-  });
+  // Everything below reads independently → one parallel round instead of a chain of ~8 round-trips
+  // (felt on every Personal tab switch).
+  const [periods, categories, biometricCount, creditCardsRaw, spendCardsRaw, members, pastLoans, cardRemindersAll] = await Promise.all([
+    prisma.personalPeriod.findMany({
+      where: { memberId: member.id },
+      orderBy: [{ year: "desc" }, { month: "desc" }],
+    }),
+    prisma.personalCategory.findMany({
+      where: { memberId: member.id, archived: false },
+      orderBy: [{ sortOrder: "asc" }, { name: "asc" }],
+    }),
+    prisma.webAuthnCredential.count({ where: { memberId: member.id, purpose: "personal" } }),
+    // Active credit cards for the "Paid by card" picker (spend + fixed-line modals).
+    prisma.financeAccount.findMany({
+      where: { memberId: member.id, type: "credit_card", active: true },
+      orderBy: [{ sortOrder: "asc" }, { id: "asc" }],
+      select: { id: true, name: true, color: true },
+    }),
+    // All active cards in the HOUSEHOLD for the day-to-day spend picker — your own AND other members'
+    // (peer usage: you spend, they front the cash, you owe them). Own cards first, then each member's,
+    // tagged with owner so the modal can group them and derive the cross-person debt. Credit stays
+    // tag-only (dues run through getCardDues); debit/prepaid post to the owner's ledger + balance.
+    prisma.financeAccount.findMany({
+      where: { active: true, member: { householdId: member.householdId } },
+      orderBy: [{ sortOrder: "asc" }, { id: "asc" }],
+      select: {
+        id: true, name: true, color: true, type: true, memberId: true, member: { select: { name: true } }, personalPrimary: true,
+        credit: { select: { statementDay: true, dueOffsetDays: true } },
+      },
+    }),
+    // Other household members — the split/reimburse picker mirrors a shared spend into their Lending tab
+    // and notifies them, exactly like a peer-card spend does for the card owner.
+    prisma.member.findMany({
+      where: { householdId: member.householdId, id: { not: member.id } },
+      orderBy: { name: "asc" },
+      select: { id: true, name: true },
+    }),
+    // Past OUTSIDE people (typed names, not household members) you've split/lent with before — offered as
+    // quick-picks in the split "Someone else" box so you don't retype the same name. Linked (household)
+    // loans carry the member's name and are picked from the members list instead, so filter to the
+    // single-sided (linkGroup null) typed names.
+    prisma.personalLoan.findMany({
+      where: { memberId: member.id, linkGroup: null },
+      select: { counterparty: true },
+      distinct: ["counterparty"],
+      orderBy: { counterparty: "asc" },
+    }),
+    // Due-bill reminders (soon/overdue) — drives the landing banner + the Finance-tab badge.
+    getCardBillReminders(member.id),
+  ]);
 
   const y = params?.y ? Number(params.y) : undefined;
   const m = params?.m ? Number(params.m) : undefined;
@@ -52,35 +98,9 @@ export async function loadPersonal(params?: { y?: string; m?: string }) {
       ? (periods.find((p) => p.year === y && p.month === m) ?? null)
       : (periods.find((p) => p.year === anchor.year && p.month === anchor.month) ?? periods[0] ?? null);
 
-  const categories = await prisma.personalCategory.findMany({
-    where: { memberId: member.id, archived: false },
-    orderBy: [{ sortOrder: "asc" }, { name: "asc" }],
-  });
+  const hasBiometric = biometricCount > 0;
+  const creditCards = creditCardsRaw.map((a) => ({ id: a.id, name: a.name, color: a.color }));
 
-  const hasBiometric =
-    (await prisma.webAuthnCredential.count({ where: { memberId: member.id, purpose: "personal" } })) > 0;
-
-  // Active credit cards for the "Paid by card" picker (spend + fixed-line modals).
-  const creditCards = (
-    await prisma.financeAccount.findMany({
-      where: { memberId: member.id, type: "credit_card", active: true },
-      orderBy: [{ sortOrder: "asc" }, { id: "asc" }],
-      select: { id: true, name: true, color: true },
-    })
-  ).map((a) => ({ id: a.id, name: a.name, color: a.color }));
-
-  // All active cards in the HOUSEHOLD for the day-to-day spend picker — your own AND other members'
-  // (peer usage: you spend, they front the cash, you owe them). Own cards first, then each member's,
-  // tagged with owner so the modal can group them and derive the cross-person debt. Credit stays
-  // tag-only (dues run through getCardDues); debit/prepaid post to the owner's ledger + balance.
-  const spendCardsRaw = await prisma.financeAccount.findMany({
-      where: { active: true, member: { householdId: member.householdId } },
-      orderBy: [{ sortOrder: "asc" }, { id: "asc" }],
-      select: {
-        id: true, name: true, color: true, type: true, memberId: true, member: { select: { name: true } }, personalPrimary: true,
-        credit: { select: { statementDay: true, dueOffsetDays: true } },
-      },
-    });
   const spendCards = spendCardsRaw
     // statementDay/dueOffsetDays let the spend modal auto-derive a "collect by" date for a split paid on
     // a credit card (mirrors the peer-card cycle logic, client-side, so it can be shown disabled).
@@ -98,27 +118,7 @@ export async function loadPersonal(params?: { y?: string; m?: string }) {
     for (const c of spendCards) c.personal = c.id === pid;
   }
 
-  // Other household members — the split/reimburse picker mirrors a shared spend into their Lending tab
-  // and notifies them, exactly like a peer-card spend does for the card owner.
-  const members = await prisma.member.findMany({
-    where: { householdId: member.householdId, id: { not: member.id } },
-    orderBy: { name: "asc" },
-    select: { id: true, name: true },
-  });
-
-  // Due-bill reminders (soon/overdue) — drives the landing banner + the Finance-tab badge.
-  const cardReminders = creditCards.length > 0 ? await getCardBillReminders(member.id) : [];
-
-  // Past OUTSIDE people (typed names, not household members) you've split/lent with before — offered as
-  // quick-picks in the split "Someone else" box so you don't retype the same name. Linked (household)
-  // loans carry the member's name and are picked from the members list instead, so filter to the
-  // single-sided (linkGroup null) typed names.
-  const pastLoans = await prisma.personalLoan.findMany({
-    where: { memberId: member.id, linkGroup: null },
-    select: { counterparty: true },
-    distinct: ["counterparty"],
-    orderBy: { counterparty: "asc" },
-  });
+  const cardReminders = creditCards.length > 0 ? cardRemindersAll : [];
   const pastNames = pastLoans.map((l) => l.counterparty).filter((n) => n.trim().length > 0);
 
   return {

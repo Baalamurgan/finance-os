@@ -56,9 +56,11 @@ export default async function SettlementPage({
   // persisted default (ignores the shareable ?hub= override) — for disabling "Set default"
   const defaultId = c.selected.treasurerMemberId ?? c.household.treasurerMemberId ?? headId;
   const treasurerId = hubParam ?? defaultId;
-  const { rows, treasurer, transfers, settledCount, total, allSettled } =
-    await getSettlement(c.household.id, selectedId, treasurerId);
-  const history = await getSettlementHistory(c.household.id);
+  const [settlement, history] = await Promise.all([
+    getSettlement(c.household.id, selectedId, treasurerId),
+    getSettlementHistory(c.household.id),
+  ]);
+  const { rows, treasurer, transfers, settledCount, total, allSettled } = settlement;
   const pastHistory = history.filter((h) => h.periodId !== selectedId);
   const fmtDate = (d: Date) =>
     new Date(d).toLocaleDateString("en-GB", { day: "2-digit", month: "short" });

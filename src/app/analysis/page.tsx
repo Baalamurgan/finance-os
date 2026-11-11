@@ -87,13 +87,16 @@ export default async function AnalysisPage({
     );
   }
 
-  const rollup = isRange
-    ? await getRollupRange(c.household.id, Number(sp.fy), Number(sp.fm), Number(sp.ty), Number(sp.tm))
-    : await getRollup(c.selected!.id);
-  const allTrends = await getTrends(c.household.id);
-  const catTrend = isRange
-    ? await getCategoryTrendRange(c.household.id, Number(sp.fy), Number(sp.fm), Number(sp.ty), Number(sp.tm))
-    : null;
+  // Independent reads → one parallel round.
+  const [rollup, allTrends, catTrend] = await Promise.all([
+    isRange
+      ? getRollupRange(c.household.id, Number(sp.fy), Number(sp.fm), Number(sp.ty), Number(sp.tm))
+      : getRollup(c.selected!.id),
+    getTrends(c.household.id),
+    isRange
+      ? getCategoryTrendRange(c.household.id, Number(sp.fy), Number(sp.fm), Number(sp.ty), Number(sp.tm))
+      : Promise.resolve(null),
+  ]);
   const trends = isRange
     ? allTrends.filter((t) => {
         const lo = Number(sp.fy) * 12 + (Number(sp.fm) - 1);

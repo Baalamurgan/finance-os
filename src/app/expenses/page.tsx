@@ -73,10 +73,22 @@ export default async function ExpensesPage({
     );
   }
 
-  const { cards: rawCards, totalAllocation, totalSpent, totalRemaining, miscSpent } =
-    await getTrackedExpenses(c.household.id, c.selected.id);
+  const open = c.selected.status === "open";
+  // All the page's reads are independent → one parallel round (not a chain of round-trips).
+  const [tracked, familyCardsRaw, rollup, miscReview, spendActivity, refunds] = await Promise.all([
+    getTrackedExpenses(c.household.id, c.selected.id),
+    getFamilyCards(c.household.id),
+    getRollup(c.selected.id),
+    // Head-only tidy-up: misc spends that look like a tracked category (open month only).
+    c.isHead && open ? getMiscReview(c.household.id, c.selected.id) : Promise.resolve([]),
+    // Who logged/edited/removed a spend this month (audit trail, everyone) — at the bottom under the cards.
+    getSpendActivity(c.selected.id),
+    // Refund tags on spends (original → "↩ refunded", refund line → its refund) + Undo (head).
+    getSpendRefundIndex(c.household.id),
+  ]);
+  const { cards: rawCards, totalAllocation, totalSpent, totalRemaining, miscSpent } = tracked;
   // Family cards for the "Paid with" picker on the edit-spend modal.
-  const familyCards = (await getFamilyCards(c.household.id)).map((fc) => ({
+  const familyCards = familyCardsRaw.map((fc) => ({
     id: fc.id, name: fc.name, ownerId: fc.memberId, ownerName: fc.member.name, last4: fc.last4, type: fc.type, color: fc.color,
   }));
 
@@ -99,7 +111,6 @@ export default async function ExpensesPage({
   // lines (misc spend-cards + one-offs, incl. the loan prepay), minus carried-over spends. Same source
   // (getRollup) and same grouping (sheetSection) as the Sheet, so the count, rows, ✓ and total match.
   // Shown for every month (a closed month's planned lines stay visible). Read-only pointer.
-  const rollup = await getRollup(c.selected.id);
   const spentCats = new Set(rollup.spentCatIds);
   const plannedRows = rollup.expenses
     .filter((e) => sheetSection(e) === "Misc" && e.note !== CARRY_NOTE)
@@ -134,9 +145,6 @@ export default async function ExpensesPage({
   // General (all-members) cash vs card, for the unfiltered summary. Cash is what actually leaves hand →
   // drives In-Hand; card settles next month. Display-only.
   const generalCash = Math.round((totalSpent - cardSpends) * 100) / 100;
-  const open = c.selected.status === "open";
-  // Head-only tidy-up: misc spends that look like a tracked category (open month only).
-  const miscReview = c.isHead && open ? await getMiscReview(c.household.id, c.selected.id) : [];
 
   // Misc spends broken down by their sub-category (Food, Health, …) for the donut beside the list.
   // Respects the member filter automatically (card.spends is already narrowed when filtered).
@@ -150,10 +158,6 @@ export default async function ExpensesPage({
     .sort((a, b) => b[1] - a[1])
     .map(([name, value], i) => ({ name: `${iconOf(name)} ${name}`, value, color: MISC_DONUT_COLORS[i % MISC_DONUT_COLORS.length] }));
   const miscDonutTotal = miscSegments.reduce((s, x) => s + x.value, 0);
-  // Who logged/edited/removed a spend this month (audit trail, everyone) — at the bottom under the cards.
-  const spendActivity = await getSpendActivity(c.selected.id);
-  // Refund tags on spends (original → "↩ refunded", refund line → its refund) + Undo (head).
-  const refunds = await getSpendRefundIndex(c.household.id);
   // The Refund modal is head-only and books into the OPEN month — offered while any month is open.
   const anyOpen = c.selected.status === "open" || c.selected.status === "closed";
 

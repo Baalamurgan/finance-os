@@ -5,7 +5,7 @@ import { unstable_rethrow } from "next/navigation";
 
 type ToastType = "success" | "error" | "loading";
 type ToastAct = { label: string; onClick: () => void };
-type Toast = { id: number; message: string; type: ToastType; action?: ToastAct };
+type Toast = { id: number; message: string; type: ToastType; action?: ToastAct; leaving?: boolean };
 
 const ToastCtx = createContext<(message: string, type?: ToastType, action?: ToastAct) => void>(() => {});
 
@@ -42,6 +42,12 @@ export function useToastAction() {
 export function ToastProvider({ children }: { children: ReactNode }) {
   const [toasts, setToasts] = useState<Toast[]>([]);
 
+  // Slide/fade a pill out, then drop it (instead of vanishing mid-read).
+  const leave = useCallback((id: number) => {
+    setToasts((t) => t.map((x) => (x.id === id ? { ...x, leaving: true } : x)));
+    setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), 260);
+  }, []);
+
   const show = useCallback((message: string, type: ToastType = "success", action?: ToastAct) => {
     const id = Date.now() + Math.random();
     // A real result (success/error) also clears any lingering "loading" pill, so a slow save shows
@@ -49,8 +55,8 @@ export function ToastProvider({ children }: { children: ReactNode }) {
     setToasts((t) => [...(type === "loading" ? t : t.filter((x) => x.type !== "loading")), { id, message, type, action }]);
     // Loading pills linger (a slow round-trip) with a generous failsafe; results auto-dismiss quickly —
     // one with an action (Undo) stays longer so there's time to tap it.
-    setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), type === "loading" ? 12000 : action ? 6000 : 3200);
-  }, []);
+    setTimeout(() => leave(id), type === "loading" ? 12000 : action ? 6000 : 3200);
+  }, [leave]);
 
   return (
     <ToastCtx.Provider value={show}>
@@ -58,7 +64,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
       {/* bottom-center on mobile, bottom-right on desktop; above the mobile nav */}
       <div className="pointer-events-none fixed inset-x-0 bottom-[calc(env(safe-area-inset-bottom)+5rem)] z-[100] flex flex-col items-center gap-2 px-4 sm:inset-x-auto sm:bottom-5 sm:right-5 sm:items-end">
         {toasts.map((t) => (
-          <ToastPill key={t.id} toast={t} onDone={() => setToasts((x) => x.filter((y) => y.id !== t.id))} />
+          <ToastPill key={t.id} toast={t} onDone={() => leave(t.id)} />
         ))}
       </div>
     </ToastCtx.Provider>
@@ -78,12 +84,12 @@ function ToastPill({ toast, onDone }: { toast: Toast; onDone: () => void }) {
     <div
       role="status"
       className={`pointer-events-auto flex max-w-[92vw] items-center gap-2.5 rounded-full bg-white py-2.5 pl-2.5 pr-4 text-sm font-medium shadow-lg ring-1 transition-all duration-300 sm:max-w-sm ${
-        shown ? "translate-y-0 opacity-100" : "translate-y-2 opacity-0"
+        shown && !toast.leaving ? "translate-y-0 scale-100 opacity-100" : "translate-y-2 scale-95 opacity-0"
       } ${loading ? "text-slate-700 ring-slate-200" : ok ? "text-emerald-800 ring-emerald-200" : "text-red-800 ring-red-200"}`}
     >
       <span
         className={`grid h-6 w-6 shrink-0 place-items-center rounded-full text-white ${
-          loading ? "bg-slate-400" : ok ? "bg-emerald-500" : "bg-red-500"
+          loading ? "bg-slate-400" : ok ? "bg-emerald-500 fo-check-pop" : "bg-red-500 fo-check-pop"
         }`}
         aria-hidden
       >

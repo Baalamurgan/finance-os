@@ -49,7 +49,8 @@ export async function loadCommon(params?: { y?: string; m?: string }) {
   // App-lock: if the household has a shared PIN and this device isn't unlocked
   // for the session, gate everything behind the lock screen. (The /lock page
   // does its own minimal loading so it never trips this redirect.)
-  if (household.pinHash && !(await isUnlocked(household.id))) redirect("/lock");
+  // (Its check runs in parallel with the month's other reads below; the redirect still happens before any
+  // data is returned.)
 
   // resolve the selected period by (year, month), else latest
   const y = params?.y ? Number(params.y) : undefined;
@@ -86,20 +87,32 @@ export async function loadCommon(params?: { y?: string; m?: string }) {
   // Settlement lock: once ANY transfer for this month is marked paid, money has started
   // moving to the treasurer against the shown numbers — so the sheet's planned expense/income
   // is frozen for non-heads (daily spends still flow; the head can still edit). See the Sheet.
-  const locked =
-    selected != null &&
-    (await prisma.settlementRecord.count({ where: { periodId: selected.id } })) > 0;
-
   // App-lock state for the header menu (enable biometric / lock now).
   const pinEnabled = !!household.pinHash;
-  const hasBiometric =
-    pinEnabled && (await prisma.webAuthnCredential.count({ where: { memberId: currentMember.id } })) > 0;
-
-  // "View as member": a head can downgrade themselves to read-only (effective role).
   const actualRole = currentMember?.role ?? "member";
   const actualIsHead = actualRole === "head";
-  const viewingAsMember =
-    actualIsHead && (await cookies()).get("view-as")?.value === "member";
+
+  // The remaining reads don't depend on each other → one parallel round instead of a chain (each DB
+  // round-trip on prod is tens of ms, so this is felt on every tab switch).
+  const [unlocked, settledCount, biometricCount, cookieStore, bud, lines] = await Promise.all([
+    household.pinHash ? isUnlocked(household.id) : Promise.resolve(true),
+    selected ? prisma.settlementRecord.count({ where: { periodId: selected.id } }) : Promise.resolve(0),
+    pinEnabled ? prisma.webAuthnCredential.count({ where: { memberId: currentMember.id } }) : Promise.resolve(0),
+    cookies(),
+    selected
+      ? prisma.budget.findMany({ where: { periodId: selected.id, planned: { gt: 0 } }, select: { categoryId: true } })
+      : Promise.resolve([] as { categoryId: number | null }[]),
+    selected
+      ? prisma.expenseEntry.findMany({ where: { periodId: selected.id, OR: [{ note: null }, { note: { not: REMOVED_NOTE } }] }, select: { categoryId: true }, distinct: ["categoryId"] })
+      : Promise.resolve([] as { categoryId: number | null }[]),
+  ]);
+  if (!unlocked) redirect("/lock");
+
+  const locked = selected != null && settledCount > 0;
+  const hasBiometric = pinEnabled && biometricCount > 0;
+
+  // "View as member": a head can downgrade themselves to read-only (effective role).
+  const viewingAsMember = actualIsHead && cookieStore.get("view-as")?.value === "member";
   const role = viewingAsMember ? "member" : actualRole;
 
   // In-app MONTH-END reminder: surface a banner + once-a-day popup in the 5 days before the
@@ -141,13 +154,7 @@ export async function loadCommon(params?: { y?: string; m?: string }) {
   // The permanent Misc buckets (Personal/Misc, Giving, Someone else…) are always live: spends land there
   // without a Sheet line of their own.
   const liveIds = new Set<number>();
-  if (selected) {
-    const [bud, lines] = await Promise.all([
-      prisma.budget.findMany({ where: { periodId: selected.id, planned: { gt: 0 } }, select: { categoryId: true } }),
-      prisma.expenseEntry.findMany({ where: { periodId: selected.id, OR: [{ note: null }, { note: { not: REMOVED_NOTE } }] }, select: { categoryId: true }, distinct: ["categoryId"] }),
-    ]);
-    for (const r of [...bud, ...lines]) if (r.categoryId != null) liveIds.add(r.categoryId);
-  }
+  for (const r of [...bud, ...lines]) if (r.categoryId != null) liveIds.add(r.categoryId);
   const isLive = (cat: { id: number; section: string; miscCard: boolean }) => !selected || liveIds.has(cat.id) || (cat.section === "Misc" && !cat.miscCard);
   const categoriesWithLive = categories.map((cat) => ({ ...cat, liveThisMonth: isLive(cat) }));
 

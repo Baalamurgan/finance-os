@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { getMyPlanAlerts, type PlanAlerts } from "@/app/personal/actions";
 import { formatINR } from "@/lib/format";
+import { recentCall } from "@/lib/recentCall";
 
 // Money Plan pop-up (like the card-bill alert): YOUR plan steps due today or overdue — family Money-plan
 // steps and personal plan steps — once a day per view, in BOTH family and personal. In the family view the
@@ -21,7 +22,7 @@ export function PlanDueAlert({ context }: { context: "family" | "personal" }) {
       if (Number(localStorage.getItem(laterKey) ?? 0) > Date.now()) return;
     } catch { /* storage blocked → still show */ }
     let alive = true;
-    getMyPlanAlerts(context).then((d) => { if (alive) setData(d); }).catch(() => {});
+    recentCall(`planAlerts:${context}`, () => getMyPlanAlerts(context)).then((d) => { if (alive) setData(d); }).catch(() => {});
     return () => { alive = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);

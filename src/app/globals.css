@@ -161,3 +161,53 @@ main {
   z-index: 2;
   background: var(--color-white);
 }
+
+/* ───────────── Motion: make opening, switching and saving feel alive, never "waiting" ─────────────
+   Entrances only (exits stay instant so nothing lingers or blocks a tap). Short, ease-out, and all
+   switched off for people who ask the OS for reduced motion. */
+@keyframes fo-fade-in { from { opacity: 0; } }
+@keyframes fo-sheet-up { from { opacity: 0; transform: translateY(28px); } }
+@keyframes fo-pop-in { from { opacity: 0; transform: translateY(8px) scale(0.97); } }
+@keyframes fo-menu-in { from { opacity: 0; transform: translateY(-4px) scale(0.98); } }
+@keyframes fo-check-pop { 0% { transform: scale(0.4); } 60% { transform: scale(1.18); } 100% { transform: scale(1); } }
+
+/* In the base layer so any utility class (Tailwind's transition/animate-*) still wins where set. */
+@layer base {
+  /* Every modal/pop-up backdrop (the dimmed full-screen layer) fades in; its card rises from the bottom on
+     phones (bottom-sheet feel) and pops in on wider screens. */
+  .fixed.inset-0[class*="bg-black/"] { animation: fo-fade-in 0.18s ease-out; }
+  .fixed.inset-0[class*="bg-black/"] > :not([aria-hidden]) { animation: fo-sheet-up 0.32s cubic-bezier(0.22, 1, 0.36, 1); }
+  @media (min-width: 640px) {
+    .fixed.inset-0[class*="bg-black/"] > :not([aria-hidden]) { animation: fo-pop-in 0.22s cubic-bezier(0.22, 1, 0.36, 1); }
+  }
+
+  /* Dropdown menus (avatar menu, More, pickers) unfold from their button. */
+  .fo-menu { animation: fo-menu-in 0.16s cubic-bezier(0.22, 1, 0.36, 1); transform-origin: top; }
+
+  /* A freshly loaded page settles in (opacity only: a transform would re-anchor fixed modals inside it). */
+  main { animation: fo-fade-in 0.28s ease-out; }
+
+  /* Tactile press: buttons and tab links dip slightly under the finger. */
+  button:not(:disabled), a[href] { -webkit-tap-highlight-color: transparent; }
+  button:not(:disabled):active { transform: scale(0.97); }
+  button { transition-property: color, background-color, border-color, box-shadow, opacity, transform; transition-duration: 0.15s; }
+
+  /* A result toast's ✓ / ! pops in, so "done" registers at a glance. */
+  .fo-check-pop { animation: fo-check-pop 0.38s cubic-bezier(0.34, 1.56, 0.64, 1); }
+
+  /* Top-of-screen progress line while a tab/month loads. */
+  .fo-progress {
+    position: fixed; top: 0; left: 0; z-index: 9998; height: 2.5px; width: 100%;
+    transform-origin: left; pointer-events: none;
+    background: linear-gradient(90deg, #6366f1, #a855f7);
+    box-shadow: 0 0 8px rgba(99, 102, 241, 0.55);
+  }
+  .fo-progress[data-tone="personal"] { background: linear-gradient(90deg, #10b981, #14b8a6); box-shadow: 0 0 8px rgba(16, 185, 129, 0.5); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fixed.inset-0[class*="bg-black/"],
+  .fixed.inset-0[class*="bg-black/"] > *,
+  .fo-menu, .fo-check-pop, main { animation: none !important; }
+  button:not(:disabled):active { transform: none; }
+}

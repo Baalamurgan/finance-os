@@ -594,7 +594,15 @@ export async function _getSettlement(
   // Settlement is a START-of-month activity (salaries → hub). Daily spends + misc
   // logged during a month are credited to the spender in the NEXT month's
   // settlement, so this month settles against the PREVIOUS month's spends.
-  const period = await prisma.period.findUnique({ where: { id: periodId } });
+  // This month's rows only need the id → fetched alongside the month itself; last month's rows (and its
+  // wind-down plan) follow once last month is known. Fewer round-trips, same reads.
+  const [period, members, incomes, allExpenses, records] = await Promise.all([
+    prisma.period.findUnique({ where: { id: periodId } }),
+    prisma.member.findMany({ where: { householdId }, orderBy: { id: "asc" } }),
+    prisma.incomeEntry.findMany({ where: { periodId } }),
+    prisma.expenseEntry.findMany({ where: { periodId }, include: { category: true }, orderBy: { id: "asc" } }),
+    prisma.settlementRecord.findMany({ where: { periodId } }),
+  ]);
   const prevMonth = period ? (period.month === 1 ? 12 : period.month - 1) : 0;
   const prevYear = period ? (period.month === 1 ? period.year - 1 : period.year) : 0;
   const prevPeriod = period
@@ -603,15 +611,12 @@ export async function _getSettlement(
       })
     : null;
 
-  const [members, incomes, allExpenses, prevSpends, records, sentRefunds] = await Promise.all([
-    prisma.member.findMany({ where: { householdId }, orderBy: { id: "asc" } }),
-    prisma.incomeEntry.findMany({ where: { periodId } }),
-    prisma.expenseEntry.findMany({ where: { periodId }, include: { category: true }, orderBy: { id: "asc" } }),
+  const [prevSpends, sentRefunds, prevPlan] = await Promise.all([
     prisma.spend.findMany({ where: { periodId: prevPeriod?.id ?? -1 }, include: { category: true } }),
-    prisma.settlementRecord.findMany({ where: { periodId } }),
     // Refunds whose money was SENT NOW (a Money Plan move in the month they were booked) — their refund
     // line must stay OUT of the next settlement, or the spender would pay it back twice.
     prisma.spendRefund.findMany({ where: { periodId: prevPeriod?.id ?? -1, payWhen: "now", refundSpendId: { not: null } }, select: { refundSpendId: true } }),
+    prevPeriod && groupRuleActive(prevPeriod.year, prevPeriod.month) ? loadWindDownPlan(prisma, prevPeriod) : Promise.resolve(null),
   ]);
   const sentRefundIds = new Set(sentRefunds.map((r) => r.refundSpendId));
   const spends = prevSpends.filter((s) => !sentRefundIds.has(s.id));
@@ -640,8 +645,8 @@ export async function _getSettlement(
   // Wind-down groups (from the Nov 2026 close): settle last month's overspend back to the budget holder
   // and charge a holder whose leftover covered it — this month's settlement carries both as lines.
   const adjustments: SettleAdjustment[] = [];
-  if (prevPeriod && groupRuleActive(prevPeriod.year, prevPeriod.month)) {
-    const plan = await loadWindDownPlan(prisma, prevPeriod);
+  if (prevPeriod && prevPlan) {
+    const plan = prevPlan;
     const mon = prevPeriod.label.split(" ")[0];
     const cap = (s: string) => s.charAt(0) + s.slice(1).toLowerCase();
     for (const g of plan.groups) {
@@ -1092,7 +1097,7 @@ export async function getMiscCardSteps(householdId: number, periodId: number): P
  * (sum of Spends), remaining, over-budget flag, and the list of spends.
  */
 export async function getTrackedExpenses(householdId: number, periodId: number) {
-  const [categories, budgets, spends, sinkBal] = await Promise.all([
+  const [categories, budgets, spends, sinkBal, miscEnvelopes] = await Promise.all([
     prisma.category.findMany({
       where: { householdId, tracked: true, onHold: false },
       orderBy: { name: "asc" },
@@ -1104,6 +1109,7 @@ export async function getTrackedExpenses(householdId: number, periodId: number) 
       orderBy: { createdAt: "desc" },
     }),
     getSinkingBalances(householdId),
+    prisma.expenseEntry.findMany({ where: { periodId, note: null, category: { householdId, tracked: true, miscCard: true } }, select: { categoryId: true, amount: true } }),
   ]);
 
   const plannedByCat = new Map<number, number>();
@@ -1111,7 +1117,7 @@ export async function getTrackedExpenses(householdId: number, periodId: number) 
   // A one-off planned-misc card has an envelope line but no Budget row — use that envelope's amount as
   // its allocation so it still surfaces (with its budget) in the Spends tab, like a budgeted card.
   const miscEnvByCat = new Map<number, number>();
-  for (const e of await prisma.expenseEntry.findMany({ where: { periodId, note: null, category: { householdId, tracked: true, miscCard: true } }, select: { categoryId: true, amount: true } })) {
+  for (const e of miscEnvelopes) {
     if (e.categoryId != null) miscEnvByCat.set(e.categoryId, e.amount);
   }
 
@@ -1261,20 +1267,32 @@ export async function getPendingCardBills(householdId: number, period: { year: n
   return (await getCardHoldings(householdId, period)).pending;
 }
 
-export async function getCardHoldings(householdId: number, period: { year: number; month: number } | null): Promise<{ pending: PendingCardBill[]; unbilled: CardUnbilled[] }> {
+// `duesFor` lets a caller share one getCardDues per owner across calls (dues don't depend on the month) —
+// _getInHand passes one so this month and last month's opening don't load the same dues twice.
+export async function getCardHoldings(householdId: number, period: { year: number; month: number } | null, duesFor: (ownerId: number) => ReturnType<typeof getCardDues> = getCardDues): Promise<{ pending: PendingCardBill[]; unbilled: CardUnbilled[] }> {
   if (!period) return { pending: [], unbilled: [] };
-  const cards = await prisma.financeAccount.findMany({
-    where: { type: "credit_card", member: { householdId } },
-    select: { id: true, name: true, color: true, memberId: true, member: { select: { name: true } }, credit: { select: { annualFee: true, annualFeeMonth: true, statementDay: true, dueOffsetDays: true } } },
-  });
+  // Independent reads in one round (cards + the budget holders + card-paid bills and their months).
+  const [cards, holders, bpRows] = await Promise.all([
+    prisma.financeAccount.findMany({
+      where: { type: "credit_card", member: { householdId } },
+      select: { id: true, name: true, color: true, memberId: true, member: { select: { name: true } }, credit: { select: { annualFee: true, annualFeeMonth: true, statementDay: true, dueOffsetDays: true } } },
+    }),
+    prisma.category.findMany({ where: { householdId, tracked: true }, select: { name: true, responsibleMemberId: true } }),
+    prisma.billPayment.findMany({ where: { householdId, cardAccountId: { not: null } }, select: { id: true, periodId: true, spendPeriodId: true } }),
+  ]);
   if (cards.length === 0) return { pending: [], unbilled: [] };
+  const owners = [...new Set(cards.map((c) => c.memberId))];
+  // Each card owner's dues are independent → fetched together (was one owner after another).
+  const [bpPeriods, duesByOwner] = await Promise.all([
+    prisma.period.findMany({ where: { id: { in: [...new Set(bpRows.map((b) => b.spendPeriodId ?? b.periodId))] } }, select: { id: true, year: true, month: true } }),
+    Promise.all(owners.map((o) => duesFor(o))),
+  ]);
   const monthEnd = new Date(period.year, period.month, 0, 23, 59, 59).getTime(); // last calendar day of the plan month
   const planYm = period.year * 12 + period.month;
   const unbilled: CardUnbilled[] = [];
   // The budgeted family part of a cycle from budget months BEFORE the plan month (closed budgets).
   // Only the OWNER's own budgets are cash they hold — a family spend on their card in someone ELSE's budget
   // (e.g. Fuel held by another member) is their out-of-pocket, reimbursed through the settlement instead.
-  const holders = await prisma.category.findMany({ where: { householdId, tracked: true }, select: { name: true, responsibleMemberId: true } });
   const holderByName = new Map(holders.map((c) => [c.name, c.responsibleMemberId]));
   const priorItems = (ownerId: number, items: RawCardItem[]) =>
     famItems(items.filter((i) => i.family && !i.peer && i.budgeted && i.category != null && holderByName.get(i.category) === ownerId && istYm(i.dateISO) < planYm));
@@ -1283,8 +1301,6 @@ export async function getCardHoldings(householdId: number, period: { year: numbe
   // from the fund / set-aside the payer holds and stays with them until the card bill is paid → held, any month.
   // Counted from the month the bill was PAID FOR (its BillPayment's spend month), never by the card's charge
   // date — a November YouTube auto-debited on 28 Oct must not inflate October's close.
-  const bpRows = await prisma.billPayment.findMany({ where: { householdId, cardAccountId: { not: null } }, select: { id: true, periodId: true, spendPeriodId: true } });
-  const bpPeriods = await prisma.period.findMany({ where: { id: { in: [...new Set(bpRows.map((b) => b.spendPeriodId ?? b.periodId))] } }, select: { id: true, year: true, month: true } });
   const ymOfPeriod = new Map(bpPeriods.map((pp) => [pp.id, pp.year * 12 + pp.month]));
   const bpYm = new Map(bpRows.map((b) => [b.id, ymOfPeriod.get(b.spendPeriodId ?? b.periodId) ?? 0]));
   const billPayItems = (items: RawCardItem[]) => famItems(items.filter((i) => i.family && !i.peer && i.billPay && i.billPaymentId != null && (bpYm.get(i.billPaymentId) ?? Infinity) <= planYm));
@@ -1292,7 +1308,6 @@ export async function getCardHoldings(householdId: number, period: { year: numbe
   const priorOop = (ownerId: number, items: RawCardItem[]) =>
     famItems(items.filter((i) => i.family && !i.peer && !i.billPay && istYm(i.dateISO) < planYm && !(i.budgeted && i.category != null && holderByName.get(i.category) === ownerId)));
   const cardById = new Map(cards.map((c) => [c.id, c]));
-  const owners = [...new Set(cards.map((c) => c.memberId))];
   // Split the family portion into budgeted (Fuel/provision → from the held budget) vs misc/other (→ from
   // in-hand). getCardDues already computes familyBudgeted per cycle, so both views stay consistent.
   const split = (familyTotal: number, familyBudgeted: number) => ({
@@ -1300,8 +1315,8 @@ export async function getCardHoldings(householdId: number, period: { year: numbe
     familyMisc: Math.round((familyTotal - familyBudgeted) * 100) / 100,
   });
   const out: PendingCardBill[] = [];
-  for (const ownerId of owners) {
-    const dues = await getCardDues(ownerId);
+  for (const [oi, ownerId] of owners.entries()) {
+    const dues = duesByOwner[oi];
     for (const d of dues) {
       const card = cardById.get(d.cardId);
       if (!card) continue;
@@ -1388,7 +1403,44 @@ export async function getCardHoldings(householdId: number, period: { year: numbe
  * expense balance); the piggy-holder's row carries the Piggy bank. Both roles
  * default to the head and always appear even with no personal in-hand.
  */
-export async function _getInHand(householdId: number, periodId: number, settlementArg?: Awaited<ReturnType<typeof _getSettlement>>, computeOpening = true) {
+export async function _getInHand(householdId: number, periodId: number, settlementArg?: Awaited<ReturnType<typeof _getSettlement>>, computeOpening = true, duesMemo: Map<number, ReturnType<typeof getCardDues>> = new Map()) {
+  const duesFor = (ownerId: number) => {
+    let p = duesMemo.get(ownerId);
+    if (!p) { p = getCardDues(ownerId); duesMemo.set(ownerId, p); }
+    return p;
+  };
+  // Reads that depend only on the ids are started up front, alongside the main batch below, and awaited
+  // where they're used — so they overlap instead of running one after another (each one is a DB round-trip).
+  const soon = <T,>(p: Promise<T>): Promise<T> => { p.catch(() => {}); return p; }; // handled where awaited
+  const miscEnvelopesP = soon(prisma.expenseEntry.findMany({ where: { periodId, note: null, category: { householdId, tracked: true, miscCard: true } }, select: { categoryId: true, amount: true } }));
+  const paidBillsP = soon(prisma.personalCardBill.findMany({
+    where: { cardAccount: { member: { householdId } } },
+    select: { cardAccountId: true, cycleEnd: true, paidAt: true },
+  }));
+  const priorOpenP = soon(prisma.period.findMany({ where: { householdId, status: "open", id: { not: periodId } }, select: { id: true, label: true } }));
+  const hiddenStepsP = soon(prisma.hiddenPlanStep.findMany({ where: { periodId }, select: { stepKey: true } }));
+  const piggyIncomeRowsP = soon(prisma.incomeEntry.findMany({ where: { periodId, note: PIGGY_INCOME_NOTE }, select: { amount: true, receivedAt: true } }));
+  const poolP = soon(Promise.all([
+    prisma.poolHandover.findMany({ where: { periodId }, select: { id: true, fromMemberId: true, kind: true, amount: true, detail: true, handedOverAt: true } }),
+    prisma.incomeEntry.aggregate({ where: { periodId, note: LEFTOVER_NOTE }, _sum: { amount: true } }),
+  ]));
+  const famP = soon((async () => {
+    const famAccts = await prisma.financeAccount.findMany({
+      where: { familyPrimary: true, active: true, member: { householdId } },
+      select: { id: true, name: true, memberId: true, openingBalance: true },
+    });
+    const ids = famAccts.map((a) => a.id);
+    const [famTxns, billMoves] = famAccts.length
+      ? await Promise.all([
+          prisma.accountTransaction.findMany({ where: { accountId: { in: ids } }, select: { accountId: true, date: true, amount: true, type: true } }),
+          prisma.personalPlanStep.findMany({
+            where: { status: "pending", kind: "transfer", snapshot: { path: ["fundsCardBillStep"], not: Prisma.AnyNull }, OR: [{ toAccountId: { in: ids } }, { fromAccountId: { in: ids } }] },
+            select: { amount: true, fromAccountId: true, toAccountId: true },
+          }),
+        ])
+      : [[], []];
+    return { famAccts, famTxns, billMoves };
+  })());
   const [household, period, categories, budgets, spends, billLines, fundLines, fundCats, sinkBal, billPayments, members, piggy, incomeAgg, expenseAgg, carriedRaw, closedPeriods, allPays, allowanceLines, sinkCats] = await Promise.all([
     prisma.household.findUnique({ where: { id: householdId }, select: { treasurerMemberId: true, piggyHolderMemberId: true } }),
     prisma.period.findUnique({ where: { id: periodId }, select: { treasurerMemberId: true, status: true, month: true, year: true } }),
@@ -1440,13 +1492,34 @@ export async function _getInHand(householdId: number, periodId: number, settleme
     // under the person who actually holds it — separate from the general Piggy holder.
     prisma.category.findMany({ where: { householdId, OR: [{ sinking: true }, { fundingStyle: { not: null } }] }, select: { id: true, name: true, responsibleMemberId: true } }),
   ]);
+  // Second wave, started as soon as the month is known (also overlapped, awaited where used below):
+  // the settlement nets, last closed month + its Piggy slices, card holdings, and last month's In-Hand.
+  const treasurerIdEarly = period?.treasurerMemberId ?? household?.treasurerMemberId ?? members.find((m) => m.role === "head")?.id ?? null;
+  const settlementP = soon(settlementArg ? Promise.resolve(settlementArg) : getSettlement(householdId, periodId, treasurerIdEarly));
+  const priorPeriodP = soon(period
+    ? prisma.period.findFirst({
+        where: { householdId, status: "closed", OR: [{ year: { lt: period.year } }, { year: period.year, month: { lt: period.month } }] },
+        orderBy: [{ year: "desc" }, { month: "desc" }],
+        select: { id: true, piggyHandedOverAt: true, closedAt: true },
+      })
+    : Promise.resolve(null));
+  const priorPiggyEntriesP = soon(priorPeriodP.then((pp) => (pp ? prisma.piggyEntry.findMany({ where: { periodId: pp.id, kind: "piggy" }, select: { categoryId: true, amount: true } }) : [])));
+  const cardHoldingsP = soon(getCardHoldings(householdId, period ? { year: period.year, month: period.month } : null, duesFor));
+  // Pass the prior month's settlement explicitly (uncached _getSettlement) so the recursion never
+  // calls the cached getSettlement — the per-member net is independent of who the treasurer is, so
+  // reusing this month's treasurerId is exact.
+  const priorInHandP = soon(priorPeriodP.then(async (pp) => {
+    if (!(computeOpening && pp && period?.status !== "closed")) return null;
+    const priorSettle = await _getSettlement(householdId, pp.id, treasurerIdEarly);
+    return _getInHand(householdId, pp.id, priorSettle, false, duesMemo);
+  }));
   const plannedByCat = new Map(budgets.map((b) => [b.categoryId, b.planned]));
   // A miscCard category (a planned one-off spend, e.g. "G704 advance settlement") carries its budget as an
   // envelope ExpenseEntry, NOT a Budget row — so mirror the Sheet (getTrackedExpenses) and use that envelope
   // as the allocation here too. Without this the in-hand saw them as unbudgeted and dropped their spend into
   // the misc lump; now they surface as proper budgeted categories (spent/total · remaining), matching the
   // Spends tab and keeping In-Hand ↔ Sheet in sync.
-  for (const e of await prisma.expenseEntry.findMany({ where: { periodId, note: null, category: { householdId, tracked: true, miscCard: true } }, select: { categoryId: true, amount: true } })) {
+  for (const e of await miscEnvelopesP) {
     if (e.categoryId != null && (plannedByCat.get(e.categoryId) ?? 0) === 0 && e.amount > 0) plannedByCat.set(e.categoryId, e.amount);
   }
   const budgetedIds = new Set(categories.filter((c) => (plannedByCat.get(c.id) ?? 0) > 0).map((c) => c.id));
@@ -1484,10 +1557,7 @@ export async function _getInHand(householdId: number, periodId: number, settleme
   // a card bill drops the payer's holding in the month they actually pay. (Load the paid cycles once.)
   const cycleKey = (cardId: number, end: Date) => `${cardId}:${new Date(end.getFullYear(), end.getMonth(), end.getDate()).getTime()}`;
   const paidCycleAt = new Map<string, Date>();
-  const paidBills = await prisma.personalCardBill.findMany({
-    where: { cardAccount: { member: { householdId } } },
-    select: { cardAccountId: true, cycleEnd: true, paidAt: true },
-  });
+  const paidBills = await paidBillsP;
   for (const b of paidBills) paidCycleAt.set(cycleKey(b.cardAccountId, b.cycleEnd), b.paidAt);
   const earlyPaidCardSpend = (s: (typeof spends)[number]): boolean => {
     if (s.cardAccount?.type !== "credit_card" || s.cardAccountId == null) return false;
@@ -1633,7 +1703,7 @@ export async function _getInHand(householdId: number, periodId: number, settleme
   // month's set-aside — it accrues into the fund when that month winds down. A draft isn't
   // payable yet, so we surface this as a projected fund ("₹X after <month> winds down"). In a
   // real open month there's no prior open period, so this term is 0 and nothing changes.
-  const priorOpen = await prisma.period.findMany({ where: { householdId, status: "open", id: { not: periodId } }, select: { id: true, label: true } });
+  const priorOpen = await priorOpenP;
   const projectedByCat = new Map<number, number>();
   let projectionLabel: string | null = null;
   if (priorOpen.length > 0) {
@@ -1720,7 +1790,7 @@ export async function _getInHand(householdId: number, periodId: number, settleme
   // "bill-<expenseId>" for a Sheet bill, "fund-<categoryId>" for a periodic fund bill). Bills whose
   // step is hidden are moved into the card's own "Hidden" section instead of the pay list — the plan
   // and the In-Hand card stay in sync. Hiding is view-only; the underlying bill/total is untouched.
-  const hiddenSteps = await prisma.hiddenPlanStep.findMany({ where: { periodId }, select: { stepKey: true } });
+  const hiddenSteps = await hiddenStepsP;
   const hiddenStepKeys = new Set(hiddenSteps.map((h) => h.stepKey));
   const isHiddenBill = (id: number) => hiddenStepKeys.has(`bill-${id}`);
   const isHiddenPeriodic = (categoryId: number) => hiddenStepKeys.has(`fund-${categoryId}`);
@@ -1868,7 +1938,7 @@ export async function _getInHand(householdId: number, periodId: number, settleme
   // CONTRIBUTOR who funds their own assigned bills from their salary (so they HOLD that cash); net < 0
   // is a RECEIVER whose bills the pool funds ("yet to receive"). `build` uses this to place unpaid-bill
   // cash on the right side. Net is independent of who the treasurer is, so the id passed doesn't matter.
-  const settlementNet = settlementArg ?? (await getSettlement(householdId, periodId, treasurerId));
+  const settlementNet = await settlementP;
   const netByMember = new Map(settlementNet.rows.map((r) => [r.id, r.net]));
 
   // Prior month's PENDING Piggy hand-over: if the immediately-preceding month is CLOSED but its
@@ -1877,20 +1947,11 @@ export async function _getInHand(householdId: number, periodId: number, settleme
   // counts in the OWNERS' In-Hand (via `build` below) and the holder shows it as "yet to receive",
   // until the tickable Money-Plan hand-over step is ticked. (The holder's own leftover is already
   // theirs, so it's excluded.) `build` reads pendingByOwner as a closure, like it does piggyHolderId.
-  const priorPeriod = period
-    ? await prisma.period.findFirst({
-        where: { householdId, status: "closed", OR: [{ year: { lt: period.year } }, { year: period.year, month: { lt: period.month } }] },
-        orderBy: [{ year: "desc" }, { month: "desc" }],
-        select: { id: true, piggyHandedOverAt: true, closedAt: true },
-      })
-    : null;
+  const priorPeriod = await priorPeriodP;
   // Always fetch the prior month's piggy slices (even AFTER hand-over), so the hand-over STEP can stay
   // visible (struck-through) once ticked instead of vanishing — but only let them affect BALANCES while
   // still pending (see pendingByOwner below). A piggy step moves no cash in the plan, so this is display-only.
-  const priorPiggyEntries =
-    priorPeriod
-      ? await prisma.piggyEntry.findMany({ where: { periodId: priorPeriod.id, kind: "piggy" }, select: { categoryId: true, amount: true } })
-      : [];
+  const priorPiggyEntries = await priorPiggyEntriesP;
   const catOwner = new Map(categories.map((c) => [c.id, c.responsibleMemberId ?? null]));
   // owner → their held slice of last month's general-Piggy leftover (the hand-over amounts).
   const piggyOwnerSlices = new Map<number, number>();
@@ -1911,7 +1972,7 @@ export async function _getInHand(householdId: number, periodId: number, settleme
   // already dropped is what drove the holder's General Piggy negative (−₹3,310) and scheduled a pointless
   // owner → holder → treasurer chain. The part of the lump not backed by the remaining Piggy balance is
   // therefore "consumed": routed owner → treasurer; only the rest is still handed to the holder.
-  const piggyIncomeRows = await prisma.incomeEntry.findMany({ where: { periodId, note: PIGGY_INCOME_NOTE }, select: { amount: true, receivedAt: true } });
+  const piggyIncomeRows = await piggyIncomeRowsP;
   const piggyIncomeAll = r2(piggyIncomeRows.reduce((t, r) => t + r.amount, 0));
   const piggyIncomeOpen = r2(piggyIncomeRows.filter((r) => r.receivedAt == null).reduce((t, r) => t + r.amount, 0));
   const split = splitPiggyLump({ slices: piggyOwnerSlices, handedOver: piggyHandedOver, piggyBalance: piggy.generalTotal, incomeAll: piggyIncomeAll, incomeOpen: piggyIncomeOpen });
@@ -1928,10 +1989,7 @@ export async function _getInHand(householdId: number, periodId: number, settleme
   // Prior-month cash a member still HOLDS that became this month's pool income (their budget leftover
   // routed to income, and/or the general Piggy taken as income) — each must be handed to the treasurer.
   // Attached to the holder's card (rows below) + summed for the treasurer's "to collect" note.
-  const [poolHandovers, leftoverIncomeAgg] = await Promise.all([
-    prisma.poolHandover.findMany({ where: { periodId }, select: { id: true, fromMemberId: true, kind: true, amount: true, detail: true, handedOverAt: true } }),
-    prisma.incomeEntry.aggregate({ where: { periodId, note: LEFTOVER_NOTE }, _sum: { amount: true } }),
-  ]);
+  const [poolHandovers, leftoverIncomeAgg] = await poolP;
 
   // Two-step pool misc a member is currently HOLDING: leg 1 disbursed (paid) but the vendor not paid yet
   // (vendorPaid false). This is the interim cash the member physically holds — surfaced so their card can
@@ -1948,7 +2006,7 @@ export async function _getInHand(householdId: number, periodId: number, settleme
   // Family credit-card bills that have come due this month: the owner has been HOLDING their cash since
   // the swipe (credit spends don't leave hand until the bill — see the exclusion above), so once the
   // bill is due it rides as a carried "held for the bill" line on the owner until they pay it.
-  const { pending: pendingCardBills, unbilled: cardUnbilled } = await getCardHoldings(householdId, period ? { year: period.year, month: period.month } : null);
+  const { pending: pendingCardBills, unbilled: cardUnbilled } = await cardHoldingsP;
   const cardUnbilledByOwner = new Map<number, CardUnbilled[]>();
   for (const u of cardUnbilled) cardUnbilledByOwner.set(u.ownerId, [...(cardUnbilledByOwner.get(u.ownerId) ?? []), u]);
   const pendingCardBillsByOwner = new Map<number, PendingCardBill[]>();
@@ -1969,12 +2027,8 @@ export async function _getInHand(householdId: number, periodId: number, settleme
   // print "carried from last month" as named ↳ lines instead of one lump. (Sinking is shown via the
   // current sinkingHeld; the carried out-of-pocket owed-back nets into the honest remainder.)
   const carryPartsByMember = new Map<number, { onCard: number; others: number; free: number; swept: number; over: { name: string; amount: number }[] }>();
-  if (computeOpening && priorPeriod && period?.status !== "closed") {
-    // Pass the prior month's settlement explicitly (uncached _getSettlement) so the recursion never
-    // calls the cached getSettlement — the per-member net is independent of who the treasurer is, so
-    // reusing this month's treasurerId is exact.
-    const priorSettle = await _getSettlement(householdId, priorPeriod.id, treasurerId);
-    const prior = await _getInHand(householdId, priorPeriod.id, priorSettle, false);
+  const prior = await priorInHandP;
+  if (prior) {
     for (const r of prior.byPerson) {
       if (r.memberId == null) continue;
       openingByMember.set(r.memberId, r.personal);
@@ -1997,22 +2051,10 @@ export async function _getInHand(householdId: number, periodId: number, settleme
   // total is "what they hold right now", and 0 is a real, meaningful answer).
   // Each member's FAMILY account (e.g. SBI): the real bank balance that should line up with their In-Hand.
   // Derived exactly like any balance account (opening + ledger), so family Cash/UPI spends already lowered it.
-  const famAccts = await prisma.financeAccount.findMany({
-    where: { familyPrimary: true, active: true, member: { householdId } },
-    select: { id: true, name: true, memberId: true, openingBalance: true },
-  });
-  const famTxns = famAccts.length
-    ? await prisma.accountTransaction.findMany({ where: { accountId: { in: famAccts.map((a) => a.id) } }, select: { accountId: true, date: true, amount: true, type: true } })
-    : [];
+  const { famAccts, famTxns, billMoves } = await famP;
   // A card bill paid from one account leaves a pending transfer for the other share (e.g. "Jupiter → SBI ₹22,778"):
   // until it's ticked that money is "to come back" to (or "to send" from) the family account — the In-Hand
   // match counts it, so it still lines up. Only the amount is used here (no personal details).
-  const billMoves = famAccts.length
-    ? await prisma.personalPlanStep.findMany({
-        where: { status: "pending", kind: "transfer", snapshot: { path: ["fundsCardBillStep"], not: Prisma.AnyNull }, OR: [{ toAccountId: { in: famAccts.map((a) => a.id) } }, { fromAccountId: { in: famAccts.map((a) => a.id) } }] },
-        select: { amount: true, fromAccountId: true, toAccountId: true },
-      })
-    : [];
   const familyAccountByMember = new Map(
     famAccts.map((a) => [a.memberId, {
       name: a.name,

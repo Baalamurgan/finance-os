@@ -37,10 +37,12 @@ export default async function ActivityPage({
     />
   );
 
-  const changes = c.selected ? await getMonthChanges(c.household.id, c.selected.id) : null;
-  // Head-only: actions that were denied (permission / closed month / missing row). Surfacing them here
-  // means a member's "it didn't work" is catchable without a repro, and confirms a fix took.
-  const blocks = c.isHead ? await getRecentBlocks(c.household.id) : [];
+  const [changes, blocks] = await Promise.all([
+    c.selected ? getMonthChanges(c.household.id, c.selected.id) : Promise.resolve(null),
+    // Head-only: actions that were denied (permission / closed month / missing row). Surfacing them here
+    // means a member's "it didn't work" is catchable without a repro, and confirms a fix took.
+    c.isHead ? getRecentBlocks(c.household.id) : Promise.resolve([]),
+  ]);
 
   const nonEmpty = (d?: { added: unknown[]; removed: unknown[]; changed: unknown[] } | null) =>
     !!d && (d.added.length > 0 || d.removed.length > 0 || d.changed.length > 0);

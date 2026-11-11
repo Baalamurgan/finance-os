@@ -5,6 +5,7 @@ import { useEffect, useRef, useState } from "react";
 import { getMyCardReminders, getMyLendingReminders } from "@/app/personal/actions";
 import { getMyBillReminders } from "@/app/actions";
 import { formatINR } from "@/lib/format";
+import { recentCall } from "@/lib/recentCall";
 
 // Bell reminder inbox — used in BOTH shells. Personal shows credit-card bill reminders;
 // family shows household bill reminders (the ones you're on the hook for). Items are derived
@@ -19,7 +20,7 @@ const dismissId = (r: Item) => `${r.key}@${r.dueISO}`;
 
 async function loadItems(context: "family" | "personal"): Promise<Item[]> {
   if (context === "personal") {
-    const [cards, lending] = await Promise.all([getMyCardReminders(), getMyLendingReminders()]);
+    const [cards, lending] = await Promise.all([recentCall("cardReminders", getMyCardReminders), recentCall("lendingReminders", getMyLendingReminders)]);
     const cardItems: Item[] = cards.map((r) => ({ key: `c${r.cardId}`, title: r.cardName, dueISO: r.dueISO, daysUntilDue: r.daysUntilDue, overdue: r.overdue, amount: r.amount, href: `/personal/finance/${r.cardId}`, dot: r.color }));
     const lendItems: Item[] = lending.map((r) => ({
       key: `l${r.id}`,
@@ -31,7 +32,7 @@ async function loadItems(context: "family" | "personal"): Promise<Item[]> {
     // soonest first, across both kinds
     return [...cardItems, ...lendItems].sort((a, b) => a.daysUntilDue - b.daysUntilDue);
   }
-  const rows = await getMyBillReminders();
+  const rows = await recentCall("billReminders", getMyBillReminders);
   return rows.map((r) => ({ key: `b${r.categoryId}`, title: r.name, dueISO: r.dueISO, daysUntilDue: r.daysUntilDue, overdue: r.overdue, amount: r.amount ?? 0, href: "/in-hand" }));
 }
 

@@ -17,6 +17,9 @@ import { RemindersBell } from "@/components/personal/RemindersBell";
 import { setViewAs } from "@/app/actions";
 import { formatINR } from "@/lib/format";
 import { MISC_SUBCATEGORIES } from "@/lib/misc";
+import { FAMILY_MORE, FAMILY_PRIMARY, FAMILY_TABS, FAMILY_TAB_ICON } from "@/components/navTabs";
+import { startNavProgress } from "@/components/NavProgress";
+import { rememberFamilyChrome } from "@/components/NavSkeleton";
 
 const MONTHS = [
   "Jan", "Feb", "Mar", "Apr", "May", "Jun",
@@ -100,22 +103,9 @@ export function NavHeader({
 
   // Day-to-day tabs live in the nav; the admin-ish ones (Wind Down, Setup, Settings)
   // moved under the avatar menu to declutter the bar.
-  const tabs = [
-    { key: "sheet", label: "Sheet", href: "/" },
-    { key: "expenses", label: "Spends", href: "/expenses" },
-    { key: "in-hand", label: "Money Plan", href: "/in-hand" },
-    { key: "transactions", label: "Transactions", href: "/transactions" },
-    { key: "settlement", label: "Settlement", href: "/settlement" },
-    { key: "activity", label: "Changes", href: "/activity" },
-    { key: "analysis", label: "Analysis", href: "/analysis" },
-    { key: "piggy", label: "Piggy", href: "/piggy" },
-    { key: "notes", label: "Notes", href: "/notes" },
-    { key: "loans", label: "Loans & Chits", href: "/loans" },
-    { key: "priority", label: "Priority", href: "/priority" },
-  ];
-
-  const primaryTabs = tabs.slice(0, 3); // Sheet · Expenses · In Hand
-  const moreTabs = tabs.slice(3); // Analysis · Piggy · Loans · Wind Down · …
+  const tabs = FAMILY_TABS;
+  const primaryTabs = FAMILY_PRIMARY; // Sheet · Expenses · In Hand
+  const moreTabs = FAMILY_MORE; // Analysis · Piggy · Loans · Wind Down · …
 
   const q = `?y=${selYear}&m=${selMonth}`;
   const activeHref = tabs.find((t) => t.key === active)?.href ?? "/";
@@ -129,7 +119,15 @@ export function NavHeader({
 
   // replace (not push) so the phone back button exits the app instead of
   // stepping back through months/tabs — feels native, less confusing for elders.
-  const go = (y: number, m: number) => router.replace(`${activeHref}?y=${y}&m=${m}`);
+  const go = (y: number, m: number) => {
+    startNavProgress();
+    router.replace(`${activeHref}?y=${y}&m=${m}`);
+  };
+
+  // Remember the header's look so the loading frame of the NEXT tab draws the same header instantly.
+  useEffect(() => {
+    rememberFamilyChrome({ name: householdName, piggy: formatINR(piggyBalance), month: selMonth, year: selYear, initial: (account.name || "?").trim().charAt(0).toUpperCase(), image: account.image });
+  }, [householdName, piggyBalance, selMonth, selYear, account.name, account.image]);
 
   return (
     <>
@@ -292,15 +290,7 @@ export function NavHeader({
   );
 }
 
-// Simple, instantly-recognizable icons for the bottom bar (kind to older eyes).
-const TAB_ICON: Record<string, string> = {
-  sheet: "📋",
-  expenses: "🧾",
-  "in-hand": "🧭",
-  transactions: "📒",
-  settlement: "🤝",
-  analysis: "📊",
-};
+const TAB_ICON = FAMILY_TAB_ICON;
 
 function BottomNav({
   primaryTabs,
@@ -409,7 +399,7 @@ function MoreMenu({
         </svg>
       </button>
       {open && (
-        <div className="absolute left-0 z-50 mt-1 w-44 overflow-hidden rounded-lg border border-slate-200 bg-white py-1 shadow-lg">
+        <div className="fo-menu absolute left-0 z-50 mt-1 w-44 overflow-hidden rounded-lg border border-slate-200 bg-white py-1 shadow-lg">
           {items.map((t) => (
             <Link
               key={t.key}

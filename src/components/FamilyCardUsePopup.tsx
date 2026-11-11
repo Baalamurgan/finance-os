@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { getMyIncomingFamilyCardUses, type FamilyCardUse } from "@/app/personal/actions";
 import { formatINR } from "@/lib/format";
+import { recentCall } from "@/lib/recentCall";
 
 // Family view's twin of the personal "Your card was used" pop-up: a FAMILY spend another member paid with
 // your card. Each shows once — shown ids are remembered on this device — and new ones surface the next time
@@ -18,7 +19,7 @@ export function FamilyCardUsePopup() {
 
   useEffect(() => {
     let alive = true;
-    getMyIncomingFamilyCardUses()
+    recentCall("familyCardUses", getMyIncomingFamilyCardUses)
       .then((all) => {
         if (!alive) return;
         const seen = new Set(readSeen());

@@ -30,14 +30,19 @@ export default async function PiggyPage({
   const previewSource = previewMode
     ? c.periods.find((p) => p.status === "open" && (p.year < selY || (p.year === selY && p.month < selM))) ?? null
     : null;
-  const projected = previewSource ? await getProjectedPiggy(c.household.id, previewSource.id) : null;
-  const { generalTotal, generalByCategory, sinking } = projected ?? (await getPiggyOverview(c.household.id));
-  // Prior month's leftover still with the owners (not yet handed to the Piggy holder).
-  const pendingHandover =
-    c.selected?.status === "open" ? (await getInHand(c.household.id, c.selected.id)).pendingPiggyHandover : null;
+  // Independent reads → one parallel round.
+  const [projected, overview, inHandNow, liveSinkingBalances, history] = await Promise.all([
+    previewSource ? getProjectedPiggy(c.household.id, previewSource.id) : Promise.resolve(null),
+    previewSource ? Promise.resolve(null) : getPiggyOverview(c.household.id),
+    // Prior month's leftover still with the owners (not yet handed to the Piggy holder).
+    c.selected?.status === "open" ? getInHand(c.household.id, c.selected.id) : Promise.resolve(null),
+    previewSource ? Promise.resolve(null) : getSinkingBalances(c.household.id),
+    getPiggyHistory(c.household.id),
+  ]);
+  const { generalTotal, generalByCategory, sinking } = projected ?? overview!;
+  const pendingHandover = inHandNow ? inHandNow.pendingPiggyHandover : null;
   const sinkingTotal = sinking.reduce((s, x) => s + x.hold, 0);
-  const sinkingBalances = projected ? projected.sinkingBalances : await getSinkingBalances(c.household.id);
-  const history = await getPiggyHistory(c.household.id);
+  const sinkingBalances = projected ? projected.sinkingBalances : liveSinkingBalances!;
   // A category has a fund bucket if it's a (legacy) sinking fund OR a bill-with-a-fund
   // (periodic bill funded by auto-saving). Both accrue into piggyEntry kind "sinking".
   const hasFund = (cat: { sinking: boolean; fundingStyle: string | null }) => cat.sinking || cat.fundingStyle != null;

@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import { forgetRecentCalls } from "@/lib/recentCall";
 
 // Keeps each device fresh so family members see each other's edits:
 //  • auto-refreshes when the app regains focus / becomes visible (debounced)
@@ -20,6 +21,7 @@ export function RefreshManager() {
     if (now - last.current < 4000) return; // debounce
     last.current = now;
     setRefreshing(true);
+    forgetRecentCalls(); // back in the app / pulled down → the next pop-up check asks fresh
     router.refresh();
     setTimeout(() => setRefreshing(false), 800);
   }, [router]);

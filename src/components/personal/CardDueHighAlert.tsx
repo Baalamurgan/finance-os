@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { getMyCardHighAlerts, type CardHighAlert } from "@/app/personal/actions";
+import { recentCall } from "@/lib/recentCall";
 
 // High-alert popup: a member's credit-card bill due within 3 days (or overdue). Fires once
 // a day, right after unlock, in BOTH family and personal views. Fetches its own data on
@@ -15,7 +16,7 @@ export function CardDueHighAlert({ context }: { context: "family" | "personal" }
     const key = `cc-highalert-shown:${new Date().toDateString()}`;
     if (localStorage.getItem(key) === "1") return;
     let alive = true;
-    getMyCardHighAlerts().then((a) => {
+    recentCall("cardHighAlerts", getMyCardHighAlerts).then((a) => {
       if (alive && a.length > 0) setAlerts(a);
     });
     return () => { alive = false; };

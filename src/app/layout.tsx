@@ -4,6 +4,8 @@ import "./globals.css";
 import { ServiceWorkerRegister } from "@/components/ServiceWorkerRegister";
 import { RefreshManager } from "@/components/RefreshManager";
 import { ToastProvider } from "@/components/Toast";
+import { NavProgress } from "@/components/NavProgress";
+import { Suspense } from "react";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -61,6 +63,10 @@ export default function RootLayout({
           }}
         />
         <ToastProvider>{children}</ToastProvider>
+        {/* thin top line while a tab / month loads (reads the URL → its own Suspense boundary) */}
+        <Suspense fallback={null}>
+          <NavProgress />
+        </Suspense>
         <RefreshManager />
         <ServiceWorkerRegister />
       </body>

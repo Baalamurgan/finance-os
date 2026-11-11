@@ -174,15 +174,17 @@ export async function getBalanceCards(memberId: number): Promise<BalanceCardView
 }
 
 export async function getCardDues(memberId: number): Promise<CardDue[]> {
-  const cards = await prisma.financeAccount.findMany({
-    where: { memberId, type: "credit_card" },
-    include: { credit: true },
-    orderBy: [{ sortOrder: "asc" }, { id: "asc" }],
-  });
+  const [cards, member] = await Promise.all([
+    prisma.financeAccount.findMany({
+      where: { memberId, type: "credit_card" },
+      include: { credit: true },
+      orderBy: [{ sortOrder: "asc" }, { id: "asc" }],
+    }),
+    prisma.member.findUnique({ where: { id: memberId }, select: { householdId: true } }),
+  ]);
   if (cards.length === 0) return [];
 
   const cardIds = cards.map((c) => c.id);
-  const member = await prisma.member.findUnique({ where: { id: memberId }, select: { householdId: true } });
   const [spends, fixed, bills, categories, familyTxns, famBudgetedCats] = await Promise.all([
     prisma.personalSpend.findMany({ where: { memberId, cardAccountId: { not: null }, pending: false }, select: { cardAccountId: true, amount: true, date: true, note: true, categoryId: true } }),
     prisma.personalExpense.findMany({ where: { memberId, cardAccountId: { not: null }, pending: false }, select: { cardAccountId: true, amount: true, date: true, label: true } }),
