@@ -394,3 +394,7 @@ main {
   .fo-arrow path { animation: none !important; stroke-dashoffset: 0; }
   .fo-press:active { transform: none; }
 }
+
+/* Money donut: the ring sweeps round once on arrival (mask stroke drawn 0 → full). */
+.fo-donut-sweep { stroke-dasharray: 1; stroke-dashoffset: 1; animation: fo-draw 0.8s cubic-bezier(0.65, 0, 0.35, 1) 0.05s forwards; }
+@media (prefers-reduced-motion: reduce) { .fo-donut-sweep { animation: none; stroke-dashoffset: 0; } }
