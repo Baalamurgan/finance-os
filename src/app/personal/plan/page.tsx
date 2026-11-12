@@ -29,7 +29,7 @@ export default async function PersonalPlanPage({
   const c = await loadPersonal(sp);
   const financeDue = c.cardReminders.length > 0;
   const nav = (
-    <PersonalNav active="plan" account={c.account} selYear={c.selYear} selMonth={c.selMonth} financeDue={financeDue} />
+    <PersonalNav active="plan" account={c.account} selYear={c.selYear} selMonth={c.selMonth} dataMonths={c.dataMonths} financeDue={financeDue} />
   );
 
   if (!c.selected) {

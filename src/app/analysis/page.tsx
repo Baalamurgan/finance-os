@@ -39,6 +39,7 @@ export default async function AnalysisPage({
       selYear={c.selYear}
       selMonth={c.selMonth}
       previewPeriod={c.previewPeriod}
+      dataMonths={c.dataMonths}
       provisional={c.provisional}
       members={c.members}      categories={c.categories}
       account={c.account}
@@ -73,6 +74,7 @@ export default async function AnalysisPage({
       curMonth={c.selMonth}
       from={fromDefault}
       to={toDefault}
+      dataMonths={c.periods.filter((p) => p.status !== "draft").map((p) => p.year * 12 + p.month - 1)}
     />
   );
 

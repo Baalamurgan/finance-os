@@ -60,6 +60,7 @@ export default async function PiggyPage({
         selYear={c.selYear}
         selMonth={c.selMonth}
         previewPeriod={c.previewPeriod}
+        dataMonths={c.dataMonths}
         provisional={c.provisional}
         members={c.members}        categories={c.categories}
         account={c.account}

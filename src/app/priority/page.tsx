@@ -28,6 +28,7 @@ export default async function PriorityPage({
         selYear={c.selYear}
         selMonth={c.selMonth}
         previewPeriod={c.previewPeriod}
+        dataMonths={c.dataMonths}
         provisional={c.provisional}
         members={c.members}
         categories={c.categories}

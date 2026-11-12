@@ -22,6 +22,7 @@ import { PillTrack } from "@/components/motion/PillTrack";
 import { QuickJump, type JumpItem } from "@/components/motion/QuickJump";
 import { startNavProgress } from "@/components/NavProgress";
 import { rememberFamilyChrome } from "@/components/NavSkeleton";
+import { monthInYear, monthKey, yearsWithData } from "@/lib/monthPick";
 
 const MONTHS = [
   "Jan", "Feb", "Mar", "Apr", "May", "Jun",
@@ -50,6 +51,7 @@ export function NavHeader({
   actualIsHead,
   viewingAsMember,
   miscSubCategories = MISC_SUBCATEGORIES,
+  dataMonths,
 }: {
   active:
     | "sheet"
@@ -87,6 +89,7 @@ export function NavHeader({
   actualIsHead?: boolean;
   viewingAsMember?: boolean;
   miscSubCategories?: { name: string; icon: string }[];
+  dataMonths?: number[]; // y*12+(m-1) of months that have a sheet; others are greyed out in the picker
 }) {
   const router = useRouter();
   const now = new Date();
@@ -120,12 +123,13 @@ export function NavHeader({
   ];
   const activeHref = tabs.find((t) => t.key === active)?.href ?? "/";
 
-  const years: number[] = [];
-  for (let yr = curYear; yr >= 2000; yr--) years.push(yr);
-  // The preview draft can be in next year (Dec → Jan); make that year selectable.
-  if (previewPeriod && previewPeriod.year > curYear && !years.includes(previewPeriod.year)) {
-    years.unshift(previewPeriod.year);
-  }
+  // Only months that have a sheet are pickable (plus this month and the preview draft, so they can
+  // always be opened); years with no such month are left out.
+  const allowed = new Set<number>(dataMonths ?? []);
+  allowed.add(monthKey(curYear, curMonth));
+  if (previewPeriod) allowed.add(monthKey(previewPeriod.year, previewPeriod.month));
+  const has = (y: number, m: number) => !dataMonths || allowed.has(monthKey(y, m));
+  const years = dataMonths ? yearsWithData(allowed, [selYear]) : Array.from({ length: curYear - 1999 }, (_, i) => curYear - i);
 
   // replace (not push) so the phone back button exits the app instead of
   // stepping back through months/tabs — feels native, less confusing for elders.
@@ -196,7 +200,7 @@ export function NavHeader({
               // Keep the next-month preview selectable even though it's a "future" month.
               const isPreview = !!previewPeriod && selYear === previewPeriod.year && mnum === previewPeriod.month;
               return (
-                <option key={mnum} value={mnum} disabled={future && !isPreview}>
+                <option key={mnum} value={mnum} disabled={(future && !isPreview) || !has(selYear, mnum)}>
                   {mname}{isPreview ? " · Preview" : ""}
                 </option>
               );
@@ -206,9 +210,8 @@ export function NavHeader({
             value={selYear}
             onChange={(e) => {
               const y = Number(e.target.value);
-              // if switching to current year and selected month is in the future, clamp
-              const m = y === curYear && selMonth > curMonth ? curMonth : selMonth;
-              go(y, m);
+              // land on the same month if that year has it, else the nearest month with a sheet
+              go(y, dataMonths ? monthInYear(allowed, y, selMonth) : y === curYear && selMonth > curMonth ? curMonth : selMonth);
             }}
             className="rounded-md border border-slate-300 bg-white px-1.5 py-1 text-[13px] shadow-sm sm:px-2 sm:py-1.5 sm:text-sm"
           >

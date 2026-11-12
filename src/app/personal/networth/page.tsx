@@ -38,7 +38,7 @@ export default async function NetWorthPage({ searchParams }: { searchParams: Pro
 
   return (
     <>
-      <PersonalNav active="networth" account={c.account} selYear={c.selYear} selMonth={c.selMonth} financeDue={c.cardReminders.length > 0} />
+      <PersonalNav active="networth" account={c.account} selYear={c.selYear} selMonth={c.selMonth} dataMonths={c.dataMonths} financeDue={c.cardReminders.length > 0} />
       <main className="fo-rise mx-auto max-w-3xl space-y-5 p-4 pb-24 sm:p-6">
         {/* Hero: the number, how it moved, the trend */}
         <section className="rounded-2xl border border-slate-200 bg-gradient-to-br from-emerald-50 to-white p-5">

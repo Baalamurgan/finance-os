@@ -16,6 +16,7 @@ import { PERSONAL_MORE, PERSONAL_PRIMARY } from "@/components/navTabs";
 import { startNavProgress } from "@/components/NavProgress";
 import { PillTrack } from "@/components/motion/PillTrack";
 import { QuickJump } from "@/components/motion/QuickJump";
+import { monthInYear, monthKey, yearsWithData } from "@/lib/monthPick";
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
@@ -29,12 +30,14 @@ export function PersonalNav({
   selYear,
   selMonth,
   financeDue = false,
+  dataMonths,
 }: {
   active: "today" | "sheet" | "expenses" | "analysis" | "finance" | "setup" | "loans" | "cards" | "plan" | "networth";
   account: { name: string; email: string; image: string | null };
   selYear: number;
   selMonth: number;
   financeDue?: boolean; // a card bill is due soon/overdue → red dot on Accounts (and the More button)
+  dataMonths?: number[]; // y*12+(m-1) of months you have data for; others are greyed out in the picker
 }) {
   const router = useRouter();
   const now = new Date();
@@ -46,8 +49,11 @@ export function PersonalNav({
     startNavProgress();
     router.replace(`${activeHref}?y=${y}&m=${m}`);
   };
-  const years: number[] = [];
-  for (let yr = curYear; yr >= 2000; yr--) years.push(yr);
+  // Only months you have data for are pickable (plus this month); years with none are left out.
+  const allowed = new Set<number>(dataMonths ?? []);
+  allowed.add(monthKey(curYear, curMonth));
+  const has = (y: number, m: number) => !dataMonths || allowed.has(monthKey(y, m));
+  const years = dataMonths ? yearsWithData(allowed, [selYear]) : Array.from({ length: curYear - 1999 }, (_, i) => curYear - i);
 
   return (
     <>
@@ -97,12 +103,12 @@ export function PersonalNav({
               {MONTHS.map((mname, i) => {
                 const mnum = i + 1;
                 const future = selYear > curYear || (selYear === curYear && mnum > curMonth);
-                return <option key={mnum} value={mnum} disabled={future}>{mname}</option>;
+                return <option key={mnum} value={mnum} disabled={future || !has(selYear, mnum)}>{mname}</option>;
               })}
             </select>
             <select
               value={selYear}
-              onChange={(e) => { const y = Number(e.target.value); go(y, y === curYear && selMonth > curMonth ? curMonth : selMonth); }}
+              onChange={(e) => { const y = Number(e.target.value); go(y, dataMonths ? monthInYear(allowed, y, selMonth) : y === curYear && selMonth > curMonth ? curMonth : selMonth); }}
               className="rounded-md border border-emerald-200 bg-white px-1.5 py-1 text-[13px] shadow-sm sm:px-2 sm:py-1.5 sm:text-sm"
             >
               {years.map((yr) => <option key={yr} value={yr}>{yr}</option>)}

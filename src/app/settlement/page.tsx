@@ -21,6 +21,7 @@ export default async function SettlementPage({
       selYear={c.selYear}
       selMonth={c.selMonth}
       previewPeriod={c.previewPeriod}
+      dataMonths={c.dataMonths}
       provisional={c.provisional}
       members={c.members}      categories={c.categories}
       account={c.account}
