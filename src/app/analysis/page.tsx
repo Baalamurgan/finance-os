@@ -2,7 +2,8 @@ import { formatINR, pctLabel } from "@/lib/format";
 import { loadCommon } from "@/lib/load";
 import { getRollup, getRollupRange, getTrends, getCategoryTrendRange } from "@/lib/queries";
 import { NavHeader } from "@/components/NavHeader";
-import { CategoryBars, CategoryRangeChart, SplitPie, TrendChart } from "@/components/Charts";
+import { CashFlowChart, CategoryRangeChart } from "@/components/Charts";
+import { BudgetList, FlowHero, FlowLegend, Highlights, Panel, ShareList, SplitBar, signedINR, type Highlight, type ShareRow } from "@/components/analysis/AnalysisParts";
 import { AnalysisRangePicker } from "@/components/AnalysisRangePicker";
 
 const MON = ["", "JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"];
@@ -79,7 +80,7 @@ export default async function AnalysisPage({
     return (
       <>
         {nav}
-        <main className="fo-rise mx-auto max-w-7xl space-y-4 p-6">
+        <main className="fo-rise mx-auto max-w-5xl space-y-4 p-4 sm:p-6">
           {picker}
           <p className="p-12 text-center text-slate-500">No data to analyse for this month.</p>
         </main>
@@ -87,8 +88,16 @@ export default async function AnalysisPage({
     );
   }
 
+  // Month keys (year*12 + month-1) so months compare/sort as numbers.
+  const key = (y: number, m: number) => y * 12 + (m - 1);
+  const lo = isRange ? Math.min(key(Number(sp.fy), Number(sp.fm)), key(Number(sp.ty), Number(sp.tm))) : key(c.selYear, c.selMonth);
+  const hi = isRange ? Math.max(key(Number(sp.fy), Number(sp.fm)), key(Number(sp.ty), Number(sp.tm))) : key(c.selYear, c.selMonth);
+  const prevKey = lo - 1;
+  // Last month's sheet (month view) — for "what went up" per category.
+  const prevPeriod = isRange ? null : c.periods.find((p) => key(p.year, p.month) === prevKey && p.status !== "draft") ?? null;
+
   // Independent reads → one parallel round.
-  const [rollup, allTrends, catTrend] = await Promise.all([
+  const [rollup, allTrends, catTrend, prevRollup] = await Promise.all([
     isRange
       ? getRollupRange(c.household.id, Number(sp.fy), Number(sp.fm), Number(sp.ty), Number(sp.tm))
       : getRollup(c.selected!.id),
@@ -96,198 +105,152 @@ export default async function AnalysisPage({
     isRange
       ? getCategoryTrendRange(c.household.id, Number(sp.fy), Number(sp.fm), Number(sp.ty), Number(sp.tm))
       : Promise.resolve(null),
+    prevPeriod ? getRollup(prevPeriod.id) : Promise.resolve(null),
   ]);
-  const trends = isRange
-    ? allTrends.filter((t) => {
-        const lo = Number(sp.fy) * 12 + (Number(sp.fm) - 1);
-        const hi = Number(sp.ty) * 12 + (Number(sp.tm) - 1);
-        const k = t.year * 12 + (t.month - 1);
-        return k >= Math.min(lo, hi) && k <= Math.max(lo, hi);
-      })
-    : allTrends;
-  const overBudget = rollup.byCategory.filter((r) => r.planned > 0 && r.actual > r.planned);
+  const tk = (t: { year: number; month: number }) => key(t.year, t.month);
+
+  // Cash-flow chart: the range itself, or the 12 months up to the selected one.
+  const flow = isRange ? allTrends.filter((t) => tk(t) >= lo && tk(t) <= hi) : allTrends.filter((t) => tk(t) <= hi).slice(-12);
+
+  // What to compare with: last month, or the same number of months just before the range.
+  const span = hi - lo + 1;
+  const flowNow = allTrends.filter((t) => tk(t) >= lo && tk(t) <= hi);
+  const before = allTrends.filter((t) => tk(t) >= lo - span && tk(t) < lo);
+  // Only a like-for-like comparison: the earlier stretch must have as many months on record as this one.
+  const prev = before.length > 0 && before.length === flowNow.length ? { income: before.reduce((s, t) => s + t.income, 0), spent: before.reduce((s, t) => s + t.expense, 0) } : null;
+  const vs = isRange ? `prev ${span} mo` : cap(MON[((prevKey % 12) + 12) % 12 + 1]);
+
+  // Categories, biggest first; month view shows the change vs last month.
+  const prevByName = new Map((prevRollup?.byCategory ?? []).map((r) => [r.name, r.actual]));
+  const spentCats = rollup.byCategory.filter((r) => r.actual > 0).sort((a, b) => b.actual - a.actual);
+  const catTotal = spentCats.reduce((s, r) => s + r.actual, 0);
+  const catRows: ShareRow[] = spentCats.map((r) => ({
+    key: r.name,
+    name: r.name,
+    amount: r.actual,
+    change: prevRollup ? r.actual - (prevByName.get(r.name) ?? 0) : null,
+  }));
+  const budgets = rollup.byCategory.filter((r) => r.planned > 0);
+  const overs = budgets.filter((r) => r.actual > r.planned).sort((a, b) => b.actual - b.planned - (a.actual - a.planned));
+
+  // Running month only: how far into the month we are (the "today" line on the budget bars).
+  const today = new Date();
+  const dayPct = !isRange && c.selYear === today.getFullYear() && c.selMonth === today.getMonth() + 1
+    ? (today.getDate() / new Date(c.selYear, c.selMonth, 0).getDate()) * 100
+    : null;
+
+  // ── Highlights ──
+  const highlights: Highlight[] = [];
+  const top = spentCats[0];
+  if (top) highlights.push({ icon: "🏆", label: "Biggest spend", value: top.name, sub: `${formatINR(top.actual)} · ${pctLabel((top.actual / (catTotal || 1)) * 100)} of spending` });
+  if (isRange) {
+    const months = Math.max(1, "monthsCount" in rollup ? rollup.monthsCount : flow.length); // months with a sheet
+    highlights.push({ icon: "📅", label: "Average spent / month", value: formatINR(Math.round(rollup.totalExpense / months)), sub: `income ${formatINR(Math.round(rollup.totalIncome / months))} / month` });
+    const best = [...flow].sort((a, b) => b.balance - a.balance)[0];
+    if (best && flow.length > 1) highlights.push({ icon: "🌟", label: "Best month", value: best.label, sub: `${signedINR(best.balance)} left`, tone: best.balance >= 0 ? "good" : "bad" });
+  } else {
+    // (skip the biggest spend itself — it already has its own tile)
+    const rises = catRows.filter((r) => (r.change ?? 0) > 0 && r.name !== top?.name).sort((a, b) => (b.change ?? 0) - (a.change ?? 0));
+    if (rises[0]) highlights.push({ icon: "📈", label: `Biggest jump vs ${vs}`, value: rises[0].name, sub: `+${formatINR(rises[0].change!)}`, tone: "bad" });
+    const past = allTrends.filter((t) => tk(t) < lo).slice(-6);
+    if (past.length >= 2) {
+      const avg = past.reduce((s, t) => s + t.expense, 0) / past.length;
+      const diff = rollup.totalExpense - avg;
+      highlights.push({
+        icon: "📊",
+        label: `vs ${past.length}-month average`,
+        value: Math.abs(diff) < 1 ? "Right on average" : `${formatINR(Math.round(Math.abs(diff)))} ${diff > 0 ? "more" : "less"}`,
+        sub: `average spent ${formatINR(Math.round(avg))}`,
+        tone: Math.abs(diff) < 1 ? null : diff > 0 ? "bad" : "good",
+      });
+    }
+  }
+  if (budgets.length > 0)
+    highlights.push(
+      overs.length > 0
+        ? { icon: "🎯", label: "Over budget", value: overs.length === 1 ? overs[0].name : `${overs.length} budgets`, sub: overs.length === 1 ? `by ${formatINR(overs[0].actual - overs[0].planned)}` : overs.map((o) => o.name).join(", "), tone: "bad" }
+        : { icon: "🎯", label: "Budgets", value: "All within budget", sub: `${budgets.length} budget${budgets.length === 1 ? "" : "s"} on track`, tone: "good" },
+    );
+
   const title = isRange
-    ? `${MON[Number(sp.fm)]} ${sp.fy} – ${MON[Number(sp.tm)]} ${sp.ty} — analysis`
-    : `${c.selected!.label} — analysis`;
+    ? `${cap(MON[Number(sp.fm)])} ${sp.fy} – ${cap(MON[Number(sp.tm)])} ${sp.ty}`
+    : c.selected!.label;
+  const necessary = rollup.necessaryVsOther.find((x) => x.name === "Necessary")?.value ?? 0;
+  const other = rollup.necessaryVsOther.find((x) => x.name === "Other")?.value ?? 0;
 
   return (
     <>
       {nav}
-      <main className="fo-rise mx-auto max-w-7xl space-y-8 p-6">
+      <main className="fo-rise mx-auto max-w-5xl space-y-5 p-4 pb-28 sm:p-6">
         {picker}
-        <h1 className="text-xl font-bold text-slate-900">{title}</h1>
+        <div className="flex items-baseline justify-between gap-2">
+          <h1 className="text-xl font-bold text-slate-900">{title}</h1>
+          <span className="text-xs text-slate-400">{isRange ? `${span} months` : "Analysis"}</span>
+        </div>
 
-        <section className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-          <Card label="Total Income" value={formatINR(rollup.totalIncome)} tone="green" />
-          <Card label="Total Expense" value={formatINR(rollup.totalExpense)} tone="red" />
-          <Card label="Balance" value={formatINR(rollup.balance)} tone="indigo" />
-        </section>
+        <FlowHero
+          tone="family"
+          idPrefix={isRange ? "an-range" : "an-month"}
+          leftLabel={isRange ? "Left over the range" : "Left this month"}
+          income={rollup.totalIncome}
+          spent={rollup.totalExpense}
+          prev={prev}
+          vs={vs}
+        />
 
-        {overBudget.length > 0 && (
-          <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-            <b>Over budget this month:</b>{" "}
-            {overBudget
-              .map((r) => `${r.name} (${formatINR(r.actual)} of ${formatINR(r.planned)})`)
-              .join(", ")}
-            .
-          </div>
+        <Highlights items={highlights} />
+
+        {flow.length > 1 && (
+          <Panel title="Cash flow" sub={isRange ? "Income and spending, month by month" : "Last 12 months · tap a month for details"} right={<FlowLegend />}>
+            <CashFlowChart data={flow} focus={isRange ? null : c.selected!.label} />
+          </Panel>
         )}
 
-        {trends.length > 1 && (
-          <section className="rounded-xl border border-slate-200 bg-white p-4">
-            <h2 className="text-sm font-semibold text-slate-700">Trends — income, expense &amp; balance</h2>
-            <p className="mb-2 text-xs text-slate-400">Month over month across all recorded periods.</p>
-            <TrendChart data={trends} />
-          </section>
-        )}
+        <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
+          <Panel
+            title="Where the money went"
+            sub={<>By category · {formatINR(catTotal)}{prevRollup ? <> · ▲▼ vs {vs}</> : null}</>}
+          >
+            {catRows.length > 0 ? <ShareList rows={catRows} total={catTotal} tone="family" vs={vs} /> : <p className="text-sm text-slate-400">No spending recorded.</p>}
+          </Panel>
 
-        {/* Range view: per-category budgeted-vs-spent over the range (the month-trend chart
-            above can be uninformative for a range). Pick a category; the gap = unspent → Piggy. */}
+          <Panel title="Budgets" sub={dayPct != null ? "The line marks today" : "Spent against what was planned"}>
+            {budgets.length > 0 ? (
+              <BudgetList rows={budgets} dayPct={dayPct} />
+            ) : (
+              <p className="text-sm text-slate-400">No budgets set for this {isRange ? "range" : "month"}.</p>
+            )}
+          </Panel>
+        </div>
+
+        <div className="grid grid-cols-1 gap-5 sm:grid-cols-2">
+          <Panel title="Essentials vs other" sub="Sheet expenses marked necessary">
+            <SplitBar parts={[{ name: "Essentials", value: necessary, color: "bg-indigo-500" }, { name: "Other", value: other, color: "bg-slate-300" }]} />
+          </Panel>
+          <Panel title="By member" sub="Who the sheet expenses were for">
+            {rollup.byMember.length > 0 ? (
+              <ShareList
+                rows={[...rollup.byMember].sort((a, b) => b.total - a.total).map((m) => ({ key: m.name, name: m.name, amount: m.total }))}
+                total={rollup.byMember.reduce((s, m) => s + m.total, 0)}
+                tone="family"
+              />
+            ) : (
+              <p className="text-sm text-slate-400">Nothing recorded.</p>
+            )}
+          </Panel>
+        </div>
+
+        {/* Range view: one category, budgeted vs spent month by month. */}
         {isRange && catTrend && catTrend.categories.length > 0 && (
-          <section className="rounded-xl border border-slate-200 bg-white p-4">
-            <h2 className="text-sm font-semibold text-slate-700">Category over the range — budgeted vs spent</h2>
-            <p className="mb-2 text-xs text-slate-400">
-              Month by month for one category. The gap between budgeted and spent is what stayed unspent (→ Piggy).
-            </p>
+          <Panel title="One category over the range" sub="Budgeted vs spent each month — the gap is what stayed unspent (→ Piggy)">
             <CategoryRangeChart months={catTrend.months} categories={catTrend.categories} />
-          </section>
+          </Panel>
         )}
-
-        {/* priority: budget vs spent table first */}
-        <BudgetVsSpent rows={rollup.byCategory} />
-
-        <section className="grid grid-cols-1 gap-6 lg:grid-cols-3">
-          <div className="lg:col-span-2 rounded-xl border border-slate-200 bg-white p-4">
-            <h2 className="text-sm font-semibold text-slate-700">Budget vs Spent by category</h2>
-            <p className="mb-2 text-xs text-slate-400">
-              Budget = what you planned for the month · Spent = total recorded in that category.
-            </p>
-            <CategoryBars data={rollup.byCategory} />
-          </div>
-          <div className="space-y-6">
-            <div className="rounded-xl border border-slate-200 bg-white p-4">
-              <h2 className="mb-2 text-sm font-semibold text-slate-700">Necessary vs other</h2>
-              <SplitPie data={rollup.necessaryVsOther} />
-            </div>
-            <div className="rounded-xl border border-slate-200 bg-white p-4">
-              <h2 className="mb-2 text-sm font-semibold text-slate-700">By member</h2>
-              <SplitPie data={rollup.byMember.map((m) => ({ name: m.name, value: m.total }))} />
-            </div>
-          </div>
-        </section>
       </main>
     </>
   );
 }
 
-function BudgetVsSpent({
-  rows,
-}: {
-  rows: { name: string; actual: number; planned: number }[];
-}) {
-  const budgeted = rows.filter((r) => r.planned > 0);
-  const unbudgeted = rows.filter((r) => r.planned === 0 && r.actual > 0);
-  const totalBudget = budgeted.reduce((s, r) => s + r.planned, 0);
-  const totalSpentOnBudget = budgeted.reduce((s, r) => s + r.actual, 0);
-  const remaining = totalBudget - totalSpentOnBudget;
-
-  return (
-    <section className="rounded-xl border border-slate-200 bg-white p-4">
-      <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
-        <h2 className="text-sm font-semibold text-slate-700">Budget vs Spent</h2>
-        {totalBudget > 0 && (
-          <p className="text-xs text-slate-500">
-            Spent <b className="text-slate-700">{formatINR(totalSpentOnBudget)}</b> of{" "}
-            <b className="text-slate-700">{formatINR(totalBudget)}</b> budgeted —{" "}
-            <span className={remaining >= 0 ? "font-semibold text-green-600" : "font-semibold text-red-600"}>
-              {remaining >= 0 ? "under by " : "over by "}
-              {formatINR(Math.abs(remaining))}
-            </span>
-          </p>
-        )}
-      </div>
-
-      {budgeted.length > 0 ? (
-        <div className="space-y-3">
-          {budgeted.map((r) => {
-            const pct = Math.min((r.actual / r.planned) * 100, 100);
-            const over = r.actual > r.planned;
-            return (
-              <div key={r.name}>
-                <div className="flex items-center justify-between text-sm">
-                  <span className="font-medium text-slate-700">{r.name}</span>
-                  <span className="tabular-nums text-slate-500">
-                    {formatINR(r.actual)}{" "}
-                    <span className="text-slate-400">/ {formatINR(r.planned)}</span>
-                    <span className={`ml-2 font-medium ${over ? "text-red-600" : "text-green-600"}`}>
-                      {over ? "over" : pctLabel((r.actual / r.planned) * 100)}
-                    </span>
-                  </span>
-                </div>
-                <div className="mt-1 h-2 w-full overflow-hidden rounded-full bg-slate-100">
-                  <div
-                    className={`h-full rounded-full ${over ? "bg-red-500" : "bg-indigo-500"}`}
-                    style={{ width: `${pct}%` }}
-                  />
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      ) : (
-        <p className="text-sm text-slate-400">
-          No budgets set yet. Budgets let you track spending against a monthly plan.
-        </p>
-      )}
-
-      {unbudgeted.length > 0 && (() => {
-        const unbudgetedTotal = unbudgeted.reduce((s, r) => s + r.actual, 0) || 1;
-        return (
-          <div className="mt-5 border-t border-slate-100 pt-3">
-            <div className="mb-1 text-xs font-medium uppercase tracking-wide text-slate-400">
-              Spending with no budget set
-            </div>
-            <ul className="space-y-1 text-sm">
-              {unbudgeted.map((r) => {
-                const pct = (r.actual / unbudgetedTotal) * 100;
-                return (
-                  <li key={r.name} className="flex items-baseline justify-between gap-2">
-                    <span className="text-slate-600">{r.name}</span>
-                    <span className="flex items-baseline gap-2">
-                      <span className="tabular-nums text-slate-700">{formatINR(r.actual)}</span>
-                      <span className="w-10 shrink-0 text-right text-xs text-slate-400">
-                        {pctLabel(pct)}
-                      </span>
-                    </span>
-                  </li>
-                );
-              })}
-            </ul>
-          </div>
-        );
-      })()}
-    </section>
-  );
-}
-
-function Card({
-  label,
-  value,
-  tone,
-}: {
-  label: string;
-  value: string;
-  tone: "green" | "red" | "indigo";
-}) {
-  const tones = {
-    green: "from-green-50 to-white text-green-700",
-    red: "from-red-50 to-white text-red-700",
-    indigo: "from-indigo-50 to-white text-indigo-700",
-  } as const;
-  return (
-    <div className={`rounded-xl border border-slate-200 bg-gradient-to-br p-5 ${tones[tone]}`}>
-      <div className="text-xs font-medium uppercase tracking-wide text-slate-500">{label}</div>
-      <div className="mt-1 text-2xl font-bold">{value}</div>
-    </div>
-  );
+function cap(m: string | undefined) {
+  return m ? m[0] + m.slice(1).toLowerCase() : "";
 }

@@ -56,6 +56,15 @@ export async function getPersonalAnalysis(memberId: number, periodId: number, ra
     const out = (expByPeriod.get(p.id) ?? 0) + (spdByPeriod.get(p.id) ?? 0);
     return { label: p.label, income: Math.round(inc), expense: Math.round(out), balance: Math.round(inc - out) };
   });
+  // The same number of months just before the window, for "vs earlier" (none for "all").
+  const before = rangeMonths ? periods.slice(Math.max(0, periods.length - rangeMonths * 2), Math.max(0, periods.length - rangeMonths)) : [];
+  const prev = before.length > 0 && before.length === window.length // like-for-like only
+    ? {
+        months: before.length,
+        income: before.reduce((s, p) => s + p.income + (extraOf.get(p.id) ?? 0), 0),
+        out: before.reduce((s, p) => s + (expByPeriod.get(p.id) ?? 0) + (spdByPeriod.get(p.id) ?? 0), 0),
+      }
+    : null;
   const rIncome = series.reduce((s, x) => s + x.income, 0);
   const rExpenses = window.reduce((s, p) => s + (expByPeriod.get(p.id) ?? 0), 0);
   const rSpends = window.reduce((s, p) => s + (spdByPeriod.get(p.id) ?? 0), 0);
@@ -71,6 +80,7 @@ export async function getPersonalAnalysis(memberId: number, periodId: number, ra
     avgOut: rOut / mo,
     savingRate: rIncome > 0 ? ((rIncome - rOut) / rIncome) * 100 : 0,
     series,
+    prev,
   };
 
   // ── top categories over the range ──

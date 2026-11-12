@@ -268,3 +268,12 @@ main {
   .fo-pill-track span[aria-hidden] { transition: none !important; }
   button:not(:disabled):active { transform: none; }
 }
+
+/* ───────────── Analysis: the savings ring draws itself in ───────────── */
+@keyframes fo-ring { from { stroke-dashoffset: var(--fo-ring-len); } }
+@layer base {
+  .fo-ring { animation: fo-ring 1.1s cubic-bezier(0.22, 1, 0.36, 1) backwards 0.15s; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .fo-ring { animation: none !important; }
+}

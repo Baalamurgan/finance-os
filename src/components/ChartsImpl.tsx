@@ -4,10 +4,9 @@ import { useState } from "react";
 import {
   Bar,
   BarChart,
+  CartesianGrid,
   Cell,
   Legend,
-  Line,
-  LineChart,
   Pie,
   PieChart,
   ResponsiveContainer,
@@ -19,23 +18,73 @@ import { pctLabel } from "@/lib/format";
 
 const inr = (n: number) => `₹${n.toLocaleString("en-IN")}`;
 
-export function TrendChart({
+// Cash flow: income vs spent per month as paired bars on one rupee scale. The month in focus stays solid,
+// the rest step back; hover (or tap) a month for income / spent / left. Bars grow up on arrival.
+export function CashFlowChart({
   data,
+  focus,
 }: {
   data: { label: string; income: number; expense: number; balance: number }[];
+  focus?: string | null; // label of the month to emphasise
 }) {
+  const dim = (label: string) => (focus && label !== focus ? 0.4 : 1);
   return (
-    <ResponsiveContainer width="100%" height={260}>
-      <LineChart data={data} margin={{ top: 10, right: 16, left: 0, bottom: 0 }}>
-        <XAxis dataKey="label" tick={{ fontSize: 11 }} />
-        <YAxis tickFormatter={(v) => `₹${Math.round(Number(v) / 1000)}k`} tick={{ fontSize: 11 }} width={48} />
-        <Tooltip formatter={(value) => inr(Number(value))} />
-        <Legend />
-        <Line type="monotone" dataKey="income" stroke="#16a34a" name="Income" strokeWidth={2} dot={{ r: 3 }} />
-        <Line type="monotone" dataKey="expense" stroke="#dc2626" name="Expense" strokeWidth={2} dot={{ r: 3 }} />
-        <Line type="monotone" dataKey="balance" stroke="#4f46e5" name="Balance" strokeWidth={2} dot={{ r: 3 }} />
-      </LineChart>
-    </ResponsiveContainer>
+    <div className="[&_.recharts-cartesian-axis-tick-value]:fill-slate-400 [&_.recharts-cartesian-grid_line]:stroke-slate-100">
+      <ResponsiveContainer width="100%" height={240}>
+        <BarChart data={data} margin={{ top: 8, right: 4, left: 0, bottom: 0 }} barGap={2} barCategoryGap="22%">
+          <CartesianGrid vertical={false} strokeDasharray="3 4" />
+          <XAxis dataKey="label" tick={{ fontSize: 10 }} tickLine={false} axisLine={false} interval="preserveStartEnd" tickFormatter={shortMonth} />
+          <YAxis tickFormatter={compactINR} tick={{ fontSize: 10 }} tickLine={false} axisLine={false} width={46} />
+          <Tooltip cursor={{ fill: "rgba(148, 163, 184, 0.12)" }} content={<FlowTip />} />
+          <Bar dataKey="income" name="Income" fill="#16a34a" radius={[4, 4, 0, 0]} maxBarSize={18} animationDuration={700} animationEasing="ease-out">
+            {data.map((d) => <Cell key={d.label} fillOpacity={dim(d.label)} />)}
+          </Bar>
+          <Bar dataKey="expense" name="Spent" fill="#dc2626" radius={[4, 4, 0, 0]} maxBarSize={18} animationDuration={700} animationBegin={120} animationEasing="ease-out">
+            {data.map((d) => <Cell key={d.label} fillOpacity={dim(d.label)} />)}
+          </Bar>
+        </BarChart>
+      </ResponsiveContainer>
+    </div>
+  );
+}
+
+// "NOV 2026" / "Nov 2026" → "Nov 26"; anything else is shown as is.
+function shortMonth(label: string) {
+  const m = String(label).match(/^([A-Za-z]{3})[A-Za-z]*\s+(\d{4})$/);
+  return m ? `${m[1][0].toUpperCase()}${m[1].slice(1).toLowerCase()} ${m[2].slice(2)}` : String(label);
+}
+
+function compactINR(v: number) {
+  const n = Math.abs(Number(v));
+  const sign = Number(v) < 0 ? "-" : "";
+  if (n >= 1e7) return `${sign}₹${+(n / 1e7).toFixed(1)}Cr`;
+  if (n >= 1e5) return `${sign}₹${+(n / 1e5).toFixed(1)}L`;
+  if (n >= 1e3) return `${sign}₹${Math.round(n / 1e3)}k`;
+  return `${sign}₹${n}`;
+}
+
+function FlowTip({ active, payload, label }: { active?: boolean; payload?: { payload: { income: number; expense: number; balance: number } }[]; label?: string }) {
+  if (!active || !payload?.length) return null;
+  const d = payload[0].payload;
+  return (
+    <div className="min-w-[150px] rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs shadow-lg shadow-slate-900/10">
+      <div className="mb-1 font-semibold text-slate-700">{label}</div>
+      <Row dot="#16a34a" k="Income" v={inr(Math.round(d.income))} />
+      <Row dot="#dc2626" k="Spent" v={inr(Math.round(d.expense))} />
+      <div className="mt-1 border-t border-slate-100 pt-1">
+        <Row k="Left" v={`${Math.round(d.balance) < 0 ? "-" : ""}${inr(Math.abs(Math.round(d.balance)))}`} bold tone={d.balance < 0 ? "text-red-600" : "text-slate-800"} />
+      </div>
+    </div>
+  );
+}
+
+function Row({ dot, k, v, bold, tone = "text-slate-700" }: { dot?: string; k: string; v: string; bold?: boolean; tone?: string }) {
+  return (
+    <div className="flex items-center gap-2 py-0.5">
+      {dot ? <span className="h-2 w-2 rounded-full" style={{ background: dot }} /> : <span className="w-2" />}
+      <span className="flex-1 text-slate-500">{k}</span>
+      <span className={`tabular-nums ${bold ? "font-semibold" : ""} ${tone}`}>{v}</span>
+    </div>
   );
 }
 
@@ -75,25 +124,6 @@ export function SpendBars({
         <YAxis tickFormatter={(v) => `₹${Math.round(Number(v) / 1000)}k`} tick={{ fontSize: 10 }} width={44} />
         <Tooltip formatter={(value) => inr(Number(value))} />
         <Bar dataKey="total" fill={color} radius={[3, 3, 0, 0]} name="Spent" />
-      </BarChart>
-    </ResponsiveContainer>
-  );
-}
-
-export function CategoryBars({
-  data,
-}: {
-  data: { name: string; actual: number; planned: number }[];
-}) {
-  return (
-    <ResponsiveContainer width="100%" height={Math.max(220, data.length * 34)}>
-      <BarChart data={data} layout="vertical" margin={{ left: 24, right: 24 }}>
-        <XAxis type="number" tickFormatter={inr} fontSize={11} />
-        <YAxis type="category" dataKey="name" width={120} fontSize={11} />
-        <Tooltip formatter={(value) => inr(Number(value))} />
-        <Legend />
-        <Bar dataKey="planned" name="Budget" fill="#cbd5e1" radius={[0, 4, 4, 0]} />
-        <Bar dataKey="actual" name="Spent" fill="#6366f1" radius={[0, 4, 4, 0]} />
       </BarChart>
     </ResponsiveContainer>
   );
@@ -149,29 +179,25 @@ export function CategoryRangeChart({
           </span>
         </p>
       </div>
-      <ResponsiveContainer width="100%" height={280}>
-        <BarChart data={data} margin={{ top: 8, right: 12, left: 0, bottom: 0 }}>
-          <XAxis dataKey="label" tick={{ fontSize: 10 }} interval="preserveStartEnd" />
-          <YAxis tickFormatter={(v) => `₹${Math.round(Number(v) / 1000)}k`} tick={{ fontSize: 10 }} width={44} />
-          <Tooltip formatter={(value) => inr(Number(value))} />
-          <Legend iconSize={9} />
-          <Bar dataKey="planned" name="Budgeted" fill="#cbd5e1" radius={[3, 3, 0, 0]} />
-          <Bar dataKey="spent" name="Spent" fill="#6366f1" radius={[3, 3, 0, 0]} />
+      <div className="mb-2 flex items-center gap-3 text-[11px] text-slate-500">
+        <span className="flex items-center gap-1"><span className="h-2 w-2 rounded-sm bg-slate-300" />Budgeted</span>
+        <span className="flex items-center gap-1"><span className="h-2 w-2 rounded-sm bg-indigo-500" />Spent</span>
+      </div>
+      <div className="[&_.recharts-cartesian-axis-tick-value]:fill-slate-400 [&_.recharts-cartesian-grid_line]:stroke-slate-100">
+      <ResponsiveContainer width="100%" height={260}>
+        <BarChart data={data} margin={{ top: 8, right: 4, left: 0, bottom: 0 }} barGap={2} barCategoryGap="22%">
+          <CartesianGrid vertical={false} strokeDasharray="3 4" />
+          <XAxis dataKey="label" tick={{ fontSize: 10 }} tickLine={false} axisLine={false} interval="preserveStartEnd" tickFormatter={shortMonth} />
+          <YAxis tickFormatter={compactINR} tick={{ fontSize: 10 }} tickLine={false} axisLine={false} width={46} />
+          <Tooltip cursor={{ fill: "rgba(148, 163, 184, 0.12)" }} formatter={(value) => inr(Math.round(Number(value)))} contentStyle={{ borderRadius: 12, fontSize: 12, background: "var(--color-white)", borderColor: "var(--color-slate-200)" }} labelStyle={{ color: "var(--color-slate-700)", fontWeight: 600 }} />
+          <Bar dataKey="planned" name="Budgeted" fill="#cbd5e1" radius={[4, 4, 0, 0]} maxBarSize={18} animationDuration={700} />
+          <Bar dataKey="spent" name="Spent" fill="#6366f1" radius={[4, 4, 0, 0]} maxBarSize={18} animationDuration={700} animationBegin={120} />
         </BarChart>
       </ResponsiveContainer>
+      </div>
     </div>
   );
 }
-
-const PIE_COLORS = [
-  "#6366f1",
-  "#22c55e",
-  "#f59e0b",
-  "#ef4444",
-  "#06b6d4",
-  "#a855f7",
-  "#ec4899",
-];
 
 /** "Where did the income go" donut: one slice per section + a "Left" slice, with
  *  an amount/percent legend. Answers the "we earn so much, why so little left?". */
@@ -232,32 +258,5 @@ export function MoneyFlowDonut({
         ))}
       </ul>
     </div>
-  );
-}
-
-export function SplitPie({
-  data,
-}: {
-  data: { name: string; value: number }[];
-}) {
-  return (
-    <ResponsiveContainer width="100%" height={260}>
-      <PieChart margin={{ top: 4, right: 4, bottom: 4, left: 4 }}>
-        <Pie
-          data={data}
-          dataKey="value"
-          nameKey="name"
-          cx="50%"
-          cy="45%"
-          outerRadius="70%"
-        >
-          {data.map((_, i) => (
-            <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />
-          ))}
-        </Pie>
-        <Tooltip formatter={(value) => inr(Number(value))} />
-        <Legend verticalAlign="bottom" height={28} iconSize={9} />
-      </PieChart>
-    </ResponsiveContainer>
   );
 }

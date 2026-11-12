@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { useRouter } from "next/navigation";
 import { startNavProgress } from "@/components/NavProgress";
 
@@ -68,9 +69,15 @@ export function QuickJump({ items, q, tone = "family" }: { items: readonly JumpI
         <kbd className="rounded border border-slate-200 px-1 font-sans text-[10px]">⌘K</kbd>
       </button>
 
-      {open && (
+      {/* Rendered at the page root: the header behind it is blurred, and a blurred parent traps "fixed"
+          children inside its own box — the dim layer would only cover the header strip. */}
+      {open && createPortal(
         <div className="fixed inset-0 z-[60] flex items-start justify-center bg-black/30 px-4 pt-[12vh]" onClick={close}>
-          <div className="w-full max-w-md overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl" onClick={(e) => e.stopPropagation()}>
+          <div
+            className="w-full max-w-md overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xl shadow-slate-900/10"
+            style={{ animation: "fo-pop-in 0.2s cubic-bezier(0.22, 1, 0.36, 1)" }}
+            onClick={(e) => e.stopPropagation()}
+          >
             <div className="flex items-center gap-2 border-b border-slate-100 px-4">
               <svg width="16" height="16" viewBox="0 0 20 20" className="shrink-0 text-slate-400" aria-hidden><path fill="currentColor" d="M8.5 3a5.5 5.5 0 0 1 4.38 8.83l3.65 3.64-1.06 1.06-3.64-3.65A5.5 5.5 0 1 1 8.5 3zm0 1.5a4 4 0 1 0 0 8 4 4 0 0 0 0-8z" /></svg>
               <input
@@ -107,7 +114,8 @@ export function QuickJump({ items, q, tone = "family" }: { items: readonly JumpI
               ))}
             </ul>
           </div>
-        </div>
+        </div>,
+        document.body,
       )}
     </>
   );
