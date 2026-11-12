@@ -90,9 +90,10 @@ export function MoneyFlow({ nodes, links, total, totalLabel }: { nodes: FlowNode
                   style={{ strokeDasharray: 1, strokeDashoffset: 1, animation: `fo-draw 0.9s cubic-bezier(0.65, 0, 0.35, 1) ${0.15 + b.col * 0.55 + Math.min(b.i, 10) * 0.03}s forwards` }}>
                   <title>{`${byId.get(b.from)?.label} → ${byId.get(b.to)?.label}: ${formatINR(Math.round(b.value))}`}</title>
                 </path>
-                {b.t >= 4 && (
-                  <path d={b.d} fill="none" stroke="#fff" strokeOpacity={0.35} strokeWidth={Math.max(1, b.t * 0.35)} strokeLinecap="round"
-                    className="fo-flow pointer-events-none" style={{ strokeDasharray: "6 34", animationDelay: `${1.4 + b.col * 0.3}s` }} />
+                {b.t >= 6 && (
+                  // a thin line of light running along the band's middle (a few passes, then still)
+                  <path d={b.d} fill="none" stroke={color} strokeOpacity={0.55} strokeWidth={1.5} strokeLinecap="butt"
+                    className="fo-flow pointer-events-none" style={{ strokeDasharray: "14 26", strokeDashoffset: 0, animationDelay: `${1.4 + b.col * 0.3}s` }} />
                 )}
               </g>
             );

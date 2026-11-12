@@ -45,3 +45,24 @@ export function istTodayStartMs(now: Date = new Date()): number {
 export function istTodayISO(now: Date = new Date()): string {
   return istNow(now).toISOString().slice(0, 10);
 }
+
+// The IST calendar day ("YYYY-MM-DD") a stored instant falls on.
+export function istDayOf(d: Date): string {
+  return istNow(d).toISOString().slice(0, 10);
+}
+
+// "YYYY-MM-DD" → the instant that IST day starts (stored as a spend's spentOn). null if malformed.
+export function istDayStart(iso: string): Date | null {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso);
+  if (!m) return null;
+  const [y, mo, d] = [Number(m[1]), Number(m[2]), Number(m[3])];
+  const t = Date.UTC(y, mo - 1, d);
+  const back = new Date(t);
+  if (back.getUTCFullYear() !== y || back.getUTCMonth() !== mo - 1 || back.getUTCDate() !== d) return null; // e.g. 31 Feb
+  return new Date(t - IST_OFFSET_MS);
+}
+
+// A family spend's day: the picked spend date, else the day it was logged.
+export function spendDay(s: { spentOn?: Date | null; createdAt: Date }): string {
+  return istDayOf(s.spentOn ?? s.createdAt);
+}

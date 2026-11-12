@@ -1,13 +1,16 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
+import { startNavProgress } from "@/components/NavProgress";
 import { formatINR } from "@/lib/format";
 
 // Daily spending as a heatmap: darker = more spent that day. One month → a calendar (Mon–Sun rows of
 // weeks, day numbers inside); a longer stretch → a contribution-style grid (a column per week, scrolled to
-// the latest). Cells pop in one after another. Tap / hover a day to read it. Single hue, light → dark.
+// the latest). Cells pop in one after another. Hover a day to read it (cleared when the mouse leaves the
+// grid); click / tap a day with spends to open those spends on the Spends tab. Single hue, light → dark.
 
-export type DayTotal = { date: string; amount: number; count: number }; // date = YYYY-MM-DD (IST)
+export type DayTotal = { date: string; amount: number; count: number; href?: string }; // date = YYYY-MM-DD (IST); href = that day on Spends
 
 const TONE = {
   family: ["bg-slate-100", "bg-indigo-200 dark:bg-indigo-500/30", "bg-indigo-300 dark:bg-indigo-500/50", "bg-indigo-500 dark:bg-indigo-500/75", "bg-indigo-700 dark:bg-indigo-400"],
@@ -24,6 +27,14 @@ const nice = (d: Date) => d.toLocaleDateString("en-IN", { day: "numeric", month:
 export function SpendHeatmap({ days, from, to, today, tone = "family" }: { days: DayTotal[]; from: string; to: string; today: string; tone?: keyof typeof TONE }) {
   const [sel, setSel] = useState<string | null>(null);
   const scroller = useRef<HTMLDivElement>(null);
+  const router = useRouter();
+  const hrefOf = useMemo(() => new Map(days.filter((d) => d.href).map((d) => [d.date, d.href!])), [days]);
+  const open = (date: string) => {
+    const h = hrefOf.get(date);
+    if (h) { startNavProgress(); router.push(h); }
+    else setSel((s) => (s === date ? null : date)); // a day with nothing to open: just read it
+  };
+  const leave = (e: React.PointerEvent) => { if (e.pointerType === "mouse") setSel(null); };
 
   const data = useMemo(() => {
     const by = new Map(days.map((d) => [d.date, d]));
@@ -55,10 +66,10 @@ export function SpendHeatmap({ days, from, to, today, tone = "family" }: { days:
       key={x.date}
       type="button"
       disabled={x.future}
-      onClick={() => setSel((s) => (s === x.date ? null : x.date))}
+      onClick={() => open(x.date)}
       onPointerEnter={(e) => e.pointerType === "mouse" && !x.future && setSel(x.date)}
       title={x.future ? undefined : `${nice(x.d)} · ${x.amount > 0 ? formatINR(Math.round(x.amount)) : "no spends"}`}
-      className={`fo-cell ${size} rounded-[4px] ${x.future ? "bg-slate-50 opacity-50" : pal[data.level(x.amount)]} ${sel === x.date ? "ring-2 ring-slate-800 ring-offset-1 dark:ring-slate-300" : ""} ${label ? "grid place-items-center text-[10px] font-medium tabular-nums" : ""} ${label && data.level(x.amount) >= 3 ? "text-[#fff]" : "text-slate-500"}`}
+      className={`fo-cell ${size} rounded-[4px] ${hrefOf.has(x.date) ? "cursor-pointer hover:ring-2 hover:ring-slate-400/60" : ""} ${x.future ? "bg-slate-50 opacity-50" : pal[data.level(x.amount)]} ${sel === x.date ? "ring-2 ring-slate-800 ring-offset-1 dark:ring-slate-300" : ""} ${label ? "grid place-items-center text-[10px] font-medium tabular-nums" : ""} ${label && data.level(x.amount) >= 3 ? "text-[#fff]" : "text-slate-500"}`}
       style={{ animationDelay: `${Math.min(i, 120) * 8}ms` }}
       aria-label={x.future ? `${nice(x.d)}, later` : `${nice(x.d)}, ${x.amount > 0 ? formatINR(Math.round(x.amount)) : "no spends"}`}
     >
@@ -72,7 +83,7 @@ export function SpendHeatmap({ days, from, to, today, tone = "family" }: { days:
   return (
     <div>
       {calendar ? (
-        <div className="mx-auto max-w-sm">
+        <div className="mx-auto max-w-sm" onPointerLeave={leave}>
           <div className="mb-1 grid grid-cols-7 gap-1 text-center text-[10px] font-medium text-slate-400">
             {WD.map((d, i) => <span key={i}>{d}</span>)}
           </div>
@@ -83,7 +94,7 @@ export function SpendHeatmap({ days, from, to, today, tone = "family" }: { days:
         </div>
       ) : (
         <div ref={scroller} className="overflow-x-auto pb-1">
-          <div className="grid w-max grid-flow-col grid-rows-7 gap-[3px]">
+          <div className="grid w-max grid-flow-col grid-rows-7 gap-[3px]" onPointerLeave={leave}>
             {Array.from({ length: lead }).map((_, i) => <span key={`p${i}`} className="h-3 w-3" />)}
             {data.list.map((x, i) => cell(x, i, "h-3 w-3"))}
           </div>

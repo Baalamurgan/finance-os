@@ -18,6 +18,8 @@ import { SpendSubCategoryPicker } from "@/components/SpendSubCategoryPicker";
 import { EditSpendModal } from "@/components/EditSpendModal";
 import { ExpensesSortControl } from "@/components/ExpensesSortControl";
 import { ExpensesMemberFilter } from "@/components/ExpensesMemberFilter";
+import { ExpensesDayFilter } from "@/components/ExpensesDayFilter";
+import { spendDay } from "@/lib/time";
 import { MoneyFlowDonut } from "@/components/Charts";
 
 type SortKey = "date" | "amount" | "member";
@@ -28,7 +30,7 @@ const MISC_DONUT_COLORS = ["#6366f1", "#f59e0b", "#10b981", "#ef4444", "#8b5cf6"
 export default async function ExpensesPage({
   searchParams,
 }: {
-  searchParams: Promise<{ y?: string; m?: string; sort?: string; member?: string; card?: string }>;
+  searchParams: Promise<{ y?: string; m?: string; sort?: string; member?: string; card?: string; day?: string }>;
 }) {
   const sp = await searchParams;
   const c = await loadCommon(sp);
@@ -39,6 +41,8 @@ export default async function ExpensesPage({
   // ?card=<id> (from the In-Hand card popup): only spends swiped on that card — view-only, like ?member.
   const filterCardId = sp.card ? Number(sp.card) : null;
   const filterMemberName = filterMemberId != null ? c.members.find((m) => m.id === filterMemberId)?.name ?? null : null;
+  // ?day=YYYY-MM-DD (from the Analysis calendar, or the Day filter): only that day's spends — view-only.
+  const filterDay = sp.day && /^\d{4}-\d{2}-\d{2}$/.test(sp.day) ? sp.day : null;
 
   const nav = (
     <NavHeader
@@ -105,13 +109,17 @@ export default async function ExpensesPage({
   // Apply the chosen sort (and optional per-member filter, e.g. arriving from Settlement)
   // to each card's spend list. Totals above stay on the full month — filtering is view-only.
   const memberName = (id: number | null) => (id != null ? c.members.find((m) => m.id === id)?.name ?? "" : "Shared");
-  const orderSpends = <T extends { amount: number; createdAt: Date; memberId: number | null; cardAccountId: number | null }>(rows: T[]): T[] => {
+  // newest first by the day it was spent, then by when it was logged
+  const newest = (a: { spentOn: Date | null; createdAt: Date }, b: { spentOn: Date | null; createdAt: Date }) =>
+    spendDay(b).localeCompare(spendDay(a)) || b.createdAt.getTime() - a.createdAt.getTime();
+  const orderSpends = <T extends { amount: number; createdAt: Date; spentOn: Date | null; memberId: number | null; cardAccountId: number | null }>(rows: T[]): T[] => {
     const byMember = filterMemberId != null ? rows.filter((s) => s.memberId === filterMemberId) : rows;
-    const filtered = filterCardId != null ? byMember.filter((s) => s.cardAccountId === filterCardId) : byMember;
+    const byCard = filterCardId != null ? byMember.filter((s) => s.cardAccountId === filterCardId) : byMember;
+    const filtered = filterDay != null ? byCard.filter((s) => spendDay(s) === filterDay) : byCard;
     const by = [...filtered];
     if (sort === "amount") by.sort((a, b) => b.amount - a.amount);
-    else if (sort === "member") by.sort((a, b) => memberName(a.memberId).localeCompare(memberName(b.memberId)) || b.createdAt.getTime() - a.createdAt.getTime());
-    else by.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime()); // date (newest first)
+    else if (sort === "member") by.sort((a, b) => memberName(a.memberId).localeCompare(memberName(b.memberId)) || newest(a, b));
+    else by.sort(newest); // date (newest first)
     return by;
   };
   const cards = rawCards.map((card) => ({ ...card, spends: orderSpends(card.spends) }));
@@ -189,6 +197,7 @@ export default async function ExpensesPage({
           <div className="flex flex-1 basis-64 flex-wrap items-center justify-end gap-3">
             {c.isHead && anyOpen && <RefundModal members={c.members} householdId={c.household.id} categories={c.categories.filter((cat) => cat.tracked && cat.liveThisMonth).map((cat) => ({ id: cat.id, name: cat.name }))} />}
             <ExpensesMemberFilter members={c.members} selectedId={filterMemberId} />
+            <ExpensesDayFilter day={filterDay} year={c.selected.year} month={c.selected.month} />
             <ExpensesSortControl sort={sort} />
             {filterMemberId != null ? (
               <div className="rounded-xl border border-indigo-200 bg-white px-4 py-2 text-right">
@@ -253,6 +262,20 @@ export default async function ExpensesPage({
             <a href={`/expenses?y=${c.selYear}&m=${c.selMonth}&sort=${sort}`} className="rounded-md border border-fuchsia-300 bg-white px-3 py-1 text-xs font-medium text-fuchsia-700 hover:bg-fuchsia-100">✕ Clear filter</a>
           </div>
         )}
+        {filterDay && (() => {
+          const all = cards.flatMap((card) => card.spends);
+          const total = all.reduce((t, x) => t + x.amount, 0);
+          const nice = new Date(`${filterDay}T00:00:00Z`).toLocaleDateString("en-IN", { weekday: "short", day: "numeric", month: "short", timeZone: "UTC" });
+          const keep = new URLSearchParams({ y: String(c.selYear), m: String(c.selMonth), sort, ...(filterMemberId != null ? { member: String(filterMemberId) } : {}), ...(filterCardId != null ? { card: String(filterCardId) } : {}) });
+          return (
+            <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-sky-200 bg-sky-50 px-4 py-2.5 text-sm dark:border-sky-500/30 dark:bg-sky-500/10">
+              <span className="text-sky-900 dark:text-sky-200">
+                📅 Spends on <b>{nice}</b> · <b className="tabular-nums">{formatINR(total)}</b> · {all.length} spend{all.length === 1 ? "" : "s"}
+              </span>
+              <a href={`/expenses?${keep.toString()}`} className="rounded-md border border-sky-300 bg-white px-3 py-1 text-xs font-medium text-sky-700 hover:bg-sky-100">✕ Clear filter</a>
+            </div>
+          );
+        })()}
         {/* active per-member filter (e.g. arrived from Settlement → a member's Misc) */}
         {filterMemberName && (
           <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-indigo-200 bg-indigo-50 px-4 py-2.5 text-sm">
@@ -276,6 +299,7 @@ export default async function ExpensesPage({
               card={card}
               open={open}
               periodId={c.selected!.id}
+              periodYM={{ year: c.selected!.year, month: c.selected!.month }}
               isHead={c.isHead}
               members={c.members}
               currentMemberId={c.currentMember?.id}
@@ -304,6 +328,7 @@ export default async function ExpensesPage({
                   card={card}
                   open={open}
                   periodId={c.selected!.id}
+              periodYM={{ year: c.selected!.year, month: c.selected!.month }}
                   isHead={c.isHead}
                   members={c.members}
                   currentMemberId={c.currentMember?.id}
@@ -344,6 +369,7 @@ export default async function ExpensesPage({
                     card={card}
                     open={open}
                     periodId={c.selected!.id}
+              periodYM={{ year: c.selected!.year, month: c.selected!.month }}
                     isHead={c.isHead}
                     members={c.members}
                     currentMemberId={c.currentMember?.id}
@@ -407,6 +433,7 @@ function SpendCard({
   card,
   open,
   periodId,
+  periodYM,
   isHead,
   members,
   currentMemberId,
@@ -419,6 +446,7 @@ function SpendCard({
   card: SpendCardData;
   open: boolean;
   periodId: number;
+  periodYM: { year: number; month: number };
   isHead: boolean;
   members: { id: number; name: string }[];
   currentMemberId?: number | null;
@@ -462,6 +490,7 @@ function SpendCard({
           {open && (
             <AddSpendModal
               periodId={periodId}
+              periodYM={periodYM}
               trigger="card"
               fixedCategory={{ id: card.id, name: card.name, misc: isMisc }}
               isHead={isHead}
@@ -560,7 +589,7 @@ function SpendCard({
                 <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-slate-400">
                   <span>
                     {s.member?.name ?? "Shared"} ·{" "}
-                    {new Date(s.createdAt).toLocaleDateString("en-IN", { day: "numeric", month: "short" })}
+                    {new Date(`${spendDay(s)}T00:00:00Z`).toLocaleDateString("en-IN", { day: "numeric", month: "short", timeZone: "UTC" })}
                   </span>
                   {s.cardAccount && (
                     <span className="inline-flex items-center gap-1 text-violet-600">

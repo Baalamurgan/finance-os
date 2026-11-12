@@ -187,7 +187,7 @@ export default async function PersonalAnalysis({
             </Panel>
 
             {a.dailyRange && (
-              <Panel title="Daily spending" sub={`Your spends by day · ${rangeLabel}`}>
+              <Panel title="Daily spending" sub={`Your spends by day · ${rangeLabel} · tap a day to see its spends`}>
                 <SpendHeatmap days={a.daily} from={a.dailyRange.from} to={a.dailyRange.to} today={istTodayISO()} tone="personal" />
               </Panel>
             )}

@@ -1034,6 +1034,7 @@ model Spend {
   // Set on a REFUND line (a negative spend booked by the Refund modal): the original spend it corrects.
   // Refund lines are created/removed only through SpendRefund (never edited or deleted directly).
   refundOfId Int?
+  spentOn    DateTime? // the day it was spent (IST midnight), picked in the Add-spend modal; null = the day it was logged (createdAt)
   createdAt  DateTime @default(now())
 }
 

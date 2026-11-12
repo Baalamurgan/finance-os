@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/prisma";
+import { istDayOf } from "@/lib/time";
 
 export type Bucket = "need" | "want" | "invest";
 export const BUCKET_TARGET: Record<Bucket, number> = { need: 50, want: 30, invest: 20 };
@@ -106,16 +107,21 @@ export async function getPersonalAnalysis(memberId: number, periodId: number, ra
   for (const b of Object.keys(bucketCats) as Bucket[]) bucketCats[b].sort((x, y) => y.total - x.total);
 
   // Daily spends over the range (IST day) → the heatmap. Fixed lines have no day, so spends only.
-  const dayMap = new Map<string, { amount: number; count: number }>();
+  const dayMap = new Map<string, { amount: number; count: number; periodId: number }>();
   for (const sp of spends) {
     if (!rangeIds.has(sp.periodId)) continue;
-    const day = new Date(sp.date.getTime() + 330 * 60000).toISOString().slice(0, 10);
-    const e = dayMap.get(day) ?? { amount: 0, count: 0 };
+    const day = istDayOf(sp.date);
+    const e = dayMap.get(day) ?? { amount: 0, count: 0, periodId: sp.periodId };
     e.amount += sp.amount;
     e.count += 1;
     dayMap.set(day, e);
   }
-  const daily = [...dayMap.entries()].map(([date, v]) => ({ date, amount: Math.round(v.amount * 100) / 100, count: v.count }));
+  // each day links to its spends on the Spends tab (the month the spend is filed under)
+  const ymOf = new Map(window.map((p) => [p.id, p]));
+  const daily = [...dayMap.entries()].map(([date, v]) => {
+    const p = ymOf.get(v.periodId);
+    return { date, amount: Math.round(v.amount * 100) / 100, count: v.count, href: p ? `/personal/expenses?y=${p.year}&m=${p.month}&day=${date}` : undefined };
+  });
   const first = window[0], lastP = window[window.length - 1];
   const pad = (n: number) => String(n).padStart(2, "0");
   // The months' calendar days, widened to any spend dated just outside them (a personal month can run on

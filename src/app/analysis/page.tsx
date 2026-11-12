@@ -272,8 +272,14 @@ export default async function AnalysisPage({
           </Panel>
         </div>
 
-        <Panel title="Daily spending" sub={`Logged spends by day${isRange ? "" : " · tap a day"}`}>
-          <SpendHeatmap days={daily} from={dayFrom} to={dayTo} today={todayIST} />
+        <Panel title="Daily spending" sub="Spends by day · tap a day to see its spends">
+          <SpendHeatmap
+            days={daily.map((d) => {
+              const p = c.periods.find((x) => x.id === d.periodId);
+              return { ...d, href: p ? `/expenses?y=${p.year}&m=${p.month}&day=${d.date}` : undefined };
+            })}
+            from={dayFrom} to={dayTo} today={todayIST}
+          />
         </Panel>
 
         <div className="grid grid-cols-1 gap-5 sm:grid-cols-2">

@@ -8,6 +8,7 @@ import { suggestCategoryName, resolveCategoryId, suggestSpendKind, validateSpend
 import { evalArithmetic, hasArithmeticOp } from "@/lib/calc";
 import { useToast } from "@/components/Toast";
 import { CTA_CLASS, CtaLabel } from "@/components/Cta";
+import { istTodayISO } from "@/lib/time";
 
 type Cat = { id: number; name: string; misc?: boolean; oneMonth?: boolean }; // misc = the Personal/Misc bucket; oneMonth = a this-month-only spend card
 
@@ -26,6 +27,7 @@ export function AddSpendModal({
   currentMemberId,
   subCategories,
   triggerLabel,
+  periodYM,
 }: {
   periodId: number;
   trigger: "primary" | "card" | "fab";
@@ -36,6 +38,7 @@ export function AddSpendModal({
   currentMemberId?: number | null;
   subCategories?: { name: string; icon: string }[]; // shown & required for misc spends
   triggerLabel?: string; // override the "card" trigger button text (e.g. "Pay")
+  periodYM?: { year: number; month: number }; // the month being logged into → the date picker stays inside it
 }) {
   const toast = useToast();
   const [open, setOpen] = useState(false);
@@ -56,6 +59,24 @@ export function AddSpendModal({
   const [amountExpr, setAmountExpr] = useState(""); // mirrors the amount field so the "=" calc button can show
   const [submitTick, setSubmitTick] = useState(0); // bump to submit after a state update
   const [fieldError, setFieldError] = useState<{ field: string; message: string } | null>(null); // inline validation
+  const [spentOn, setSpentOn] = useState(""); // YYYY-MM-DD — the day it was spent
+
+  // Date of spend: inside the month being logged into, never after today.
+  const today = istTodayISO();
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const monthMin = periodYM ? `${periodYM.year}-${pad(periodYM.month)}-01` : undefined;
+  const monthEnd = periodYM ? `${periodYM.year}-${pad(periodYM.month)}-${pad(new Date(Date.UTC(periodYM.year, periodYM.month, 0)).getUTCDate())}` : undefined;
+  const dateMax = monthEnd && monthEnd < today ? monthEnd : today;
+  const inRange = (d: string) => (!monthMin || d >= monthMin) && d <= dateMax;
+  const yesterday = new Date(Date.parse(`${today}T00:00:00Z`) - 86400000).toISOString().slice(0, 10);
+  // Default: the day open on the Spends page (?day=), else today — kept inside the month.
+  const defaultDay = () => {
+    let d = today;
+    try { const q = new URLSearchParams(window.location.search).get("day"); if (q && /^\d{4}-\d{2}-\d{2}$/.test(q)) d = q; } catch { /* no URL */ }
+    if (monthMin && d < monthMin) d = monthMin;
+    if (d > dateMax) d = dateMax;
+    return d;
+  };
 
   const selectedCard = cardId != null ? cards.find((c) => c.id === cardId) : undefined;
   // "Paid with": Cash + the one most-used card as quick chips; every other card lives in a dropdown.
@@ -204,6 +225,7 @@ export function AddSpendModal({
 
   const openModal = () => {
     resetForm();
+    setSpentOn(defaultDay());
     setOpen(true);
   };
 
@@ -544,6 +566,30 @@ export function AddSpendModal({
                       </select>
                     </div>
                   )}
+
+                  {/* date of spend — defaults to the day open on Spends (or today); stays put while "keep adding" */}
+                  <div>
+                    <label htmlFor="spend-date" className="text-sm font-medium text-slate-600">Date of spend</label>
+                    <div className="mt-1.5 flex items-center gap-2">
+                      <input
+                        id="spend-date"
+                        name="spentOn"
+                        type="date"
+                        required
+                        value={spentOn}
+                        min={monthMin}
+                        max={dateMax}
+                        onChange={(e) => setSpentOn(e.target.value)}
+                        className="min-w-0 flex-1 rounded-xl border-2 border-slate-300 px-4 py-2.5 text-base outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
+                      />
+                      {[{ d: today, l: "Today" }, { d: yesterday, l: "Yesterday" }].filter((x) => inRange(x.d)).map((x) => (
+                        <button key={x.l} type="button" onClick={() => setSpentOn(x.d)}
+                          className={`shrink-0 rounded-full px-3 py-2 text-xs font-semibold ${spentOn === x.d ? "bg-indigo-600 text-white" : "bg-slate-100 text-slate-600"}`}>
+                          {x.l}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
 
                   {/* keep-adding toggle: off = Save closes; on = stay open for next item */}
                   <label className="flex items-center gap-3 rounded-xl bg-slate-50 px-4 py-3 text-base text-slate-700">

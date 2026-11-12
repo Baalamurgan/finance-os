@@ -304,7 +304,7 @@ main {
 @keyframes fo-near-sheen { 0% { transform: translateX(-100%); } 100% { transform: translateX(250%); } }
 @keyframes fo-coin-spin { to { transform: rotateY(360deg); } }
 @keyframes fo-float { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-6px); } }
-@keyframes fo-flow { to { stroke-dashoffset: -40; } }
+@keyframes fo-flow { 0% { opacity: 0; } 15%, 85% { opacity: 1; } 100% { opacity: 0; stroke-dashoffset: -40; } }
 @keyframes fo-cell-in { from { opacity: 0; transform: scale(0.4); } }
 
 @layer base {
@@ -331,7 +331,7 @@ main {
   /* Pull-to-refresh ₹ coin, empty-state art idle float, money-flow shimmer, heatmap cells. */
   .fo-coin-spin { animation: fo-coin-spin 0.9s linear infinite; }
   .fo-float { animation: fo-float 3.2s ease-in-out infinite; }
-  .fo-flow { animation: fo-flow 1.6s linear 3; }
+  .fo-flow { opacity: 0; animation: fo-flow 1.6s linear 3; } /* visible only while it runs */
   .fo-cell { animation: fo-cell-in 0.35s cubic-bezier(0.34, 1.56, 0.64, 1) backwards; }
 }
 
