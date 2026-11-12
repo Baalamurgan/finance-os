@@ -61,7 +61,6 @@ export function AddSpendModal({
   const [submitTick, setSubmitTick] = useState(0); // bump to submit after a state update
   const [fieldError, setFieldError] = useState<{ field: string; message: string } | null>(null); // inline validation
   const [spentOn, setSpentOn] = useState(""); // YYYY-MM-DD — the day it was spent
-  const [savedFlash, setSavedFlash] = useState(false); // Save turns into "✓ Saved" for a beat before closing
 
   // Date of spend: inside the month being logged into, never after today.
   const today = istTodayISO();
@@ -222,11 +221,8 @@ export function AddSpendModal({
         const t = setTimeout(() => setJustSaved(false), 2500);
         return () => clearTimeout(t);
       }
-      // a short "✓ Saved" on the button, then close (straight away with reduced motion)
-      if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) { closeModal(); return; }
-      setSavedFlash(true);
-      const t = setTimeout(() => { setSavedFlash(false); closeModal(); }, 500);
-      return () => clearTimeout(t);
+      // the modal is already hidden while saving — just close it (the toast confirms the save)
+      closeModal();
     }
   }, [state.n, keepAdding]);
 
@@ -627,15 +623,15 @@ export function AddSpendModal({
                   <button
                     type="button"
                     onClick={onSave}
-                    disabled={pending || savedFlash}
-                    className={`flex min-h-12 flex-1 items-center justify-center gap-2 rounded-xl px-4 py-3 text-base font-semibold text-white shadow-sm transition-colors active:bg-indigo-800 disabled:opacity-60 ${savedFlash ? "bg-emerald-600 disabled:opacity-100" : "bg-indigo-600"}`}
+                    disabled={pending}
+                    className="flex min-h-12 flex-1 items-center justify-center gap-2 rounded-xl bg-indigo-600 px-4 py-3 text-base font-semibold text-white shadow-sm active:bg-indigo-800 disabled:opacity-60"
                   >
                     {pending && (
                       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" className="animate-spin" aria-hidden>
                         <path d="M12 3a9 9 0 1 0 9 9" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" />
                       </svg>
                     )}
-                    {pending ? "Saving…" : savedFlash ? <span className="fo-check-pop inline-block">✓ Saved</span> : "Save"}
+                    {pending ? "Saving…" : "Save"}
                   </button>
                 </div>
               </form>

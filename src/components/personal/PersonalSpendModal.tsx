@@ -66,7 +66,6 @@ export function PersonalSpendModal({
   const isEdit = !!initial;
   const toast = useToast();
   const [uncontrolled, setUncontrolled] = useState(false);
-  const [savedFlash, setSavedFlash] = useState(false); // Add/Save turns into "✓ Saved" for a beat before closing
   const open = controlledOpen ?? uncontrolled;
   const setOpen = (v: boolean) => {
     onOpenChange?.(v);
@@ -137,11 +136,8 @@ export function PersonalSpendModal({
           setAmount(""); setNote(""); setCategoryId(""); setCatTouched(false);
           resetShared(); setReimburse(false); setReimbSel(""); setCardId("");
         }
-        // a short "✓ Saved" on the button, then close (straight away with reduced motion)
-        if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) { setOpen(false); return; }
-        setSavedFlash(true);
-        const t = setTimeout(() => { setSavedFlash(false); setOpen(false); }, 500);
-        return () => clearTimeout(t);
+        // the modal is already hidden while saving — just close it (the toast confirms the save)
+        setOpen(false);
       } else toast(state.error ?? "Couldn't save", "error");
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -425,8 +421,8 @@ export function PersonalSpendModal({
               </div>
               <div className="modal-foot flex justify-end gap-2 border-t border-slate-100 px-5 py-3">
                 <button type="button" onClick={() => setOpen(false)} className="rounded-md px-3 py-2 text-sm text-slate-500 hover:bg-slate-100">Cancel</button>
-                <button type="submit" disabled={pending || savedFlash} className={`rounded-md bg-emerald-600 px-3 py-2 text-sm font-medium text-white hover:bg-emerald-700 ${savedFlash ? "disabled:opacity-100" : "disabled:opacity-40"}`}>
-                  {pending ? "Saving…" : savedFlash ? <span className="fo-check-pop inline-block">✓ Saved</span> : isEdit ? "Save" : "Add"}
+                <button type="submit" disabled={pending} className="rounded-md bg-emerald-600 px-3 py-2 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-40">
+                  {pending ? "Saving…" : isEdit ? "Save" : "Add"}
                 </button>
               </div>
             </form>
