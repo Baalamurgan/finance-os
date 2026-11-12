@@ -37,7 +37,7 @@ export function PersonalSpendFab({
   const [side, setSide] = useState<"left" | "right">("right");
   const [open, setOpen] = useState(false);
   const [dragX, setDragX] = useState<number | null>(null);
-  const start = useRef<{ x: number; moved: boolean } | null>(null);
+  const start = useRef<{ x: number; y: number; moved: boolean } | null>(null);
 
   useEffect(() => {
     const s = localStorage.getItem("personal-fab-side");
@@ -55,31 +55,37 @@ export function PersonalSpendFab({
     if (!v && autoOpen) router.replace(pathname);
   };
 
+  // Tap = open via a real click (also works for a tap the instant the page loads); only a deliberate
+  // sideways drag (≥ 24px, mostly horizontal) moves the button — a tap's natural wobble no longer
+  // swallows it (the "needs two taps" bug).
+  const justDragged = useRef(false);
   const onDown = (e: React.PointerEvent) => {
-    start.current = { x: e.clientX, moved: false };
-    setDragX(e.clientX);
-    (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
+    start.current = { x: e.clientX, y: e.clientY, moved: false };
   };
   const onMove = (e: React.PointerEvent) => {
-    if (!start.current) return;
-    if (Math.abs(e.clientX - start.current.x) > 6) start.current.moved = true;
-    setDragX(e.clientX);
+    const s0 = start.current;
+    if (!s0) return;
+    const dx = e.clientX - s0.x, dy = e.clientY - s0.y;
+    if (!s0.moved && Math.abs(dx) >= 24 && Math.abs(dx) > Math.abs(dy) * 1.5) {
+      s0.moved = true;
+      (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
+    }
+    if (s0.moved) setDragX(e.clientX);
   };
   const onUp = (e: React.PointerEvent) => {
-    if (!start.current) return;
-    if (start.current.moved) {
-      const snap = e.clientX < window.innerWidth / 2 ? "left" : "right";
-      setSide(snap);
-      try {
-        localStorage.setItem("personal-fab-side", snap);
-      } catch {
-        /* ignore */
-      }
-    } else {
-      setOpen(true);
-    }
+    const s0 = start.current;
     start.current = null;
+    if (!s0?.moved) return;
+    const snap = e.clientX < window.innerWidth / 2 ? "left" : "right";
+    setSide(snap);
+    try {
+      localStorage.setItem("personal-fab-side", snap);
+    } catch {
+      /* ignore */
+    }
     setDragX(null);
+    justDragged.current = true; // the click after a drag must not open
+    window.setTimeout(() => { justDragged.current = false; }, 0);
   };
 
   const pos: React.CSSProperties =
@@ -93,9 +99,12 @@ export function PersonalSpendFab({
     <>
       {showButton && (
         <button
+          type="button"
+          onClick={() => { if (!justDragged.current) setOpen(true); }}
           onPointerDown={onDown}
           onPointerMove={onMove}
           onPointerUp={onUp}
+          onPointerCancel={() => { start.current = null; setDragX(null); }}
           style={{ ...pos, bottom: "calc(env(safe-area-inset-bottom) + 1.25rem)" }}
           className="fixed z-40 flex h-14 touch-none select-none items-center gap-1.5 rounded-full bg-emerald-600 px-5 text-sm font-semibold text-white shadow-lg ring-1 ring-emerald-700/20 active:scale-95"
         >

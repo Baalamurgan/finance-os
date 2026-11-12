@@ -25,7 +25,7 @@ export function useToast() {
 export function useToastAction() {
   const toast = useToast();
   return useCallback(
-    (action: (formData: FormData) => void | Promise<unknown>, opts?: { success?: string | null; error?: string; onSuccess?: (formData: FormData) => void }) =>
+    (action: (formData: FormData) => void | Promise<unknown>, opts?: { success?: string | null; error?: string; onSuccess?: (formData: FormData) => void; onError?: () => void }) =>
       async (formData: FormData) => {
         try {
           await action(formData);
@@ -34,6 +34,7 @@ export function useToastAction() {
         } catch (e) {
           unstable_rethrow(e); // let redirect()/notFound() do their thing
           toast(opts?.error ?? "Something went wrong", "error");
+          opts?.onError?.();
         }
       },
     [toast],

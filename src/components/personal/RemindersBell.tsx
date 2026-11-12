@@ -104,7 +104,7 @@ export function RemindersBell({ context }: { context: "family" | "personal" }) {
                   <Link href={r.href} onClick={() => setOpen(false)} className="flex min-w-0 flex-1 items-center gap-3 py-3 pl-4 hover:bg-slate-50">
                     {/* a little calendar tile: the due day, tinted with the card's colour; overdue ones breathe red */}
                     <span
-                      className={`relative flex h-10 w-10 shrink-0 flex-col items-center justify-center overflow-hidden rounded-xl border pt-0.5 text-center leading-none ${r.overdue ? "fo-attention border-red-200 bg-red-50 text-red-700" : "border-slate-200 bg-slate-50 text-slate-700"}`}
+                      className={`relative flex h-10 w-10 shrink-0 flex-col items-center justify-center overflow-hidden rounded-xl border pt-0.5 text-center leading-none ${r.overdue ? "fo-urgent border-red-200 bg-red-50 text-red-700" : "border-slate-200 bg-slate-50 text-slate-700"}`}
                     >
                       <span className="absolute inset-x-0 top-0 h-1" style={{ background: r.dot ?? "#f59e0b" }} aria-hidden />
                       <span className="block text-[15px] font-bold tabular-nums">{new Date(r.dueISO).getDate()}</span>

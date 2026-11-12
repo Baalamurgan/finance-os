@@ -91,7 +91,7 @@ export function AnalysisRangePicker({
 
   const sel = "rounded-md border border-slate-300 bg-white px-2 py-1.5 text-sm shadow-sm";
   const chip = (on: boolean) =>
-    `shrink-0 rounded-full px-3 py-1.5 text-xs font-semibold transition ${on ? "bg-indigo-600 text-white shadow-sm shadow-indigo-600/30" : "bg-slate-100 text-slate-600 hover:bg-slate-200"}`;
+    `fo-press shrink-0 rounded-full px-3 py-1.5 text-xs font-semibold ${on ? "bg-indigo-600 text-white shadow-sm shadow-indigo-600/30" : "bg-slate-100 text-slate-600 hover:bg-slate-200"}`;
 
   return (
     <div className="space-y-3 rounded-2xl border border-slate-200 bg-white p-3">

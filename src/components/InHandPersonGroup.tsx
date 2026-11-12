@@ -7,6 +7,8 @@ import { formatINR } from "@/lib/format";
 import type { InHand } from "@/lib/queries";
 import { toggleBillPaid, unpayPeriodicBill, unpayMiscBill, unhideStep } from "@/app/actions";
 import { PayBillModal } from "@/components/PayBillModal";
+import { FlashAmount } from "@/components/motion/FlashAmount";
+import { useChangePulse } from "@/components/motion/useChangePulse";
 import { MiscPayModal } from "@/components/MiscPayModal";
 import { PayCardBillModal } from "@/components/PayCardBillModal";
 import { InHandCardBlock } from "@/components/InHandCardBlock";
@@ -297,8 +299,10 @@ export function InHandPersonGroup({
   // Live headline, projected + full breakdown on tap. Default collapsed to keep the wall of cards
   // scannable; expanding reveals where the money will land and the bills still to pay.
   const [expanded, setExpanded] = useState(false);
+  // a ticked cash move / paid bill changes what this person holds → the card glows once
+  const glow = useChangePulse(isPreview ? expected : holdingNow, "fo-glow");
   return (
-    <div className="rounded-xl border border-slate-200 p-3">
+    <div className={`rounded-xl border border-slate-200 p-3 ${glow}`}>
       <button
         type="button"
         onClick={() => setExpanded((v) => !v)}
@@ -315,7 +319,7 @@ export function InHandPersonGroup({
           {/* In a PREVIEW month, "holding now" is fake (you don't hold a future month's cash) — so lead
               with the meaningful projection, Expected by month-end. In the live month, lead with holding-now. */}
           <span className={`text-right text-sm font-bold tabular-nums ${(isPreview ? expected : holdingNow) < 0 ? "text-red-600" : "text-emerald-700"}`}>
-            {formatINR(isPreview ? expected : holdingNow)}
+            <FlashAmount text={formatINR(isPreview ? expected : holdingNow)} />
             <span className="ml-1 text-[10px] font-normal text-slate-400">{isPreview ? "expected" : holdingNow < 0 ? "to reclaim" : "holding now"}</span>
           </span>
           <span className={`text-[10px] text-slate-300 transition-transform ${expanded ? "rotate-180" : ""}`}>▾</span>

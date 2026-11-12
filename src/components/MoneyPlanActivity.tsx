@@ -25,7 +25,7 @@ export function MoneyPlanActivity({ items }: { items: Activity[] }) {
       </summary>
       <ul className="divide-y divide-slate-100 px-4 pb-2">
         {items.map((it) => (
-          <li key={it.id} className="flex items-start gap-2.5 py-2 text-xs">
+          <li key={it.id} className="fo-reveal flex items-start gap-2.5 py-2 text-xs">
             <span className="mt-px shrink-0" aria-hidden>{ICON[it.entity] ?? "•"}</span>
             <div className="min-w-0 flex-1">
               <p className="text-slate-700">

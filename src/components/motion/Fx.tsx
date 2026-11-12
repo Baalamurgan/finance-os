@@ -22,6 +22,15 @@ export type FxEvent =
   | { kind: "wrap"; stats: WrapStats };
 
 const EVENT = "fo:fx";
+/** Give a field a short shake (a validation error). Replays if called again. */
+export function shake(el: Element | null | undefined) {
+  if (!el || reducedMotion()) return;
+  el.classList.remove("fo-shake");
+  void (el as HTMLElement).offsetWidth; // restart the animation
+  el.classList.add("fo-shake");
+  window.setTimeout(() => el.classList.remove("fo-shake"), 500);
+}
+
 export function fx(e: FxEvent) {
   if (typeof window === "undefined" || reducedMotion()) return;
   window.dispatchEvent(new CustomEvent<FxEvent>(EVENT, { detail: e }));
@@ -44,6 +53,13 @@ export function FxLayer() {
     };
     window.addEventListener(EVENT, on);
     return () => window.removeEventListener(EVENT, on);
+  }, []);
+
+  // Any form field the browser rejects on submit (required / out of range…) shakes once.
+  useEffect(() => {
+    const onInvalid = (e: Event) => shake(e.target as Element);
+    document.addEventListener("invalid", onInvalid, true);
+    return () => document.removeEventListener("invalid", onInvalid, true);
   }, []);
 
   // Spotlight: cards marked data-spot get a soft light that follows the pointer (desktop / mouse only).

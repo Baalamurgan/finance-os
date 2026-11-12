@@ -29,7 +29,9 @@ const fmt = (n: number, decimals: number) =>
 
 const DIGITS = Array.from({ length: 20 }, (_, i) => i % 10); // two turns of the wheel
 
-export function CountUp({ text, id, duration = 900, className }: { text: string; id?: string; duration?: number; className?: string }) {
+/** `onlyChanges`: never roll in from 0 on mount — only roll when the value changes while it's on screen
+ *  (list rows, where rolling every row on every page open would be noise). */
+export function CountUp({ text, id, duration = 900, className, onlyChanges = false }: { text: string; id?: string; duration?: number; className?: string; onlyChanges?: boolean }) {
   // null = plain final text; otherwise the digits we roll FROM (right-aligned against the final digits)
   const [from, setFrom] = useState<number[] | null>(null);
   const [run, setRun] = useState(false);
@@ -42,7 +44,7 @@ export function CountUp({ text, id, duration = 900, className }: { text: string;
     // Read the starting point once per value (dev Strict Mode runs this effect twice).
     if (origin.current?.text !== text) {
       const prior = last.current ?? (id != null ? seen[id] : undefined);
-      origin.current = { text, from: prior ?? (live ? 0 : null) };
+      origin.current = { text, from: prior ?? (live && !onlyChanges ? 0 : null) };
       if (p) {
         last.current = p.value;
         if (id != null) seen[id] = p.value;

@@ -1022,11 +1022,11 @@ function DayTag({ kind, day, status, days, done = false }: { kind: string; day: 
   if (day == null) return <span className="shrink-0 rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-400">no date</span>;
   if (status === "overdue") {
     const late = days != null ? Math.abs(days) : 0;
-    return <span className="shrink-0 rounded-full bg-red-100 px-1.5 py-0.5 text-[10px] font-semibold text-red-700">overdue{late > 0 ? ` ${late}d` : ""} · was {ord}</span>;
+    return <span className="fo-urgent shrink-0 rounded-full bg-red-100 px-1.5 py-0.5 text-[10px] font-semibold text-red-700">overdue{late > 0 ? ` ${late}d` : ""} · was {ord}</span>;
   }
   // Due TODAY = red (needs action now), same urgency as overdue.
   if (status === "soon" && days === 0) {
-    return <span className="shrink-0 rounded-full bg-red-100 px-1.5 py-0.5 text-[10px] font-semibold text-red-700">due today</span>;
+    return <span className="fo-urgent shrink-0 rounded-full bg-red-100 px-1.5 py-0.5 text-[10px] font-semibold text-red-700">due today</span>;
   }
   // Due in 1–2 days = amber.
   if (status === "soon") {

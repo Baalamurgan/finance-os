@@ -1,5 +1,6 @@
 import { formatINR } from "@/lib/format";
 import { istDayOf } from "@/lib/time";
+import { CountUp } from "@/components/motion/CountUp";
 import { prisma } from "@/lib/prisma";
 import { loadPersonal } from "@/lib/loadPersonal";
 import { personalMonthLabel } from "@/lib/personal";
@@ -165,7 +166,8 @@ export default async function PersonalExpenses({
           {/* 1 — what you can still spend against this month's budget (Spent folded into the sub-line) */}
           <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4">
             <div className="text-[11px] font-medium uppercase tracking-wide text-emerald-700">Can spend</div>
-            <div className={`mt-1 text-xl font-bold ${canSpend >= 0 ? "text-emerald-800" : "text-red-600"}`}>{formatINR(canSpend)}</div>
+            {/* rolls to its new value; amber when under a tenth of the budget is left, red when overspent */}
+            <div className={`mt-1 text-xl font-bold transition-colors duration-500 ${canSpend < 0 ? "text-red-600" : personalExpense > 0 && canSpend < personalExpense * 0.1 ? "text-amber-600" : "text-emerald-800"}`}><CountUp id="p-can-spend" text={formatINR(canSpend)} /></div>
             <div className="text-[10px] text-slate-500">of {formatINR(Math.max(0, personalExpense))} · spent {formatINR(netSpent)}</div>
           </div>
           {/* 2 — money actually in your account now, tap to see what it's made of */}

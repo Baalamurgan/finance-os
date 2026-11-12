@@ -52,7 +52,8 @@ export function SwipeRow({ children, className = "" }: { children: ReactNode; cl
 
   const armed = Math.abs(dx) >= TRIGGER;
   return (
-    <div className={`relative overflow-hidden ${className}`}>
+    // fo-reveal: rows ease in as they scroll into view (pure CSS, scroll-driven)
+    <div className={`fo-reveal relative overflow-hidden ${className}`}>
       {dx !== 0 && (
         <div className={`absolute inset-0 flex items-center px-4 text-xs font-semibold text-[#fff] ${dx > 0 ? "justify-start bg-indigo-500" : "justify-end bg-red-500"}`} aria-hidden>
           <span className="transition-transform duration-150" style={{ transform: `scale(${armed ? 1.15 : 0.9})` }}>

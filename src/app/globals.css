@@ -339,3 +339,58 @@ main {
   .fo-over, .fo-near::after, .fo-coin-spin, .fo-float, .fo-flow, .fo-cell { animation: none !important; }
   [data-spot]::before { display: none; }
 }
+
+/* ───────────── Polish: things that changed glow, urgent tags pulse a few times, saves confirm, errors
+   shake, chips press, list rows ease in as they scroll into view. All one-shot (nothing loops forever). */
+@keyframes fo-flash { 0% { background-color: rgba(250, 204, 21, 0.5); box-shadow: 0 0 0 3px rgba(250, 204, 21, 0.5); } 100% { background-color: transparent; box-shadow: 0 0 0 3px transparent; } }
+@keyframes fo-flash-2 { 0% { background-color: rgba(250, 204, 21, 0.5); box-shadow: 0 0 0 3px rgba(250, 204, 21, 0.5); } 100% { background-color: transparent; box-shadow: 0 0 0 3px transparent; } }
+@keyframes fo-glow { 0% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.55); border-color: rgb(110, 231, 183); } 100% { box-shadow: 0 0 0 10px rgba(16, 185, 129, 0); } }
+@keyframes fo-glow-2 { 0% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.55); border-color: rgb(110, 231, 183); } 100% { box-shadow: 0 0 0 10px rgba(16, 185, 129, 0); } }
+@keyframes fo-shake { 0%, 100% { transform: translateX(0); } 15% { transform: translateX(-6px); } 30% { transform: translateX(5px); } 45% { transform: translateX(-4px); } 60% { transform: translateX(3px); } 75% { transform: translateX(-1px); } }
+@keyframes fo-spin { to { transform: rotate(360deg); } }
+@keyframes fo-row-in { from { opacity: 0; transform: translateY(12px); } }
+
+@layer base {
+  /* -a / -b use twin keyframes so switching class restarts the animation (same name wouldn't) */
+  .fo-flash-a { animation: fo-flash 1.4s ease-out; }
+  .fo-flash-b { animation: fo-flash-2 1.4s ease-out; }
+  .fo-glow-a { animation: fo-glow 1.2s ease-out; }
+  .fo-glow-b { animation: fo-glow-2 1.2s ease-out; }
+  .fo-shake { animation: fo-shake 0.45s ease-in-out; }
+
+  /* urgent tags (overdue / due today): a soft ring pulses three times, then rests */
+  .fo-urgent { animation: fo-pulse-ring 1.6s ease-out 3; }
+
+  /* settlement "who pays whom" arrows draw from payer to payee */
+  .fo-arrow path { stroke-dasharray: 1; stroke-dashoffset: 1; animation: fo-draw 0.55s cubic-bezier(0.65, 0, 0.35, 1) forwards; animation-delay: var(--fo-d, 0.1s); }
+  .fo-arrow path + path { animation-delay: calc(var(--fo-d, 0.1s) + 0.4s); animation-duration: 0.25s; }
+
+  /* chips press in with a springy release */
+  .fo-press { transition: transform 0.25s cubic-bezier(0.34, 1.8, 0.64, 1), background-color 0.15s, color 0.15s; }
+  .fo-press:active { transform: scale(0.9); transition-duration: 0.08s; }
+
+  /* a pressed save button: spinner while saving, then a ✓ (set by ToastForm) */
+  [data-fo-busy], [data-fo-done] { position: relative; color: transparent !important; pointer-events: none; }
+  [data-fo-busy] > *, [data-fo-done] > * { visibility: hidden; }
+  [data-fo-busy]::after {
+    content: ""; position: absolute; inset: 0; margin: auto; width: 1em; height: 1em; border-radius: 9999px;
+    border: 2px solid var(--fo-c, currentColor); border-right-color: transparent; animation: fo-spin 0.7s linear infinite;
+  }
+  [data-fo-done]::after {
+    content: "✓"; position: absolute; inset: 0; display: grid; place-items: center; font-weight: 800;
+    color: var(--fo-c, #059669); animation: fo-check-pop 0.38s cubic-bezier(0.34, 1.56, 0.64, 1);
+  }
+}
+
+/* list rows ease in as they scroll into view — scroll-driven CSS, no JS (browsers without it: no effect) */
+@supports (animation-timeline: view()) {
+  @layer base {
+    .fo-reveal { animation: fo-row-in linear both; animation-timeline: view(); animation-range: entry 0% entry 35%; }
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fo-flash-a, .fo-flash-b, .fo-glow-a, .fo-glow-b, .fo-shake, .fo-urgent, .fo-reveal, [data-fo-done]::after { animation: none !important; }
+  .fo-arrow path { animation: none !important; stroke-dashoffset: 0; }
+  .fo-press:active { transform: none; }
+}
