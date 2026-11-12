@@ -5,6 +5,7 @@ import { ServiceWorkerRegister } from "@/components/ServiceWorkerRegister";
 import { RefreshManager } from "@/components/RefreshManager";
 import { ToastProvider } from "@/components/Toast";
 import { NavProgress } from "@/components/NavProgress";
+import { FxLayer } from "@/components/motion/Fx";
 import { Suspense } from "react";
 
 const geistSans = Geist({
@@ -68,6 +69,8 @@ export default function RootLayout({
           <NavProgress />
         </Suspense>
         <RefreshManager />
+        {/* coin drops, paid ticks, confetti, the month-wrapped card, card spotlight */}
+        <FxLayer />
         <ServiceWorkerRegister />
       </body>
     </html>

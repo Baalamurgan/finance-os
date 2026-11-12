@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useCallback, useRef, useState } from "react";
+import { heroLaunch } from "@/components/motion/Hero";
 
 // A wallet of the cards, drawn like real cards in a stack. Flick the top card aside (or use the arrows /
 // ← →) to bring the next one up; tap it to turn it over and read its details on the back. Each card wears
@@ -23,7 +24,7 @@ export type WalletCard = {
 
 const FLING_PX = 80;
 
-function shade(hex: string, amt: number) {
+export function shade(hex: string, amt: number) {
   const m = hex.replace("#", "").match(/^([0-9a-f]{6}|[0-9a-f]{3})$/i);
   if (!m) return hex;
   let h = m[1];
@@ -135,6 +136,7 @@ export function CardWallet({ cards }: { cards: WalletCard[] }) {
           return (
             <div
               key={c.id}
+              data-hero-card
               ref={isTop ? topRef : undefined}
               onPointerDown={isTop ? onDown : undefined}
               onPointerMove={isTop ? onMove : undefined}
@@ -191,7 +193,7 @@ export function CardWallet({ cards }: { cards: WalletCard[] }) {
   );
 }
 
-function CardFace({ c }: { c: WalletCard }) {
+export function CardFace({ c }: { c: WalletCard }) {
   return (
     <div
       className="absolute inset-0 overflow-hidden rounded-2xl p-4 text-[#fff] shadow-[0_18px_40px_-14px_rgba(15,23,42,0.55)] [backface-visibility:hidden] sm:p-5"
@@ -262,6 +264,8 @@ function CardBack({ c, open }: { c: WalletCard; open: boolean }) {
       {c.href && (
         <Link
           href={c.href}
+          // the card zooms into the account page (turning face-up on the way)
+          onClick={(e) => { const card = e.currentTarget.closest("[data-hero-card]"); if (card instanceof HTMLElement && c.href) heroLaunch(c.href, card, { unflip: true }); }}
           onPointerDown={(e) => e.stopPropagation()}
           onPointerUp={(e) => e.stopPropagation()}
           tabIndex={open ? 0 : -1}

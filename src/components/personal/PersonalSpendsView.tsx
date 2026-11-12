@@ -5,6 +5,7 @@ import { formatINR } from "@/lib/format";
 import { PersonalSpendRowActions } from "@/components/personal/PersonalSpendRowActions";
 import type { SpendCard, SplitEditInfo } from "@/components/personal/PersonalSpendModal";
 import type { Member } from "@/components/personal/PersonalSplitModal";
+import { SwipeRow } from "@/components/motion/SwipeRow";
 
 type Cat = { id: number; name: string; icon: string | null };
 type Card = SpendCard;
@@ -72,6 +73,7 @@ export function PersonalSpendsView({
     const cat = catMap.get(s.categoryId);
     const card = s.cardAccountId != null ? cardMap.get(s.cardAccountId) : undefined;
     return (
+      <SwipeRow>
       <div className="flex items-center justify-between py-2.5 text-sm">
         <div className="min-w-0">
           <div className="flex items-center gap-1.5">
@@ -93,6 +95,7 @@ export function PersonalSpendsView({
           <PersonalSpendRowActions periodId={periodId} categories={categories} cards={cards} members={members} pastNames={pastNames} initial={{ id: s.id, categoryId: s.categoryId, amount: s.amount, note: s.note, cardAccountId: s.cardAccountId, dateISO: s.date, periodOpen, split: s.edit }} />
         </div>
       </div>
+      </SwipeRow>
     );
   };
 

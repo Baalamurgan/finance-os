@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/prisma";
+import { istDayOf } from "@/lib/time";
 
 export type Bucket = "need" | "want" | "invest";
 export const BUCKET_TARGET: Record<Bucket, number> = { need: 50, want: 30, invest: 20 };
@@ -13,7 +14,7 @@ export async function getPersonalAnalysis(memberId: number, periodId: number, ra
     prisma.personalPeriod.findMany({ where: { memberId }, orderBy: [{ year: "asc" }, { month: "asc" }] }),
     prisma.personalCategory.findMany({ where: { memberId } }),
     prisma.personalExpense.findMany({ where: { memberId, pending: false }, select: { periodId: true, categoryId: true, amount: true } }),
-    prisma.personalSpend.findMany({ where: { memberId, pending: false }, select: { periodId: true, categoryId: true, amount: true } }),
+    prisma.personalSpend.findMany({ where: { memberId, pending: false }, select: { periodId: true, categoryId: true, amount: true, date: true } }),
     prisma.personalIncome.groupBy({ by: ["periodId"], where: { memberId }, _sum: { amount: true } }),
   ]);
 
@@ -94,5 +95,45 @@ export async function getPersonalAnalysis(memberId: number, periodId: number, ra
     .slice(0, 8)
     .map((x) => ({ name: x.cat!.name, icon: x.cat!.icon, bucket: (x.cat!.bucket as Bucket) ?? "want", total: x.total }));
 
-  return { monthly: monthly.slice(-18), rule, range, topCategories, hasData: all.length > 0 };
+  // Money flow over the range: income → need / want / invest (+ saved) → the biggest categories in each.
+  const bucketCats = { need: [] as { name: string; icon: string | null; total: number }[], want: [] as { name: string; icon: string | null; total: number }[], invest: [] as { name: string; icon: string | null; total: number }[] };
+  const bucketTotals = { need: 0, want: 0, invest: 0 };
+  for (const r of all.filter((x) => rangeIds.has(x.periodId))) bucketTotals[bucketOf.get(r.categoryId ?? -1) ?? "want"] += r.amount;
+  for (const [id, total] of catTotals) {
+    const cat = catOf.get(id);
+    if (!cat) continue;
+    bucketCats[(cat.bucket as Bucket) ?? "want"].push({ name: cat.name, icon: cat.icon, total });
+  }
+  for (const b of Object.keys(bucketCats) as Bucket[]) bucketCats[b].sort((x, y) => y.total - x.total);
+
+  // Daily spends over the range (IST day) → the heatmap. Fixed lines have no day, so spends only.
+  const dayMap = new Map<string, { amount: number; count: number; periodId: number }>();
+  for (const sp of spends) {
+    if (!rangeIds.has(sp.periodId)) continue;
+    const day = istDayOf(sp.date);
+    const e = dayMap.get(day) ?? { amount: 0, count: 0, periodId: sp.periodId };
+    e.amount += sp.amount;
+    e.count += 1;
+    dayMap.set(day, e);
+  }
+  // each day links to its spends on the Spends tab (the month the spend is filed under)
+  const ymOf = new Map(window.map((p) => [p.id, p]));
+  const daily = [...dayMap.entries()].map(([date, v]) => {
+    const p = ymOf.get(v.periodId);
+    return { date, amount: Math.round(v.amount * 100) / 100, count: v.count, href: p ? `/personal/expenses?y=${p.year}&m=${p.month}&day=${date}` : undefined };
+  });
+  const first = window[0], lastP = window[window.length - 1];
+  const pad = (n: number) => String(n).padStart(2, "0");
+  // The months' calendar days, widened to any spend dated just outside them (a personal month can run on
+  // a wind-down cycle rather than the calendar), so every spend lands on the grid.
+  const dates = daily.map((d) => d.date).sort();
+  const dailyRange = first && lastP
+    ? (() => {
+        const from = `${first.year}-${pad(first.month)}-01`;
+        const to = `${lastP.year}-${pad(lastP.month)}-${pad(new Date(Date.UTC(lastP.year, lastP.month, 0)).getUTCDate())}`;
+        return { from: dates[0] && dates[0] < from ? dates[0] : from, to: dates.length && dates[dates.length - 1] > to ? dates[dates.length - 1] : to };
+      })()
+    : null;
+
+  return { monthly: monthly.slice(-18), rule, range, topCategories, hasData: all.length > 0, flow: { bucketTotals, bucketCats }, daily, dailyRange };
 }

@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { formatINR } from "@/lib/format";
 import { payFamilyCardBill, getMyFeeAccounts } from "@/app/actions";
 import { useToastAction } from "@/components/Toast";
+import { fx } from "@/components/motion/Fx";
 import { CTA_CLASS, CtaLabel } from "@/components/Cta";
 
 // One line of the statement breakdown. Hoisted out of the modal so it isn't re-created each render.
@@ -110,7 +111,7 @@ export function PayCardBillModal({
               <h2 className="text-lg font-bold text-slate-900">Pay {cardName} bill</h2>
               <button type="button" onClick={() => setOpen(false)} aria-label="Close" className="rounded-md px-2 text-2xl leading-none text-slate-400 hover:bg-slate-100">✕</button>
             </div>
-            <form action={withToast(payFamilyCardBill, { success: "Card bill paid" })} onSubmit={() => setTimeout(() => setOpen(false), 0)} className="space-y-3 px-5 pt-4">
+            <form action={withToast(payFamilyCardBill, { success: "Card bill paid", onSuccess: () => fx({ kind: "paid", label: `${cardName} bill` }) })} onSubmit={() => setTimeout(() => setOpen(false), 0)} className="space-y-3 px-5 pt-4">
               <input type="hidden" name="cardId" value={cardId} />
               <input type="hidden" name="cycleEnd" value={cycleEndISO} />
 

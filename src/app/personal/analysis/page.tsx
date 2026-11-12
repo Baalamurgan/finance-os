@@ -1,11 +1,16 @@
 import { formatINR, pctLabel } from "@/lib/format";
 import { loadPersonal } from "@/lib/loadPersonal";
+import { istTodayISO } from "@/lib/time";
 import { personalMonthLabel } from "@/lib/personal";
 import { getPersonalAnalysis, type Bucket } from "@/lib/personalAnalysis";
 import { PersonalNav } from "@/components/personal/PersonalNav";
 import { PersonalEmpty } from "@/components/personal/PersonalEmpty";
 import { PersonalRangeTabs } from "@/components/personal/PersonalRangeTabs";
 import { BucketTrend, CashFlowChart } from "@/components/Charts";
+import { MorphBar } from "@/components/motion/Morph";
+import { EmptyArt } from "@/components/motion/EmptyArt";
+import { MoneyFlow, type FlowLink, type FlowNode } from "@/components/analysis/MoneyFlow";
+import { SpendHeatmap } from "@/components/analysis/SpendHeatmap";
 import { FlowHero, FlowLegend, Highlights, Panel, ShareList, signedINR, type Highlight } from "@/components/analysis/AnalysisParts";
 
 const BUCKET_META: Record<Bucket, { label: string; color: string; bar: string; hint: string }> = {
@@ -52,6 +57,39 @@ export default async function PersonalAnalysis({
     highlights.push({ icon: "🔥", label: "Months you saved", value: `${saved} of ${r.series.length}`, sub: saved === r.series.length ? "every single month" : `${r.series.length - saved} went over`, tone: saved * 2 >= r.series.length ? "good" : "bad" });
   }
 
+  // Money flow over the range: income → need / want / invest (+ saved) → the top categories in each.
+  const BUCKET_HEX: Record<Bucket, string> = { need: "#10b981", want: "#8b5cf6", invest: "#f59e0b" };
+  const flowNodes: FlowNode[] = [];
+  const flowLinks: FlowLink[] = [];
+  if (r.income > 0 || r.out > 0) {
+    if (r.income > 0) { flowNodes.push({ id: "inc", label: "Income", value: r.income, col: 0, color: "#16a34a" }); }
+    const short = r.out - r.income;
+    if (short > 0.5) flowNodes.push({ id: "short", label: "From savings", value: short, col: 0, color: "#dc2626" });
+    for (const b of ["need", "want", "invest"] as Bucket[]) {
+      const total = a.flow.bucketTotals[b];
+      if (total <= 0.5) continue;
+      const label = b === "need" ? "Needs" : b === "want" ? "Wants" : "Invest";
+      flowNodes.push({ id: b, label, value: total, col: 1, color: BUCKET_HEX[b] });
+      // what fed it: income first, then savings for any overspend (in bucket order)
+      const cats = a.flow.bucketCats[b];
+      const top = cats.slice(0, 3);
+      top.forEach((cat, i) => { flowNodes.push({ id: `${b}${i}`, label: `${cat.icon ?? ""} ${cat.name}`.trim(), value: cat.total, col: 2, color: BUCKET_HEX[b] }); flowLinks.push({ from: b, to: `${b}${i}`, value: cat.total }); });
+      const rest = total - top.reduce((t, x) => t + x.total, 0);
+      if (rest > 0.5) { flowNodes.push({ id: `${b}-rest`, label: `Other ${label.toLowerCase()}`, value: rest, col: 2, color: BUCKET_HEX[b] }); flowLinks.push({ from: b, to: `${b}-rest`, value: rest }); }
+    }
+    // income → buckets (and the saved remainder); any overspend is drawn from savings into the last buckets
+    let incLeft = r.income;
+    for (const b of ["need", "want", "invest"] as Bucket[]) {
+      const total = a.flow.bucketTotals[b];
+      if (total <= 0.5) continue;
+      const fromInc = Math.min(total, Math.max(0, incLeft));
+      incLeft -= fromInc;
+      if (fromInc > 0.5) flowLinks.push({ from: "inc", to: b, value: fromInc });
+      if (total - fromInc > 0.5) flowLinks.push({ from: "short", to: b, value: total - fromInc });
+    }
+    if (r.saved > 0.5) { flowNodes.push({ id: "saved", label: "Saved", value: r.saved, col: 1, color: "#0ea5e9" }); flowLinks.push({ from: "inc", to: "saved", value: r.saved }); }
+  }
+
   // 50/30/20 as one bar: each bucket's share of the basis; the rest is what's left unspent.
   const rule = (["need", "want", "invest"] as Bucket[]).map((b) => ({ b, ...a.rule[b] }));
   const used = rule.reduce((s, x) => s + x.pct, 0);
@@ -85,6 +123,12 @@ export default async function PersonalAnalysis({
           </Panel>
         )}
 
+        {flowNodes.length > 1 && (
+          <Panel title="Money flow" sub={`Where your income went · ${rangeLabel}`}>
+            <MoneyFlow nodes={flowNodes} links={flowLinks} total={Math.max(r.income, r.out)} totalLabel="income" />
+          </Panel>
+        )}
+
         <Panel
           title={`50/30/20 · ${c.selected.label}`}
           sub={a.rule.basis === "income" ? `Of ${formatINR(a.rule.income)} income this month` : "Of what you spent — set your salary for the % of income"}
@@ -92,7 +136,7 @@ export default async function PersonalAnalysis({
           <div className="relative">
             <div className="flex h-3 w-full gap-0.5 overflow-hidden rounded-full bg-slate-100">
               {rule.filter((x) => x.pct > 0).map((x, i) => (
-                <div key={x.b} className={`fo-bar h-full ${BUCKET_META[x.b].bar}`} style={{ width: `${(x.pct / scale) * 100}%`, animationDelay: `${100 + i * 120}ms` }} />
+                <MorphBar key={x.b} id={`pa-rule:${x.b}`} pct={(x.pct / scale) * 100} className={`h-full ${BUCKET_META[x.b].bar}`} delay={100 + i * 120} />
               ))}
             </div>
             {/* target lines: needs end at 50%, wants at 80% */}
@@ -126,9 +170,9 @@ export default async function PersonalAnalysis({
         </Panel>
 
         {!a.hasData ? (
-          <p className="rounded-2xl border border-dashed border-slate-200 bg-white p-8 text-center text-sm text-slate-400">
-            No spending yet to analyse. Log some spends and set category buckets in Setup.
-          </p>
+          <div className="rounded-2xl border border-slate-200 bg-white">
+            <EmptyArt tone="personal" title="No spending yet to analyse">Log some spends and set category buckets in Setup.</EmptyArt>
+          </div>
         ) : (
           <>
             <Panel title="Top categories" sub={`Biggest first · ${rangeLabel}`}>
@@ -136,10 +180,17 @@ export default async function PersonalAnalysis({
                 rows={a.topCategories.map((t) => ({ key: t.name, name: `${t.icon ?? ""} ${t.name}`.trim(), amount: t.total, dot: BUCKET_META[t.bucket].bar }))}
                 total={r.out}
                 tone="personal"
+                idPrefix="pa-cat"
                 show={8}
                 barClass={(row) => BUCKET_META[a.topCategories.find((t) => t.name === row.key)?.bucket ?? "want"].bar}
               />
             </Panel>
+
+            {a.dailyRange && (
+              <Panel title="Daily spending" sub={`Your spends by day · ${rangeLabel} · tap a day to see its spends`}>
+                <SpendHeatmap days={a.daily} from={a.dailyRange.from} to={a.dailyRange.to} today={istTodayISO()} tone="personal" />
+              </Panel>
+            )}
 
             <Panel title="Monthly spending by bucket" sub="Need, want and invest each month">
               <BucketTrend data={a.monthly.map((m) => ({ label: m.label, need: m.need, want: m.want, invest: m.invest }))} />

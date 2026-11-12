@@ -261,7 +261,21 @@ export default async function WindDownPage({
               )}
 
               {c.canEdit ? (
-                <WindDownButton periodId={c.selected.id} label={c.selected.label} leftovers={grouped ? 0 : piggyAdd} nextLabel={nextLabel} grouped={grouped} />
+                <WindDownButton
+                  periodId={c.selected.id} label={c.selected.label} leftovers={grouped ? 0 : piggyAdd} nextLabel={nextLabel} grouped={grouped}
+                  wrap={(() => {
+                    // the "<Month> wrapped" card shown once the month is locked (same figures as Analysis)
+                    const spent = rollup.byCategory.filter((r) => r.actual > 0).sort((a, b) => b.actual - a.actual);
+                    const budgeted = rollup.byCategory.filter((r) => r.planned > 0);
+                    return {
+                      month: new Date(2000, c.selected.month - 1, 1).toLocaleString("en-IN", { month: "long" }),
+                      income: rollup.totalIncome,
+                      spent: rollup.totalExpense,
+                      best: spent[0] ? { name: spent[0].name, amount: spent[0].actual } : null,
+                      budgets: budgeted.length > 0 ? { total: budgeted.length, over: budgeted.filter((r) => r.actual > r.planned).length } : null,
+                    };
+                  })()}
+                />
               ) : (
                 <p className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-3 text-center text-sm text-slate-500">
                   🔒 This is a preview — only the head

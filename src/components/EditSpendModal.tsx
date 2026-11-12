@@ -64,6 +64,7 @@ export function EditSpendModal({
         type="button"
         onClick={() => { setSubCategory(spend.subCategory ?? ""); setCardId(spend.cardAccountId ?? null); setOpen(true); }}
         aria-label="Edit spend"
+        data-swipe="right"
         className="flex h-9 w-9 items-center justify-center rounded-lg text-base text-slate-300 hover:bg-indigo-50 hover:text-indigo-600"
       >
         ✎

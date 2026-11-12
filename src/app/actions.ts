@@ -23,7 +23,7 @@ import { applyBudgetShortfall, windDownPeriod } from "@/lib/windDown";
 import { groupRuleActive } from "@/lib/windDownPlan";
 import { PAYBACK_REIMB_NOTE, SURPLUS_NOTE, CARRY_NOTE, DEFERRED_NOTE, PIGGY_INCOME_NOTE, POOL_NOTE, POOL_BILL_NOTE, REMOVED_NOTE, isPoolNote, isPaybackNote, isLendGroup, LEND_GROUP_PREFIX, POOL_LEND_GROUP_PREFIX, REFUND_GROUP_PREFIX, isRefundGroup, REFUND_INCOME_NOTE } from "@/lib/notes";
 import { currentCycle } from "@/lib/finance/cycle";
-import { istDateParts } from "@/lib/time";
+import { istDateParts, istDayStart, istTodayISO } from "@/lib/time";
 import { canActOnStep } from "@/lib/planAuth";
 
 // Record a money-affecting change (who + what + when) for the activity feeds: the Money-Plan
@@ -800,9 +800,23 @@ async function doAddSpend(formData: FormData): Promise<SpendResult> {
     if (current && current.status === "open" && current.id !== periodId) targetPeriodId = current.id;
   }
 
+  // The day it was spent (optional, picked in the modal): must be in the month it's filed under and not
+  // in the future. Stored as that IST day's start; display/reporting only (the period stays as above).
+  const spentOnRaw = String(formData.get("spentOn") ?? "").trim();
+  let spentOn: Date | null = null;
+  if (spentOnRaw) {
+    spentOn = istDayStart(spentOnRaw);
+    if (!spentOn) return { ok: false, error: "That date doesn't look right." };
+    // (the month picked on screen, or — if the spend was routed to today's month above — that one)
+    const ps = await prisma.period.findMany({ where: { id: { in: [periodId, targetPeriodId] } }, select: { year: true, month: true, label: true } });
+    const [yy, mm] = spentOnRaw.split("-").map(Number);
+    if (ps.length > 0 && !ps.some((p) => p.year === yy && p.month === mm)) return { ok: false, error: `Pick a date in ${ps.map((p) => p.label).join(" or ")}.` };
+    if (spentOnRaw > istTodayISO()) return { ok: false, error: "The date can't be in the future." };
+  }
+
   const imagePath = await saveUpload(formData.get("image"));
   const spend = await prisma.spend.create({
-    data: { periodId: targetPeriodId, categoryId, memberId, label, amount, subCategory, imagePath, cardAccountId: cardId, loggedById: selfId },
+    data: { periodId: targetPeriodId, categoryId, memberId, label, amount, subCategory, imagePath, cardAccountId: cardId, loggedById: selfId, spentOn },
   });
   // Paid with a family card? Mirror it onto the card OWNER's personal card ledger as a linked line, so
   // their personal view reflects the family spend (a member may use another member's card). For CREDIT

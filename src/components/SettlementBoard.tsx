@@ -99,7 +99,11 @@ export function SettlementBoard({
               <li key={i} className={`flex flex-wrap items-center justify-between gap-3 rounded-lg px-4 py-3 ${t.settled ? "bg-green-50" : "bg-slate-50"}`}>
                 <span className="text-sm">
                   <b className="text-slate-800">{t.from}</b>
-                  <span className="mx-2 text-indigo-500">→</span>
+                  {/* the arrow draws itself from payer to payee */}
+                  <svg viewBox="0 0 28 10" className="fo-arrow mx-2 inline-block h-2.5 w-7 align-middle text-indigo-500" style={{ ["--fo-d" as string]: `${0.15 + Math.min(i, 8) * 0.12}s` }} aria-label="pays">
+                    <path d="M1 5 H25" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" pathLength={1} />
+                    <path d="M20 1 L26 5 L20 9" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" pathLength={1} />
+                  </svg>
                   <b className="text-slate-800">{t.to}</b>
                 </span>
                 <div className="flex items-center gap-3">

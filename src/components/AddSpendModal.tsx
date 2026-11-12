@@ -8,6 +8,8 @@ import { suggestCategoryName, resolveCategoryId, suggestSpendKind, validateSpend
 import { evalArithmetic, hasArithmeticOp } from "@/lib/calc";
 import { useToast } from "@/components/Toast";
 import { CTA_CLASS, CtaLabel } from "@/components/Cta";
+import { istTodayISO } from "@/lib/time";
+import { shake } from "@/components/motion/Fx";
 
 type Cat = { id: number; name: string; misc?: boolean; oneMonth?: boolean }; // misc = the Personal/Misc bucket; oneMonth = a this-month-only spend card
 
@@ -26,6 +28,7 @@ export function AddSpendModal({
   currentMemberId,
   subCategories,
   triggerLabel,
+  periodYM,
 }: {
   periodId: number;
   trigger: "primary" | "card" | "fab";
@@ -36,6 +39,7 @@ export function AddSpendModal({
   currentMemberId?: number | null;
   subCategories?: { name: string; icon: string }[]; // shown & required for misc spends
   triggerLabel?: string; // override the "card" trigger button text (e.g. "Pay")
+  periodYM?: { year: number; month: number }; // the month being logged into → the date picker stays inside it
 }) {
   const toast = useToast();
   const [open, setOpen] = useState(false);
@@ -56,6 +60,24 @@ export function AddSpendModal({
   const [amountExpr, setAmountExpr] = useState(""); // mirrors the amount field so the "=" calc button can show
   const [submitTick, setSubmitTick] = useState(0); // bump to submit after a state update
   const [fieldError, setFieldError] = useState<{ field: string; message: string } | null>(null); // inline validation
+  const [spentOn, setSpentOn] = useState(""); // YYYY-MM-DD — the day it was spent
+
+  // Date of spend: inside the month being logged into, never after today.
+  const today = istTodayISO();
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const monthMin = periodYM ? `${periodYM.year}-${pad(periodYM.month)}-01` : undefined;
+  const monthEnd = periodYM ? `${periodYM.year}-${pad(periodYM.month)}-${pad(new Date(Date.UTC(periodYM.year, periodYM.month, 0)).getUTCDate())}` : undefined;
+  const dateMax = monthEnd && monthEnd < today ? monthEnd : today;
+  const inRange = (d: string) => (!monthMin || d >= monthMin) && d <= dateMax;
+  const yesterday = new Date(Date.parse(`${today}T00:00:00Z`) - 86400000).toISOString().slice(0, 10);
+  // Default: the day open on the Spends page (?day=), else today — kept inside the month.
+  const defaultDay = () => {
+    let d = today;
+    try { const q = new URLSearchParams(window.location.search).get("day"); if (q && /^\d{4}-\d{2}-\d{2}$/.test(q)) d = q; } catch { /* no URL */ }
+    if (monthMin && d < monthMin) d = monthMin;
+    if (d > dateMax) d = dateMax;
+    return d;
+  };
 
   const selectedCard = cardId != null ? cards.find((c) => c.id === cardId) : undefined;
   // "Paid with": Cash + the one most-used card as quick chips; every other card lives in a dropdown.
@@ -95,6 +117,7 @@ export function AddSpendModal({
   const failField = (field: string, message: string) => {
     setFieldError({ field, message });
     toast(message, "error");
+    shake(field === "amount" ? amountRef.current : field === "label" ? labelRef.current : field === "subCategory" ? subRef.current : field === "category" ? catRef.current : null);
     if (field === "amount") amountRef.current?.focus();
     else if (field === "label") labelRef.current?.focus();
     else if (field === "subCategory") subRef.current?.focus();
@@ -198,12 +221,14 @@ export function AddSpendModal({
         const t = setTimeout(() => setJustSaved(false), 2500);
         return () => clearTimeout(t);
       }
+      // the modal is already hidden while saving — just close it (the toast confirms the save)
       closeModal();
     }
   }, [state.n, keepAdding]);
 
   const openModal = () => {
     resetForm();
+    setSpentOn(defaultDay());
     setOpen(true);
   };
 
@@ -368,7 +393,7 @@ export function AddSpendModal({
                                   setLabelText(ch.label);
                                 }
                               }}
-                              className={`flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full border-2 px-3 py-2 text-sm font-medium transition ${
+                              className={`fo-press flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full border-2 px-3 py-2 text-sm font-medium ${
                                 active
                                   ? "border-indigo-500 bg-indigo-50 text-indigo-700"
                                   : ch.frequent
@@ -545,6 +570,30 @@ export function AddSpendModal({
                     </div>
                   )}
 
+                  {/* date of spend — defaults to the day open on Spends (or today); stays put while "keep adding" */}
+                  <div>
+                    <label htmlFor="spend-date" className="text-sm font-medium text-slate-600">Date of spend</label>
+                    <div className="mt-1.5 flex items-center gap-2">
+                      <input
+                        id="spend-date"
+                        name="spentOn"
+                        type="date"
+                        required
+                        value={spentOn}
+                        min={monthMin}
+                        max={dateMax}
+                        onChange={(e) => setSpentOn(e.target.value)}
+                        className="min-w-0 flex-1 rounded-xl border-2 border-slate-300 px-4 py-2.5 text-base outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
+                      />
+                      {[{ d: today, l: "Today" }, { d: yesterday, l: "Yesterday" }].filter((x) => inRange(x.d)).map((x) => (
+                        <button key={x.l} type="button" onClick={() => setSpentOn(x.d)}
+                          className={`fo-press shrink-0 rounded-full px-3 py-2 text-xs font-semibold ${spentOn === x.d ? "bg-indigo-600 text-white" : "bg-slate-100 text-slate-600"}`}>
+                          {x.l}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
                   {/* keep-adding toggle: off = Save closes; on = stay open for next item */}
                   <label className="flex items-center gap-3 rounded-xl bg-slate-50 px-4 py-3 text-base text-slate-700">
                     <input
@@ -658,10 +707,15 @@ export function AddSpendModal({
 // row's delete control; the chosen side is remembered in localStorage. A plain
 // tap (no drag) opens the modal.
 function Fab({ onOpen }: { onOpen: () => void }) {
+  // Tap = open (a real click, so it also works for a tap made the instant the page loads); a clear
+  // sideways DRAG moves the button to the other side. A finger always wobbles a little on a tap, so only a
+  // deliberate horizontal move (≥ 24px, mostly sideways) counts as a drag — a smaller wobble used to be read
+  // as a drag and swallowed the tap (the "needs two taps" bug).
   const [side, setSide] = useState<"left" | "right">("right");
   const [dragX, setDragX] = useState<number | null>(null);
-  const startX = useRef<number | null>(null);
-  const moved = useRef(false);
+  const start = useRef<{ x: number; y: number } | null>(null);
+  const dragging = useRef(false);
+  const justDragged = useRef(false);
 
   useEffect(() => {
     const s = localStorage.getItem("fab-side");
@@ -669,29 +723,34 @@ function Fab({ onOpen }: { onOpen: () => void }) {
   }, []);
 
   const onPointerDown = (e: React.PointerEvent) => {
-    moved.current = false;
-    startX.current = e.clientX;
-    (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
+    dragging.current = false;
+    start.current = { x: e.clientX, y: e.clientY };
   };
   const onPointerMove = (e: React.PointerEvent) => {
-    if (startX.current == null) return;
-    if (Math.abs(e.clientX - startX.current) > 6) {
-      moved.current = true;
-      setDragX(e.clientX);
+    const s = start.current;
+    if (!s) return;
+    const dx = e.clientX - s.x, dy = e.clientY - s.y;
+    if (!dragging.current && Math.abs(dx) >= 24 && Math.abs(dx) > Math.abs(dy) * 1.5) {
+      dragging.current = true;
+      (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
     }
+    if (dragging.current) setDragX(e.clientX);
   };
-  const onPointerUp = (e: React.PointerEvent) => {
-    if (startX.current == null) return;
-    const x = e.clientX;
-    startX.current = null;
-    if (moved.current) {
-      const newSide = x < window.innerWidth / 2 ? "left" : "right";
-      setSide(newSide);
-      localStorage.setItem("fab-side", newSide);
-      setDragX(null);
-    } else {
-      onOpen();
-    }
+  const endDrag = (e: React.PointerEvent) => {
+    const wasDrag = dragging.current;
+    start.current = null;
+    dragging.current = false;
+    if (!wasDrag) return;
+    const newSide = e.clientX < window.innerWidth / 2 ? "left" : "right";
+    setSide(newSide);
+    try { localStorage.setItem("fab-side", newSide); } catch { /* storage off */ }
+    setDragX(null);
+    justDragged.current = true; // the click that follows a drag must not open the modal
+    window.setTimeout(() => { justDragged.current = false; }, 0);
+  };
+  const onClick = () => {
+    if (justDragged.current) return;
+    onOpen();
   };
 
   const positional: React.CSSProperties =
@@ -703,9 +762,12 @@ function Fab({ onOpen }: { onOpen: () => void }) {
 
   return (
     <button
+      type="button"
+      onClick={onClick}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
-      onPointerUp={onPointerUp}
+      onPointerUp={endDrag}
+      onPointerCancel={() => { start.current = null; dragging.current = false; setDragX(null); }}
       className="fixed z-40 flex touch-none select-none items-center gap-2 rounded-full bg-indigo-600 px-5 py-4 text-base font-semibold text-white shadow-lg shadow-indigo-600/30 active:bg-indigo-800 sm:hidden"
       style={{ bottom: "calc(env(safe-area-inset-bottom) + 4.75rem)", ...positional }}
     >

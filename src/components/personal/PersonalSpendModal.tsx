@@ -136,6 +136,7 @@ export function PersonalSpendModal({
           setAmount(""); setNote(""); setCategoryId(""); setCatTouched(false);
           resetShared(); setReimburse(false); setReimbSel(""); setCardId("");
         }
+        // the modal is already hidden while saving — just close it (the toast confirms the save)
         setOpen(false);
       } else toast(state.error ?? "Couldn't save", "error");
     }

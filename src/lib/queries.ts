@@ -15,7 +15,7 @@ import { withShareCount } from "@/lib/format";
 import { getCardDues, type MonthAmount } from "@/lib/personal/cash";
 import { currentCycle } from "@/lib/finance/cycle";
 import { computeBalance } from "@/lib/finance/balance";
-import { istTodayStartMs, istDateParts } from "@/lib/time";
+import { istTodayStartMs, istDateParts, spendDay } from "@/lib/time";
 
 // Keywords that drive the on-save category suggestion: the household's LEARNED words
 // (SpendKeyword) plus its head-curated shortcuts (SpendShortcut, weighted high since
@@ -2254,6 +2254,22 @@ async function _getRollup(periodId: number) {
     expenses,
     spentCatIds,
   };
+}
+
+/** Daily totals of the logged spends (Spend rows) of these sheets, by the IST day they were logged — the
+ *  Analysis heatmap. Refund lines (negative) net against their day. */
+export async function getDailySpends(periodIds: number[]) {
+  if (periodIds.length === 0) return [] as { date: string; amount: number; count: number; periodId: number }[];
+  const rows = await prisma.spend.findMany({ where: { periodId: { in: periodIds } }, select: { amount: true, createdAt: true, spentOn: true, periodId: true } });
+  const by = new Map<string, { amount: number; count: number; periodId: number }>();
+  for (const r of rows) {
+    const day = spendDay(r); // the picked spend date, else the IST day it was logged
+    const e = by.get(day) ?? { amount: 0, count: 0, periodId: r.periodId };
+    e.amount += r.amount;
+    e.count += 1;
+    by.set(day, e);
+  }
+  return [...by.entries()].map(([date, v]) => ({ date, amount: Math.round(v.amount * 100) / 100, count: v.count, periodId: v.periodId }));
 }
 
 // Aggregate getRollup across every period in an inclusive [from, to] month range

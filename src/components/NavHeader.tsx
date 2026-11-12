@@ -227,6 +227,7 @@ export function NavHeader({
             <span className="hidden sm:block">
               <AddSpendModal
                 periodId={periodId}
+                periodYM={{ year: selYear, month: selMonth }}
                 trigger="primary"
                 categories={spendCategories}
                 isHead={isHead}
@@ -293,6 +294,7 @@ export function NavHeader({
     {periodOpen && periodId && (
       <AddSpendModal
         periodId={periodId}
+        periodYM={{ year: selYear, month: selMonth }}
         trigger="fab"
         categories={spendCategories}
         isHead={isHead}

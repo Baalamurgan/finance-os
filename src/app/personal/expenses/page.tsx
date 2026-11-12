@@ -1,4 +1,6 @@
 import { formatINR } from "@/lib/format";
+import { istDayOf } from "@/lib/time";
+import { CountUp } from "@/components/motion/CountUp";
 import { prisma } from "@/lib/prisma";
 import { loadPersonal } from "@/lib/loadPersonal";
 import { personalMonthLabel } from "@/lib/personal";
@@ -19,7 +21,7 @@ const COLORS = ["#059669", "#0ea5e9", "#f59e0b", "#8b5cf6", "#ef4444", "#14b8a6"
 export default async function PersonalExpenses({
   searchParams,
 }: {
-  searchParams: Promise<{ y?: string; m?: string; add?: string }>;
+  searchParams: Promise<{ y?: string; m?: string; add?: string; day?: string }>;
 }) {
   const sp = await searchParams;
   const c = await loadPersonal(sp);
@@ -88,6 +90,7 @@ export default async function PersonalExpenses({
   ].filter((s) => s.value > 0);
 
   const r2 = (n: number) => Math.round(n * 100) / 100;
+  const filterDay = sp.day && /^\d{4}-\d{2}-\d{2}$/.test(sp.day) ? sp.day : null;
   const spendsForClient = spends.map((s) => {
     // Split/reimbursement summary (Model A): start at YOUR share, assuming everyone pays. A
     // receivable that's deleted (they won't pay) is borne back onto your spend; received/settled
@@ -148,6 +151,7 @@ export default async function PersonalExpenses({
       edit,
     };
   });
+  const shownSpends = filterDay ? spendsForClient.filter((s) => istDayOf(new Date(s.date)) === filterDay) : spendsForClient;
 
   return (
     <>
@@ -162,7 +166,8 @@ export default async function PersonalExpenses({
           {/* 1 — what you can still spend against this month's budget (Spent folded into the sub-line) */}
           <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4">
             <div className="text-[11px] font-medium uppercase tracking-wide text-emerald-700">Can spend</div>
-            <div className={`mt-1 text-xl font-bold ${canSpend >= 0 ? "text-emerald-800" : "text-red-600"}`}>{formatINR(canSpend)}</div>
+            {/* rolls to its new value; amber when under a tenth of the budget is left, red when overspent */}
+            <div className={`mt-1 text-xl font-bold transition-colors duration-500 ${canSpend < 0 ? "text-red-600" : personalExpense > 0 && canSpend < personalExpense * 0.1 ? "text-amber-600" : "text-emerald-800"}`}><CountUp id="p-can-spend" text={formatINR(canSpend)} /></div>
             <div className="text-[10px] text-slate-500">of {formatINR(Math.max(0, personalExpense))} · spent {formatINR(netSpent)}</div>
           </div>
           {/* 2 — money actually in your account now, tap to see what it's made of */}
@@ -191,7 +196,19 @@ export default async function PersonalExpenses({
 
         <PlannedSpends items={plannedItems} accounts={myAccounts} removed={removedList} />
 
-        <PersonalSpendsView spends={spendsForClient} categories={catList} cards={c.spendCards} periodId={period.id} periodOpen={period.status === "open"} members={c.members} pastNames={c.pastNames} />
+        {/* ?day= (from the Analysis heatmap): only that day's spends in the list below — view-only */}
+        {filterDay && (() => {
+          const nice = new Date(`${filterDay}T00:00:00Z`).toLocaleDateString("en-IN", { weekday: "short", day: "numeric", month: "short", timeZone: "UTC" });
+          const total = shownSpends.reduce((t, x) => t + x.amount, 0);
+          return (
+            <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-sky-200 bg-sky-50 px-4 py-2.5 text-sm dark:border-sky-500/30 dark:bg-sky-500/10">
+              <span className="text-sky-900 dark:text-sky-200">📅 Spends on <b>{nice}</b> · <b className="tabular-nums">{formatINR(total)}</b> · {shownSpends.length} spend{shownSpends.length === 1 ? "" : "s"}</span>
+              <a href={`/personal/expenses?y=${c.selYear}&m=${c.selMonth}`} className="rounded-md border border-sky-300 bg-white px-3 py-1 text-xs font-medium text-sky-700 hover:bg-sky-100">✕ Clear filter</a>
+            </div>
+          );
+        })()}
+
+        <PersonalSpendsView spends={shownSpends} categories={catList} cards={c.spendCards} periodId={period.id} periodOpen={period.status === "open"} members={c.members} pastNames={c.pastNames} />
 
         {/* manage spend categories */}
         <section className="rounded-xl border border-slate-200 bg-white p-4">

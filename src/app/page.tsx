@@ -1,5 +1,6 @@
 import { Fragment } from "react";
 import { CountUp } from "@/components/motion/CountUp";
+import { FlashAmount } from "@/components/motion/FlashAmount";
 import { redirect } from "next/navigation";
 import { formatINR, withShareCount } from "@/lib/format";
 import { categoryEmoji } from "@/lib/categoryEmoji";
@@ -1302,7 +1303,8 @@ function Row({
         )}
       </div>
       <div className="flex items-center gap-2 pl-2">
-        <span className="tabular-nums text-slate-700">{formatINR(amount)}</span>
+        {/* rolls + glows when an edit changes it */}
+        <FlashAmount text={formatINR(amount)} className="tabular-nums text-slate-700" />
         {/* The done ✓ always sits on the RIGHT, beside the amount — consistent on every row. When a done
             row's edit controls (⋯ / skip / remove) are removed, the ✓ takes the ⋯'s exact h-9 w-9 slot so
             the amount stays aligned. A budgeted / planned-misc card the HEAD can still edit keeps its ⋯, so

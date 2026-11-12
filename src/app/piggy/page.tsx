@@ -7,6 +7,8 @@ import { DepositPiggyModal } from "@/components/DepositPiggyModal";
 import { SetFundModal } from "@/components/SetFundModal";
 import { setPiggyHolder } from "@/app/actions";
 import { ToastForm } from "@/components/ToastForm";
+import { CountUp } from "@/components/motion/CountUp";
+import { FlashAmount } from "@/components/motion/FlashAmount";
 
 export default async function PiggyPage({
   searchParams,
@@ -111,7 +113,7 @@ export default async function PiggyPage({
           <div className="text-xs font-medium uppercase tracking-wide text-slate-300">
             {previewMode ? "Projected total set aside" : "Total set aside in the account"}
           </div>
-          <div className="mt-1 text-3xl font-extrabold">{formatINR(generalTotal + sinkingTotal)}</div>
+          <div className="mt-1 text-3xl font-extrabold"><CountUp id="piggy-total" text={formatINR(generalTotal + sinkingTotal)} /></div>
           <div className="mt-1 text-xs text-slate-400">
             General Piggy {formatINR(generalTotal)} + sinking holds {formatINR(sinkingTotal)} — these
             live in your one bank account; the split below is just how it&apos;s earmarked.
@@ -156,7 +158,7 @@ export default async function PiggyPage({
               {c.isHead && !previewMode && <SetFundModal target="general" name="General Piggy" current={generalTotal} />}
             </div>
             <div className="mt-1 text-3xl font-extrabold text-amber-800">
-              {formatINR(generalTotal)}
+              <CountUp id="piggy-general" text={formatINR(generalTotal)} />
             </div>
             <div className="mt-1 text-xs text-amber-700/70">
               Unspent remainders from variable categories
@@ -172,7 +174,7 @@ export default async function PiggyPage({
               Sinking funds (held)
             </div>
             <div className="mt-1 text-3xl font-extrabold text-indigo-800">
-              {formatINR(sinkingTotal)}
+              <CountUp id="piggy-sinking" text={formatINR(sinkingTotal)} />
             </div>
             <div className="mt-1 text-xs text-indigo-700/70">
               Saved up for upcoming bills (WiFi, Mobile…)
@@ -233,7 +235,7 @@ export default async function PiggyPage({
                   </div>
                   <div className="flex items-center gap-2">
                     <span className="tabular-nums font-semibold text-slate-800">
-                      {formatINR(sinkingBalances[cat.id] ?? 0)}{" "}
+                      <FlashAmount text={formatINR(sinkingBalances[cat.id] ?? 0)} />{" "}
                       <span className="text-xs font-normal text-slate-400">held</span>
                     </span>
                     {c.isHead && !previewMode && (

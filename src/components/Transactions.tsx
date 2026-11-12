@@ -94,7 +94,7 @@ export function Transactions({
             {m.rows.map((r, i) => {
               const onCard = r.dir === "card";
               return (
-                <tr key={i} className={`border-b border-slate-100 align-top ${r.boundary ? "bg-slate-50/70" : onCard ? "bg-slate-50/40" : ""}`}>
+                <tr key={i} className={`fo-reveal border-b border-slate-100 align-top ${r.boundary ? "bg-slate-50/70" : onCard ? "bg-slate-50/40" : ""}`}>
                   <td className="whitespace-nowrap px-3 py-2 text-slate-400"><When r={r} /></td>
                   <td className={`px-3 py-2 ${onCard ? "text-slate-400" : "text-slate-700"}`}>
                     <div>{r.label}</div>
