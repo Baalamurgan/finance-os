@@ -164,6 +164,8 @@ export async function loadCommon(params?: { y?: string; m?: string }) {
     previewPeriod,
     provisional,
     periods,
+    // months that have a sheet (incl. the preview draft) → the only ones the month/year pickers offer
+    dataMonths: periods.map((p) => p.year * 12 + p.month - 1),
     selected,
     selYear,
     selMonth,

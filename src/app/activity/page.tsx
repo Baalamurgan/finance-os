@@ -20,6 +20,7 @@ export default async function ActivityPage({
       selYear={c.selYear}
       selMonth={c.selMonth}
       previewPeriod={c.previewPeriod}
+      dataMonths={c.dataMonths}
       provisional={c.provisional}
       members={c.members}      categories={c.categories}
       account={c.account}
@@ -51,7 +52,7 @@ export default async function ActivityPage({
   return (
     <>
       {nav}
-      <main className="mx-auto max-w-2xl space-y-5 p-4 sm:p-6">
+      <main className="fo-rise mx-auto max-w-2xl space-y-5 p-4 sm:p-6">
         <div>
           <h1 className="text-xl font-bold text-slate-900">What changed</h1>
           <p className="text-sm text-slate-500">

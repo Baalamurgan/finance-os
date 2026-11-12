@@ -8,6 +8,7 @@ import { prisma } from "@/lib/prisma";
 import { Prisma } from "@prisma/client";
 import { PersonalNav } from "@/components/personal/PersonalNav";
 import { AddAccountModal } from "@/components/personal/AddAccountModal";
+import { CardWallet, type WalletCard } from "@/components/motion/CardWallet";
 
 const fmtDate = (iso: string | null) =>
   iso ? new Date(iso).toLocaleDateString("en-IN", { day: "numeric", month: "short" }) : "—";
@@ -54,10 +55,38 @@ export default async function PersonalCardsPage({
     return [d.cardId, { next, lastPaid, toPay: fullUnpaid(d), needsStatementDay: d.needsStatementDay }];
   }));
 
+  const cardTypes = new Set(["credit_card", "debit_card", "prepaid_card"]);
+  const walletCards: WalletCard[] = wallet
+    .filter(({ account }) => cardTypes.has(account.type))
+    .map(({ account, summary, balance }) => {
+      const kind = account.type === "credit_card" ? "Credit" : account.type === "prepaid_card" ? "Prepaid" : "Debit";
+      const info = dueByCard.get(account.id);
+      let status: WalletCard["status"] = null;
+      if (account.type !== "credit_card") status = { text: `${formatINR(balance ?? 0)} balance`, tone: "muted" };
+      else if (!info || info.needsStatementDay) status = { text: "Set up its billing cycle", tone: "muted" };
+      else if (info.toPay > 0.005 && info.next) status = { text: `${formatINR(info.toPay)} due ${fmtDate(info.next.dueISO)}`, tone: "due" };
+      else status = { text: "✓ Bill paid", tone: "ok" };
+      const back = [
+        { label: "Type", value: [kind, account.institution].filter(Boolean).join(" · ") },
+        ...(account.type === "credit_card"
+          ? [
+              ...(info && info.toPay > 0.005 && info.next ? [{ label: "To pay", value: `${formatINR(info.toPay)} · due ${fmtDate(info.next.dueISO)}` }] : []),
+              ...(summary?.hasLimit ? [{ label: "Limit used", value: `${Math.round(summary.utilPct ?? 0)}%` }] : []),
+            ]
+          : [{ label: "Balance", value: formatINR(balance ?? 0) }]),
+        ...(account.last4 ? [{ label: "Ends in", value: account.last4 }] : []),
+      ];
+      return {
+        id: account.id, name: account.name, color: account.color, last4: account.last4, holder: c.account.name,
+        kind, network: account.network ?? null, institution: account.institution, status, back,
+        href: `/personal/finance/${account.id}`,
+      };
+    });
+
   return (
     <>
-      <PersonalNav active="cards" account={c.account} selYear={c.selYear} selMonth={c.selMonth} financeDue={financeDue} />
-      <main className="mx-auto max-w-3xl space-y-5 p-4 pb-24 sm:p-6">
+      <PersonalNav active="cards" account={c.account} selYear={c.selYear} selMonth={c.selMonth} dataMonths={c.dataMonths} financeDue={financeDue} />
+      <main className="fo-rise mx-auto max-w-3xl space-y-5 p-4 pb-24 sm:p-6">
         <div className="flex items-start justify-between gap-3">
           <div>
             <h1 className="text-xl font-bold text-slate-900">Accounts</h1>
@@ -66,14 +95,21 @@ export default async function PersonalCardsPage({
           <AddAccountModal />
         </div>
 
-        <section className="space-y-2">
+        {/* The cards as a wallet: flick through them, tap one to see its details on the back. */}
+        {walletCards.length > 0 && (
+          <section className="rounded-2xl border border-slate-200 bg-white px-4 pb-4 pt-6 sm:px-6">
+            <CardWallet cards={walletCards} />
+          </section>
+        )}
+
+        <section className="fo-rise space-y-2">
           {wallet.map(({ account, summary, balance }) => {
             const typeLabel = account.type === "credit_card" ? "Credit" : account.type === "prepaid_card" ? "Prepaid" : account.type === "bank" ? "Bank" : account.type === "cash" ? "Cash" : "Debit";
             const meta = [typeLabel, account.institution, account.last4 && `XX${account.last4}`].filter(Boolean).join(" · ");
             const info = dueByCard.get(account.id);
 
             return (
-              <Link key={account.id} href={`/personal/finance/${account.id}`} className="block hover:opacity-80">
+              <Link key={account.id} href={`/personal/finance/${account.id}`} className="fo-lift block rounded-xl hover:opacity-90">
                 <div className="flex items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white p-3.5">
                   <div className="flex min-w-0 items-center gap-2.5">
                     <span className="h-3 w-3 shrink-0 rounded-full" style={{ background: account.color }} />

@@ -14,6 +14,9 @@ import { AutoLock } from "@/components/AutoLock";
 import { PersonalUserMenu } from "@/components/UserMenu";
 import { PERSONAL_MORE, PERSONAL_PRIMARY } from "@/components/navTabs";
 import { startNavProgress } from "@/components/NavProgress";
+import { PillTrack } from "@/components/motion/PillTrack";
+import { QuickJump } from "@/components/motion/QuickJump";
+import { monthInYear, monthKey, yearsWithData } from "@/lib/monthPick";
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
@@ -27,12 +30,14 @@ export function PersonalNav({
   selYear,
   selMonth,
   financeDue = false,
+  dataMonths,
 }: {
   active: "today" | "sheet" | "expenses" | "analysis" | "finance" | "setup" | "loans" | "cards" | "plan" | "networth";
   account: { name: string; email: string; image: string | null };
   selYear: number;
   selMonth: number;
   financeDue?: boolean; // a card bill is due soon/overdue → red dot on Accounts (and the More button)
+  dataMonths?: number[]; // y*12+(m-1) of months you have data for; others are greyed out in the picker
 }) {
   const router = useRouter();
   const now = new Date();
@@ -44,8 +49,11 @@ export function PersonalNav({
     startNavProgress();
     router.replace(`${activeHref}?y=${y}&m=${m}`);
   };
-  const years: number[] = [];
-  for (let yr = curYear; yr >= 2000; yr--) years.push(yr);
+  // Only months you have data for are pickable (plus this month); years with none are left out.
+  const allowed = new Set<number>(dataMonths ?? []);
+  allowed.add(monthKey(curYear, curMonth));
+  const has = (y: number, m: number) => !dataMonths || allowed.has(monthKey(y, m));
+  const years = dataMonths ? yearsWithData(allowed, [selYear]) : Array.from({ length: curYear - 1999 }, (_, i) => curYear - i);
 
   return (
     <>
@@ -66,20 +74,24 @@ export function PersonalNav({
           </div>
 
           {/* desktop tabs (mobile uses the bottom bar) */}
-          <nav className="hidden items-center gap-1 sm:flex">
-            {PRIMARY.map((t) => (
-              <Link
-                key={t.key}
-                href={`${t.href}${q}`}
-                replace
-                className={`relative rounded-md px-3 py-1.5 text-sm font-medium transition ${
-                  active === t.key ? "bg-emerald-600 text-white" : "text-emerald-800 hover:bg-emerald-100"
-                }`}
-              >
-                {t.label}
-              </Link>
-            ))}
-            <DesktopMore active={active} q={q} financeDue={financeDue} />
+          <nav className="hidden sm:block">
+            <PillTrack scope="personal-top" className="flex items-center gap-1" pillClassName="rounded-md bg-emerald-600 shadow-sm shadow-emerald-600/30">
+              {PRIMARY.map((t) => (
+                <Link
+                  key={t.key}
+                  href={`${t.href}${q}`}
+                  replace
+                  data-tab
+                  data-active={active === t.key}
+                  className={`relative rounded-md px-3 py-1.5 text-sm font-medium transition ${
+                    active === t.key ? "bg-emerald-600 text-white" : "text-emerald-800 hover:bg-emerald-100"
+                  }`}
+                >
+                  {t.label}
+                </Link>
+              ))}
+              <DesktopMore active={active} q={q} financeDue={financeDue} />
+            </PillTrack>
           </nav>
 
           <div className="ml-auto flex flex-nowrap items-center gap-1.5 sm:gap-2">
@@ -91,16 +103,18 @@ export function PersonalNav({
               {MONTHS.map((mname, i) => {
                 const mnum = i + 1;
                 const future = selYear > curYear || (selYear === curYear && mnum > curMonth);
-                return <option key={mnum} value={mnum} disabled={future}>{mname}</option>;
+                return <option key={mnum} value={mnum} disabled={future || !has(selYear, mnum)}>{mname}</option>;
               })}
             </select>
             <select
               value={selYear}
-              onChange={(e) => { const y = Number(e.target.value); go(y, y === curYear && selMonth > curMonth ? curMonth : selMonth); }}
+              onChange={(e) => { const y = Number(e.target.value); go(y, dataMonths ? monthInYear(allowed, y, selMonth) : y === curYear && selMonth > curMonth ? curMonth : selMonth); }}
               className="rounded-md border border-emerald-200 bg-white px-1.5 py-1 text-[13px] shadow-sm sm:px-2 sm:py-1.5 sm:text-sm"
             >
               {years.map((yr) => <option key={yr} value={yr}>{yr}</option>)}
             </select>
+
+            <QuickJump q={q} items={TABS} tone="personal" />
 
             <RemindersBell context="personal" />
 
@@ -175,17 +189,19 @@ function PersonalBottomNav({ active, q, financeDue }: { active: string; q: strin
         className="fixed inset-x-0 bottom-0 z-50 flex border-t border-slate-200 bg-white/95 backdrop-blur sm:hidden"
         style={{ paddingBottom: "max(env(safe-area-inset-bottom), 0.5rem)" }}
       >
-        {PRIMARY.map((t) => (
-          <Link key={t.key} href={`${t.href}${q}`} replace onClick={() => setOpen(false)} className={cell(active === t.key)}>
-            <span className="text-xl leading-none">{t.icon}</span>
-            {t.label}
-          </Link>
-        ))}
-        <button ref={btnRef} type="button" onClick={() => setOpen((v) => !v)} className={cell(moreActive || open)}>
-          <span className="text-xl leading-none">⋯</span>
-          More
-          {financeDue && <span className="absolute right-1/4 top-1 h-1.5 w-1.5 rounded-full bg-red-500" />}
-        </button>
+        <PillTrack scope="personal-bottom" className="flex flex-1" inset={4} pillClassName="rounded-2xl bg-emerald-500/10 ring-1 ring-emerald-500/15">
+          {PRIMARY.map((t) => (
+            <Link key={t.key} href={`${t.href}${q}`} replace data-tab data-active={active === t.key} onClick={() => setOpen(false)} className={cell(active === t.key)}>
+              <span className={`text-xl leading-none transition-transform duration-300 ${active === t.key ? "scale-110" : ""}`}>{t.icon}</span>
+              {t.label}
+            </Link>
+          ))}
+          <button ref={btnRef} type="button" data-tab data-no-pill data-active={moreActive} onClick={() => setOpen((v) => !v)} className={cell(moreActive || open)}>
+            <span className="text-xl leading-none">⋯</span>
+            More
+            {financeDue && <span className="absolute right-1/4 top-1 h-1.5 w-1.5 rounded-full bg-red-500" />}
+          </button>
+        </PillTrack>
       </nav>
     </>
   );
@@ -216,6 +232,9 @@ function DesktopMore({ active, q, financeDue }: { active: string; q: string; fin
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
+        data-tab
+        data-no-pill
+        data-active={!!current}
         aria-expanded={open}
         className={`relative rounded-md px-3 py-1.5 text-sm font-medium transition ${current ? "bg-emerald-600 text-white" : "text-emerald-800 hover:bg-emerald-100"}`}
       >

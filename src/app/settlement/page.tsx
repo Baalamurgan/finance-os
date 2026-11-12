@@ -21,6 +21,7 @@ export default async function SettlementPage({
       selYear={c.selYear}
       selMonth={c.selMonth}
       previewPeriod={c.previewPeriod}
+      dataMonths={c.dataMonths}
       provisional={c.provisional}
       members={c.members}      categories={c.categories}
       account={c.account}
@@ -68,7 +69,7 @@ export default async function SettlementPage({
   return (
     <>
       {nav}
-      <main className="mx-auto max-w-4xl space-y-6 p-6">
+      <main className="fo-rise mx-auto max-w-4xl space-y-6 p-6">
         <div className="flex flex-wrap items-end justify-between gap-3">
           <div>
             <h1 className="text-xl font-bold text-slate-900">

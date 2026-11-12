@@ -28,6 +28,7 @@ export default async function PriorityPage({
         selYear={c.selYear}
         selMonth={c.selMonth}
         previewPeriod={c.previewPeriod}
+        dataMonths={c.dataMonths}
         provisional={c.provisional}
         members={c.members}
         categories={c.categories}
@@ -45,7 +46,7 @@ export default async function PriorityPage({
         viewingAsMember={c.viewingAsMember}
       />
 
-      <main className="mx-auto max-w-4xl space-y-6 p-6">
+      <main className="fo-rise mx-auto max-w-4xl space-y-6 p-6">
         <PriorityBoard payables={payables} monthLabel={monthLabel} />
       </main>
     </>

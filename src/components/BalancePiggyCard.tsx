@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { formatINR } from "@/lib/format";
+import { CountUp } from "@/components/motion/CountUp";
 
 // One remembered preference across ALL preview months (not per-month) — the user's choice sticks.
 const INCLUDE_PIGGY_KEY = "family:previewIncludeEstimatedPiggy";
@@ -42,11 +43,11 @@ export function BalancePiggyCard({
       <div className="grid grid-cols-2 gap-4">
         <div>
           <div className="text-xs font-medium uppercase tracking-wide text-slate-400">Balance (Income − Expense)</div>
-          <div className="text-lg font-bold text-indigo-700">{formatINR(balance)}</div>
+          <div className="text-lg font-bold text-indigo-700"><CountUp id="sheet-balance" text={formatINR(balance)} /></div>
         </div>
         <div>
           <div className="text-xs font-medium uppercase tracking-wide text-slate-400">🐷 Piggy bank{isPreview ? " (est.)" : ""}</div>
-          <div className="text-lg font-bold text-slate-800">{formatINR(piggy)}</div>
+          <div className="text-lg font-bold text-slate-800"><CountUp id="sheet-piggy" text={formatINR(piggy)} /></div>
         </div>
       </div>
 
@@ -67,7 +68,7 @@ export function BalancePiggyCard({
         <span className="text-xs font-medium uppercase tracking-wide text-slate-400">
           {showSum ? "Balance + Piggy" : "Balance — Piggy not included"}
         </span>
-        <span className="text-lg font-bold tabular-nums text-slate-900">{formatINR(total)}</span>
+        <span className="text-lg font-bold tabular-nums text-slate-900"><CountUp id="sheet-total" text={formatINR(total)} /></span>
       </div>
 
       {isPreview && !includePiggy && piggy > 0.005 && (

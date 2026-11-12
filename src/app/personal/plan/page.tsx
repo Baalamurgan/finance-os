@@ -29,7 +29,7 @@ export default async function PersonalPlanPage({
   const c = await loadPersonal(sp);
   const financeDue = c.cardReminders.length > 0;
   const nav = (
-    <PersonalNav active="plan" account={c.account} selYear={c.selYear} selMonth={c.selMonth} financeDue={financeDue} />
+    <PersonalNav active="plan" account={c.account} selYear={c.selYear} selMonth={c.selMonth} dataMonths={c.dataMonths} financeDue={financeDue} />
   );
 
   if (!c.selected) {
@@ -190,7 +190,7 @@ export default async function PersonalPlanPage({
   return (
     <>
       {nav}
-      <main className="mx-auto max-w-3xl space-y-5 p-4 pb-24 sm:p-6">
+      <main className="fo-rise mx-auto max-w-3xl space-y-5 p-4 pb-24 sm:p-6">
         <div>
           <h1 className="text-xl font-bold text-slate-900">Money plan — {c.selected.label}</h1>
           <p className="text-sm text-slate-500">Where your money is, and the moves to make this month.</p>

@@ -23,7 +23,7 @@ export default async function PersonalSheet({
 }) {
   const sp = await searchParams;
   const c = await loadPersonal(sp);
-  const nav = <PersonalNav active="sheet" account={c.account} selYear={c.selYear} selMonth={c.selMonth} financeDue={c.cardReminders.length > 0} />;
+  const nav = <PersonalNav active="sheet" account={c.account} selYear={c.selYear} selMonth={c.selMonth} dataMonths={c.dataMonths} financeDue={c.cardReminders.length > 0} />;
 
   if (!c.selected) {
     return (
@@ -94,7 +94,7 @@ export default async function PersonalSheet({
   return (
     <>
       {nav}
-      <main className="mx-auto max-w-3xl space-y-4 p-4 pb-28 sm:p-6">
+      <main className="fo-rise mx-auto max-w-3xl space-y-4 p-4 pb-28 sm:p-6">
         <CardBillReminderBanner reminders={c.cardReminders} />
 
         {/* next-month preview draft */}

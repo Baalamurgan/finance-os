@@ -86,23 +86,30 @@ export function RemindersBell({ context }: { context: "family" | "personal" }) {
       >
         🔔
         {count > 0 && (
-          <span className="absolute -right-0.5 -top-0.5 grid h-4 min-w-4 place-items-center rounded-full bg-red-500 px-1 text-[10px] font-bold text-white">
+          <span key={count} className="fo-check-pop absolute -right-0.5 -top-0.5 grid h-4 min-w-4 place-items-center rounded-full bg-red-500 px-1 text-[10px] font-bold text-white">
             {count}
           </span>
         )}
       </button>
 
       {open && (
-        <div className="absolute right-0 z-50 mt-2 w-80 max-w-[85vw] overflow-hidden rounded-xl border border-slate-200 bg-white shadow-xl">
+        <div className="fo-menu absolute right-0 z-50 mt-2 w-80 max-w-[85vw] origin-top-right overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xl">
           <div className="border-b border-slate-100 px-4 py-2.5 text-sm font-semibold text-slate-800">Reminders</div>
           {count === 0 ? (
             <p className="px-4 py-6 text-center text-sm text-slate-400">Nothing due right now. 🎉</p>
           ) : (
-            <ul className="max-h-80 divide-y divide-slate-100 overflow-y-auto">
+            <ul className="fo-rise max-h-80 divide-y divide-slate-100 overflow-y-auto">
               {visible!.map((r) => (
                 <li key={r.key} className="flex items-stretch">
                   <Link href={r.href} onClick={() => setOpen(false)} className="flex min-w-0 flex-1 items-center gap-3 py-3 pl-4 hover:bg-slate-50">
-                    <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ background: r.dot ?? "#f59e0b" }} />
+                    {/* a little calendar tile: the due day, tinted with the card's colour; overdue ones breathe red */}
+                    <span
+                      className={`relative flex h-10 w-10 shrink-0 flex-col items-center justify-center overflow-hidden rounded-xl border pt-0.5 text-center leading-none ${r.overdue ? "fo-attention border-red-200 bg-red-50 text-red-700" : "border-slate-200 bg-slate-50 text-slate-700"}`}
+                    >
+                      <span className="absolute inset-x-0 top-0 h-1" style={{ background: r.dot ?? "#f59e0b" }} aria-hidden />
+                      <span className="block text-[15px] font-bold tabular-nums">{new Date(r.dueISO).getDate()}</span>
+                      <span className="mt-0.5 block text-[9px] font-medium uppercase tracking-wide opacity-70">{new Date(r.dueISO).toLocaleDateString("en-IN", { month: "short" })}</span>
+                    </span>
                     <div className="min-w-0 flex-1">
                       <div className="truncate text-sm font-medium text-slate-900">{r.title}</div>
                       <div className={`text-xs ${r.overdue ? "text-red-600" : "text-slate-500"}`}>{fmtDue(r)}</div>

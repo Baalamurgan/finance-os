@@ -1,4 +1,5 @@
 import { canPayFrom } from "@/lib/payAccounts";
+import { CountUp } from "@/components/motion/CountUp";
 import { formatINR } from "@/lib/format";
 import { sheetSection, isBudgetLikeCard } from "@/lib/sheetSection";
 import { loadCommon } from "@/lib/load";
@@ -45,6 +46,7 @@ export default async function ExpensesPage({
       selYear={c.selYear}
       selMonth={c.selMonth}
       previewPeriod={c.previewPeriod}
+      dataMonths={c.dataMonths}
       provisional={c.provisional}
       members={c.members}      categories={c.categories}
       account={c.account}
@@ -87,6 +89,12 @@ export default async function ExpensesPage({
     getSpendRefundIndex(c.household.id),
   ]);
   const { cards: rawCards, totalAllocation, totalSpent, totalRemaining, miscSpent } = tracked;
+  // Day-of-month marker for the overall budget bar — only while viewing the running month.
+  const today = new Date();
+  const monthDay = c.selYear === today.getFullYear() && c.selMonth === today.getMonth() + 1
+    ? { day: today.getDate(), days: new Date(c.selYear, c.selMonth, 0).getDate() }
+    : null;
+  const usedPct = totalAllocation > 0 ? (totalSpent / totalAllocation) * 100 : 0;
   // Family cards for the "Paid with" picker on the edit-spend modal.
   const familyCards = familyCardsRaw.map((fc) => ({
     id: fc.id, name: fc.name, ownerId: fc.memberId, ownerName: fc.member.name, last4: fc.last4, type: fc.type, color: fc.color,
@@ -164,7 +172,7 @@ export default async function ExpensesPage({
   return (
     <>
       {nav}
-      <main className="mx-auto max-w-7xl space-y-5 p-6 pb-28 sm:pb-6">
+      <main className="fo-rise mx-auto max-w-7xl space-y-5 p-6 pb-28 sm:pb-6">
         <div className="flex flex-wrap items-end justify-between gap-2">
           <div className="min-w-0 flex-1 basis-64">
             <h1 className="text-xl font-bold text-slate-900">
@@ -206,11 +214,21 @@ export default async function ExpensesPage({
                   Spent / Allocated
                 </div>
                 <div className="text-lg font-bold text-slate-800">
-                  {formatINR(totalSpent)}{" "}
+                  <CountUp id="spends-total" text={formatINR(totalSpent)} />{" "}
                   <span className="text-sm font-normal text-slate-400">
                     / {formatINR(totalAllocation)}
                   </span>
                 </div>
+                {/* how much of the budget is used vs how far into the month we are (current month only) */}
+                {totalAllocation > 0 && monthDay && (
+                  <div className="ml-auto mt-1 w-48 max-w-full" title={`${Math.round(usedPct)}% of the budget used · day ${monthDay.day} of ${monthDay.days}`}>
+                    <div className="relative h-1.5 overflow-hidden rounded-full bg-slate-100">
+                      <div className={`fo-bar h-full rounded-full ${usedPct > (monthDay.day / monthDay.days) * 100 + 5 ? "bg-amber-500" : "bg-emerald-500"}`} style={{ width: `${Math.min(100, usedPct)}%` }} />
+                      <span className="absolute inset-y-0 w-0.5 bg-slate-500/70" style={{ left: `${(monthDay.day / monthDay.days) * 100}%` }} aria-hidden />
+                    </div>
+                    <div className="mt-0.5 text-[10px] text-slate-400">{Math.round(usedPct)}% used · day {monthDay.day}/{monthDay.days}</div>
+                  </div>
+                )}
                 {cardSpends > 0 && (
                   <div className="text-[11px] text-slate-400">
                     {formatINR(generalCash)} cash · <span className="text-fuchsia-500">{formatINR(cardSpends)} on cards</span> (settles next month)
@@ -503,7 +521,7 @@ function SpendCard({
               {/* green (plenty left) → yellow → red (near/over budget); the grey mask on
                   the right hides the part not yet spent, so the fill edge shows the tone. */}
               <div
-                className="absolute inset-0"
+                className="fo-reveal-x absolute inset-0"
                 style={{ background: "linear-gradient(to right, #22c55e 0%, #eab308 60%, #ef4444 100%)" }}
               />
               <div className="absolute inset-y-0 right-0 bg-slate-100" style={{ width: `${100 - pct}%` }} />

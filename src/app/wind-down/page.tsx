@@ -39,6 +39,7 @@ export default async function WindDownPage({
       selYear={c.selYear}
       selMonth={c.selMonth}
       previewPeriod={c.previewPeriod}
+      dataMonths={c.dataMonths}
       provisional={c.provisional}
       members={c.members}      categories={c.categories}
       account={c.account}
@@ -151,7 +152,7 @@ export default async function WindDownPage({
   return (
     <>
       {nav}
-      <main className="mx-auto max-w-3xl space-y-6 p-6">
+      <main className="fo-rise mx-auto max-w-3xl space-y-6 p-6">
         <h1 className="text-xl font-bold text-slate-900">Wind down — {c.selected.label}</h1>
 
         <section

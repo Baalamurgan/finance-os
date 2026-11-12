@@ -1,4 +1,5 @@
 import { Fragment } from "react";
+import { CountUp } from "@/components/motion/CountUp";
 import { redirect } from "next/navigation";
 import { formatINR, withShareCount } from "@/lib/format";
 import { categoryEmoji } from "@/lib/categoryEmoji";
@@ -489,6 +490,7 @@ export default async function SheetPage({
       selYear={c.selYear}
       selMonth={c.selMonth}
       previewPeriod={c.previewPeriod}
+      dataMonths={c.dataMonths}
       provisional={c.provisional}
       members={c.members}      categories={c.categories}
       account={c.account}
@@ -656,7 +658,7 @@ export default async function SheetPage({
     <>
       {nav}
       <DetailsPersist />
-      <main className="mx-auto max-w-[68rem] space-y-4 p-6">
+      <main className="fo-rise mx-auto max-w-[68rem] space-y-4 p-6">
         {/* Next-month preview draft — head-only, distinct from real months */}
         {isDraft && (
           <div className="rounded-xl border-2 border-dashed border-violet-300 bg-violet-50 p-4">
@@ -812,7 +814,7 @@ export default async function SheetPage({
                 <span className="text-sm font-bold uppercase tracking-widest text-green-700">Income</span>
               </span>
               <span className="text-xl font-extrabold tabular-nums text-green-700">
-                {formatINR(rollup.totalIncome)}
+                <CountUp id="sheet-income" text={formatINR(rollup.totalIncome)} />
               </span>
             </summary>
             <div className="divide-y divide-slate-100 px-4 py-1">
@@ -860,7 +862,7 @@ export default async function SheetPage({
                 <span className="text-sm font-bold uppercase tracking-widest text-red-700">Expense</span>
               </span>
               <span className="text-xl font-extrabold tabular-nums text-red-700">
-                {formatINR(rollup.totalExpense)}
+                <CountUp id="sheet-expense" text={formatINR(rollup.totalExpense)} />
               </span>
             </summary>
             <div className="px-2 py-1">

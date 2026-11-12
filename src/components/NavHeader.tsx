@@ -18,8 +18,11 @@ import { setViewAs } from "@/app/actions";
 import { formatINR } from "@/lib/format";
 import { MISC_SUBCATEGORIES } from "@/lib/misc";
 import { FAMILY_MORE, FAMILY_PRIMARY, FAMILY_TABS, FAMILY_TAB_ICON } from "@/components/navTabs";
+import { PillTrack } from "@/components/motion/PillTrack";
+import { QuickJump, type JumpItem } from "@/components/motion/QuickJump";
 import { startNavProgress } from "@/components/NavProgress";
 import { rememberFamilyChrome } from "@/components/NavSkeleton";
+import { monthInYear, monthKey, yearsWithData } from "@/lib/monthPick";
 
 const MONTHS = [
   "Jan", "Feb", "Mar", "Apr", "May", "Jun",
@@ -48,6 +51,7 @@ export function NavHeader({
   actualIsHead,
   viewingAsMember,
   miscSubCategories = MISC_SUBCATEGORIES,
+  dataMonths,
 }: {
   active:
     | "sheet"
@@ -85,6 +89,7 @@ export function NavHeader({
   actualIsHead?: boolean;
   viewingAsMember?: boolean;
   miscSubCategories?: { name: string; icon: string }[];
+  dataMonths?: number[]; // y*12+(m-1) of months that have a sheet; others are greyed out in the picker
 }) {
   const router = useRouter();
   const now = new Date();
@@ -108,14 +113,23 @@ export function NavHeader({
   const moreTabs = FAMILY_MORE; // Analysis · Piggy · Loans · Wind Down · …
 
   const q = `?y=${selYear}&m=${selMonth}`;
+  const JUMP_ICON: Record<string, string> = { ...FAMILY_TAB_ICON, activity: "🕘", piggy: "🐷", notes: "📝", loans: "🏦", priority: "⭐" };
+  const jumpItems: JumpItem[] = [
+    ...FAMILY_TABS.map((t) => ({ key: t.key, label: t.label, href: t.href, icon: JUMP_ICON[t.key] })),
+    { key: "cards", label: "Cards", href: "/cards", icon: "💳" },
+    { key: "wind-down", label: "Wind Down", href: "/wind-down", icon: "🌙", hint: "month close" },
+    ...(canEdit ? [{ key: "setup", label: "Setup", href: "/setup", icon: "⚙️", hint: "budgets & bills" }] : []),
+    ...(isHead ? [{ key: "users", label: "Settings", href: "/users", icon: "🔧", hint: "members & lock" }] : []),
+  ];
   const activeHref = tabs.find((t) => t.key === active)?.href ?? "/";
 
-  const years: number[] = [];
-  for (let yr = curYear; yr >= 2000; yr--) years.push(yr);
-  // The preview draft can be in next year (Dec → Jan); make that year selectable.
-  if (previewPeriod && previewPeriod.year > curYear && !years.includes(previewPeriod.year)) {
-    years.unshift(previewPeriod.year);
-  }
+  // Only months that have a sheet are pickable (plus this month and the preview draft, so they can
+  // always be opened); years with no such month are left out.
+  const allowed = new Set<number>(dataMonths ?? []);
+  allowed.add(monthKey(curYear, curMonth));
+  if (previewPeriod) allowed.add(monthKey(previewPeriod.year, previewPeriod.month));
+  const has = (y: number, m: number) => !dataMonths || allowed.has(monthKey(y, m));
+  const years = dataMonths ? yearsWithData(allowed, [selYear]) : Array.from({ length: curYear - 1999 }, (_, i) => curYear - i);
 
   // replace (not push) so the phone back button exits the app instead of
   // stepping back through months/tabs — feels native, less confusing for elders.
@@ -145,22 +159,26 @@ export function NavHeader({
         </div>
 
         {/* desktop tabs (mobile uses the bottom bar) */}
-        <nav className="hidden flex-wrap items-center gap-1 sm:flex">
-          {primaryTabs.map((t) => (
-            <Link
-              key={t.key}
-              href={`${t.href}${q}`}
-              replace
-              className={`rounded-md px-3 py-1.5 text-sm font-medium transition ${
-                active === t.key
-                  ? "bg-indigo-600 text-white"
-                  : "text-slate-600 hover:bg-slate-100"
-              }`}
-            >
-              {t.label}
-            </Link>
-          ))}
-          <MoreMenu items={moreTabs} q={q} active={active} />
+        <nav className="hidden sm:block">
+          <PillTrack scope="family-top" className="flex flex-wrap items-center gap-1" pillClassName="rounded-md bg-indigo-600 shadow-sm shadow-indigo-600/30">
+            {primaryTabs.map((t) => (
+              <Link
+                key={t.key}
+                href={`${t.href}${q}`}
+                replace
+                data-tab
+                data-active={active === t.key}
+                className={`rounded-md px-3 py-1.5 text-sm font-medium transition ${
+                  active === t.key
+                    ? "bg-indigo-600 text-white"
+                    : "text-slate-600 hover:bg-slate-100"
+                }`}
+              >
+                {t.label}
+              </Link>
+            ))}
+            <MoreMenu items={moreTabs} q={q} active={active} />
+          </PillTrack>
         </nav>
 
         {/* Single non-wrapping row on mobile (the household name truncates to make room) so the header
@@ -182,7 +200,7 @@ export function NavHeader({
               // Keep the next-month preview selectable even though it's a "future" month.
               const isPreview = !!previewPeriod && selYear === previewPeriod.year && mnum === previewPeriod.month;
               return (
-                <option key={mnum} value={mnum} disabled={future && !isPreview}>
+                <option key={mnum} value={mnum} disabled={(future && !isPreview) || !has(selYear, mnum)}>
                   {mname}{isPreview ? " · Preview" : ""}
                 </option>
               );
@@ -192,9 +210,8 @@ export function NavHeader({
             value={selYear}
             onChange={(e) => {
               const y = Number(e.target.value);
-              // if switching to current year and selected month is in the future, clamp
-              const m = y === curYear && selMonth > curMonth ? curMonth : selMonth;
-              go(y, m);
+              // land on the same month if that year has it, else the nearest month with a sheet
+              go(y, dataMonths ? monthInYear(allowed, y, selMonth) : y === curYear && selMonth > curMonth ? curMonth : selMonth);
             }}
             className="rounded-md border border-slate-300 bg-white px-1.5 py-1 text-[13px] shadow-sm sm:px-2 sm:py-1.5 sm:text-sm"
           >
@@ -219,6 +236,8 @@ export function NavHeader({
               />
             </span>
           )}
+
+          <QuickJump q={q} items={jumpItems} />
 
           <RemindersBell context="family" />
 
@@ -344,18 +363,20 @@ function BottomNav({
         // devices report a larger real inset and keep it.
         style={{ paddingBottom: "max(env(safe-area-inset-bottom), 0.75rem)" }}
       >
-        {primaryTabs.map((t) => (
-          <Link key={t.key} href={`${t.href}${q}`} replace className={cell(active === t.key)} onClick={() => setOpen(false)}>
-            <span className="text-xl leading-none">{TAB_ICON[t.key] ?? "•"}</span>
-            {t.label}
-          </Link>
-        ))}
-        {moreTabs.length > 0 && (
-          <button type="button" onClick={() => setOpen((v) => !v)} className={cell(moreActive || open)}>
-            <span className="text-xl leading-none">⋯</span>
-            More
-          </button>
-        )}
+        <PillTrack scope="family-bottom" className="flex flex-1" inset={4} pillClassName="rounded-2xl bg-indigo-500/10 ring-1 ring-indigo-500/15">
+          {primaryTabs.map((t) => (
+            <Link key={t.key} href={`${t.href}${q}`} replace data-tab data-active={active === t.key} className={cell(active === t.key)} onClick={() => setOpen(false)}>
+              <span className={`text-xl leading-none transition-transform duration-300 ${active === t.key ? "scale-110" : ""}`}>{TAB_ICON[t.key] ?? "•"}</span>
+              {t.label}
+            </Link>
+          ))}
+          {moreTabs.length > 0 && (
+            <button type="button" data-tab data-no-pill data-active={moreActive} onClick={() => setOpen((v) => !v)} className={cell(moreActive || open)}>
+              <span className="text-xl leading-none">⋯</span>
+              More
+            </button>
+          )}
+        </PillTrack>
       </nav>
     </>
   );
@@ -389,6 +410,9 @@ function MoreMenu({
     <div className="relative" ref={ref}>
       <button
         onClick={() => setOpen((v) => !v)}
+        data-tab
+        data-no-pill
+        data-active={activeHere}
         className={`flex items-center gap-1 rounded-md px-3 py-1.5 text-sm font-medium transition ${
           activeHere ? "bg-indigo-600 text-white" : "text-slate-600 hover:bg-slate-100"
         }`}

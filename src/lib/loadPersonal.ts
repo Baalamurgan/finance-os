@@ -125,6 +125,8 @@ export async function loadPersonal(params?: { y?: string; m?: string }) {
     member,
     account,
     periods,
+    // months that have a personal month (+ the current cycle) → the only ones the month/year pickers offer
+    dataMonths: [...new Set([...periods.map((p) => p.year * 12 + p.month - 1), anchor.year * 12 + anchor.month - 1])],
     selected,
     selYear: y ?? selected?.year ?? anchor.year,
     selMonth: m ?? selected?.month ?? anchor.month,

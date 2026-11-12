@@ -39,8 +39,8 @@ export default async function CreditCardDetail({
 
   return (
     <>
-      <PersonalNav active="finance" account={c.account} selYear={c.selYear} selMonth={c.selMonth} financeDue={c.cardReminders.length > 0} />
-      <main className="mx-auto max-w-3xl space-y-5 p-4 pb-24 sm:p-6">
+      <PersonalNav active="finance" account={c.account} selYear={c.selYear} selMonth={c.selMonth} dataMonths={c.dataMonths} financeDue={c.cardReminders.length > 0} />
+      <main className="fo-rise mx-auto max-w-3xl space-y-5 p-4 pb-24 sm:p-6">
         <div>
           <Link href="/personal/cards" className="text-xs font-medium text-emerald-700 hover:underline">← All cards</Link>
           <div className="mt-1 flex items-center gap-2">

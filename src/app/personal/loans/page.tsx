@@ -29,7 +29,7 @@ export default async function PersonalLoans({
 }) {
   const sp = await searchParams;
   const c = await loadPersonal(sp);
-  const nav = <PersonalNav active="loans" account={c.account} selYear={c.selYear} selMonth={c.selMonth} financeDue={c.cardReminders.length > 0} />;
+  const nav = <PersonalNav active="loans" account={c.account} selYear={c.selYear} selMonth={c.selMonth} dataMonths={c.dataMonths} financeDue={c.cardReminders.length > 0} />;
 
   const loans = (await prisma.personalLoan.findMany({
     where: { memberId: c.member.id },
@@ -53,7 +53,7 @@ export default async function PersonalLoans({
   return (
     <>
       {nav}
-      <main className="mx-auto max-w-3xl space-y-5 p-4 sm:p-6">
+      <main className="fo-rise mx-auto max-w-3xl space-y-5 p-4 sm:p-6">
         <h1 className="text-xl font-bold text-slate-900">Lending &amp; borrowing</h1>
 
         <div className="grid grid-cols-2 gap-4">
