@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { withdrawPiggy } from "@/app/actions";
 import { formatINR } from "@/lib/format";
 import { useToastAction } from "@/components/Toast";
+import { fx } from "@/components/motion/Fx";
 
 type Cat = { id: number; name: string; sinking?: boolean };
 
@@ -63,7 +64,7 @@ export function WithdrawPiggyModal({
             </div>
 
             <form
-              action={withToast(withdrawPiggy, { success: "Withdrawn from Piggy" })}
+              action={withToast(withdrawPiggy, { success: "Withdrawn from Piggy", onSuccess: (fd) => { const n = Number(fd.get("amount")) || 0; if (n > 0) fx({ kind: "coin", amount: n, out: true }); } })}
               onSubmit={(e) => {
                 if (!e.currentTarget.checkValidity()) return;
                 if (overdraw) {

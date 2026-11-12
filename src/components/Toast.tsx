@@ -25,11 +25,12 @@ export function useToast() {
 export function useToastAction() {
   const toast = useToast();
   return useCallback(
-    (action: (formData: FormData) => void | Promise<unknown>, opts?: { success?: string | null; error?: string }) =>
+    (action: (formData: FormData) => void | Promise<unknown>, opts?: { success?: string | null; error?: string; onSuccess?: (formData: FormData) => void }) =>
       async (formData: FormData) => {
         try {
           await action(formData);
           if (opts?.success !== null) toast(opts?.success ?? "Saved", "success");
+          opts?.onSuccess?.(formData);
         } catch (e) {
           unstable_rethrow(e); // let redirect()/notFound() do their thing
           toast(opts?.error ?? "Something went wrong", "error");

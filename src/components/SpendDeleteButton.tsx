@@ -15,6 +15,7 @@ export function SpendDeleteButton({ id }: { id: number }) {
       <button
         type="button"
         onClick={() => setConfirming(true)}
+        data-swipe="left"
         aria-label="Delete spend"
         className="flex h-9 w-9 items-center justify-center rounded-lg text-base text-slate-300 hover:bg-red-50 hover:text-red-600"
       >

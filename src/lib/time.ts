@@ -40,3 +40,8 @@ export function istTodayStart(now: Date = new Date()): Date {
 export function istTodayStartMs(now: Date = new Date()): number {
   return istTodayStart(now).getTime();
 }
+
+// Today's IST date as "YYYY-MM-DD" (the Analysis heatmaps).
+export function istTodayISO(now: Date = new Date()): string {
+  return istNow(now).toISOString().slice(0, 10);
+}

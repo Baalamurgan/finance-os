@@ -12,6 +12,8 @@ import { SpendActivity } from "@/components/SpendActivity";
 import { AddSpendModal } from "@/components/AddSpendModal";
 import { MiscReview } from "@/components/MiscReview";
 import { SpendDeleteButton } from "@/components/SpendDeleteButton";
+import { SwipeRow } from "@/components/motion/SwipeRow";
+import { MorphBar } from "@/components/motion/Morph";
 import { SpendSubCategoryPicker } from "@/components/SpendSubCategoryPicker";
 import { EditSpendModal } from "@/components/EditSpendModal";
 import { ExpensesSortControl } from "@/components/ExpensesSortControl";
@@ -223,7 +225,7 @@ export default async function ExpensesPage({
                 {totalAllocation > 0 && monthDay && (
                   <div className="ml-auto mt-1 w-48 max-w-full" title={`${Math.round(usedPct)}% of the budget used · day ${monthDay.day} of ${monthDay.days}`}>
                     <div className="relative h-1.5 overflow-hidden rounded-full bg-slate-100">
-                      <div className={`fo-bar h-full rounded-full ${usedPct > (monthDay.day / monthDay.days) * 100 + 5 ? "bg-amber-500" : "bg-emerald-500"}`} style={{ width: `${Math.min(100, usedPct)}%` }} />
+                      <MorphBar id="spends-used" pct={Math.min(100, usedPct)} className={`h-full rounded-full ${usedPct > 100 ? "fo-over bg-red-500" : usedPct > (monthDay.day / monthDay.days) * 100 + 5 ? "bg-amber-500" : "bg-emerald-500"}`} />
                       <span className="absolute inset-y-0 w-0.5 bg-slate-500/70" style={{ left: `${(monthDay.day / monthDay.days) * 100}%` }} aria-hidden />
                     </div>
                     <div className="mt-0.5 text-[10px] text-slate-400">{Math.round(usedPct)}% used · day {monthDay.day}/{monthDay.days}</div>
@@ -517,14 +519,16 @@ function SpendCard({
                   : `${formatINR(card.remaining)} left → Piggy`}
               </span>
             </div>
-            <div className="relative mt-1.5 h-2 w-full overflow-hidden rounded-full bg-slate-100">
+            <div className={`relative mt-1.5 h-2 w-full overflow-hidden rounded-full bg-slate-100 ${card.overBudget ? "fo-over" : pct >= 85 ? "fo-near" : ""}`}>
               {/* green (plenty left) → yellow → red (near/over budget); the grey mask on
-                  the right hides the part not yet spent, so the fill edge shows the tone. */}
+                  the right hides the part not yet spent, so the fill edge shows the tone.
+                  Over budget the bar wobbles once; from 85% a light sweeps across it; a new spend
+                  slides the edge to its new spot. */}
               <div
                 className="fo-reveal-x absolute inset-0"
                 style={{ background: "linear-gradient(to right, #22c55e 0%, #eab308 60%, #ef4444 100%)" }}
               />
-              <div className="absolute inset-y-0 right-0 bg-slate-100" style={{ width: `${100 - pct}%` }} />
+              <div className="absolute inset-y-0 right-0 bg-slate-100 transition-[width] duration-700 ease-out" style={{ width: `${100 - pct}%` }} />
             </div>
           </>
         ) : (
@@ -542,7 +546,8 @@ function SpendCard({
       <div className="flex-1 divide-y divide-slate-100 overflow-y-auto px-4 py-2 sm:max-h-64">
         {card.spends.length === 0 && <p className="py-3 text-sm text-slate-400">No spends logged yet.</p>}
         {card.spends.map((s) => (
-          <div key={s.id} className="flex items-center justify-between gap-2 py-2 text-sm">
+          <SwipeRow key={s.id}>
+          <div className="flex items-center justify-between gap-2 py-2 text-sm">
             <div className="flex min-w-0 items-center gap-2">
               {s.imagePath && (
                 <a href={s.imagePath} target="_blank" rel="noreferrer">
@@ -599,6 +604,7 @@ function SpendCard({
               {open && !refunds.byLine.get(s.id) && !refunds.byOriginal.get(s.id) && <SpendDeleteButton id={s.id} />}
             </div>
           </div>
+          </SwipeRow>
         ))}
       </div>
       </div>

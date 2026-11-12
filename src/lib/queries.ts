@@ -2256,6 +2256,22 @@ async function _getRollup(periodId: number) {
   };
 }
 
+/** Daily totals of the logged spends (Spend rows) of these sheets, by the IST day they were logged — the
+ *  Analysis heatmap. Refund lines (negative) net against their day. */
+export async function getDailySpends(periodIds: number[]) {
+  if (periodIds.length === 0) return [] as { date: string; amount: number; count: number }[];
+  const rows = await prisma.spend.findMany({ where: { periodId: { in: periodIds } }, select: { amount: true, createdAt: true } });
+  const by = new Map<string, { amount: number; count: number }>();
+  for (const r of rows) {
+    const day = new Date(r.createdAt.getTime() + 330 * 60000).toISOString().slice(0, 10); // IST
+    const e = by.get(day) ?? { amount: 0, count: 0 };
+    e.amount += r.amount;
+    e.count += 1;
+    by.set(day, e);
+  }
+  return [...by.entries()].map(([date, v]) => ({ date, amount: Math.round(v.amount * 100) / 100, count: v.count }));
+}
+
 // Aggregate getRollup across every period in an inclusive [from, to] month range
 // (for the Analysis "custom range" view). Sums totals + by-category/member/split.
 // Cached wrapper: family-wide per period. Busted by any family write via FAMILY_TAG.

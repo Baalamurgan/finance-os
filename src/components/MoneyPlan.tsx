@@ -17,6 +17,7 @@ import { useToast, useToastAction } from "@/components/Toast";
 import type { MoneyPlanResult } from "@/lib/queries";
 import { canActOnStep, canActInMonth } from "@/lib/planAuth";
 import { CTA_CLASS, CtaLabel } from "@/components/Cta";
+import { CelebrateWhen, DrawCheck } from "@/components/motion/Fx";
 import { isPaybackNote, isLendGroup, isPoolLendGroup, isRefundGroup } from "@/lib/notes";
 
 // The shared, everyone-visible Money Plan: the month's transfers + bill payments as one ordered,
@@ -190,10 +191,12 @@ export function MoneyPlan({
         </div>
         <span className="shrink-0 text-xs font-medium text-slate-500">{plan.done}/{plan.total} done</span>
       </div>
+      {/* the last step of the month ticked → confetti */}
+      {open && <CelebrateWhen id={`plan-${periodId}`} done={plan.total > 0 && plan.done >= plan.total} />}
 
       {/* progress (always the WHOLE plan, not the filtered view) */}
       <div className="mb-3 h-1.5 w-full overflow-hidden rounded-full bg-slate-100">
-        <div className="h-full rounded-full bg-emerald-500 transition-all" style={{ width: `${pct}%` }} />
+        <div className="h-full rounded-full bg-emerald-500 transition-all duration-700 ease-out" style={{ width: `${pct}%` }} />
       </div>
 
       {/* filter + refresh */}
@@ -327,14 +330,14 @@ export function MoneyPlan({
               <Fragment key={s.id}>
               {newDateGroup && <DateGroupHeader day={s.day} kind={s.kind} collapsed={dayCollapsed} count={dayStats.get(dayKey)?.total} done={dayStats.get(dayKey)?.done} onToggle={() => toggleDay(dayKey)} />}
               {!dayCollapsed && (
-              <li className={`flex items-start gap-2.5 rounded-lg px-2.5 py-2 text-xs ${s.done ? "bg-emerald-50/50" : isIncome ? "bg-emerald-50/40" : urgent ? "bg-red-50" : soon ? "bg-amber-50" : isManual ? "bg-cyan-50/50" : "bg-slate-50"}`}>
+              <li className={`flex items-start gap-2.5 rounded-lg px-2.5 py-2 text-xs transition-colors duration-500 ${s.done ? "bg-emerald-50/50" : isIncome ? "bg-emerald-50/40" : urgent ? "bg-red-50" : soon ? "bg-amber-50" : isManual ? "bg-cyan-50/50" : "bg-slate-50"}`}>
                 <button
                   type="button"
                   onClick={() => setBalances({ s, n })}
                   title="Tap to see everyone's cash before & after this step"
                   className="grid h-5 w-5 shrink-0 place-items-center rounded-full text-[11px] font-semibold text-slate-500 ring-1 ring-slate-300 hover:bg-slate-200 hover:text-slate-800"
                 >
-                  {s.done ? <span className="text-emerald-600">✓</span> : n}
+                  {s.done ? <span className="text-emerald-600"><DrawCheck /></span> : n}
                 </button>
 
                 <div className="min-w-0 flex-1">

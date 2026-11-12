@@ -11,6 +11,8 @@ import { setFamilyPrimary, setPersonalPrimary, setCreditConfig, deleteTransactio
 import { TXN_TYPES, BALANCE_ACCOUNT_TYPES, CARD_NETWORKS } from "@/lib/finance/types";
 import { CardColorPicker } from "@/components/CardColorPicker";
 import { ToastForm } from "@/components/ToastForm";
+import { CardFace } from "@/components/motion/CardWallet";
+import { HeroTarget } from "@/components/motion/Hero";
 
 const fmtDate = (d: Date | null) =>
   d ? d.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" }) : "—";
@@ -51,6 +53,19 @@ export default async function CreditCardDetail({
             {[account.institution, account.network?.toUpperCase(), account.last4 && `XX${account.last4}`].filter(Boolean).join(" · ") || typeLabel}
           </p>
         </div>
+
+        {/* The card itself — opening it from the wallet zooms the wallet card into this spot. */}
+        {(isCredit || account.type === "debit_card" || account.type === "prepaid_card") && (
+          <HeroTarget k={`/personal/finance/${account.id}`} className="relative mx-auto aspect-[1.586] w-full max-w-[18rem]">
+            <CardFace
+              c={{
+                id: account.id, name: account.name, color: account.color, last4: account.last4, holder: c.account.name,
+                kind: isCredit ? "Credit" : account.type === "prepaid_card" ? "Prepaid" : "Debit",
+                network: account.network ?? null, institution: account.institution,
+              }}
+            />
+          </HeroTarget>
+        )}
 
         {/* Debit/prepaid: available balance + top up */}
         {isBalance && (

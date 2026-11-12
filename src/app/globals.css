@@ -277,3 +277,65 @@ main {
 @media (prefers-reduced-motion: reduce) {
   .fo-ring { animation: none !important; }
 }
+
+/* ───────────── Money moments (FxLayer), budget bars that react, spotlight, pull-to-refresh coin ───────────── */
+@keyframes fo-draw { to { stroke-dashoffset: 0; } }
+@keyframes fo-fx-fade { 0% { opacity: 0; transform: scale(0.9); } 12% { opacity: 1; transform: scale(1); } 80% { opacity: 1; } 100% { opacity: 0; transform: translateY(-12px); } }
+@keyframes fo-coin-in {
+  0% { transform: translateY(-46vh) rotate(-30deg); opacity: 1; }
+  80% { transform: translateY(34px) rotate(180deg) scale(0.9); opacity: 1; }
+  100% { transform: translateY(46px) rotate(200deg) scale(0.3); opacity: 0; }
+}
+@keyframes fo-coin-out {
+  0% { transform: translateY(46px) scale(0.3); opacity: 0; }
+  30% { transform: translateY(-10px) rotate(90deg) scale(1); opacity: 1; }
+  100% { transform: translateY(-46vh) rotate(260deg); opacity: 0; }
+}
+@keyframes fo-pig {
+  0%, 44% { transform: scale(1); }
+  52% { transform: scale(1.18, 0.82); }
+  62% { transform: scale(0.92, 1.1) translateY(-6px); }
+  72% { transform: scale(1.04, 0.97); }
+  82%, 100% { transform: scale(1); }
+}
+@keyframes fo-amount-up { 0%, 40% { opacity: 0; transform: translateY(10px) scale(0.8); } 55% { opacity: 1; transform: translateY(0) scale(1.08); } 65%, 100% { transform: translateY(0) scale(1); } }
+@keyframes fo-wrap-in { from { opacity: 0; transform: translateY(40px) scale(0.9) rotate(-2deg); } }
+@keyframes fo-wobble { 0%, 100% { transform: translateX(0); } 20% { transform: translateX(-3px); } 40% { transform: translateX(3px); } 60% { transform: translateX(-2px); } 80% { transform: translateX(1px); } }
+@keyframes fo-near-sheen { 0% { transform: translateX(-100%); } 100% { transform: translateX(250%); } }
+@keyframes fo-coin-spin { to { transform: rotateY(360deg); } }
+@keyframes fo-float { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-6px); } }
+@keyframes fo-flow { to { stroke-dashoffset: -40; } }
+@keyframes fo-cell-in { from { opacity: 0; transform: scale(0.4); } }
+
+@layer base {
+  /* Budget bars: over budget wobbles once after it fills; ≥85% gets a light sweep across it. */
+  .fo-over { animation: fo-wobble 0.5s ease-in-out 0.95s 1; transform-origin: left; }
+  .fo-bar.fo-over { animation: fo-grow-x 0.8s cubic-bezier(0.22, 1, 0.36, 1) backwards 0.12s, fo-wobble 0.5s ease-in-out 0.95s 1; }
+  .fo-near { position: relative; overflow: hidden; }
+  .fo-near::after {
+    content: ""; position: absolute; inset: 0; width: 40%;
+    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.55), transparent);
+    animation: fo-near-sheen 1.4s ease-in-out 1s 2 backwards;
+  }
+
+  /* Spotlight: a soft light follows the mouse across cards marked data-spot (desktop only, set by FxLayer). */
+  [data-spot] { position: relative; }
+  [data-spot]::before {
+    content: ""; position: absolute; inset: 0; border-radius: inherit; pointer-events: none; z-index: 0;
+    background: radial-gradient(260px circle at var(--spot-x, 50%) var(--spot-y, 50%), rgba(99, 102, 241, 0.09), transparent 70%);
+    opacity: 0; transition: opacity 0.25s ease;
+  }
+  [data-spot][data-spot-on]::before { opacity: 1; }
+  .dark [data-spot]::before { background: radial-gradient(260px circle at var(--spot-x, 50%) var(--spot-y, 50%), rgba(129, 140, 248, 0.12), transparent 70%); }
+
+  /* Pull-to-refresh ₹ coin, empty-state art idle float, money-flow shimmer, heatmap cells. */
+  .fo-coin-spin { animation: fo-coin-spin 0.9s linear infinite; }
+  .fo-float { animation: fo-float 3.2s ease-in-out infinite; }
+  .fo-flow { animation: fo-flow 1.6s linear 3; }
+  .fo-cell { animation: fo-cell-in 0.35s cubic-bezier(0.34, 1.56, 0.64, 1) backwards; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fo-over, .fo-near::after, .fo-coin-spin, .fo-float, .fo-flow, .fo-cell { animation: none !important; }
+  [data-spot]::before { display: none; }
+}

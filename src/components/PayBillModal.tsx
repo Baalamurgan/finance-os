@@ -5,6 +5,7 @@ import { useSavingToast } from "@/components/useSavingToast";
 import { payPeriodicBill, type PayBillState } from "@/app/actions";
 import { formatINR } from "@/lib/format";
 import { useToast } from "@/components/Toast";
+import { fx } from "@/components/motion/Fx";
 import { CTA_CLASS, CtaLabel } from "@/components/Cta";
 
 const INIT: PayBillState = { ok: false, n: 0 };
@@ -69,7 +70,7 @@ export function PayBillModal({
   // React to the action result: success → toast + close; blocked → toast the reason, keep open.
   useEffect(() => {
     if (state.n === 0) return;
-    if (state.ok) { toast(`${name} marked paid`, "success"); setOpen(false); }
+    if (state.ok) { toast(`${name} marked paid`, "success"); setOpen(false); fx({ kind: "paid", label: name }); }
     else if (state.error) toast(state.error, "error");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state.n]);

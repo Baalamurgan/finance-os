@@ -59,6 +59,9 @@ export function RowActions({
 
   return (
     <>
+      {/* Swipe targets for <SwipeRow> (phones): right → Edit, left → the menu opened at "Delete? Yes / No". */}
+      {onEdit && <button type="button" hidden data-swipe="right" tabIndex={-1} onClick={onEdit} />}
+      {!editOnly && <button type="button" hidden data-swipe="left" tabIndex={-1} onClick={() => { openMenu(); setConfirming(true); }} />}
       <button
         ref={btnRef}
         type="button"

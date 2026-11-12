@@ -1,9 +1,11 @@
 import type { ReactNode } from "react";
 import { formatINR, pctLabel } from "@/lib/format";
 import { CountUp } from "@/components/motion/CountUp";
+import { MorphBar, MorphRing } from "@/components/motion/Morph";
 
-// Building blocks shared by the family and personal Analysis tabs. Server-safe (no hooks); the only moving
-// parts are CSS entrances (bars fill, the ring draws) and CountUp on the headline figures.
+// Building blocks shared by the family and personal Analysis tabs. Server-safe (no hooks); the moving parts
+// are client islands: CountUp (odometer figures) and MorphBar / MorphRing (bars and the ring grow in the
+// first time, then glide from the old value to the new one when the month or range changes).
 
 export type Tone = "family" | "personal";
 const ACCENT: Record<Tone, { text: string; ring: string; bar: string }> = {
@@ -25,7 +27,7 @@ export function rateLabel(pct: number) {
 // ── Card shell ──────────────────────────────────────────────────────────────────────────────────────────
 export function Panel({ title, sub, right, children, className = "" }: { title: string; sub?: ReactNode; right?: ReactNode; children: ReactNode; className?: string }) {
   return (
-    <section className={`rounded-2xl border border-slate-200 bg-white p-4 sm:p-5 ${className}`}>
+    <section data-spot className={`rounded-2xl border border-slate-200 bg-white p-4 sm:p-5 ${className}`}>
       <div className="mb-3 flex flex-wrap items-start justify-between gap-x-3 gap-y-1">
         <div className="min-w-0">
           <h2 className="text-sm font-semibold text-slate-800">{title}</h2>
@@ -83,7 +85,7 @@ export function FlowHero({
   const a = ACCENT[tone];
   const spentShare = income > 0 ? Math.min(100, (spent / income) * 100) : spent > 0 ? 100 : 0;
   return (
-    <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
+    <section data-spot className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
       <div className="flex items-center justify-between gap-4 p-4 sm:p-5">
         <div className="min-w-0">
           <p className="text-[11px] font-medium uppercase tracking-wide text-slate-400">{leftLabel}</p>
@@ -94,14 +96,14 @@ export function FlowHero({
             <Delta now={left} prev={prev ? prev.income - prev.spent : null} vs={vs} upIsGood />
           </div>
         </div>
-        <SaveRing pct={rate} color={a.ring} hasIncome={income > 0} />
+        <SaveRing id={`${idPrefix}-ring`} pct={rate} color={a.ring} hasIncome={income > 0} />
       </div>
 
       {/* income → spent | left, as one bar */}
       <div className="px-4 sm:px-5">
         <div className="flex h-2.5 w-full overflow-hidden rounded-full bg-slate-100" role="img" aria-label={`Spent ${pctLabel(spentShare)} of income`}>
-          <div className="fo-bar h-full bg-red-500" style={{ width: `${spentShare}%` }} />
-          {spentShare < 100 && <div className={`fo-bar h-full ${a.bar}`} style={{ width: `${100 - spentShare}%`, animationDelay: "0.3s" }} />}
+          <MorphBar id={`${idPrefix}-spentbar`} pct={spentShare} className="h-full bg-red-500" />
+          <MorphBar id={`${idPrefix}-leftbar`} pct={100 - spentShare} className={`h-full ${a.bar}`} delay={300} />
         </div>
       </div>
 
@@ -129,22 +131,15 @@ export function FlowHero({
 }
 
 /** Savings rate as a ring that draws itself in. Negative = spent more than came in (red, empty ring). */
-function SaveRing({ pct, color, hasIncome }: { pct: number; color: string; hasIncome: boolean }) {
+function SaveRing({ id, pct, color, hasIncome }: { id: string; pct: number; color: string; hasIncome: boolean }) {
   const r = 30;
   const len = 2 * Math.PI * r;
   const fill = Math.max(0, Math.min(100, pct));
-  const off = len * (1 - fill / 100);
   return (
     <div className="relative h-[76px] w-[76px] shrink-0" title="Share of income kept">
       <svg viewBox="0 0 76 76" className="h-full w-full -rotate-90" aria-hidden>
         <circle cx="38" cy="38" r={r} fill="none" strokeWidth="7" className="stroke-slate-100" />
-        {fill > 0 && (
-          <circle
-            cx="38" cy="38" r={r} fill="none" stroke={color} strokeWidth="7" strokeLinecap="round"
-            strokeDasharray={len} strokeDashoffset={off}
-            className="fo-ring" style={{ ["--fo-ring-len" as string]: `${len}` }}
-          />
-        )}
+        <MorphRing id={id} fill={fill} len={len} color={color} />
       </svg>
       <div className="absolute inset-0 flex flex-col items-center justify-center leading-none">
         <span className={`text-sm font-extrabold tabular-nums ${pct < 0 ? "text-red-600" : "text-slate-800"}`}>{hasIncome ? rateLabel(pct) : "—"}</span>
@@ -161,7 +156,7 @@ export function Highlights({ items }: { items: Highlight[] }) {
   return (
     <div className="fo-rise grid grid-cols-2 gap-3 lg:grid-cols-4">
       {items.map((h) => (
-        <div key={h.label} className="rounded-2xl border border-slate-200 bg-white p-3.5">
+        <div key={h.label} data-spot className="rounded-2xl border border-slate-200 bg-white p-3.5">
           <div className="flex items-center gap-2">
             <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-slate-50 text-sm" aria-hidden>{h.icon}</span>
             <span className="text-[11px] font-medium leading-tight text-slate-400">{h.label}</span>
@@ -179,7 +174,7 @@ export function Highlights({ items }: { items: Highlight[] }) {
 // ── Ranked list with share bars ─────────────────────────────────────────────────────────────────────────
 export type ShareRow = { key: string; name: string; amount: number; dot?: string; change?: number | null };
 /** Biggest first. `total` is what the % is a share of. `change` = rupees vs the earlier period (shown as a chip). */
-export function ShareList({ rows, total, tone, show = 6, barClass, vs }: { rows: ShareRow[]; total: number; tone: Tone; show?: number; barClass?: (r: ShareRow) => string; vs?: string }) {
+export function ShareList({ rows, total, tone, show = 6, barClass, vs, idPrefix }: { rows: ShareRow[]; total: number; tone: Tone; show?: number; barClass?: (r: ShareRow) => string; vs?: string; idPrefix: string }) {
   const max = Math.max(1, ...rows.map((r) => r.amount));
   const head = rows.slice(0, show);
   const rest = rows.slice(show);
@@ -199,9 +194,11 @@ export function ShareList({ rows, total, tone, show = 6, barClass, vs }: { rows:
           <span className="w-9 shrink-0 text-right text-[11px] tabular-nums text-slate-400">{pctLabel(share)}</span>
         </div>
         <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-slate-100" aria-hidden>
-          <div
-            className={`fo-bar h-full rounded-full ${barClass ? barClass(r) : ACCENT[tone].bar}`}
-            style={{ width: `${Math.max(1.5, (r.amount / max) * 100)}%`, animationDelay: `${100 + Math.min(i, 8) * 45}ms` }}
+          <MorphBar
+            id={`${idPrefix}:${r.key}`}
+            pct={Math.max(1.5, (r.amount / max) * 100)}
+            className={`h-full rounded-full ${barClass ? barClass(r) : ACCENT[tone].bar}`}
+            delay={100 + Math.min(i, 8) * 45}
           />
         </div>
       </li>
@@ -227,7 +224,7 @@ export function ShareList({ rows, total, tone, show = 6, barClass, vs }: { rows:
 export type BudgetRow = { name: string; planned: number; actual: number };
 /** Budgeted categories: overall used bar + one bar per budget (overs first). `dayPct` draws a "today" line
  *  so you can tell whether spending is ahead of the month. */
-export function BudgetList({ rows, dayPct }: { rows: BudgetRow[]; dayPct?: number | null }) {
+export function BudgetList({ rows, dayPct, idPrefix }: { rows: BudgetRow[]; dayPct?: number | null; idPrefix: string }) {
   const totalPlanned = rows.reduce((s, r) => s + r.planned, 0);
   const totalActual = rows.reduce((s, r) => s + r.actual, 0);
   const left = totalPlanned - totalActual;
@@ -253,7 +250,7 @@ export function BudgetList({ rows, dayPct }: { rows: BudgetRow[]; dayPct?: numbe
       </div>
       <div className="relative mt-2 h-2.5 rounded-full bg-slate-100">
         <div className="absolute inset-0 overflow-hidden rounded-full">
-          <div className={`fo-bar h-full rounded-full ${usedPct > 100 ? "bg-red-500" : "bg-gradient-to-r from-indigo-400 to-indigo-600"}`} style={{ width: `${Math.min(100, usedPct)}%` }} />
+          <MorphBar id={`${idPrefix}:total`} pct={Math.min(100, usedPct)} className={`h-full rounded-full ${usedPct > 100 ? "fo-over bg-red-500" : usedPct >= 85 ? "fo-near bg-gradient-to-r from-indigo-400 to-indigo-600" : "bg-gradient-to-r from-indigo-400 to-indigo-600"}`} />
         </div>
         {marker}
       </div>
@@ -282,9 +279,11 @@ export function BudgetList({ rows, dayPct }: { rows: BudgetRow[]; dayPct?: numbe
               </div>
               <div className="relative mt-1 h-1.5 rounded-full bg-slate-100">
                 <div className="absolute inset-0 overflow-hidden rounded-full">
-                  <div
-                    className={`fo-bar h-full rounded-full ${isOver ? "bg-red-500" : pct >= 85 ? "bg-amber-500" : "bg-indigo-500"}`}
-                    style={{ width: `${Math.max(pct > 0 ? 1.5 : 0, Math.min(100, pct))}%`, animationDelay: `${120 + Math.min(i, 8) * 45}ms` }}
+                  <MorphBar
+                    id={`${idPrefix}:${r.name}`}
+                    pct={Math.max(pct > 0 ? 1.5 : 0, Math.min(100, pct))}
+                    className={`h-full rounded-full ${isOver ? "fo-over bg-red-500" : pct >= 85 ? "fo-near bg-amber-500" : "bg-indigo-500"}`}
+                    delay={120 + Math.min(i, 8) * 45}
                   />
                 </div>
                 {marker}
@@ -298,14 +297,14 @@ export function BudgetList({ rows, dayPct }: { rows: BudgetRow[]; dayPct?: numbe
 }
 
 // ── One bar split into parts, with a legend ─────────────────────────────────────────────────────────────
-export function SplitBar({ parts }: { parts: { name: string; value: number; color: string }[] }) {
+export function SplitBar({ parts, idPrefix }: { parts: { name: string; value: number; color: string }[]; idPrefix: string }) {
   const total = parts.reduce((s, p) => s + Math.max(0, p.value), 0);
   if (total <= 0) return <p className="text-sm text-slate-400">Nothing to split yet.</p>;
   return (
     <div>
       <div className="flex h-3 w-full gap-0.5 overflow-hidden rounded-full">
         {parts.filter((p) => p.value > 0).map((p, i) => (
-          <div key={p.name} className={`fo-bar h-full first:rounded-l-full last:rounded-r-full ${p.color}`} style={{ width: `${(p.value / total) * 100}%`, animationDelay: `${100 + i * 120}ms` }} />
+          <MorphBar key={p.name} id={`${idPrefix}:${p.name}`} pct={(p.value / total) * 100} className={`h-full first:rounded-l-full last:rounded-r-full ${p.color}`} delay={100 + i * 120} />
         ))}
       </div>
       <ul className="mt-3 space-y-1.5">

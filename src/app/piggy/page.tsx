@@ -7,6 +7,7 @@ import { DepositPiggyModal } from "@/components/DepositPiggyModal";
 import { SetFundModal } from "@/components/SetFundModal";
 import { setPiggyHolder } from "@/app/actions";
 import { ToastForm } from "@/components/ToastForm";
+import { CountUp } from "@/components/motion/CountUp";
 
 export default async function PiggyPage({
   searchParams,
@@ -111,7 +112,7 @@ export default async function PiggyPage({
           <div className="text-xs font-medium uppercase tracking-wide text-slate-300">
             {previewMode ? "Projected total set aside" : "Total set aside in the account"}
           </div>
-          <div className="mt-1 text-3xl font-extrabold">{formatINR(generalTotal + sinkingTotal)}</div>
+          <div className="mt-1 text-3xl font-extrabold"><CountUp id="piggy-total" text={formatINR(generalTotal + sinkingTotal)} /></div>
           <div className="mt-1 text-xs text-slate-400">
             General Piggy {formatINR(generalTotal)} + sinking holds {formatINR(sinkingTotal)} — these
             live in your one bank account; the split below is just how it&apos;s earmarked.

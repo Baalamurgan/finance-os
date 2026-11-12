@@ -71,14 +71,23 @@ export function RefreshManager() {
   }, [doRefresh]);
 
   if (!refreshing && pulling === 0) return null;
+  // A ₹ coin drops in with the pull, tilts as you drag, and spins while refreshing.
+  const ready = pulling > 70;
   return (
     <div
       className="pointer-events-none fixed inset-x-0 top-2 z-[60] flex justify-center"
-      style={{ opacity: refreshing ? 1 : Math.min(1, pulling / 70) }}
+      style={{ opacity: refreshing ? 1 : Math.min(1, pulling / 50), transform: `translateY(${refreshing ? 8 : Math.min(pulling, 90) * 0.35}px)` }}
     >
-      <div className="flex items-center gap-2 rounded-full bg-white px-4 py-2 text-xs font-medium text-slate-600 shadow">
-        <span className={refreshing ? "inline-block animate-spin" : ""}>↻</span>
-        {refreshing ? "Refreshing…" : pulling > 70 ? "Release to refresh" : "Pull to refresh"}
+      <div className="flex items-center gap-2 rounded-full bg-white px-3 py-1.5 text-xs font-medium text-slate-600 shadow-lg ring-1 ring-slate-200/70">
+        <span className="[perspective:200px]">
+          <span
+            className={`grid h-6 w-6 place-items-center rounded-full border-2 border-amber-500 bg-gradient-to-br from-amber-200 to-amber-400 text-[11px] font-black text-amber-800 ${refreshing ? "fo-coin-spin" : ""}`}
+            style={refreshing ? undefined : { transform: `rotateY(${pulling * 4}deg) scale(${ready ? 1.12 : 1})`, transition: "transform 0.12s" }}
+          >
+            ₹
+          </span>
+        </span>
+        {refreshing ? "Refreshing…" : ready ? "Release to refresh" : "Pull to refresh"}
       </div>
     </div>
   );

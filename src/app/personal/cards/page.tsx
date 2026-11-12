@@ -9,6 +9,7 @@ import { Prisma } from "@prisma/client";
 import { PersonalNav } from "@/components/personal/PersonalNav";
 import { AddAccountModal } from "@/components/personal/AddAccountModal";
 import { CardWallet, type WalletCard } from "@/components/motion/CardWallet";
+import { EmptyArt } from "@/components/motion/EmptyArt";
 
 const fmtDate = (iso: string | null) =>
   iso ? new Date(iso).toLocaleDateString("en-IN", { day: "numeric", month: "short" }) : "—";
@@ -142,9 +143,9 @@ export default async function PersonalCardsPage({
             );
           })}
           {wallet.length === 0 && (
-            <p className="rounded-xl border border-dashed border-slate-300 bg-white p-6 text-center text-sm text-slate-500">
-              No cards yet — add one to track its bills, due dates and balance.
-            </p>
+            <div className="rounded-xl border border-slate-200 bg-white">
+              <EmptyArt tone="personal" title="No cards yet">Add one to track its bills, due dates and balance.</EmptyArt>
+            </div>
           )}
         </section>
       </main>

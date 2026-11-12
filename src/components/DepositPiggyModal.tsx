@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { depositPiggy } from "@/app/actions";
 import { formatINR } from "@/lib/format";
 import { useToastAction } from "@/components/Toast";
+import { fx } from "@/components/motion/Fx";
 
 type Fund = { id: number; name: string };
 
@@ -48,7 +49,8 @@ export function DepositPiggyModal({ sinkingFunds }: { sinkingFunds: Fund[] }) {
             </div>
 
             <form
-              action={withToast(depositPiggy, { success: "Added to Piggy" })}
+              // the coin drops into the pig once it's saved (a negative amount = a correction → the coin comes out)
+              action={withToast(depositPiggy, { success: "Added to Piggy", onSuccess: (fd) => { const n = Number(fd.get("amount")) || 0; if (n !== 0) fx({ kind: "coin", amount: n, out: n < 0 }); } })}
               onSubmit={(e) => {
                 if (!e.currentTarget.checkValidity()) return;
                 const verb = amountNum < 0 ? "Remove" : "Add";

@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { windDownMonth } from "@/app/actions";
 import { formatINR } from "@/lib/format";
+import { fx, type WrapStats } from "@/components/motion/Fx";
 
 // Wind down & lock a month. When there are under-budget leftovers heading to Piggy, a
 // confirmation modal lets the head choose to instead bring them into next month's income.
@@ -12,12 +13,14 @@ export function WindDownButton({
   leftovers,
   nextLabel,
   grouped = false,
+  wrap,
 }: {
   periodId: number;
   label: string;
   leftovers: number; // this month's under-budget leftovers (the general-Piggy contribution)
   nextLabel: string;
   grouped?: boolean; // Nov 2026 on: leftovers/overspend follow the saved "where the money goes" card
+  wrap?: WrapStats; // the month in numbers → the "<Month> wrapped" finale once it's locked
 }) {
   const [open, setOpen] = useState(false);
   const [toIncome, setToIncome] = useState(false); // false = keep in Piggy (default)
@@ -49,7 +52,14 @@ export function WindDownButton({
               <button type="button" onClick={() => setOpen(false)} aria-label="Close" className="rounded-md px-2 text-2xl leading-none text-slate-400 hover:bg-slate-100">✕</button>
             </div>
 
-            <form action={windDownMonth} className="space-y-4 px-5 py-5">
+            <form
+              action={async (fd) => {
+                await windDownMonth(fd);
+                setOpen(false);
+                if (wrap) fx({ kind: "wrap", stats: wrap });
+              }}
+              className="space-y-4 px-5 py-5"
+            >
               <input type="hidden" name="periodId" value={periodId} />
               <input type="hidden" name="leftoversToIncome" value={toIncome ? "1" : "0"} />
 
